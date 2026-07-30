@@ -149,6 +149,53 @@ func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {
 	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", map[string]any{"base_version": 3, "idempotency_key": "paste-too-large", "cells": tooMany}, http.StatusBadRequest)
 }
 
+func TestFillEndpointAndMCPAreAtomicAndUndoable(t *testing.T) {
+	t.Parallel()
+	fillTool, found := findMCPTool("spreadsheet.range.fill")
+	if !found || fillTool.Meta["required_scope"] != "range.write" {
+		t.Fatalf("MCP fill tool: %#v", fillTool)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "fill api"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "fill-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 1}, {"row": 2, "column": 1, "value": 2}}}, http.StatusOK)
+	body := map[string]any{"base_version": 2, "idempotency_key": "fill-rest", "client_id": "browser", "cells": []map[string]any{{"row": 3, "column": 1, "value": 3}, {"row": 4, "column": 1, "value": 4}, {"row": 5, "column": 1, "value": 5}}}
+	filled := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:fill", body, http.StatusOK)
+	if filled.ServerVersion != 3 || filled.AppliedCells != 3 {
+		t.Fatalf("REST fill: %#v", filled)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:fill", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 3 {
+		t.Fatalf("REST fill idempotency: %#v", duplicate)
+	}
+	mcpFill := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.range.fill", "arguments": map[string]any{"sheet_id": sheetID, "base_version": 3, "idempotency_key": "fill-mcp", "client_id": "agent", "cells": []map[string]any{{"row": 1, "column": 2, "formula": "=A1*10"}, {"row": 2, "column": 2, "formula": "=A2*10"}}}}}, http.StatusOK)
+	if mcpFill.Result.Structured.ServerVersion != 4 || mcpFill.Result.Structured.AppliedCells != 2 || len(mcpFill.Result.Structured.RecalculatedCells) != 2 {
+		t.Fatalf("MCP fill: %#v", mcpFill.Result.Structured)
+	}
+	selected := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B5", nil, http.StatusOK)
+	if len(selected.Items) != 7 {
+		t.Fatalf("filled range: %#v", selected.Items)
+	}
+	undone := request[workbook.MutationResult](t, server, http.MethodPost, "/api/v1/operations/"+filled.OperationID+":undo", map[string]any{"idempotency_key": "undo-fill", "client_id": "browser"}, http.StatusOK)
+	if undone.ServerVersion != 5 || undone.AppliedCells != 3 {
+		t.Fatalf("fill undo: %#v", undone)
+	}
+	selected = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B5", nil, http.StatusOK)
+	if len(selected.Items) != 4 {
+		t.Fatalf("range after fill undo: %#v", selected.Items)
+	}
+}
+
 func TestRangeFormatRESTAndMCPPreserveContent(t *testing.T) {
 	t.Parallel()
 	formatTool, found := findMCPTool("spreadsheet.range.format")

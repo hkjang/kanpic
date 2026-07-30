@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { clipboardText,materializePaste,parseTabularText,shiftFormula,type KanpicClipboard } from './clipboard'
+import { clipboardText,materializeFill,materializePaste,parseTabularText,shiftFormula,type KanpicClipboard } from './clipboard'
 
 describe('formula translation',()=>{
   it('moves relative references and keeps absolute axes',()=>{
@@ -49,5 +49,43 @@ describe('clipboard parsing',()=>{
 
   it('rejects a destination outside the supported grid',()=>{
     expect(()=>materializePaste('1\n2',undefined,10_000,1)).toThrow('시트 한도')
+  })
+})
+
+describe('automatic fill',()=>{
+  it('extends arithmetic numbers and preserves repeated styles',()=>{
+    const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:1,rows:2,columns:1,cells:[
+      {rowOffset:0,columnOffset:0,value:1,style:{bold:true}},
+      {rowOffset:1,columnOffset:0,value:3,style:{background:'#fef3c7'}},
+    ]}
+    expect(materializeFill(payload,{startRow:1,startColumn:1,endRow:5,endColumn:1})).toEqual([
+      {row:3,column:1,value:5,formula:undefined,style:{bold:true}},
+      {row:4,column:1,value:7,formula:undefined,style:{background:'#fef3c7'}},
+      {row:5,column:1,value:9,formula:undefined,style:{bold:true}},
+    ])
+  })
+
+  it('extends dates and trailing-number labels in either direction',()=>{
+    const dates:KanpicClipboard={version:1,sourceRow:2,sourceColumn:1,rows:2,columns:1,cells:[
+      {rowOffset:0,columnOffset:0,value:'2026-07-02'},
+      {rowOffset:1,columnOffset:0,value:'2026-07-04'},
+    ]}
+    expect(materializeFill(dates,{startRow:1,startColumn:1,endRow:4,endColumn:1}).map(cell=>cell.value)).toEqual(['2026-06-30','2026-07-06'])
+    const labels:KanpicClipboard={version:1,sourceRow:1,sourceColumn:2,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:'항목01'}]}
+    expect(materializeFill(labels,{startRow:1,startColumn:2,endRow:1,endColumn:5}).map(cell=>cell.value)).toEqual(['항목02','항목03','항목04'])
+  })
+
+  it('shifts formulas relative to each destination and excludes source cells',()=>{
+    const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:2,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:10,formula:'=A1*10',style:{italic:true}}]}
+    expect(materializeFill(payload,{startRow:1,startColumn:2,endRow:3,endColumn:2})).toEqual([
+      {row:2,column:2,value:undefined,formula:'=A2*10',style:{italic:true}},
+      {row:3,column:2,value:undefined,formula:'=A3*10',style:{italic:true}},
+    ])
+  })
+
+  it('rejects targets outside the grid or operation limit',()=>{
+    const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:1,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:1}]}
+    expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:10_000,endColumn:2})).toThrow('최대 10,000셀')
+    expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:10_001,endColumn:1})).toThrow('원본 선택 범위')
   })
 })

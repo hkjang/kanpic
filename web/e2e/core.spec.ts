@@ -242,6 +242,44 @@ test('selects a range and pastes copied formulas with relative references', asyn
   expect(result.items[1].formula).toBe('=D4*2')
 })
 
+test('drags the fill handle for numeric series and relative formulas with undo and offline resend', async ({ page, context }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name:'새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const dragFill=async(handle:{x:number;y:number},target:{x:number;y:number})=>{const box=await canvas.boundingBox();if(!box)throw new Error('canvas is not visible');await page.mouse.move(box.x+handle.x,box.y+handle.y);await page.mouse.down();await page.mouse.move(box.x+target.x,box.y+target.y,{steps:6});await page.mouse.up()}
+  const values=async(range:string)=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/${range}`).then(response=>response.json())
+
+  await edit({x:70,y:42},'1')
+  await edit({x:70,y:69},'2')
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowDown')
+  await dragFill({x:153,y:80},{x:100,y:149})
+  await expect.poll(async()=>(await values('A1:A5')).items.map((cell:{value:unknown})=>cell.value)).toEqual([1,2,3,4,5])
+
+  await edit({x:170,y:42},'=A1*10')
+  await canvas.click({position:{x:170,y:42}})
+  await dragFill({x:261,y:53},{x:208,y:149})
+  await expect.poll(async()=>(await values('B1:B5')).items.map((cell:{value:unknown})=>cell.value)).toEqual([10,20,30,40,50])
+  const formulas=await values('B1:B5')
+  expect(formulas.items.map((cell:{formula?:string})=>cell.formula)).toEqual(['=A1*10','=A2*10','=A3*10','=A4*10','=A5*10'])
+
+  await page.getByRole('button',{name:'실행 취소'}).click()
+  await expect.poll(async()=>(await values('B1:B5')).items.map((cell:{value:unknown})=>cell.value)).toEqual([10])
+
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowDown')
+  await context.setOffline(true)
+  await dragFill({x:153,y:80},{x:100,y:176})
+  await expect(page.getByText('오프라인 · 로컬 저장',{exact:true})).toBeVisible()
+  await context.setOffline(false)
+  await expect.poll(async()=>(await values('A6')).items[0]?.value,{timeout:15_000}).toBe(6)
+})
+
 test('pastes more than 1000 cells without truncation in one version', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

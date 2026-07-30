@@ -28,6 +28,13 @@ export type PastedCell = {
   style?:Record<string,unknown>
 }
 
+export type FillRange = {
+  startRow:number
+  startColumn:number
+  endRow:number
+  endColumn:number
+}
+
 function columnNumber(name:string){
   let value=0
   for(const character of name.toUpperCase())value=value*26+character.charCodeAt(0)-64
@@ -125,6 +132,55 @@ export function materializePaste(text:string,internalRaw:string|undefined,startR
     const formula=raw.startsWith('=')?raw:undefined
     return {row:startRow+rowOffset,column:startColumn+columnOffset,value:formula?undefined:parsedValue(raw),formula}
   })))
+}
+
+function positiveModulo(value:number,divisor:number){return((value%divisor)+divisor)%divisor}
+function arithmeticStep(values:number[]){if(values.length<2)return;const step=values[1]-values[0];return values.every((value,index)=>index===0||value-values[index-1]===step)?step:undefined}
+function isoDateValue(value:unknown){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return;const date=new Date(`${value}T00:00:00Z`);if(Number.isNaN(date.getTime())||date.toISOString().slice(0,10)!==value)return;return date.getTime()}
+function trailingNumber(value:unknown){if(typeof value!=='string')return;const match=value.match(/^(.*?)(-?\d+)$/);if(!match)return;return{prefix:match[1],number:Number(match[2]),width:match[2].replace('-','').length}}
+function seriesValue(values:ClipboardCell[],position:number){
+  if(values.some(cell=>cell.formula))return{matched:false as const}
+  const raw=values.map(cell=>cell.value)
+  if(raw.every(value=>typeof value==='number')){
+    const numbers=raw as number[],step=arithmeticStep(numbers)
+    if(step!==undefined)return{matched:true as const,value:numbers[0]+step*position}
+  }
+  const dates=raw.map(isoDateValue)
+  if(dates.every(value=>value!==undefined)){
+    const timestamps=dates as number[],day=86_400_000,step=timestamps.length===1?day:arithmeticStep(timestamps)
+    if(step!==undefined)return{matched:true as const,value:new Date(timestamps[0]+step*position).toISOString().slice(0,10)}
+  }
+  const numbered=raw.map(trailingNumber)
+  if(numbered.every(value=>value!==undefined)){
+    const items=numbered as Array<{prefix:string;number:number;width:number}>,samePrefix=items.every(item=>item.prefix===items[0].prefix)
+    const step=items.length===1?1:arithmeticStep(items.map(item=>item.number))
+    if(samePrefix&&step!==undefined){const number=items[0].number+step*position,sign=number<0?'-':'';return{matched:true as const,value:`${items[0].prefix}${sign}${String(Math.abs(number)).padStart(items[0].width,'0')}`}}
+  }
+  return{matched:false as const}
+}
+
+export function materializeFill(payload:KanpicClipboard,target:FillRange){
+  const sourceEndRow=payload.sourceRow+payload.rows-1,sourceEndColumn=payload.sourceColumn+payload.columns-1
+  if(target.startRow<1||target.startColumn<1||target.endRow>MAX_GRID_ROWS||target.endColumn>MAX_GRID_COLUMNS||target.startRow>payload.sourceRow||target.startColumn>payload.sourceColumn||target.endRow<sourceEndRow||target.endColumn<sourceEndColumn)throw new Error('자동 채우기 대상은 원본 선택 범위를 포함해야 합니다.')
+  const targetCount=(target.endRow-target.startRow+1)*(target.endColumn-target.startColumn+1)
+  if(targetCount>MAX_PASTE_CELLS)throw new Error(`자동 채우기는 원본을 포함해 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
+  const byOffset=new Map(payload.cells.map(cell=>[`${cell.rowOffset}:${cell.columnOffset}`,cell]))
+  const sourceCell=(rowOffset:number,columnOffset:number)=>byOffset.get(`${rowOffset}:${columnOffset}`)
+  const vertical=payload.columns===1&&target.startColumn===payload.sourceColumn&&target.endColumn===sourceEndColumn
+  const horizontal=payload.rows===1&&target.startRow===payload.sourceRow&&target.endRow===sourceEndRow
+  const ordered=vertical?Array.from({length:payload.rows},(_,index)=>sourceCell(index,0)!):horizontal?Array.from({length:payload.columns},(_,index)=>sourceCell(0,index)!):[]
+  const cells:PastedCell[]=[]
+  for(let row=target.startRow;row<=target.endRow;row+=1)for(let column=target.startColumn;column<=target.endColumn;column+=1){
+    if(row>=payload.sourceRow&&row<=sourceEndRow&&column>=payload.sourceColumn&&column<=sourceEndColumn)continue
+    const rowOffset=positiveModulo(row-payload.sourceRow,payload.rows),columnOffset=positiveModulo(column-payload.sourceColumn,payload.columns)
+    const source=sourceCell(rowOffset,columnOffset)
+    if(!source)throw new Error('자동 채우기 원본 셀이 올바르지 않습니다.')
+    const position=vertical?row-payload.sourceRow:horizontal?column-payload.sourceColumn:0
+    const series=ordered.length?seriesValue(ordered,position):{matched:false as const}
+    const formula=source.formula?shiftFormula(source.formula,row-(payload.sourceRow+source.rowOffset),column-(payload.sourceColumn+source.columnOffset)):undefined
+    cells.push({row,column,value:formula?undefined:series.matched?series.value:source.value,formula,style:source.style?{...source.style}:undefined})
+  }
+  return cells
 }
 
 function validateGridBounds(cells:PastedCell[]){

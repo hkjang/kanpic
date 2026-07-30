@@ -48,6 +48,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.read", "A1 범위의 비어 있지 않은 셀을 조회합니다.", "range.read", requiredProps2("sheet_id", "string", "range", "string")),
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
+	tool("spreadsheet.range.fill", "계산된 자동 채우기 셀 최대 1만 개를 하나의 원자적·실행 취소 가능한 작업으로 적용합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식을 원자적으로 병합합니다.", "format.write", requiredProps4("sheet_id", "string", "range", "string", "style", "object", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
@@ -195,7 +196,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		return s.repository.ReadRange(ctx, stringArg(args, "sheet_id"), selected)
-	case "spreadsheet.range.write", "spreadsheet.range.paste":
+	case "spreadsheet.range.write", "spreadsheet.range.paste", "spreadsheet.range.fill":
 		var input struct {
 			SheetID        string               `json:"sheet_id"`
 			BaseVersion    int64                `json:"base_version"`
@@ -207,8 +208,9 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		limit, operationType := workbook.MaxBatchCells, ""
-		if name == "spreadsheet.range.paste" {
-			limit, operationType = workbook.MaxPasteCells, "cells.paste"
+		if name == "spreadsheet.range.paste" || name == "spreadsheet.range.fill" {
+			limit = workbook.MaxPasteCells
+			operationType = map[string]string{"spreadsheet.range.paste": "cells.paste", "spreadsheet.range.fill": "cells.fill"}[name]
 		}
 		if len(input.Cells) == 0 || len(input.Cells) > limit {
 			return nil, fmt.Errorf("cells must contain 1 to %d entries", limit)

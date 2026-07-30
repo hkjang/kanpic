@@ -64,6 +64,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("DELETE /api/v1/sheets/{sheetId}", s.deleteSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:batch", s.applyCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:fill", s.fillCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
@@ -255,6 +256,10 @@ func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pasteCells(w http.ResponseWriter, r *http.Request) {
 	s.applyCellsWithLimit(w, r, workbook.MaxPasteCells, "cells.paste")
+}
+
+func (s *Server) fillCells(w http.ResponseWriter, r *http.Request) {
+	s.applyCellsWithLimit(w, r, workbook.MaxPasteCells, "cells.fill")
 }
 
 type rangeFormatRequest struct {
