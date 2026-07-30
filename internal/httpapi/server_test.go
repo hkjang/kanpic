@@ -155,6 +155,52 @@ func TestCircularFormulaIsStoredAsExplicitError(t *testing.T) {
 	}
 }
 
+func TestOperationUndoRedoRESTAndMCP(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	wb := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "undo api"}, http.StatusCreated)
+	path := "/api/v1/sheets/" + wb.Sheets[0].ID + "/cells:batch"
+	request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 1, "idempotency_key": "undo-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 2}, {"row": 1, "column": 2, "formula": "=A1*2"}}}, http.StatusOK)
+	changed := request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 2, "idempotency_key": "undo-change", "cells": []map[string]any{{"row": 1, "column": 1, "value": 3}}}, http.StatusOK)
+	undone := request[workbook.MutationResult](t, server, http.MethodPost, "/api/v1/operations/"+changed.OperationID+":undo", map[string]any{"idempotency_key": "undo-rest", "client_id": "test"}, http.StatusOK)
+	if undone.AppliedCells != 1 || len(undone.RecalculatedCells) != 1 {
+		t.Fatalf("REST undo: %#v", undone)
+	}
+	assertHTTPRangeValues(t, server, wb.Sheets[0].ID, []string{"2", "4"})
+	redone := request[workbook.MutationResult](t, server, http.MethodPost, "/api/v1/operations/"+undone.OperationID+":undo", map[string]any{"idempotency_key": "redo-rest", "client_id": "test"}, http.StatusOK)
+	if redone.AppliedCells != 1 {
+		t.Fatalf("REST redo: %#v", redone)
+	}
+	assertHTTPRangeValues(t, server, wb.Sheets[0].ID, []string{"3", "6"})
+
+	mcpUndo := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.operation.undo", "arguments": map[string]any{"operation_id": redone.OperationID, "idempotency_key": "undo-mcp", "client_id": "agent"}}}, http.StatusOK)
+	if mcpUndo.Result.Structured.AppliedCells != 1 {
+		t.Fatalf("MCP undo: %#v", mcpUndo)
+	}
+	assertHTTPRangeValues(t, server, wb.Sheets[0].ID, []string{"2", "4"})
+}
+
+func assertHTTPRangeValues(t *testing.T, server *httptest.Server, sheetID string, expected []string) {
+	t.Helper()
+	cells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B1", nil, http.StatusOK)
+	if len(cells.Items) != len(expected) {
+		t.Fatalf("range cell count = %d, want %d", len(cells.Items), len(expected))
+	}
+	for index, value := range expected {
+		if string(cells.Items[index].Value) != value {
+			t.Fatalf("range cell %d = %s, want %s", index, cells.Items[index].Value, value)
+		}
+	}
+}
+
 func TestImportExportAndMCPFileTools(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

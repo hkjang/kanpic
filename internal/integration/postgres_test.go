@@ -77,6 +77,32 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	if err != nil || len(cells) != 1 || string(cells[0].Value) != "14" {
 		t.Fatalf("recalculated formula: %#v %v", cells, err)
 	}
+	undone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: recalculated.OperationID, ActorID: "test-user", ClientID: "integration", IdempotencyKey: "undo-formula-source"})
+	if err != nil || undone.ServerVersion != 7 || undone.AppliedCells != 1 || len(undone.RecalculatedCells) != 1 {
+		t.Fatalf("PostgreSQL undo: %#v %v", undone, err)
+	}
+	selected, _ = cellrange.Parse("A1:A2")
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 2 || string(cells[0].Value) != "10" || string(cells[1].Value) != "20" {
+		t.Fatalf("undone values: %#v %v", cells, err)
+	}
+	redone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: undone.OperationID, ActorID: "test-user", ClientID: "integration", IdempotencyKey: "redo-formula-source"})
+	if err != nil || redone.ServerVersion != 8 || redone.AppliedCells != 1 {
+		t.Fatalf("PostgreSQL redo: %#v %v", redone, err)
+	}
+	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "other-user", ClientID: "other", BaseVersion: 8, IdempotencyKey: "after-redo", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`9`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selective, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: recalculated.OperationID, ActorID: "test-user", ClientID: "integration", IdempotencyKey: "selective-conflict"})
+	if err != nil || selective.AppliedCells != 0 || len(selective.Conflicts) != 1 || selective.ServerVersion != 10 {
+		t.Fatalf("PostgreSQL selective undo: %#v %v", selective, err)
+	}
+	selected, _ = cellrange.Parse("A1")
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "9" {
+		t.Fatalf("selective undo overwrote later value: %#v %v", cells, err)
+	}
 }
 
 func TestPostgresAtomicImportExport(t *testing.T) {

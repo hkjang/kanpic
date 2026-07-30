@@ -42,3 +42,29 @@ jobs:
       - run: go test -tags=integration ./internal/...
         env:
           POSTGRES_DSN: postgres://kanpic:kanpic-test@localhost:5432/kanpic_test?sslmode=disable
+      - name: Install Playwright Chromium
+        run: node ./node_modules/@playwright/test/cli.js install --with-deps chromium
+        working-directory: web
+      - name: Run browser E2E against kanpic server
+        env:
+          POSTGRES_DSN: postgres://kanpic:kanpic-test@localhost:5432/kanpic_test?sslmode=disable
+          KANPIC_E2E_BASE_URL: http://127.0.0.1:8080
+        run: |
+          go run ./cmd/api >/tmp/kanpic-e2e-server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null || {
+            cat /tmp/kanpic-e2e-server.log
+            exit 1
+          }
+          cd web
+          npm run test:e2e

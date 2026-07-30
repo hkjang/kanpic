@@ -15,7 +15,7 @@ function parsedValue(raw:string):unknown{if(raw==='')return undefined;if(raw.toL
 export function CanvasGrid({sheetId,version,onVersion}:{sheetId:string;version:number;onVersion:(version:number)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null)
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState('')
-  const {activeRow,activeColumn,editing,zoom,cells,select,setEditing,putCells,putCell,setSaveState}=useEditorStore()
+  const {activeRow,activeColumn,editing,zoom,cells,select,setEditing,putCells,putCell,setSaveState,recordOperation}=useEditorStore()
   const rowHeight=27*zoom,columnWidth=108*zoom
   const activeCell=cells.get(cellKey(activeRow,activeColumn))
   const activeText=activeCell?.formula || (activeCell?.value == null?'':String(activeCell.value))
@@ -42,6 +42,8 @@ export function CanvasGrid({sheetId,version,onVersion}:{sheetId:string;version:n
     context.fillStyle='#edf7f5';context.fillRect(0,0,HEADER_WIDTH,HEADER_HEIGHT);context.strokeStyle='#d9dfe5';context.strokeRect(.5,.5,HEADER_WIDTH-.5,HEADER_HEIGHT-.5)
   },[size,scroll,rowHeight,columnWidth,cells,activeRow,activeColumn,zoom,visibleRange])
 
+  const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
+
   const commit=useCallback(async(raw:string,row=activeRow,column=activeColumn)=>{
     const formula=raw.startsWith('=')?raw:''
     let value:unknown=formula?undefined:parsedValue(raw)
@@ -57,14 +59,14 @@ export function CanvasGrid({sheetId,version,onVersion}:{sheetId:string;version:n
     putCell(cell);setEditing(false);setSaveState(navigator.onLine?'saving':'offline')
     const id=newIdempotencyKey()
     await enqueue({id,sheetId,attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:'web',cells:[{row,column,value,formula}]}})
-    await flushOutbox((_operation,result)=>{const applied=result as MutationResult;onVersion(applied.server_version);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
-  },[activeRow,activeColumn,sheetId,version,cells,putCell,setEditing,setSaveState,onVersion])
+    await flushOutbox(handleApplied)
+  },[activeRow,activeColumn,sheetId,version,cells,putCell,setEditing,setSaveState,handleApplied])
 
-  useEffect(()=>{const sync=()=>flushOutbox((_operation,result)=>{const applied=result as MutationResult;onVersion(applied.server_version);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)});window.addEventListener('online',sync);const timer=window.setInterval(sync,3000);sync();return()=>{window.removeEventListener('online',sync);window.clearInterval(timer)}},[onVersion,setSaveState])
+  useEffect(()=>{const sync=()=>flushOutbox(handleApplied);window.addEventListener('online',sync);const timer=window.setInterval(sync,3000);sync();return()=>{window.removeEventListener('online',sync);window.clearInterval(timer)}},[handleApplied])
 
   const pointer=(event:React.MouseEvent)=>{const rect=canvas.current!.getBoundingClientRect();const x=event.clientX-rect.left,y=event.clientY-rect.top;if(x<HEADER_WIDTH||y<HEADER_HEIGHT)return;select(Math.max(1,Math.floor((y-HEADER_HEIGHT+scroll.top)/rowHeight)+1),Math.max(1,Math.floor((x-HEADER_WIDTH+scroll.left)/columnWidth)+1));viewport.current?.focus()}
   const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;if(event.key==='Enter'||event.key==='F2'){setEditing(true);event.preventDefault()}else if(event.key==='ArrowDown'){select(activeRow+1,activeColumn);event.preventDefault()}else if(event.key==='ArrowUp'){select(Math.max(1,activeRow-1),activeColumn);event.preventDefault()}else if(event.key==='ArrowRight'||event.key==='Tab'){select(activeRow,activeColumn+1);event.preventDefault()}else if(event.key==='ArrowLeft'){select(activeRow,Math.max(1,activeColumn-1));event.preventDefault()}else if(event.key==='Backspace'||event.key==='Delete'){commit('');event.preventDefault()}else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey){setDraft(event.key);setEditing(true);event.preventDefault()}}
-  const paste=(event:React.ClipboardEvent)=>{event.preventDefault();const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'});worker.onmessage=async(message:MessageEvent<Array<{row:number;column:number;value:unknown}>>)=>{const batch=message.data.slice(0,1000);putCells(batch.map(cell=>({sheet_id:sheetId,...cell,updated_at:new Date().toISOString()})));setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId,attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:'web',cells:batch}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;onVersion(applied.server_version);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)});worker.terminate()};worker.postMessage({text:event.clipboardData.getData('text/plain'),startRow:activeRow,startColumn:activeColumn})}
+  const paste=(event:React.ClipboardEvent)=>{event.preventDefault();const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'});worker.onmessage=async(message:MessageEvent<Array<{row:number;column:number;value:unknown}>>)=>{const batch=message.data.slice(0,1000);putCells(batch.map(cell=>({sheet_id:sheetId,...cell,updated_at:new Date().toISOString()})));setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId,attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:'web',cells:batch}});await flushOutbox(handleApplied);worker.terminate()};worker.postMessage({text:event.clipboardData.getData('text/plain'),startRow:activeRow,startColumn:activeColumn})}
   const inputLeft=HEADER_WIDTH+(activeColumn-1)*columnWidth-scroll.left,inputTop=HEADER_HEIGHT+(activeRow-1)*rowHeight-scroll.top
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onPaste={paste} aria-label="스프레드시트 그리드">
     <div className="grid-spacer" style={{width:HEADER_WIDTH+TOTAL_COLUMNS*columnWidth,height:HEADER_HEIGHT+TOTAL_ROWS*rowHeight}}><canvas ref={canvas} className="grid-canvas" onClick={pointer} onDoubleClick={()=>setEditing(true)}/></div>

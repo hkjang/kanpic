@@ -17,11 +17,14 @@ import (
 type cellKey struct{ row, column int }
 
 type operation struct {
-	result   MutationResult
-	before   map[cellKey]Cell
-	after    map[cellKey]Cell
-	actorID  string
-	clientID string
+	result        MutationResult
+	before        map[cellKey]Cell
+	after         map[cellKey]Cell
+	submitted     []CellCoordinate
+	actorID       string
+	clientID      string
+	operationType string
+	undoOf        string
 }
 
 type snapshot struct {
@@ -301,19 +304,34 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		return MutationResult{}, ErrVersionAhead
 	}
 	conflicts := make([]CellConflict, 0)
+	effective := make([]CellInput, 0, len(mutation.Cells))
 	for _, input := range mutation.Cells {
 		if input.Row < 1 || input.Column < 1 {
 			return MutationResult{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
 		}
 		coord := cellKey{input.Row, input.Column}
 		current := state.cells[mutation.SheetID][coord]
-		if mutation.BaseVersion < state.workbook.Version {
+		if mutation.Expected != nil {
+			expected, exists := mutation.Expected[coordinateKey(input.Row, input.Column)]
+			if !exists {
+				return MutationResult{}, fmt.Errorf("%w: expected cell state is missing", ErrInvalid)
+			}
+			if !cellsEqual(current, expected) {
+				changedVersion := latestChange(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID)
+				if changedVersion == 0 {
+					changedVersion = state.workbook.Version
+				}
+				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
+				continue
+			}
+		} else if mutation.BaseVersion < state.workbook.Version {
 			if changedVersion := latestChange(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID); changedVersion > 0 {
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 			}
 		}
+		effective = append(effective, input)
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.cells[mutation.SheetID], mutation.Cells)
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.cells[mutation.SheetID], effective)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -334,10 +352,62 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
-	state.operations = append(state.operations, operation{result: result, before: before, after: after, actorID: mutation.ActorID, clientID: mutation.ClientID})
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
+	operationType := mutation.OperationType
+	if operationType == "" {
+		operationType = "cells.batch"
+	}
+	state.operations = append(state.operations, operation{result: result, before: before, after: after, submitted: submittedCoordinates(effective), actorID: mutation.ActorID, clientID: mutation.ClientID, operationType: operationType, undoOf: mutation.UndoOfOperationID})
 	state.idempotent[key] = result
 	return result, nil
+}
+
+func (r *MemoryRepository) UndoOperation(ctx context.Context, input UndoOperationInput) (MutationResult, error) {
+	if strings.TrimSpace(input.OperationID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return MutationResult{}, fmt.Errorf("%w: operation_id and idempotency_key are required", ErrInvalid)
+	}
+	r.mu.RLock()
+	var target *operation
+	for _, state := range r.workbooks {
+		for index := range state.operations {
+			candidate := state.operations[index]
+			if candidate.result.OperationID == input.OperationID && candidate.actorID == input.ActorID {
+				copy := candidate
+				target = &copy
+				break
+			}
+		}
+		if target != nil {
+			break
+		}
+	}
+	r.mu.RUnlock()
+	if target == nil {
+		return MutationResult{}, ErrNotFound
+	}
+	coordinates := append([]CellCoordinate(nil), target.submitted...)
+	if len(coordinates) == 0 {
+		for key := range target.after {
+			coordinates = append(coordinates, CellCoordinate{Row: key.row, Column: key.column})
+		}
+		sort.Slice(coordinates, func(i, j int) bool {
+			if coordinates[i].Row == coordinates[j].Row {
+				return coordinates[i].Column < coordinates[j].Column
+			}
+			return coordinates[i].Row < coordinates[j].Row
+		})
+	}
+	if len(coordinates) == 0 {
+		return MutationResult{}, fmt.Errorf("%w: operation has no cells to undo", ErrInvalid)
+	}
+	cells := make([]CellInput, 0, len(coordinates))
+	expected := make(map[string]Cell, len(coordinates))
+	for _, coordinate := range coordinates {
+		key := cellKey{coordinate.Row, coordinate.Column}
+		cells = append(cells, inputFromCell(coordinate.Row, coordinate.Column, target.before[key]))
+		expected[coordinateKey(coordinate.Row, coordinate.Column)] = cloneCell(target.after[key])
+	}
+	return r.ApplyCells(ctx, CellMutation{SheetID: target.result.SheetID, ActorID: input.ActorID, ClientID: input.ClientID, BaseVersion: target.result.ServerVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, Expected: expected, OperationType: "operation.undo", UndoOfOperationID: input.OperationID})
 }
 
 func (r *MemoryRepository) ReadRange(_ context.Context, sheetID string, selected cellrange.Range) ([]Cell, error) {

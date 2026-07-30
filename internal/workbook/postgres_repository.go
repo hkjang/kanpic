@@ -33,10 +33,12 @@ type sheetProperties struct {
 type operationDocument struct {
 	Before            map[string]Cell    `json:"before,omitempty"`
 	After             map[string]Cell    `json:"after,omitempty"`
+	SubmittedCells    []CellCoordinate   `json:"submitted_cells,omitempty"`
 	Conflicts         []CellConflict     `json:"conflicts,omitempty"`
 	AppliedCells      int                `json:"applied_cells"`
 	RecalculatedCells []CellCoordinate   `json:"recalculated_cells,omitempty"`
 	FormulaErrors     []CellFormulaError `json:"formula_errors,omitempty"`
+	UndoOfOperationID string             `json:"undo_of_operation_id,omitempty"`
 }
 
 type snapshotBlock struct {
@@ -423,9 +425,12 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		return duplicate, tx.Commit(ctx)
 	}
 
-	conflicts, err := r.findConflicts(ctx, tx, workbookID, mutation.SheetID, mutation.BaseVersion, mutation.ActorID, mutation.ClientID, mutation.Cells)
-	if err != nil {
-		return MutationResult{}, err
+	conflicts := make([]CellConflict, 0)
+	if mutation.Expected == nil {
+		conflicts, err = r.findConflicts(ctx, tx, workbookID, mutation.SheetID, mutation.BaseVersion, mutation.ActorID, mutation.ClientID, mutation.Cells)
+		if err != nil {
+			return MutationResult{}, err
+		}
 	}
 	type blockKey struct{ row, column int }
 	payloads := make(map[blockKey]map[string]Cell)
@@ -457,7 +462,23 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	}
 	rows.Close()
 
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(existing, mutation.Cells)
+	effective := make([]CellInput, 0, len(mutation.Cells))
+	for _, input := range mutation.Cells {
+		if mutation.Expected != nil {
+			expected, exists := mutation.Expected[coordinateKey(input.Row, input.Column)]
+			if !exists {
+				return MutationResult{}, fmt.Errorf("%w: expected cell state is missing", ErrInvalid)
+			}
+			current := existing[cellKey{input.Row, input.Column}]
+			if !cellsEqual(current, expected) {
+				changedVersion := currentVersion
+				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
+				continue
+			}
+		}
+		effective = append(effective, input)
+	}
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(existing, effective)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -500,9 +521,13 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
-	document, _ := json.Marshal(operationDocument{Before: before, After: after, Conflicts: conflicts, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors})
-	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'cells.batch',$9,$10)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, document, now)
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
+	operationType := mutation.OperationType
+	if operationType == "" {
+		operationType = "cells.batch"
+	}
+	document, _ := json.Marshal(operationDocument{Before: before, After: after, SubmittedCells: submittedCoordinates(effective), Conflicts: conflicts, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, UndoOfOperationID: mutation.UndoOfOperationID})
+	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, operationType, document, now)
 	if err != nil {
 		return MutationResult{}, mapPostgresError(err)
 	}
@@ -510,6 +535,56 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		return MutationResult{}, err
 	}
 	return result, nil
+}
+
+func (r *PostgresRepository) UndoOperation(ctx context.Context, input UndoOperationInput) (MutationResult, error) {
+	if strings.TrimSpace(input.OperationID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return MutationResult{}, fmt.Errorf("%w: operation_id and idempotency_key are required", ErrInvalid)
+	}
+	var sheetID string
+	var targetVersion int64
+	var documentData []byte
+	err := r.pool.QueryRow(ctx, `SELECT coalesce(sheet_id::text,''),server_version,payload FROM cell_operations WHERE operation_id=$1 AND actor_id=$2`, input.OperationID, input.ActorID).Scan(&sheetID, &targetVersion, &documentData)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MutationResult{}, ErrNotFound
+	}
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if sheetID == "" {
+		return MutationResult{}, fmt.Errorf("%w: operation cannot be undone at cell level", ErrInvalid)
+	}
+	var document operationDocument
+	if err := json.Unmarshal(documentData, &document); err != nil {
+		return MutationResult{}, err
+	}
+	coordinates := append([]CellCoordinate(nil), document.SubmittedCells...)
+	if len(coordinates) == 0 {
+		for key := range document.After {
+			coordinate, err := parseCoordinateKey(key)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			coordinates = append(coordinates, coordinate)
+		}
+		sort.Slice(coordinates, func(i, j int) bool {
+			if coordinates[i].Row == coordinates[j].Row {
+				return coordinates[i].Column < coordinates[j].Column
+			}
+			return coordinates[i].Row < coordinates[j].Row
+		})
+	}
+	if len(coordinates) == 0 {
+		return MutationResult{}, fmt.Errorf("%w: operation has no cells to undo", ErrInvalid)
+	}
+	cells := make([]CellInput, 0, len(coordinates))
+	expected := make(map[string]Cell, len(coordinates))
+	for _, coordinate := range coordinates {
+		key := coordinateKey(coordinate.Row, coordinate.Column)
+		cells = append(cells, inputFromCell(coordinate.Row, coordinate.Column, document.Before[key]))
+		expected[key] = cloneCell(document.After[key])
+	}
+	return r.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: input.ActorID, ClientID: input.ClientID, BaseVersion: targetVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, Expected: expected, OperationType: "operation.undo", UndoOfOperationID: input.OperationID})
 }
 
 func (r *PostgresRepository) ReadRange(ctx context.Context, sheetID string, selected cellrange.Range) ([]Cell, error) {

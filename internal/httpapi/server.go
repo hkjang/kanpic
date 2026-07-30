@@ -65,6 +65,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	// net/http wildcards cannot contain a literal suffix. The action-form API
 	// remains /versions/{id}:restore and is validated by the handler.
 	mux.HandleFunc("POST /api/v1/versions/{versionAction}", s.restoreVersion)
+	mux.HandleFunc("POST /api/v1/operations/{operationAction}", s.undoOperation)
 	mux.HandleFunc("POST /api/v1/formulas:evaluate", s.evaluateFormula)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/formulas/{address}", s.formulaInfo)
 	mux.HandleFunc("POST /api/v1/imports:preview", s.previewImport)
@@ -215,6 +216,31 @@ func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
 		SheetID: r.PathValue("sheetId"), ActorID: actorID(r), ClientID: input.ClientID,
 		BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: input.Cells,
 	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) undoOperation(w http.ResponseWriter, r *http.Request) {
+	action := r.PathValue("operationAction")
+	if !strings.HasSuffix(action, ":undo") {
+		s.writeError(w, r, workbook.ErrNotFound)
+		return
+	}
+	operationID := strings.TrimSuffix(action, ":undo")
+	var input struct {
+		IdempotencyKey string `json:"idempotency_key"`
+		ClientID       string `json:"client_id"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if headerKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); headerKey != "" {
+		input.IdempotencyKey = headerKey
+	}
+	result, err := s.repository.UndoOperation(r.Context(), workbook.UndoOperationInput{OperationID: operationID, ActorID: actorID(r), ClientID: input.ClientID, IdempotencyKey: input.IdempotencyKey})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -456,6 +482,9 @@ func requiredScope(r *http.Request) string {
 			return "version.read"
 		}
 		return "version.write"
+	}
+	if strings.Contains(path, "/operations") {
+		return "range.write"
 	}
 	if strings.Contains(path, "/sheets") {
 		if r.Method == http.MethodGet {

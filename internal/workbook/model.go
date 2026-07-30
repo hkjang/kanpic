@@ -46,12 +46,22 @@ type CellInput struct {
 }
 
 type CellMutation struct {
-	SheetID        string      `json:"sheet_id"`
-	ActorID        string      `json:"actor_id"`
-	ClientID       string      `json:"client_id"`
-	BaseVersion    int64       `json:"base_version"`
-	IdempotencyKey string      `json:"idempotency_key"`
-	Cells          []CellInput `json:"cells"`
+	SheetID           string          `json:"sheet_id"`
+	ActorID           string          `json:"actor_id"`
+	ClientID          string          `json:"client_id"`
+	BaseVersion       int64           `json:"base_version"`
+	IdempotencyKey    string          `json:"idempotency_key"`
+	Cells             []CellInput     `json:"cells"`
+	Expected          map[string]Cell `json:"-"`
+	OperationType     string          `json:"-"`
+	UndoOfOperationID string          `json:"-"`
+}
+
+type UndoOperationInput struct {
+	OperationID    string `json:"operation_id"`
+	ActorID        string `json:"actor_id"`
+	ClientID       string `json:"client_id"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type CellConflict struct {

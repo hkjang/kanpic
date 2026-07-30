@@ -1,12 +1,46 @@
 package workbook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"kanpic/internal/formula"
 	"kanpic/pkg/cellrange"
 )
+
+func cellsEqual(left, right Cell) bool {
+	return bytes.Equal(bytes.TrimSpace(left.Value), bytes.TrimSpace(right.Value)) &&
+		left.Formula == right.Formula &&
+		bytes.Equal(bytes.TrimSpace(left.Style), bytes.TrimSpace(right.Style))
+}
+
+func submittedCoordinates(inputs []CellInput) []CellCoordinate {
+	result := make([]CellCoordinate, 0, len(inputs))
+	for _, input := range inputs {
+		result = append(result, CellCoordinate{Row: input.Row, Column: input.Column})
+	}
+	return result
+}
+
+func inputFromCell(row, column int, cell Cell) CellInput {
+	return CellInput{Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: cloneJSON(cell.Style)}
+}
+
+func parseCoordinateKey(value string) (CellCoordinate, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return CellCoordinate{}, fmt.Errorf("invalid coordinate %q", value)
+	}
+	row, rowErr := strconv.Atoi(parts[0])
+	column, columnErr := strconv.Atoi(parts[1])
+	if rowErr != nil || columnErr != nil || row < 1 || column < 1 {
+		return CellCoordinate{}, fmt.Errorf("invalid coordinate %q", value)
+	}
+	return CellCoordinate{Row: row, Column: column}, nil
+}
 
 func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
 	prospective := make(map[cellKey]Cell, len(existing)+len(submitted))

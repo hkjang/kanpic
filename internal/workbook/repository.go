@@ -26,6 +26,7 @@ type Repository interface {
 	DeleteSheet(context.Context, string) error
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
+	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)
 	ReadRange(context.Context, string, cellrange.Range) ([]Cell, error)
 
 	CreateVersion(context.Context, string, string, string) (Version, error)
