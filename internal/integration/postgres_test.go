@@ -64,6 +64,19 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	if err != nil || len(cells) != 1 || string(cells[0].Value) != "10" {
 		t.Fatalf("restored cells: %#v %v", cells, err)
 	}
+	formulaResult, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "test-user", ClientID: "integration", BaseVersion: 4, IdempotencyKey: "formula", Cells: []workbook.CellInput{{Row: 2, Column: 1, Formula: "=A1*2"}}})
+	if err != nil || len(formulaResult.RecalculatedCells) != 1 {
+		t.Fatalf("formula mutation: %#v %v", formulaResult, err)
+	}
+	recalculated, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "test-user", ClientID: "integration", BaseVersion: 5, IdempotencyKey: "formula-source", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`7`)}}})
+	if err != nil || recalculated.AppliedCells != 1 || len(recalculated.RecalculatedCells) != 1 {
+		t.Fatalf("dependent recalculation: %#v %v", recalculated, err)
+	}
+	selected, _ = cellrange.Parse("A2")
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "14" {
+		t.Fatalf("recalculated formula: %#v %v", cells, err)
+	}
 }
 
 func TestPostgresAtomicImportExport(t *testing.T) {

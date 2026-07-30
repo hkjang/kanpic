@@ -300,22 +300,30 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if mutation.BaseVersion > state.workbook.Version {
 		return MutationResult{}, ErrVersionAhead
 	}
-	before := make(map[cellKey]Cell, len(mutation.Cells))
-	after := make(map[cellKey]Cell, len(mutation.Cells))
 	conflicts := make([]CellConflict, 0)
-	now := r.now()
 	for _, input := range mutation.Cells {
 		if input.Row < 1 || input.Column < 1 {
 			return MutationResult{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
 		}
 		coord := cellKey{input.Row, input.Column}
 		current := state.cells[mutation.SheetID][coord]
-		before[coord] = cloneCell(current)
 		if mutation.BaseVersion < state.workbook.Version {
 			if changedVersion := latestChange(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID); changedVersion > 0 {
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 			}
 		}
+	}
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.cells[mutation.SheetID], mutation.Cells)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	before := make(map[cellKey]Cell, len(expanded))
+	after := make(map[cellKey]Cell, len(expanded))
+	now := r.now()
+	for _, input := range expanded {
+		coord := cellKey{input.Row, input.Column}
+		current := state.cells[mutation.SheetID][coord]
+		before[coord] = cloneCell(current)
 		cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), UpdatedAt: now}
 		if isEmptyCell(cell) {
 			delete(state.cells[mutation.SheetID], coord)
@@ -326,7 +334,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(mutation.Cells), Conflicts: conflicts, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
 	state.operations = append(state.operations, operation{result: result, before: before, after: after, actorID: mutation.ActorID, clientID: mutation.ClientID})
 	state.idempotent[key] = result
 	return result, nil

@@ -62,16 +62,30 @@ type CellConflict struct {
 	SubmittedValue   json.RawMessage `json:"submitted_value,omitempty"`
 }
 
+type CellCoordinate struct {
+	Row    int `json:"row"`
+	Column int `json:"column"`
+}
+
+type CellFormulaError struct {
+	Row     int    `json:"row"`
+	Column  int    `json:"column"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type MutationResult struct {
-	OperationID   string         `json:"operation_id"`
-	WorkbookID    string         `json:"workbook_id"`
-	SheetID       string         `json:"sheet_id"`
-	BaseVersion   int64          `json:"base_version"`
-	ServerVersion int64          `json:"server_version"`
-	AppliedCells  int            `json:"applied_cells"`
-	Duplicate     bool           `json:"duplicate"`
-	Conflicts     []CellConflict `json:"conflicts"`
-	CreatedAt     time.Time      `json:"created_at"`
+	OperationID       string             `json:"operation_id"`
+	WorkbookID        string             `json:"workbook_id"`
+	SheetID           string             `json:"sheet_id"`
+	BaseVersion       int64              `json:"base_version"`
+	ServerVersion     int64              `json:"server_version"`
+	AppliedCells      int                `json:"applied_cells"`
+	RecalculatedCells []CellCoordinate   `json:"recalculated_cells"`
+	FormulaErrors     []CellFormulaError `json:"formula_errors"`
+	Duplicate         bool               `json:"duplicate"`
+	Conflicts         []CellConflict     `json:"conflicts"`
+	CreatedAt         time.Time          `json:"created_at"`
 }
 
 type Version struct {

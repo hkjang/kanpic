@@ -89,12 +89,69 @@ func TestFormulaEvaluationAndStoredResult(t *testing.T) {
 	wb := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "formula"}, http.StatusCreated)
 	path := "/api/v1/sheets/" + wb.Sheets[0].ID + "/cells:batch"
 	request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 1, "idempotency_key": "values", "cells": []map[string]any{{"row": 1, "column": 1, "value": 2}, {"row": 2, "column": 1, "value": 3}}}, http.StatusOK)
-	request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 2, "idempotency_key": "formula", "cells": []map[string]any{{"row": 3, "column": 1, "formula": "=SUM(A1:A2)"}}}, http.StatusOK)
+	initial := request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 2, "idempotency_key": "formula", "cells": []map[string]any{{"row": 3, "column": 1, "value": 999, "formula": "=SUM(A1:A2)"}, {"row": 4, "column": 1, "formula": "=A3*2"}}}, http.StatusOK)
+	if len(initial.RecalculatedCells) != 2 || len(initial.FormulaErrors) != 0 {
+		t.Fatalf("initial formula metadata: %#v", initial)
+	}
 	cells := request[struct {
 		Items []workbook.Cell `json:"items"`
-	}](t, server, http.MethodGet, "/api/v1/sheets/"+wb.Sheets[0].ID+"/ranges/A3", nil, http.StatusOK)
-	if len(cells.Items) != 1 || string(cells.Items[0].Value) != "5" || cells.Items[0].Formula != "=SUM(A1:A2)" {
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+wb.Sheets[0].ID+"/ranges/A3:A4", nil, http.StatusOK)
+	if len(cells.Items) != 2 || string(cells.Items[0].Value) != "5" || cells.Items[0].Formula != "=SUM(A1:A2)" || string(cells.Items[1].Value) != "10" {
 		t.Fatalf("stored formula: %#v", cells.Items)
+	}
+
+	updated := request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 3, "idempotency_key": "recalculate", "cells": []map[string]any{{"row": 1, "column": 1, "value": 7}}}, http.StatusOK)
+	if updated.AppliedCells != 1 || len(updated.RecalculatedCells) != 2 {
+		t.Fatalf("transitive recalculation metadata: %#v", updated)
+	}
+	cells = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+wb.Sheets[0].ID+"/ranges/A3:A4", nil, http.StatusOK)
+	if string(cells.Items[0].Value) != "10" || string(cells.Items[1].Value) != "20" {
+		t.Fatalf("transitive recalculation values: %#v", cells.Items)
+	}
+	info := request[formulaInfoResult](t, server, http.MethodGet, "/api/v1/sheets/"+wb.Sheets[0].ID+"/formulas/A3", nil, http.StatusOK)
+	if len(info.Dependencies) != 2 || info.Dependencies[0] != "A1" || info.Dependencies[1] != "A2" || len(info.Dependents) != 1 || info.Dependents[0] != "A4" {
+		t.Fatalf("formula graph info: %#v", info)
+	}
+	mcpInfo := request[struct {
+		Result struct {
+			Structured formulaInfoResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.formula.explain", "arguments": map[string]any{"sheet_id": wb.Sheets[0].ID, "address": "A3"}}}, http.StatusOK)
+	if len(mcpInfo.Result.Structured.Dependents) != 1 || mcpInfo.Result.Structured.Dependents[0] != "A4" {
+		t.Fatalf("MCP formula graph info: %#v", mcpInfo)
+	}
+}
+
+func TestCircularFormulaIsStoredAsExplicitError(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	wb := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "cycle"}, http.StatusCreated)
+	result := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+wb.Sheets[0].ID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "cycle-1", "cells": []map[string]any{
+			{"row": 1, "column": 1, "formula": "=B1+1"},
+			{"row": 1, "column": 2, "formula": "=A1+1"},
+			{"row": 1, "column": 3, "formula": "=A1+10"},
+		},
+	}, http.StatusOK)
+	if len(result.RecalculatedCells) != 3 || len(result.FormulaErrors) != 3 {
+		t.Fatalf("cycle metadata: %#v", result)
+	}
+	for _, formulaErr := range result.FormulaErrors {
+		if formulaErr.Code != "#CIRC!" {
+			t.Fatalf("cycle error: %#v", formulaErr)
+		}
+	}
+	cells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+wb.Sheets[0].ID+"/ranges/A1:C1", nil, http.StatusOK)
+	for _, cell := range cells.Items {
+		if string(cell.Value) != `"#CIRC!"` {
+			t.Fatalf("cycle value: %#v", cell)
+		}
 	}
 }
 

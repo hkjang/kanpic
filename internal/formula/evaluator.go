@@ -30,6 +30,26 @@ type Evaluator struct{}
 
 func New() *Evaluator { return &Evaluator{} }
 
+func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
+	parser, err := newParser(input)
+	if err != nil {
+		return []string{}, formulaError("#ERROR!", err.Error())
+	}
+	_, parseErr := parser.parse()
+	dependencies := make([]string, 0, len(parser.dependencies))
+	for dependency := range parser.dependencies {
+		dependencies = append(dependencies, dependency)
+	}
+	sort.Strings(dependencies)
+	if parseErr != nil {
+		if typed, ok := parseErr.(*Error); ok {
+			return dependencies, typed
+		}
+		return dependencies, formulaError("#ERROR!", parseErr.Error())
+	}
+	return dependencies, nil
+}
+
 func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 	parser, err := newParser(input)
 	if err != nil {
@@ -37,6 +57,9 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 	}
 	root, err := parser.parse()
 	if err != nil {
+		if typed, ok := err.(*Error); ok {
+			return Result{Dependencies: []string{}, Error: typed}
+		}
 		return Result{Dependencies: []string{}, Error: formulaError("#ERROR!", err.Error())}
 	}
 	normalized := make(map[string]any, len(cells))
@@ -186,6 +209,9 @@ func (n referenceNode) eval(cells map[string]any) (any, error) {
 	if !ok {
 		return nil, nil
 	}
+	if formulaErr, ok := value.(*Error); ok {
+		return nil, formulaErr
+	}
 	return value, nil
 }
 
@@ -199,7 +225,11 @@ func (n rangeNode) eval(cells map[string]any) (any, error) {
 	values := make([]any, 0, count)
 	for row := n.selected.Start.Row; row <= n.selected.End.Row; row++ {
 		for column := n.selected.Start.Column; column <= n.selected.End.Column; column++ {
-			values = append(values, cells[cellrange.Address(row, column)])
+			value := cells[cellrange.Address(row, column)]
+			if formulaErr, ok := value.(*Error); ok {
+				return nil, formulaErr
+			}
+			values = append(values, value)
 		}
 	}
 	return values, nil
@@ -553,6 +583,10 @@ func (p *parser) primary() (node, error) {
 			selected, err := cellrange.Parse(name + ":" + endAddress)
 			if err != nil {
 				return nil, err
+			}
+			count := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
+			if count > 100_000 {
+				return nil, formulaError("#VALUE!", "range is too large")
 			}
 			for row := selected.Start.Row; row <= selected.End.Row; row++ {
 				for column := selected.Start.Column; column <= selected.End.Column; column++ {

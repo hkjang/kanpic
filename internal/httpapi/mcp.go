@@ -47,6 +47,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
+	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
@@ -186,6 +187,8 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.formula.evaluate":
 		cells, _ := args["cells"].(map[string]any)
 		return s.formula.Evaluate(stringArg(args, "formula"), cells), nil
+	case "spreadsheet.formula.explain":
+		return s.getFormulaInfo(ctx, stringArg(args, "sheet_id"), stringArg(args, "address"))
 	case "spreadsheet.import.preview":
 		data, err := base64.StdEncoding.DecodeString(stringArg(args, "data_base64"))
 		if err != nil {

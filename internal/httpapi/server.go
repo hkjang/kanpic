@@ -66,6 +66,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	// remains /versions/{id}:restore and is validated by the handler.
 	mux.HandleFunc("POST /api/v1/versions/{versionAction}", s.restoreVersion)
 	mux.HandleFunc("POST /api/v1/formulas:evaluate", s.evaluateFormula)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/formulas/{address}", s.formulaInfo)
 	mux.HandleFunc("POST /api/v1/imports:preview", s.previewImport)
 	mux.HandleFunc("POST /api/v1/imports", s.executeImport)
 	mux.HandleFunc("POST /api/v1/exports", s.executeExport)
@@ -208,10 +209,6 @@ func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
 		Cells          []workbook.CellInput `json:"cells"`
 	}
 	if !decodeJSON(w, r, &input) {
-		return
-	}
-	if err := s.calculateFormulaCells(r, r.PathValue("sheetId"), input.Cells); err != nil {
-		s.writeError(w, r, err)
 		return
 	}
 	result, err := s.repository.ApplyCells(r.Context(), workbook.CellMutation{

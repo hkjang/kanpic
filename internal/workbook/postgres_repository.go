@@ -31,10 +31,12 @@ type sheetProperties struct {
 }
 
 type operationDocument struct {
-	Before       map[string]Cell `json:"before,omitempty"`
-	After        map[string]Cell `json:"after,omitempty"`
-	Conflicts    []CellConflict  `json:"conflicts,omitempty"`
-	AppliedCells int             `json:"applied_cells"`
+	Before            map[string]Cell    `json:"before,omitempty"`
+	After             map[string]Cell    `json:"after,omitempty"`
+	Conflicts         []CellConflict     `json:"conflicts,omitempty"`
+	AppliedCells      int                `json:"applied_cells"`
+	RecalculatedCells []CellCoordinate   `json:"recalculated_cells,omitempty"`
+	FormulaErrors     []CellFormulaError `json:"formula_errors,omitempty"`
 }
 
 type snapshotBlock struct {
@@ -425,26 +427,52 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if err != nil {
 		return MutationResult{}, err
 	}
-	before := make(map[string]Cell, len(mutation.Cells))
-	after := make(map[string]Cell, len(mutation.Cells))
 	type blockKey struct{ row, column int }
+	payloads := make(map[blockKey]map[string]Cell)
+	existing := make(map[cellKey]Cell)
+	rows, err := tx.Query(ctx, `SELECT block_row,block_column,payload FROM cell_blocks WHERE sheet_id=$1 FOR UPDATE`, mutation.SheetID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	for rows.Next() {
+		var block blockKey
+		var data []byte
+		if err := rows.Scan(&block.row, &block.column, &data); err != nil {
+			rows.Close()
+			return MutationResult{}, err
+		}
+		payload := make(map[string]Cell)
+		if err := json.Unmarshal(data, &payload); err != nil {
+			rows.Close()
+			return MutationResult{}, err
+		}
+		payloads[block] = payload
+		for _, cell := range payload {
+			existing[cellKey{cell.Row, cell.Column}] = cell
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return MutationResult{}, err
+	}
+	rows.Close()
+
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(existing, mutation.Cells)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	before := make(map[string]Cell, len(expanded))
+	after := make(map[string]Cell, len(expanded))
 	groups := make(map[blockKey][]CellInput)
-	for _, input := range mutation.Cells {
+	for _, input := range expanded {
 		key := blockKey{(input.Row - 1) / cellBlockSize, (input.Column - 1) / cellBlockSize}
 		groups[key] = append(groups[key], input)
 	}
 	now := r.now()
 	for block, inputs := range groups {
-		payload := make(map[string]Cell)
-		var data []byte
-		err := tx.QueryRow(ctx, `SELECT payload FROM cell_blocks WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3 FOR UPDATE`, mutation.SheetID, block.row, block.column).Scan(&data)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return MutationResult{}, err
-		}
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &payload); err != nil {
-				return MutationResult{}, err
-			}
+		payload := payloads[block]
+		if payload == nil {
+			payload = make(map[string]Cell)
 		}
 		for _, input := range inputs {
 			coordinate := coordinateKey(input.Row, input.Column)
@@ -462,7 +490,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 				return MutationResult{}, err
 			}
 		} else {
-			data, _ = json.Marshal(payload)
+			data, _ := json.Marshal(payload)
 			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(sheet_id,block_row,block_column) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, mutation.SheetID, block.row, block.column, data, now); err != nil {
 				return MutationResult{}, err
 			}
@@ -472,8 +500,8 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(mutation.Cells), Conflicts: conflicts, CreatedAt: now}
-	document, _ := json.Marshal(operationDocument{Before: before, After: after, Conflicts: conflicts, AppliedCells: len(mutation.Cells)})
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
+	document, _ := json.Marshal(operationDocument{Before: before, After: after, Conflicts: conflicts, AppliedCells: len(mutation.Cells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors})
 	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'cells.batch',$9,$10)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, document, now)
 	if err != nil {
 		return MutationResult{}, mapPostgresError(err)
@@ -673,7 +701,10 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 	if err := json.Unmarshal(documentData, &document); err != nil {
 		return MutationResult{}, false, err
 	}
-	result.AppliedCells, result.Conflicts = document.AppliedCells, document.Conflicts
+	result.AppliedCells = document.AppliedCells
+	result.RecalculatedCells = document.RecalculatedCells
+	result.FormulaErrors = document.FormulaErrors
+	result.Conflicts = document.Conflicts
 	return result, true, nil
 }
 
