@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -226,6 +227,100 @@ func TestPostgresMergedRangePersistsAndUndoRestoresContent(t *testing.T) {
 			t.Fatalf("merge metadata remained after undo: cell=%#v exists=%v err=%v", cell, exists, err)
 		}
 	}
+}
+
+func TestPostgresRangeSortMovesFormulasStylesAndUndoRestoresRows(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres range sort", WorkspaceID: "integration", OwnerID: "sort-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed := []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"Name"`)},
+		{Row: 1, Column: 2, Value: json.RawMessage(`"Quantity"`)},
+		{Row: 1, Column: 3, Value: json.RawMessage(`"Total"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"beta"`), Style: json.RawMessage(`{"bold":true}`)},
+		{Row: 2, Column: 2, Value: json.RawMessage(`2`)},
+		{Row: 2, Column: 3, Formula: "=B2*2"},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"Alpha"`)},
+		{Row: 3, Column: 2, Value: json.RawMessage(`10`)},
+		{Row: 3, Column: 3, Formula: "=B3*2"},
+		{Row: 4, Column: 1, Value: json.RawMessage(`"alpha"`)},
+		{Row: 4, Column: 2, Value: json.RawMessage(`5`)},
+		{Row: 4, Column: 3, Formula: "=B4*2"},
+	}
+	seeded, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "sort-user", BaseVersion: 1, IdempotencyKey: "postgres-sort-seed", Cells: seed})
+	if err != nil || seeded.ServerVersion != 2 || seeded.AppliedCells != len(seed) {
+		t.Fatalf("sort seed: %#v, %v", seeded, err)
+	}
+	selected, _ := cellrange.Parse("A1:C4")
+	existing, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := workbook.BuildSortCells(existing, selected, workbook.SortOptions{
+		HeaderRows: 1,
+		Keys: []workbook.SortKey{
+			{Column: 1, Direction: "asc"},
+			{Column: 2, Direction: "desc"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sorted, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "sort-user", BaseVersion: 2, IdempotencyKey: "postgres-range-sort", OperationType: "range.sort", Cells: inputs})
+	if err != nil || sorted.ServerVersion != 3 || sorted.AppliedCells != 9 {
+		t.Fatalf("sort result: %#v, %v", sorted, err)
+	}
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 12 {
+		t.Fatalf("sorted range: %#v, %v", cells, err)
+	}
+	assertSortedRow := func(row int, name string, quantity, total int, formulaText string, bold bool) {
+		t.Helper()
+		byColumn := make(map[int]workbook.Cell, 3)
+		for _, cell := range cells {
+			if cell.Row == row {
+				byColumn[cell.Column] = cell
+			}
+		}
+		if string(byColumn[1].Value) != `"`+name+`"` || string(byColumn[2].Value) != fmt.Sprint(quantity) || string(byColumn[3].Value) != fmt.Sprint(total) || byColumn[3].Formula != formulaText {
+			t.Fatalf("sorted row %d: %#v", row, byColumn)
+		}
+		var style map[string]any
+		_ = json.Unmarshal(byColumn[1].Style, &style)
+		if (style["bold"] == true) != bold {
+			t.Fatalf("sorted row %d style: %s", row, byColumn[1].Style)
+		}
+	}
+	assertSortedRow(2, "Alpha", 10, 20, "=B2*2", false)
+	assertSortedRow(3, "alpha", 5, 10, "=B3*2", false)
+	assertSortedRow(4, "beta", 2, 4, "=B4*2", true)
+
+	undone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: sorted.OperationID, ActorID: "sort-user", IdempotencyKey: "postgres-range-sort-undo"})
+	if err != nil || undone.ServerVersion != 4 || undone.AppliedCells != 9 {
+		t.Fatalf("sort undo: %#v, %v", undone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 12 {
+		t.Fatalf("range after sort undo: %#v, %v", cells, err)
+	}
+	assertSortedRow(2, "beta", 2, 4, "=B2*2", true)
+	assertSortedRow(3, "Alpha", 10, 20, "=B3*2", false)
+	assertSortedRow(4, "alpha", 5, 10, "=B4*2", false)
 }
 
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {

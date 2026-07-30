@@ -265,6 +265,11 @@ func TestRangeMergeRESTMCPAndUndoPreserveEveryCell(t *testing.T) {
 	if !mergeFound || !unmergeFound || mergeTool.Meta["required_scope"] != "format.write" || unmergeTool.Meta["required_scope"] != "format.write" {
 		t.Fatalf("merge MCP tools: merge=%#v unmerge=%#v", mergeTool, unmergeTool)
 	}
+	for _, action := range []string{"merge", "unmerge"} {
+		if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/ranges:"+action, nil)); scope != "format.write" {
+			t.Fatalf("%s REST scope = %q", action, scope)
+		}
+	}
 	repository := workbook.NewMemoryRepository()
 	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	defer server.Close()
@@ -311,6 +316,67 @@ func TestRangeMergeRESTMCPAndUndoPreserveEveryCell(t *testing.T) {
 		if _, exists, err := workbook.CellMerge(cell); err != nil || !exists {
 			t.Fatalf("undo did not restore merge: cell=%#v exists=%v err=%v", cell, exists, err)
 		}
+	}
+}
+
+func TestRangeSortRESTMCPIsStableAtomicAndUndoable(t *testing.T) {
+	t.Parallel()
+	sortTool, found := findMCPTool("spreadsheet.range.sort")
+	if !found || sortTool.Meta["required_scope"] != "range.write" {
+		t.Fatalf("sort MCP tool: %#v", sortTool)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/ranges:sort", nil)); scope != "range.write" {
+		t.Fatalf("sort REST scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "sort api"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	seed := []map[string]any{
+		{"row": 1, "column": 1, "value": "Name"}, {"row": 1, "column": 2, "value": "Quantity"}, {"row": 1, "column": 3, "value": "Total"},
+		{"row": 2, "column": 1, "value": "beta"}, {"row": 2, "column": 2, "value": 2}, {"row": 2, "column": 3, "formula": "=B2*10", "style": map[string]any{"bold": true}},
+		{"row": 3, "column": 1, "value": "Alpha"}, {"row": 3, "column": 2, "value": 10}, {"row": 3, "column": 3, "formula": "=B3*10"},
+		{"row": 4, "column": 1, "value": "alpha"}, {"row": 4, "column": 2, "value": 5}, {"row": 4, "column": 3, "formula": "=B4*10"},
+	}
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "sort-seed", "cells": seed}, http.StatusOK)
+	body := map[string]any{"base_version": 2, "idempotency_key": "sort-rest", "client_id": "browser", "range": "A1:C4", "header_rows": 1, "keys": []map[string]any{{"column": 1, "direction": "asc"}, {"column": 2, "direction": "desc"}}}
+	sorted := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:sort", body, http.StatusOK)
+	if sorted.ServerVersion != 3 || sorted.AppliedCells != 9 {
+		t.Fatalf("REST sort: %#v", sorted)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:sort", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 3 {
+		t.Fatalf("sort idempotency: %#v", duplicate)
+	}
+	selected := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:C4", nil, http.StatusOK)
+	if string(selected.Items[3].Value) != `"Alpha"` || string(selected.Items[6].Value) != `"alpha"` || string(selected.Items[9].Value) != `"beta"` || selected.Items[11].Formula != "=B4*10" {
+		t.Fatalf("REST sorted cells: %#v", selected.Items)
+	}
+	var movedStyle map[string]any
+	_ = json.Unmarshal(selected.Items[11].Style, &movedStyle)
+	if movedStyle["bold"] != true || string(selected.Items[11].Value) != "20" {
+		t.Fatalf("sorted formula/style: cell=%#v style=%#v", selected.Items[11], movedStyle)
+	}
+	mcpSorted := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.range.sort", "arguments": map[string]any{"sheet_id": sheetID, "range": "A1:C4", "base_version": 3, "idempotency_key": "sort-mcp", "client_id": "agent", "header_rows": 1, "keys": []map[string]any{{"column": 2, "direction": "asc"}}}}}, http.StatusOK)
+	if mcpSorted.Result.Structured.ServerVersion != 4 || mcpSorted.Result.Structured.AppliedCells != 9 {
+		t.Fatalf("MCP sort: %#v", mcpSorted.Result.Structured)
+	}
+	undone := request[workbook.MutationResult](t, server, http.MethodPost, "/api/v1/operations/"+mcpSorted.Result.Structured.OperationID+":undo", map[string]any{"idempotency_key": "undo-sort", "client_id": "agent"}, http.StatusOK)
+	if undone.ServerVersion != 5 || undone.AppliedCells != 9 {
+		t.Fatalf("sort undo: %#v", undone)
+	}
+	selected = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:C4", nil, http.StatusOK)
+	if string(selected.Items[3].Value) != `"Alpha"` || string(selected.Items[9].Value) != `"beta"` {
+		t.Fatalf("sort undo order: %#v", selected.Items)
 	}
 }
 

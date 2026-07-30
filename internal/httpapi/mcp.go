@@ -52,6 +52,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식을 원자적으로 병합합니다.", "format.write", requiredProps4("sheet_id", "string", "range", "string", "style", "object", "idempotency_key", "string")),
 	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
+	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -240,6 +241,17 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		input.Range = stringArg(args, "range")
 		result, cells, err := s.applyRangeMerge(ctx, stringArg(args, "sheet_id"), actor, input, name == "spreadsheet.range.merge")
+		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
+			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+		}
+		return result, err
+	case "spreadsheet.range.sort":
+		var input rangeSortRequest
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.Range = stringArg(args, "range")
+		result, cells, err := s.applyRangeSort(ctx, stringArg(args, "sheet_id"), actor, input)
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}

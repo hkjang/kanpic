@@ -68,6 +68,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:merge", s.mergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:sort", s.sortRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
@@ -279,6 +280,16 @@ type rangeMergeRequest struct {
 	Range          string `json:"range"`
 }
 
+type rangeSortRequest struct {
+	BaseVersion    int64              `json:"base_version"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	ClientID       string             `json:"client_id"`
+	Range          string             `json:"range"`
+	Keys           []workbook.SortKey `json:"keys"`
+	HeaderRows     int                `json:"header_rows"`
+	CaseSensitive  bool               `json:"case_sensitive"`
+}
+
 func (s *Server) formatRange(w http.ResponseWriter, r *http.Request) {
 	var input rangeFormatRequest
 	if !decodeJSON(w, r, &input) {
@@ -359,6 +370,39 @@ func (s *Server) applyRangeMerge(ctx context.Context, sheetID, actor string, inp
 		operationType = "range.unmerge"
 	}
 	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, OperationType: operationType})
+	return result, cells, err
+}
+
+func (s *Server) sortRange(w http.ResponseWriter, r *http.Request) {
+	var input rangeSortRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	result, cells, err := s.applyRangeSort(r.Context(), r.PathValue("sheetId"), actorID(r), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate && result.AppliedCells > 0 {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) applyRangeSort(ctx context.Context, sheetID, actor string, input rangeSortRequest) (workbook.MutationResult, []workbook.CellInput, error) {
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return workbook.MutationResult{}, nil, fmt.Errorf("%w: invalid range", workbook.ErrInvalid)
+	}
+	existing, err := s.repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		return workbook.MutationResult{}, nil, err
+	}
+	cells, err := workbook.BuildSortCells(existing, selected, workbook.SortOptions{Keys: input.Keys, HeaderRows: input.HeaderRows, CaseSensitive: input.CaseSensitive})
+	if err != nil {
+		return workbook.MutationResult{}, nil, err
+	}
+	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, OperationType: "range.sort"})
 	return result, cells, err
 }
 
@@ -668,8 +712,11 @@ func requiredScope(r *http.Request) string {
 		}
 		return "profile.write"
 	}
-	if strings.Contains(path, "ranges:format") {
+	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") {
 		return "format.write"
+	}
+	if strings.Contains(path, "ranges:sort") {
+		return "range.write"
 	}
 	if strings.Contains(path, "/ranges/") {
 		return "range.read"

@@ -191,6 +191,76 @@ test('merges cells without data loss and supports undo redo and offline unmerge'
   expect(merged.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2).value).toBe('kept')
 })
 
+test('sorts a range by multiple keys with formulas, undo, and offline resend', async ({ page, context }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name:'새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const seed=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{
+    base_version:1,
+    idempotency_key:`sort-seed-${workbookId}`,
+    cells:[
+      {row:1,column:1,value:'Name'},{row:1,column:2,value:'Quantity'},{row:1,column:3,value:'Total'},
+      {row:2,column:1,value:'beta',style:{bold:true}},{row:2,column:2,value:2},{row:2,column:3,formula:'=B2*2'},
+      {row:3,column:1,value:'Alpha'},{row:3,column:2,value:10},{row:3,column:3,formula:'=B3*2'},
+      {row:4,column:1,value:'alpha'},{row:4,column:2,value:5},{row:4,column:3,formula:'=B4*2'},
+    ],
+  }})
+  expect(seed.ok()).toBe(true)
+  await page.reload()
+  const canvas=page.locator('canvas.grid-canvas')
+  await expect(canvas).toBeVisible()
+  const range=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:C4`).then(response=>response.json())
+  const rows=async()=>{
+    const result=await range()
+    return Array.from({length:4},(_,offset)=>{
+      const row=offset+1
+      const at=(column:number)=>result.items.find((cell:{row:number;column:number})=>cell.row===row&&cell.column===column)
+      return {name:at(1)?.value,quantity:at(2)?.value,total:at(3)?.value,formula:at(3)?.formula,bold:at(1)?.style?.bold}
+    })
+  }
+  const selectRange=async()=>{
+    await canvas.click({position:{x:70,y:42}})
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowDown')
+    await expect(page.locator('.name-box')).toHaveText('A1:C4')
+  }
+
+  await selectRange()
+  await page.getByRole('button',{name:'범위 정렬'}).click()
+  await expect(page.getByRole('dialog',{name:'범위 정렬'})).toBeVisible()
+  await page.getByRole('button',{name:'+ 기준 추가'}).click()
+  await page.getByLabel('2차 정렬 방향').selectOption('desc')
+  await page.getByRole('button',{name:'정렬 적용'}).click()
+  await expect.poll(async()=>(await rows()).map(row=>row.name)).toEqual(['Name','Alpha','alpha','beta'])
+  let sorted=await rows()
+  expect(sorted.map(row=>row.quantity)).toEqual(['Quantity',10,5,2])
+  expect(sorted.slice(1).map(row=>row.formula)).toEqual(['=B2*2','=B3*2','=B4*2'])
+  expect(sorted.slice(1).map(row=>row.total)).toEqual([20,10,4])
+  expect(sorted[3].bold).toBe(true)
+
+  await page.getByRole('button',{name:'실행 취소'}).click()
+  await expect.poll(async()=>(await rows()).map(row=>row.name)).toEqual(['Name','beta','Alpha','alpha'])
+
+  await selectRange()
+  await context.setOffline(true)
+  await page.getByRole('button',{name:'범위 정렬'}).click()
+  await page.getByLabel('1차 정렬 열').selectOption('2')
+  await page.getByLabel('1차 정렬 방향').selectOption('desc')
+  await page.getByRole('button',{name:'정렬 적용'}).click()
+  await expect(page.getByText('오프라인 · 로컬 저장',{exact:true})).toBeVisible()
+  await context.setOffline(false)
+  await expect.poll(async()=>(await rows()).map(row=>row.quantity),{timeout:15_000}).toEqual(['Quantity',10,5,2])
+  sorted=await rows()
+  expect(sorted.slice(1).map(row=>row.formula)).toEqual(['=B2*2','=B3*2','=B4*2'])
+  expect(sorted.slice(1).map(row=>row.total)).toEqual([20,10,4])
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()
