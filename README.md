@@ -43,7 +43,7 @@ go test ./...
 cd web && npm ci && npm test && npm run build
 ```
 
-이 저장소의 커밋 author와 committer는 모두 `hkjang`으로 고정합니다. 최초 clone 후 아래 설정을 적용하면 저장소에 포함된 pre-commit/pre-push 검사가 활성화되며, `shimonenator` 또는 다른 이름의 커밋은 거부됩니다.
+이 저장소의 커밋 author와 committer는 모두 `hkjang`으로 고정합니다. 최초 clone 후 아래 설정을 적용하면 저장소에 포함된 prepare-commit-msg/pre-commit/pre-push 검사가 활성화되며, `shimonenator` 또는 다른 이름의 커밋은 거부됩니다. `prepare-commit-msg` 검사는 `git commit --no-verify`에도 생략되지 않습니다.
 
 ```bash
 git config --local user.name hkjang
