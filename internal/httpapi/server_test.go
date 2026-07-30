@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,6 +96,86 @@ func TestFormulaEvaluationAndStoredResult(t *testing.T) {
 	if len(cells.Items) != 1 || string(cells.Items[0].Value) != "5" || cells.Items[0].Formula != "=SUM(A1:A2)" {
 		t.Fatalf("stored formula: %#v", cells.Items)
 	}
+}
+
+func TestImportExportAndMCPFileTools(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	csvData := []byte("name,amount\nalpha,10\nbeta,20\n")
+	previewResponse := multipartRequest(t, server, http.MethodPost, "/api/v1/imports:preview", "data.csv", csvData, "", http.StatusOK)
+	var preview struct {
+		TotalCells int `json:"total_cells"`
+	}
+	if err := json.Unmarshal(previewResponse, &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.TotalCells != 6 {
+		t.Fatalf("preview cells = %d", preview.TotalCells)
+	}
+	importResponse := multipartRequest(t, server, http.MethodPost, "/api/v1/imports", "data.csv", csvData, "import-http-1", http.StatusCreated)
+	var created workbook.Workbook
+	if err := json.Unmarshal(importResponse, &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Sheets) != 1 {
+		t.Fatalf("created workbook: %#v", created)
+	}
+	exportRequest, _ := json.Marshal(map[string]any{"workbook_id": created.ID, "format": "csv"})
+	response, err := http.Post(server.URL+"/api/v1/exports", "application/json", bytes.NewReader(exportRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	exported, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(exported, []byte("alpha,10")) {
+		t.Fatalf("export: %d %s", response.StatusCode, exported)
+	}
+
+	mcpResult := request[struct {
+		Result struct {
+			Structured map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.import.preview", "arguments": map[string]any{"file_name": "agent.csv", "data_base64": base64.StdEncoding.EncodeToString(csvData)}}}, http.StatusOK)
+	if mcpResult.Result.Structured["total_cells"] != float64(6) {
+		t.Fatalf("MCP preview: %#v", mcpResult)
+	}
+}
+
+func multipartRequest(t *testing.T, server *httptest.Server, method, path, fileName string, data []byte, idempotencyKey string, status int) []byte {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.WriteField("workspace_id", "default")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(method, server.URL+path, &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	result, _ := io.ReadAll(response.Body)
+	if response.StatusCode != status {
+		t.Fatalf("%s: status %d body %s", path, response.StatusCode, result)
+	}
+	return result
 }
 
 func request[T any](t *testing.T, server *httptest.Server, method, path string, input any, status int) T {

@@ -105,3 +105,20 @@ type UpdateSheetInput struct {
 	Color    *string `json:"color,omitempty"`
 	Hidden   *bool   `json:"hidden,omitempty"`
 }
+
+type ImportSheet struct {
+	Name  string      `json:"name"`
+	Color string      `json:"color,omitempty"`
+	Cells []CellInput `json:"cells"`
+}
+
+type ImportWorkbookInput struct {
+	WorkspaceID    string        `json:"workspace_id"`
+	Title          string        `json:"title"`
+	OwnerID        string        `json:"owner_id"`
+	ActorID        string        `json:"actor_id"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	FileName       string        `json:"file_name"`
+	Format         string        `json:"format"`
+	Sheets         []ImportSheet `json:"sheets"`
+}

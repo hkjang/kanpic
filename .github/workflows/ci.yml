@@ -6,6 +6,15 @@ on:
   pull_request:
 
 jobs:
+  commit-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enforce hkjang commit identity
+        run: ./scripts/check-commit-identities.sh HEAD
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -28,7 +37,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "24", cache: npm, cache-dependency-path: web/package-lock.json }
       - run: go test ./...
-      - run: npm ci && npm run build
+      - run: npm ci && npm test && npm run build
         working-directory: web
       - run: go test -tags=integration ./internal/...
         env:

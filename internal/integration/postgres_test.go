@@ -14,6 +14,7 @@ import (
 
 	"kanpic/internal/apikey"
 	"kanpic/internal/database"
+	"kanpic/internal/importexport"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
@@ -62,6 +63,51 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	cells, err := repository.ReadRange(ctx, sheetID, selected)
 	if err != nil || len(cells) != 1 || string(cells[0].Value) != "10" {
 		t.Fatalf("restored cells: %#v %v", cells, err)
+	}
+}
+
+func TestPostgresAtomicImportExport(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	service := importexport.New(repository)
+	key := "integration-import-" + time.Now().Format("150405.000000")
+	request := importexport.ImportRequest{FileName: "atomic.csv", Data: []byte("name,amount\nalpha,10\nbeta,20\n"), WorkspaceID: "integration", ActorID: "integration-import-user", IdempotencyKey: key, MaxExpandedBytes: importexport.DefaultMaxExpandedBytes}
+	created, err := service.Import(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), created.ID)
+	duplicate, err := service.Import(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ID != created.ID {
+		t.Fatalf("idempotent import created %s and %s", created.ID, duplicate.ID)
+	}
+	cells, err := repository.ReadAllCells(ctx, created.Sheets[0].ID)
+	if err != nil || len(cells) != 6 {
+		t.Fatalf("imported cells: %d, %v", len(cells), err)
+	}
+	exported, err := service.Export(ctx, importexport.ExportRequest{WorkbookID: created.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := importexport.Parse(exported.Name, exported.Data, importexport.DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Preview.TotalCells != 6 {
+		t.Fatalf("round trip cells = %d", parsed.Preview.TotalCells)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"kanpic/internal/auth"
 	"kanpic/internal/buildinfo"
 	"kanpic/internal/formula"
+	"kanpic/internal/importexport"
 	"kanpic/internal/observability"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
@@ -34,6 +35,7 @@ type Server struct {
 	logs       *observability.Store
 	build      buildinfo.BuildInfo
 	formula    *formula.Evaluator
+	files      *importexport.Service
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -44,7 +46,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New()}
+	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/version", s.versionInfo)
@@ -64,6 +66,9 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	// remains /versions/{id}:restore and is validated by the handler.
 	mux.HandleFunc("POST /api/v1/versions/{versionAction}", s.restoreVersion)
 	mux.HandleFunc("POST /api/v1/formulas:evaluate", s.evaluateFormula)
+	mux.HandleFunc("POST /api/v1/imports:preview", s.previewImport)
+	mux.HandleFunc("POST /api/v1/imports", s.executeImport)
+	mux.HandleFunc("POST /api/v1/exports", s.executeExport)
 	if settingRepository != nil {
 		mux.HandleFunc("GET /api/v1/admin/settings", s.listSettings)
 		mux.HandleFunc("PUT /api/v1/admin/settings/{key}", s.putSetting)
@@ -442,6 +447,12 @@ func requiredScope(r *http.Request) string {
 	}
 	if strings.Contains(path, "/formulas") {
 		return "formula.read"
+	}
+	if strings.Contains(path, "/imports") {
+		return "import.write"
+	}
+	if strings.Contains(path, "/exports") {
+		return "export.read"
 	}
 	if strings.Contains(path, "/versions") {
 		if r.Method == http.MethodGet {

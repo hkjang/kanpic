@@ -43,6 +43,7 @@ type MemoryRepository struct {
 	workbooks map[string]*workbookState
 	sheetToWB map[string]string
 	now       func() time.Time
+	imports   map[string]string
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -50,7 +51,85 @@ func NewMemoryRepository() *MemoryRepository {
 		workbooks: make(map[string]*workbookState),
 		sheetToWB: make(map[string]string),
 		now:       func() time.Time { return time.Now().UTC() },
+		imports:   make(map[string]string),
 	}
+}
+
+func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkbookInput) (Workbook, error) {
+	title := strings.TrimSpace(input.Title)
+	if title == "" || len(input.Sheets) == 0 {
+		return Workbook{}, fmt.Errorf("%w: title and at least one sheet are required", ErrInvalid)
+	}
+	if input.IdempotencyKey == "" {
+		return Workbook{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
+	}
+	names := make(map[string]struct{}, len(input.Sheets))
+	cellCount := 0
+	for _, imported := range input.Sheets {
+		name := strings.ToLower(strings.TrimSpace(imported.Name))
+		if name == "" {
+			return Workbook{}, fmt.Errorf("%w: sheet name is required", ErrInvalid)
+		}
+		if _, exists := names[name]; exists {
+			return Workbook{}, ErrDuplicateName
+		}
+		names[name] = struct{}{}
+		cellCount += len(imported.Cells)
+		if cellCount > 1_000_000 {
+			return Workbook{}, fmt.Errorf("%w: import exceeds one million cells", ErrInvalid)
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := input.ActorID + ":" + input.IdempotencyKey
+	if workbookID, exists := r.imports[key]; exists {
+		state, ok := r.workbooks[workbookID]
+		if !ok {
+			return Workbook{}, ErrNotFound
+		}
+		return r.workbookWithSheets(state), nil
+	}
+	now := r.now()
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	state := &workbookState{workbook: wb, sheets: make(map[string]Sheet), cells: make(map[string]map[cellKey]Cell), idempotent: make(map[string]MutationResult)}
+	for position, imported := range input.Sheets {
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, CreatedAt: now}
+		state.sheets[sheet.ID] = sheet
+		state.cells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
+		for _, inputCell := range imported.Cells {
+			if inputCell.Row < 1 || inputCell.Column < 1 {
+				return Workbook{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
+			}
+			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}
+			if !isEmptyCell(cell) {
+				state.cells[sheet.ID][cellKey{cell.Row, cell.Column}] = cell
+			}
+		}
+		r.sheetToWB[sheet.ID] = wb.ID
+	}
+	r.workbooks[wb.ID] = state
+	r.imports[key] = wb.ID
+	return r.workbookWithSheets(state), nil
+}
+
+func (r *MemoryRepository) ReadAllCells(_ context.Context, sheetID string) ([]Cell, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	state, _, err := r.sheetState(sheetID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Cell, 0, len(state.cells[sheetID]))
+	for _, cell := range state.cells[sheetID] {
+		result = append(result, cloneCell(cell))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Row == result[j].Row {
+			return result[i].Column < result[j].Column
+		}
+		return result[i].Row < result[j].Row
+	})
+	return result, nil
 }
 
 func (r *MemoryRepository) CreateWorkbook(_ context.Context, input CreateWorkbookInput) (Workbook, error) {

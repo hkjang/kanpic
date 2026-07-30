@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"kanpic/internal/apikey"
+	"kanpic/internal/importexport"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
@@ -45,6 +47,9 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
+	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
+	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
+	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
 	tool("spreadsheet.version.create", "현재 워크북 스냅샷 버전을 생성합니다.", "version.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.version.list", "워크북 버전 목록을 조회합니다.", "version.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.version.restore", "선택한 버전을 최신 버전으로 복원합니다.", "version.write", requiredProps("version_id", "string")),
@@ -181,6 +186,28 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.formula.evaluate":
 		cells, _ := args["cells"].(map[string]any)
 		return s.formula.Evaluate(stringArg(args, "formula"), cells), nil
+	case "spreadsheet.import.preview":
+		data, err := base64.StdEncoding.DecodeString(stringArg(args, "data_base64"))
+		if err != nil {
+			return nil, err
+		}
+		return s.files.Preview(ctx, stringArg(args, "file_name"), data, s.maxExpandedBytes(r))
+	case "spreadsheet.import.execute":
+		data, err := base64.StdEncoding.DecodeString(stringArg(args, "data_base64"))
+		if err != nil {
+			return nil, err
+		}
+		idempotencyKey := stringArg(args, "idempotency_key")
+		if idempotencyKey == "" {
+			return nil, errors.New("idempotency_key is required")
+		}
+		return s.files.Import(ctx, importexport.ImportRequest{FileName: stringArg(args, "file_name"), Data: data, WorkspaceID: stringArg(args, "workspace_id"), ActorID: actor, IdempotencyKey: idempotencyKey, MaxExpandedBytes: s.maxExpandedBytes(r)})
+	case "spreadsheet.export.execute":
+		exported, err := s.files.Export(ctx, importexport.ExportRequest{WorkbookID: stringArg(args, "workbook_id"), SheetID: stringArg(args, "sheet_id"), Format: stringArg(args, "format")})
+		if err != nil {
+			return nil, err
+		}
+		return encodeExportForMCP(exported), nil
 	case "spreadsheet.version.create":
 		return s.repository.CreateVersion(ctx, stringArg(args, "workbook_id"), stringArg(args, "name"), actor)
 	case "spreadsheet.version.list":

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+zero_hash="0000000000000000000000000000000000000000"
+
+"$repo_root/scripts/check-git-identity.sh"
+
+while read -r local_ref local_hash remote_ref remote_hash; do
+  if [[ "$local_hash" == "$zero_hash" ]]; then
+    continue
+  fi
+
+  if [[ "$remote_hash" == "$zero_hash" ]]; then
+    mapfile -t commits < <(git rev-list "$local_hash" --not --remotes)
+  else
+    mapfile -t commits < <(git rev-list "$remote_hash..$local_hash")
+  fi
+
+  if [[ "${#commits[@]}" -gt 0 ]]; then
+    "$repo_root/scripts/check-commit-identities.sh" "${commits[@]}"
+  fi
+done

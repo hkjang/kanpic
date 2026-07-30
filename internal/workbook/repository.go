@@ -31,4 +31,7 @@ type Repository interface {
 	CreateVersion(context.Context, string, string, string) (Version, error)
 	ListVersions(context.Context, string) ([]Version, error)
 	RestoreVersion(context.Context, string, string) (MutationResult, error)
+
+	ImportWorkbook(context.Context, ImportWorkbookInput) (Workbook, error)
+	ReadAllCells(context.Context, string) ([]Cell, error)
 }

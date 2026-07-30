@@ -40,8 +40,18 @@ API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이�
 
 ```bash
 go test ./...
-cd web && npm ci && npm run build
+cd web && npm ci && npm test && npm run build
 ```
+
+이 저장소의 커밋 author와 committer는 모두 `hkjang`으로 고정합니다. 최초 clone 후 아래 설정을 적용하면 저장소에 포함된 pre-commit/pre-push 검사가 활성화되며, `shimonenator` 또는 다른 이름의 커밋은 거부됩니다.
+
+```bash
+git config --local user.name hkjang
+git config --local user.email gagagiga@naver.com
+git config --local core.hooksPath .githooks
+```
+
+CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 현재 워크북을 XLSX 또는 CSV로 내보낼 수 있으며, 동일 기능은 REST API와 MCP 도구에서도 제공됩니다.
 
 릴리즈 번들은 다음 명령으로 만듭니다.
 

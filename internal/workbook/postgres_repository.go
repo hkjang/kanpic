@@ -52,6 +52,129 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool, now: func() time.Time { return time.Now().UTC() }}
 }
 
+func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWorkbookInput) (Workbook, error) {
+	title := strings.TrimSpace(input.Title)
+	if title == "" || len(input.Sheets) == 0 {
+		return Workbook{}, fmt.Errorf("%w: title and at least one sheet are required", ErrInvalid)
+	}
+	if strings.TrimSpace(input.IdempotencyKey) == "" {
+		return Workbook{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
+	}
+	var existingID string
+	err := r.pool.QueryRow(ctx, `SELECT workbook_id::text FROM import_jobs WHERE actor_id=$1 AND idempotency_key=$2`, input.ActorID, input.IdempotencyKey).Scan(&existingID)
+	if err == nil {
+		return r.GetWorkbook(ctx, existingID)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Workbook{}, err
+	}
+	names := make(map[string]struct{}, len(input.Sheets))
+	cellCount := 0
+	for _, imported := range input.Sheets {
+		name := strings.ToLower(strings.TrimSpace(imported.Name))
+		if name == "" {
+			return Workbook{}, fmt.Errorf("%w: sheet name is required", ErrInvalid)
+		}
+		if _, exists := names[name]; exists {
+			return Workbook{}, ErrDuplicateName
+		}
+		names[name] = struct{}{}
+		cellCount += len(imported.Cells)
+		if cellCount > 1_000_000 {
+			return Workbook{}, fmt.Errorf("%w: import exceeds one million cells", ErrInvalid)
+		}
+		for _, cell := range imported.Cells {
+			if cell.Row < 1 || cell.Column < 1 {
+				return Workbook{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
+			}
+		}
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Workbook{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	now := r.now()
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := tx.Exec(ctx, `INSERT INTO workbooks(id,workspace_id,title,owner_id,version,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)`, wb.ID, wb.WorkspaceID, wb.Title, wb.OwnerID, now); err != nil {
+		return Workbook{}, err
+	}
+	wb.Sheets = make([]Sheet, 0, len(input.Sheets))
+	type importBlockKey struct{ row, column int }
+	for position, imported := range input.Sheets {
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, CreatedAt: now}
+		properties, _ := json.Marshal(sheetProperties{Color: imported.Color})
+		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, position, properties, now); err != nil {
+			return Workbook{}, mapPostgresError(err)
+		}
+		blocks := make(map[importBlockKey]map[string]Cell)
+		for _, inputCell := range imported.Cells {
+			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}
+			if isEmptyCell(cell) {
+				continue
+			}
+			block := importBlockKey{(cell.Row - 1) / cellBlockSize, (cell.Column - 1) / cellBlockSize}
+			if blocks[block] == nil {
+				blocks[block] = make(map[string]Cell)
+			}
+			blocks[block][coordinateKey(cell.Row, cell.Column)] = cell
+		}
+		for block, payload := range blocks {
+			data, _ := json.Marshal(payload)
+			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, sheet.ID, block.row, block.column, data, now); err != nil {
+				return Workbook{}, err
+			}
+		}
+		wb.Sheets = append(wb.Sheets, sheet)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO import_jobs(id,actor_id,idempotency_key,file_name,format,workbook_id,cell_count,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, identity.New(), input.ActorID, input.IdempotencyKey, input.FileName, input.Format, wb.ID, cellCount, now); err != nil {
+		return Workbook{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Workbook{}, err
+	}
+	return wb, nil
+}
+
+func (r *PostgresRepository) ReadAllCells(ctx context.Context, sheetID string) ([]Cell, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sheets WHERE id=$1)`, sheetID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := r.pool.Query(ctx, `SELECT payload FROM cell_blocks WHERE sheet_id=$1`, sheetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Cell, 0)
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var payload map[string]Cell
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, err
+		}
+		for _, cell := range payload {
+			result = append(result, cell)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Row == result[j].Row {
+			return result[i].Column < result[j].Column
+		}
+		return result[i].Row < result[j].Row
+	})
+	return result, nil
+}
+
 func (r *PostgresRepository) CreateWorkbook(ctx context.Context, input CreateWorkbookInput) (Workbook, error) {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {

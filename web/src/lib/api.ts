@@ -5,7 +5,8 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { credentials: 'same-origin', ...init, headers: { ...jsonHeaders, ...(init?.headers ?? {}) } })
+  const defaultHeaders = init?.body instanceof FormData ? {} : jsonHeaders
+  const response = await fetch(path, { credentials: 'same-origin', ...init, headers: { ...defaultHeaders, ...(init?.headers ?? {}) } })
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as {error?:{message?:string}} | null
     throw new ApiError(response.status, payload?.error?.message ?? `요청 실패 (${response.status})`)

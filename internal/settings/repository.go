@@ -378,6 +378,12 @@ func validateValue(item Setting) string {
 			return "자동 저장 간격은 100~500ms여야 합니다."
 		}
 	}
+	if item.Key == "files.max_import_mb" {
+		number, _ := value.(float64)
+		if number < 1 || number > 2048 {
+			return "Import 파일 한도는 1~2048MB여야 합니다."
+		}
+	}
 	return ""
 }
 
