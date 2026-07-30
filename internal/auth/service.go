@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -24,6 +25,10 @@ import (
 
 const SessionCookie = "kanpic_session"
 
+const bootstrapAdminRole = "kanpic-bootstrap-admin"
+
+var ErrInvalidBootstrapCredentials = errors.New("invalid bootstrap administrator credentials")
+
 type User struct {
 	ID          string    `json:"id"`
 	Email       string    `json:"email,omitempty"`
@@ -33,24 +38,38 @@ type User struct {
 }
 
 type Config struct {
-	Enabled    bool
-	IssuerURL  string
-	ClientID   string
-	Scopes     []string
-	AdminRoles []string
-	SessionTTL time.Duration
-	CAPEM      string
-	PublicURL  string
+	Enabled      bool
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	AdminRoles   []string
+	SessionTTL   time.Duration
+	CAPEM        string
+	PublicURL    string
+}
+
+type BootstrapCredentials struct {
+	ID       string
+	Password string
+}
+
+func (c BootstrapCredentials) Enabled() bool {
+	return strings.TrimSpace(c.ID) != "" && c.Password != ""
 }
 
 type Service struct {
-	pool     *pgxpool.Pool
-	settings *settings.Repository
+	pool      *pgxpool.Pool
+	settings  *settings.Repository
+	bootstrap BootstrapCredentials
 }
 
-func New(pool *pgxpool.Pool, settingRepository *settings.Repository) *Service {
-	return &Service{pool: pool, settings: settingRepository}
+func New(pool *pgxpool.Pool, settingRepository *settings.Repository, bootstrap BootstrapCredentials) *Service {
+	bootstrap.ID = strings.TrimSpace(bootstrap.ID)
+	return &Service{pool: pool, settings: settingRepository, bootstrap: bootstrap}
 }
+
+func (s *Service) BootstrapEnabled() bool { return s.bootstrap.Enabled() }
 
 func (s *Service) Config(ctx context.Context) (Config, error) {
 	values, err := s.settings.Values(ctx)
@@ -63,6 +82,7 @@ func (s *Service) Config(ctx context.Context) (Config, error) {
 	if value, ok := values["auth.oidc.client_id"].(string); ok && value != "" {
 		config.ClientID = value
 	}
+	config.ClientSecret, _ = values["auth.oidc.client_secret"].(string)
 	if value := stringList(values["auth.oidc.scopes"]); len(value) > 0 {
 		config.Scopes = value
 	}
@@ -94,7 +114,7 @@ func (s *Service) LoginURL(ctx context.Context, requestOrigin, returnTo string) 
 		origin = strings.TrimRight(config.PublicURL, "/")
 	}
 	redirectURL := origin + "/auth/callback"
-	oauthConfig := oauth2.Config{ClientID: config.ClientID, Endpoint: provider.Endpoint(), RedirectURL: redirectURL, Scopes: config.Scopes}
+	oauthConfig := oauthConfigFor(config, provider.Endpoint(), redirectURL)
 	state, err := randomToken(32)
 	if err != nil {
 		return "", err
@@ -137,7 +157,7 @@ func (s *Service) Callback(ctx context.Context, requestOrigin, state, code strin
 	if config.PublicURL != "" {
 		origin = strings.TrimRight(config.PublicURL, "/")
 	}
-	oauthConfig := oauth2.Config{ClientID: config.ClientID, Endpoint: provider.Endpoint(), RedirectURL: origin + "/auth/callback", Scopes: config.Scopes}
+	oauthConfig := oauthConfigFor(config, provider.Endpoint(), origin+"/auth/callback")
 	token, err := oauthConfig.Exchange(providerContext, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return "", "", User{}, fmt.Errorf("exchange OIDC code: %w", err)
@@ -172,17 +192,42 @@ func (s *Service) Callback(ctx context.Context, requestOrigin, state, code strin
 	if displayName == "" {
 		displayName = claims.Email
 	}
-	session, err := randomToken(32)
-	if err != nil {
-		return "", "", User{}, err
-	}
-	sessionHash := sha256.Sum256([]byte(session))
 	user := User{ID: claims.Subject, Email: claims.Email, DisplayName: displayName, Roles: claims.RealmAccess.Roles, ExpiresAt: time.Now().UTC().Add(config.SessionTTL)}
-	_, err = s.pool.Exec(ctx, `INSERT INTO user_sessions(session_hash,user_id,email,display_name,roles,id_token_hint,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, sessionHash[:], user.ID, user.Email, user.DisplayName, user.Roles, rawIDToken, user.ExpiresAt)
+	session, err := s.createSession(ctx, user, rawIDToken)
 	if err != nil {
 		return "", "", User{}, err
 	}
 	return session, returnTo, user, nil
+}
+
+func (s *Service) BootstrapLogin(ctx context.Context, id, password string) (string, User, error) {
+	idMatches := secureEqual(strings.TrimSpace(id), s.bootstrap.ID)
+	passwordMatches := secureEqual(password, s.bootstrap.Password)
+	if !s.bootstrap.Enabled() || !idMatches || !passwordMatches {
+		return "", User{}, ErrInvalidBootstrapCredentials
+	}
+	config, err := s.Config(ctx)
+	if err != nil {
+		return "", User{}, err
+	}
+	user := User{
+		ID:          s.bootstrap.ID,
+		DisplayName: s.bootstrap.ID,
+		Roles:       []string{bootstrapAdminRole},
+		ExpiresAt:   time.Now().UTC().Add(config.SessionTTL),
+	}
+	session, err := s.createSession(ctx, user, "")
+	return session, user, err
+}
+
+func (s *Service) createSession(ctx context.Context, user User, idTokenHint string) (string, error) {
+	session, err := randomToken(32)
+	if err != nil {
+		return "", err
+	}
+	sessionHash := sha256.Sum256([]byte(session))
+	_, err = s.pool.Exec(ctx, `INSERT INTO user_sessions(session_hash,user_id,email,display_name,roles,id_token_hint,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, sessionHash[:], user.ID, user.Email, user.DisplayName, user.Roles, idTokenHint, user.ExpiresAt)
+	return session, err
 }
 
 func (s *Service) Session(ctx context.Context, token string) (User, error) {
@@ -199,6 +244,13 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 }
 
 func (s *Service) IsAdmin(ctx context.Context, user User) bool {
+	if s.bootstrap.Enabled() && secureEqual(user.ID, s.bootstrap.ID) {
+		for _, role := range user.Roles {
+			if role == bootstrapAdminRole {
+				return true
+			}
+		}
+	}
 	config, err := s.Config(ctx)
 	if err != nil {
 		return false
@@ -213,6 +265,16 @@ func (s *Service) IsAdmin(ctx context.Context, user User) bool {
 		}
 	}
 	return false
+}
+
+func oauthConfigFor(config Config, endpoint oauth2.Endpoint, redirectURL string) oauth2.Config {
+	return oauth2.Config{
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		Endpoint:     endpoint,
+		RedirectURL:  redirectURL,
+		Scopes:       config.Scopes,
+	}
 }
 
 func providerFor(ctx context.Context, config Config) (*oidc.Provider, context.Context, error) {
@@ -261,6 +323,12 @@ func randomToken(size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func secureEqual(left, right string) bool {
+	leftHash := sha256.Sum256([]byte(left))
+	rightHash := sha256.Sum256([]byte(right))
+	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
 }
 
 func stringList(value any) []string {

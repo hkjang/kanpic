@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +25,14 @@ func main() {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("POSTGRES_DSN is required")
+		os.Exit(2)
+	}
+	bootstrap := auth.BootstrapCredentials{
+		ID:       strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_ID")),
+		Password: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+	}
+	if (bootstrap.ID == "") != (bootstrap.Password == "") {
+		logger.Error("BOOTSTRAP_ADMIN_ID and BOOTSTRAP_ADMIN_PASSWORD must be configured together")
 		os.Exit(2)
 	}
 	startupContext, startupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -47,7 +56,7 @@ func main() {
 	setupCancel()
 	logStore := observability.NewStore(pool)
 	keyRepository := apikey.New(pool)
-	authService := auth.New(pool, settingRepository)
+	authService := auth.New(pool, settingRepository, bootstrap)
 	handler := httpapi.NewPlatform(repository, settingRepository, keyRepository, authService, logStore, logger)
 	address := ":8080"
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}

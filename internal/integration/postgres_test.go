@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"kanpic/internal/apikey"
+	"kanpic/internal/auth"
 	"kanpic/internal/database"
 	"kanpic/internal/importexport"
 	"kanpic/internal/settings"
@@ -719,6 +720,42 @@ func TestSettingsAndAPIKeyLifecycle(t *testing.T) {
 	validation, err := settingRepository.Validate(ctx)
 	if err != nil || !validation.Valid {
 		t.Fatalf("validation: %#v %v", validation, err)
+	}
+	settingsList, err := settingRepository.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientSecretFound := false
+	for _, item := range settingsList {
+		if item.Key == "auth.oidc.client_secret" {
+			clientSecretFound = true
+			if !item.Secret || item.Value != nil {
+				t.Fatalf("client secret was not redacted: %#v", item)
+			}
+		}
+	}
+	if !clientSecretFound {
+		t.Fatal("auth.oidc.client_secret default is missing")
+	}
+	secretKey := "integration.secret." + time.Now().Format("150405.000000")
+	secretSetting, err := settingRepository.Put(ctx, settings.Setting{Key: secretKey, Value: json.RawMessage(`"integration-secret"`), ValueType: "string", Secret: true}, "test-user")
+	if err != nil || secretSetting.Value != nil || !secretSetting.Configured {
+		t.Fatalf("secret setting was not redacted after save: %#v %v", secretSetting, err)
+	}
+	defer settingRepository.Delete(context.Background(), secretKey, "test-cleanup")
+
+	authService := auth.New(pool, settingRepository, auth.BootstrapCredentials{ID: "integration-admin", Password: "integration-password"})
+	if _, _, err := authService.BootstrapLogin(ctx, "integration-admin", "wrong-password"); !errors.Is(err, auth.ErrInvalidBootstrapCredentials) {
+		t.Fatalf("invalid bootstrap password: %v", err)
+	}
+	sessionToken, bootstrapUser, err := authService.BootstrapLogin(ctx, "integration-admin", "integration-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authService.Logout(context.Background(), sessionToken)
+	persistedUser, err := authService.Session(ctx, sessionToken)
+	if err != nil || persistedUser.ID != bootstrapUser.ID || !authService.IsAdmin(ctx, persistedUser) {
+		t.Fatalf("bootstrap session: %#v %v", persistedUser, err)
 	}
 
 	keys := apikey.New(pool)

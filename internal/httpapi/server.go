@@ -115,6 +115,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 		mux.HandleFunc("GET /api/v1/auth/config", s.authConfig)
 		mux.HandleFunc("GET /auth/login", s.login)
 		mux.HandleFunc("GET /auth/callback", s.authCallback)
+		mux.HandleFunc("POST /auth/bootstrap/login", s.bootstrapLogin)
 		mux.HandleFunc("GET /api/v1/session", s.session)
 		mux.HandleFunc("POST /auth/logout", s.logout)
 	}
@@ -614,7 +615,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "auth_config_unavailable", "message": "인증 설정을 읽을 수 없습니다."}})
 					return
 				}
-				if config.Enabled {
+				if config.Enabled || s.auth.BootstrapEnabled() {
 					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "authentication_required", "message": "로그인이 필요합니다."}})
 					return
 				}
@@ -686,7 +687,7 @@ func sessionUser(r *http.Request) (auth.User, bool) {
 }
 
 func isProtectedPath(path string) bool {
-	if path == "/healthz" || path == "/api/v1/version" || path == "/api/v1/auth/config" {
+	if path == "/healthz" || path == "/api/v1/version" || path == "/api/v1/auth/config" || path == "/api/v1/session" {
 		return false
 	}
 	if strings.HasPrefix(path, "/auth/") {

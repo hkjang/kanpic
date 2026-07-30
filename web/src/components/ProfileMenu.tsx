@@ -14,7 +14,7 @@ export function ProfileMenu({build,session}:{build?:BuildInfo;session?:Session})
       <span className="avatar">{initial}</span><span className="profile-name">{name}</span><ChevronDown size={15}/>
     </button>
     {open && <div className="profile-popover">
-      <div className="profile-summary"><span className="avatar large">{initial}</span><div><strong>{name}</strong><small>{session?.user?.email || '초기 설정 모드'}</small></div></div>
+      <div className="profile-summary"><span className="avatar large">{initial}</span><div><strong>{name}</strong><small>{session?.user?.email || (session?.authenticated?'로컬 bootstrap 관리자':'초기 설정 모드')}</small></div></div>
       <div className="menu-separator"/>
       <a href="/preferences"><UserRound size={16}/> 개인화 설정</a>
       {(session?.admin ?? true) && <a href="/admin"><ShieldCheck size={16}/> 관리자 콘솔</a>}

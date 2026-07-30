@@ -21,6 +21,7 @@ type Setting struct {
 	ValueType   string          `json:"value_type"`
 	Description string          `json:"description,omitempty"`
 	Secret      bool            `json:"secret"`
+	Configured  bool            `json:"configured,omitempty"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 	UpdatedBy   string          `json:"updated_by"`
 }
@@ -69,7 +70,8 @@ var defaults = []Setting{
 	{Key: "editor.max_cells_per_operation", Value: json.RawMessage(`1000`), ValueType: "number", Description: "쓰기 요청당 최대 셀 수"},
 	{Key: "auth.oidc.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "Keycloak OIDC 로그인 사용"},
 	{Key: "auth.oidc.issuer_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "Keycloak Realm Issuer URL"},
-	{Key: "auth.oidc.client_id", Value: json.RawMessage(`"kanpic"`), ValueType: "string", Description: "PKCE Public Client ID"},
+	{Key: "auth.oidc.client_id", Value: json.RawMessage(`"kanpic"`), ValueType: "string", Description: "Keycloak Client ID"},
+	{Key: "auth.oidc.client_secret", Value: json.RawMessage(`""`), ValueType: "string", Description: "Confidential Client Secret (선택)", Secret: true},
 	{Key: "auth.oidc.ca_pem", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 CA 인증서 PEM", Secret: true},
 	{Key: "auth.oidc.scopes", Value: json.RawMessage(`["openid","profile","email"]`), ValueType: "string_list", Description: "OIDC Scope"},
 	{Key: "auth.oidc.admin_roles", Value: json.RawMessage(`["kanpic-admin"]`), ValueType: "string_list", Description: "관리자 권한으로 인정할 Keycloak Role"},
@@ -118,7 +120,7 @@ func (r *Repository) List(ctx context.Context, revealSecrets bool) ([]Setting, e
 			return nil, err
 		}
 		if item.Secret && !revealSecrets {
-			item.Value = nil
+			item = redact(item)
 		}
 		items = append(items, item)
 	}
@@ -162,7 +164,10 @@ func (r *Repository) Put(ctx context.Context, item Setting, actorID string) (Set
 	if err := r.snapshot(ctx, tx, "upsert "+item.Key, actorID); err != nil {
 		return Setting{}, err
 	}
-	return item, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return Setting{}, err
+	}
+	return redact(item), nil
 }
 
 func (r *Repository) Delete(ctx context.Context, key, actorID string) error {
@@ -385,6 +390,23 @@ func validateValue(item Setting) string {
 		}
 	}
 	return ""
+}
+
+func redact(item Setting) Setting {
+	if !item.Secret {
+		return item
+	}
+	var value any
+	if len(item.Value) > 0 && json.Unmarshal(item.Value, &value) == nil {
+		switch typed := value.(type) {
+		case string:
+			item.Configured = strings.TrimSpace(typed) != ""
+		default:
+			item.Configured = value != nil
+		}
+	}
+	item.Value = nil
+	return item
 }
 
 func boolValue(item Setting) (bool, bool) {

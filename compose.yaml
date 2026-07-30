@@ -11,6 +11,8 @@ services:
         BUILD_TIME: local
     environment:
       POSTGRES_DSN: postgres://kanpic:kanpic-local@postgres:5432/kanpic?sslmode=disable
+      BOOTSTRAP_ADMIN_ID: ${BOOTSTRAP_ADMIN_ID:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
     ports:
       - "8080:8080"
     depends_on:

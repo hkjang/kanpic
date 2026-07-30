@@ -139,7 +139,13 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return s.build, nil
 	case "platform.auth.config":
 		config, err := s.auth.Config(ctx)
-		return map[string]any{"oidc_enabled": config.Enabled, "issuer_url": config.IssuerURL, "client_id": config.ClientID}, err
+		return map[string]any{
+			"oidc_enabled":             config.Enabled,
+			"bootstrap_login_enabled":  s.auth.BootstrapEnabled(),
+			"issuer_url":               config.IssuerURL,
+			"client_id":                config.ClientID,
+			"client_secret_configured": strings.TrimSpace(config.ClientSecret) != "",
+		}, err
 	case "spreadsheet.workbook.list":
 		return s.repository.ListWorkbooks(ctx, stringArg(args, "workspace_id"))
 	case "spreadsheet.workbook.get":

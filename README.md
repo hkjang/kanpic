@@ -4,13 +4,15 @@ kanpic은 온프레미스와 폐쇄망을 우선 지원하는 웹 기반 AI 스�
 
 ## 로컬 실행
 
-필수 환경 변수는 `POSTGRES_DSN` 하나뿐입니다. 나머지 서비스 설정은 관리자 콘솔(`/admin`)에서 관리하고 변경할 때마다 버전이 생성됩니다.
+필수 환경 변수는 `POSTGRES_DSN` 하나뿐입니다. 초기 로컬 관리자를 로그인으로 보호하려면 `BOOTSTRAP_ADMIN_ID`와 `BOOTSTRAP_ADMIN_PASSWORD`를 함께 설정합니다. 둘 중 하나만 설정하면 서버가 시작되지 않으며, 둘 다 생략하면 기존의 개방형 초기 설정 모드로 동작합니다. 나머지 서비스 설정은 관리자 콘솔(`/admin`)에서 관리하고 변경할 때마다 버전이 생성됩니다.
 
 ```bash
+BOOTSTRAP_ADMIN_ID=admin \
+BOOTSTRAP_ADMIN_PASSWORD='충분히-긴-초기-비밀번호' \
 docker compose up --build
 ```
 
-브라우저에서 `http://localhost:8080`을 엽니다. 최초 설치는 OIDC가 꺼진 로컬 관리자 모드이며, 관리자 콘솔의 **Keycloak OIDC 간편 연결**에서 Issuer URL과 Public Client ID를 입력하고 검증·연결 테스트 후 활성화할 수 있습니다.
+브라우저에서 `http://localhost:8080`을 열고 bootstrap 관리자 계정으로 로그인합니다. 관리자 콘솔의 **Keycloak OIDC 간편 연결**에서 Issuer URL과 Client ID를 입력하고 검증·연결 테스트 후 활성화할 수 있습니다. Keycloak Public Client는 Client Secret을 비워 두고, Confidential Client는 `auth.oidc.client_secret`에 secret을 저장합니다. 두 방식 모두 Authorization Code Flow와 PKCE를 사용합니다.
 
 ## 오프라인 설치
 
@@ -21,6 +23,8 @@ sha256sum -c kanpic-v0.1.0.tar.gz.sha256
 gzip -dc kanpic-v0.1.0.tar.gz | docker load
 docker run --rm -p 8080:8080 \
   -e POSTGRES_DSN='postgres://kanpic:password@postgres.internal:5432/kanpic?sslmode=require' \
+  -e BOOTSTRAP_ADMIN_ID='admin' \
+  -e BOOTSTRAP_ADMIN_PASSWORD='충분히-긴-초기-비밀번호' \
   kanpic:v0.1.0
 ```
 
