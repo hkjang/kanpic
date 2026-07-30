@@ -65,3 +65,25 @@ test('undoes and redoes an acknowledged cell operation', async ({ page }) => {
   await redo.click()
   await expect.poll(valueAtA1).toBe(3)
 })
+
+test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const editorURL = page.url()
+  await expect(page.locator('.collaboration-count')).toContainText('1명 접속')
+
+  const second = await context.newPage()
+  await second.goto(editorURL)
+  await expect(second.locator('.collaboration-count')).toContainText('2명 접속')
+  await expect(page.locator('.collaboration-count')).toContainText('2명 접속')
+
+  const firstCanvas = page.locator('canvas.grid-canvas')
+  await firstCanvas.dblclick({ position: { x: 70, y: 42 } })
+  await page.locator('input.cell-editor').fill('17')
+  await page.locator('input.cell-editor').press('Enter')
+  await expect(second.locator('.formula-bar input')).toHaveValue('17')
+
+  await second.close()
+  await expect(page.locator('.collaboration-count')).toContainText('1명 접속')
+})

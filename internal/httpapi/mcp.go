@@ -147,13 +147,27 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.sheet.create":
 		var input workbook.CreateSheetInput
 		decodeMCP(args, &input)
-		return s.repository.CreateSheet(ctx, stringArg(args, "workbook_id"), input)
+		item, err := s.repository.CreateSheet(ctx, stringArg(args, "workbook_id"), input)
+		if err == nil {
+			s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		}
+		return item, err
 	case "spreadsheet.sheet.update":
 		var input workbook.UpdateSheetInput
 		decodeMCP(args, &input)
-		return s.repository.UpdateSheet(ctx, stringArg(args, "sheet_id"), input)
+		item, err := s.repository.UpdateSheet(ctx, stringArg(args, "sheet_id"), input)
+		if err == nil {
+			s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		}
+		return item, err
 	case "spreadsheet.sheet.delete":
-		return okResult(s.repository.DeleteSheet(ctx, stringArg(args, "sheet_id")))
+		sheetID := stringArg(args, "sheet_id")
+		workbookID := s.workbookIDForSheet(ctx, sheetID)
+		err := s.repository.DeleteSheet(ctx, sheetID)
+		if err == nil {
+			s.publishCurrentVersion(ctx, workbookID, actor, "")
+		}
+		return okResult(err)
 	case "spreadsheet.range.read":
 		selected, err := cellrange.Parse(stringArg(args, "range"))
 		if err != nil {
@@ -171,7 +185,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		if err := decodeMCP(args, &input); err != nil {
 			return nil, err
 		}
-		return s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells})
+		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells})
+		if err == nil && !result.Duplicate {
+			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, input.Cells, result)
+		}
+		return result, err
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -184,14 +202,24 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		if err := decodeMCP(args, &input); err != nil {
 			return nil, err
 		}
-		return s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: []workbook.CellInput{{Row: input.Row, Column: input.Column, Formula: input.Formula}}})
+		cells := []workbook.CellInput{{Row: input.Row, Column: input.Column, Formula: input.Formula}}
+		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells})
+		if err == nil && !result.Duplicate {
+			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, "", cells, result)
+		}
+		return result, err
 	case "spreadsheet.formula.evaluate":
 		cells, _ := args["cells"].(map[string]any)
 		return s.formula.Evaluate(stringArg(args, "formula"), cells), nil
 	case "spreadsheet.formula.explain":
 		return s.getFormulaInfo(ctx, stringArg(args, "sheet_id"), stringArg(args, "address"))
 	case "spreadsheet.operation.undo":
-		return s.repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: stringArg(args, "operation_id"), ActorID: actor, ClientID: stringArg(args, "client_id"), IdempotencyKey: stringArg(args, "idempotency_key")})
+		clientID := stringArg(args, "client_id")
+		result, err := s.repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: stringArg(args, "operation_id"), ActorID: actor, ClientID: clientID, IdempotencyKey: stringArg(args, "idempotency_key")})
+		if err == nil && !result.Duplicate {
+			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, clientID, nil, result)
+		}
+		return result, err
 	case "spreadsheet.import.preview":
 		data, err := base64.StdEncoding.DecodeString(stringArg(args, "data_base64"))
 		if err != nil {
@@ -219,7 +247,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.version.list":
 		return s.repository.ListVersions(ctx, stringArg(args, "workbook_id"))
 	case "spreadsheet.version.restore":
-		return s.repository.RestoreVersion(ctx, stringArg(args, "version_id"), actor)
+		result, err := s.repository.RestoreVersion(ctx, stringArg(args, "version_id"), actor)
+		if err == nil {
+			s.collab.PublishVersion(result.WorkbookID, actor, "", result.OperationID, result.ServerVersion)
+		}
+		return result, err
 	case "profile.preferences.get":
 		return s.settings.GetPreferences(ctx, actor)
 	case "profile.preferences.update":

@@ -3,6 +3,7 @@ module kanpic
 go 1.26
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/xuri/excelize/v2 v2.11.0

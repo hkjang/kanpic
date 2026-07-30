@@ -15,6 +15,7 @@ import (
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
 	"kanpic/internal/buildinfo"
+	"kanpic/internal/collaboration"
 	"kanpic/internal/formula"
 	"kanpic/internal/importexport"
 	"kanpic/internal/observability"
@@ -36,6 +37,7 @@ type Server struct {
 	build      buildinfo.BuildInfo
 	formula    *formula.Evaluator
 	files      *importexport.Service
+	collab     *collaboration.Hub
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -46,7 +48,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository)}
+	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/version", s.versionInfo)
@@ -71,6 +73,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("POST /api/v1/imports:preview", s.previewImport)
 	mux.HandleFunc("POST /api/v1/imports", s.executeImport)
 	mux.HandleFunc("POST /api/v1/exports", s.executeExport)
+	mux.HandleFunc("GET /ws/v1/workbooks/{workbookId}", s.webSocket)
 	if settingRepository != nil {
 		mux.HandleFunc("GET /api/v1/admin/settings", s.listSettings)
 		mux.HandleFunc("PUT /api/v1/admin/settings/{key}", s.putSetting)
@@ -178,6 +181,7 @@ func (s *Server) createSheet(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.publishCurrentVersion(r.Context(), item.WorkbookID, actorID(r), "")
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -191,14 +195,17 @@ func (s *Server) updateSheet(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.publishCurrentVersion(r.Context(), item.WorkbookID, actorID(r), "")
 	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) deleteSheet(w http.ResponseWriter, r *http.Request) {
+	workbookID := s.workbookIDForSheet(r.Context(), r.PathValue("sheetId"))
 	if err := s.repository.DeleteSheet(r.Context(), r.PathValue("sheetId")); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	s.publishCurrentVersion(r.Context(), workbookID, actorID(r), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -219,6 +226,9 @@ func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	if !result.Duplicate {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, input.Cells, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -244,6 +254,9 @@ func (s *Server) undoOperation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, r, err)
 		return
+	}
+	if !result.Duplicate {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, nil, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -298,7 +311,45 @@ func (s *Server) restoreVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.collab.PublishVersion(result.WorkbookID, actorID(r), "", result.OperationID, result.ServerVersion)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) webSocket(w http.ResponseWriter, r *http.Request) {
+	canWrite := true
+	if principal, ok := apiPrincipal(r); ok {
+		canWrite = principal.Allows("range.write")
+	}
+	s.collab.ServeHTTP(w, r, r.PathValue("workbookId"), actorID(r), canWrite)
+}
+
+func (s *Server) publishCurrentVersion(ctx context.Context, workbookID, actor, clientID string) {
+	if workbookID == "" {
+		return
+	}
+	book, err := s.repository.GetWorkbook(ctx, workbookID)
+	if err == nil {
+		s.collab.PublishVersion(workbookID, actor, clientID, "", book.Version)
+	}
+}
+
+func (s *Server) workbookIDForSheet(ctx context.Context, sheetID string) string {
+	books, err := s.repository.ListWorkbooks(ctx, "")
+	if err != nil {
+		return ""
+	}
+	for _, candidate := range books {
+		book, err := s.repository.GetWorkbook(ctx, candidate.ID)
+		if err != nil {
+			continue
+		}
+		for _, sheet := range book.Sheets {
+			if sheet.ID == sheetID {
+				return book.ID
+			}
+		}
+	}
+	return ""
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
@@ -310,7 +361,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Trace-ID", traceID)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 		} else {
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
@@ -439,13 +490,16 @@ func isProtectedPath(path string) bool {
 	if strings.HasPrefix(path, "/auth/") {
 		return false
 	}
-	return strings.HasPrefix(path, "/api/") || path == "/mcp"
+	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/ws/") || path == "/mcp"
 }
 
 func requiredScope(r *http.Request) string {
 	path := r.URL.Path
 	if path == "/healthz" || path == "/api/v1/version" {
 		return ""
+	}
+	if strings.HasPrefix(path, "/ws/") {
+		return "workbook.read"
 	}
 	if strings.HasPrefix(path, "/api/v1/admin/") {
 		return "admin.*"

@@ -16,6 +16,7 @@ type EditorState = {
   setEditing:(editing:boolean)=>void
   setZoom:(zoom:number)=>void
   putCells:(cells:Cell[])=>void
+  replaceRange:(cells:Cell[],startRow:number,startColumn:number,endRow:number,endColumn:number)=>void
   putCell:(cell:Cell)=>void
   setSaveState:(saveState:SaveState,conflicts?:number)=>void
   recordOperation:(operationId:string)=>void
@@ -36,6 +37,7 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   setEditing:(editing)=>set({editing}),
   setZoom:(zoom)=>set({zoom:Math.max(.5,Math.min(2,zoom))}),
   putCells:(cells)=>set((state)=>{const next=new Map(state.cells);cells.forEach((cell)=>next.set(key(cell.row,cell.column),cell));return{cells:next}}),
+  replaceRange:(incoming,startRow,startColumn,endRow,endColumn)=>set((state)=>{const cells=new Map(state.cells);for(const [address,cell] of cells){if(cell.row>=startRow&&cell.row<=endRow&&cell.column>=startColumn&&cell.column<=endColumn)cells.delete(address)}incoming.forEach(cell=>cells.set(key(cell.row,cell.column),cell));return{cells}}),
   putCell:(cell)=>set((state)=>{const cells=new Map(state.cells);cells.set(key(cell.row,cell.column),cell);return{cells}}),
   setSaveState:(saveState,conflicts=0)=>set({saveState,conflicts}),
   recordOperation:(operationId)=>{if(!operationId||get().undoStack.at(-1)===operationId)return;set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100),redoStack:[]}))},
