@@ -37,6 +37,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.workbook.list", "접근 가능한 워크북을 조회합니다.", "workbook.read", props("workspace_id", "string")),
 	tool("spreadsheet.workbook.get", "워크북 메타데이터와 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다.", "workbook.write", requiredProps("title", "string")),
+	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.delete", "워크북을 삭제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.sheet.list", "워크북의 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
@@ -138,6 +139,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		decodeMCP(args, &input)
 		input.OwnerID = actor
 		return s.repository.CreateWorkbook(ctx, input)
+	case "spreadsheet.workbook.duplicate":
+		var input workbook.DuplicateWorkbookInput
+		decodeMCP(args, &input)
+		input.OwnerID = actor
+		return s.repository.DuplicateWorkbook(ctx, stringArg(args, "workbook_id"), input)
 	case "spreadsheet.workbook.update":
 		var input workbook.UpdateWorkbookInput
 		decodeMCP(args, &input)

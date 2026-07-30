@@ -23,6 +23,7 @@ type Repository interface {
 	CreateWorkbook(context.Context, CreateWorkbookInput) (Workbook, error)
 	ListWorkbooks(context.Context, string) ([]Workbook, error)
 	GetWorkbook(context.Context, string) (Workbook, error)
+	DuplicateWorkbook(context.Context, string, DuplicateWorkbookInput) (Workbook, error)
 	UpdateWorkbook(context.Context, string, UpdateWorkbookInput) (Workbook, error)
 	DeleteWorkbook(context.Context, string) error
 

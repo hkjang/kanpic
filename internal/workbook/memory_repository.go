@@ -176,6 +176,43 @@ func (r *MemoryRepository) GetWorkbook(_ context.Context, id string) (Workbook, 
 	return r.workbookWithSheets(state), nil
 }
 
+func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input DuplicateWorkbookInput) (Workbook, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	source, ok := r.workbooks[id]
+	if !ok {
+		return Workbook{}, ErrNotFound
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		title = source.workbook.Title + " 복사본"
+	}
+	now := r.now()
+	ownerID := strings.TrimSpace(input.OwnerID)
+	if ownerID == "" {
+		ownerID = source.workbook.OwnerID
+	}
+	copyWorkbook := Workbook{ID: identity.New(), WorkspaceID: source.workbook.WorkspaceID, Title: title, OwnerID: ownerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	copyState := &workbookState{workbook: copyWorkbook, sheets: make(map[string]Sheet, len(source.sheets)), cells: make(map[string]map[cellKey]Cell, len(source.cells)), idempotent: make(map[string]MutationResult)}
+	for _, sourceSheet := range source.sheets {
+		copySheet := sourceSheet
+		copySheet.ID = identity.New()
+		copySheet.WorkbookID = copyWorkbook.ID
+		copySheet.CreatedAt = now
+		copyState.sheets[copySheet.ID] = copySheet
+		copyState.cells[copySheet.ID] = make(map[cellKey]Cell, len(source.cells[sourceSheet.ID]))
+		for coordinate, sourceCell := range source.cells[sourceSheet.ID] {
+			copyCell := cloneCell(sourceCell)
+			copyCell.SheetID = copySheet.ID
+			copyCell.UpdatedAt = now
+			copyState.cells[copySheet.ID][coordinate] = copyCell
+		}
+		r.sheetToWB[copySheet.ID] = copyWorkbook.ID
+	}
+	r.workbooks[copyWorkbook.ID] = copyState
+	return r.workbookWithSheets(copyState), nil
+}
+
 func (r *MemoryRepository) UpdateWorkbook(_ context.Context, id string, input UpdateWorkbookInput) (Workbook, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

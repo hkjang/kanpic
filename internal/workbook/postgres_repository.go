@@ -267,6 +267,127 @@ func (r *PostgresRepository) GetWorkbook(ctx context.Context, id string) (Workbo
 	return wb, err
 }
 
+func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, input DuplicateWorkbookInput) (Workbook, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Workbook{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var source Workbook
+	err = tx.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&source.ID, &source.WorkspaceID, &source.Title, &source.OwnerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Workbook{}, ErrNotFound
+	}
+	if err != nil {
+		return Workbook{}, err
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		title = source.Title + " 복사본"
+	}
+	ownerID := strings.TrimSpace(input.OwnerID)
+	if ownerID == "" {
+		ownerID = source.OwnerID
+	}
+	now := r.now()
+	duplicated := Workbook{ID: identity.New(), WorkspaceID: source.WorkspaceID, Title: title, OwnerID: ownerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := tx.Exec(ctx, `INSERT INTO workbooks(id,workspace_id,title,owner_id,version,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)`, duplicated.ID, duplicated.WorkspaceID, duplicated.Title, duplicated.OwnerID, now); err != nil {
+		return Workbook{}, err
+	}
+	type copiedSheet struct {
+		sourceID   string
+		dest       Sheet
+		properties []byte
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text,name,position,properties FROM sheets WHERE workbook_id=$1 ORDER BY position,id`, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	copiedSheets := make([]copiedSheet, 0)
+	sheetIDs := make(map[string]string)
+	for rows.Next() {
+		var item copiedSheet
+		if err := rows.Scan(&item.sourceID, &item.dest.Name, &item.dest.Position, &item.properties); err != nil {
+			rows.Close()
+			return Workbook{}, err
+		}
+		item.dest.ID = identity.New()
+		item.dest.WorkbookID = duplicated.ID
+		item.dest.CreatedAt = now
+		var properties sheetProperties
+		_ = json.Unmarshal(item.properties, &properties)
+		item.dest.Color, item.dest.Hidden = properties.Color, properties.Hidden
+		copiedSheets = append(copiedSheets, item)
+		sheetIDs[item.sourceID] = item.dest.ID
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Workbook{}, err
+	}
+	rows.Close()
+	for _, item := range copiedSheets {
+		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, item.dest.ID, duplicated.ID, item.dest.Name, item.dest.Position, item.properties, now); err != nil {
+			return Workbook{}, err
+		}
+		duplicated.Sheets = append(duplicated.Sheets, item.dest)
+	}
+	rows, err = tx.Query(ctx, `SELECT cb.sheet_id::text,cb.block_row,cb.block_column,cb.payload FROM cell_blocks cb JOIN sheets s ON s.id=cb.sheet_id WHERE s.workbook_id=$1`, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	type copiedBlock struct {
+		sheetID     string
+		blockRow    int
+		blockColumn int
+		data        []byte
+	}
+	copiedBlocks := make([]copiedBlock, 0)
+	for rows.Next() {
+		var sourceSheetID string
+		var item copiedBlock
+		if err := rows.Scan(&sourceSheetID, &item.blockRow, &item.blockColumn, &item.data); err != nil {
+			rows.Close()
+			return Workbook{}, err
+		}
+		destinationSheetID, ok := sheetIDs[sourceSheetID]
+		if !ok {
+			rows.Close()
+			return Workbook{}, fmt.Errorf("%w: cell block references an unknown sheet", ErrInvalid)
+		}
+		var payload map[string]Cell
+		if err := json.Unmarshal(item.data, &payload); err != nil {
+			rows.Close()
+			return Workbook{}, err
+		}
+		for key, cell := range payload {
+			cell.SheetID = destinationSheetID
+			cell.UpdatedAt = now
+			payload[key] = cell
+		}
+		item.data, err = json.Marshal(payload)
+		if err != nil {
+			rows.Close()
+			return Workbook{}, err
+		}
+		item.sheetID = destinationSheetID
+		copiedBlocks = append(copiedBlocks, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Workbook{}, err
+	}
+	rows.Close()
+	for _, item := range copiedBlocks {
+		if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, item.sheetID, item.blockRow, item.blockColumn, item.data, now); err != nil {
+			return Workbook{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Workbook{}, err
+	}
+	return duplicated, nil
+}
+
 func (r *PostgresRepository) UpdateWorkbook(ctx context.Context, id string, input UpdateWorkbookInput) (Workbook, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

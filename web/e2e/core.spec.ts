@@ -31,6 +31,44 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
 })
 
+test('manages workbook favorite, rename, duplicate, and delete from home', async ({ page }) => {
+  await page.goto('/')
+  const title=`홈 수명주기 ${Date.now()}`,renamed=`${title} 변경`,copyTitle=`${renamed} 복사본`
+  const source = await page.request.post('/api/v1/workbooks', { data:{ title, workspace_id:'default' } }).then(response=>response.json())
+  await page.request.patch(`/api/v1/sheets/${source.sheets[0].id}/cells:batch`, { data:{ base_version:1, idempotency_key:`home-seed-${source.id}`, cells:[{ row:1, column:1, value:42, style:{ bold:true } }] } })
+  await page.reload()
+  await expect(page.getByText(title, { exact:true })).toBeVisible()
+
+  await page.getByRole('button', { name:`${title} 더보기` }).click()
+  await page.getByRole('menuitem', { name:'즐겨찾기', exact:true }).click()
+  await page.locator('.segmented').getByRole('button', { name:'즐겨찾기' }).click()
+  await expect(page.getByText(title, { exact:true })).toBeVisible()
+  await page.locator('.segmented').getByRole('button', { name:'최근' }).click()
+
+  await page.getByRole('button', { name:`${title} 더보기` }).click()
+  await page.getByRole('menuitem', { name:'이름 변경' }).click()
+  await page.getByRole('textbox', { name:'워크북 이름' }).fill(renamed)
+  await page.getByRole('button', { name:'워크북 이름 저장' }).click()
+  await expect(page.getByText(renamed, { exact:true })).toBeVisible()
+
+  await page.getByRole('button', { name:`${renamed} 더보기` }).click()
+  await page.getByRole('menuitem', { name:'복제' }).click()
+  await expect(page.getByText(copyTitle, { exact:true })).toBeVisible()
+  const books=await page.request.get('/api/v1/workbooks').then(response=>response.json())
+  const copied=books.items.find((workbook:{title:string})=>workbook.title===copyTitle)
+  const copiedRange=await page.request.get(`/api/v1/sheets/${copied.sheets[0].id}/ranges/A1`).then(response=>response.json())
+  expect(copied.version).toBe(1)
+  expect(copiedRange.items[0]?.value).toBe(42)
+  expect(copiedRange.items[0]?.style?.bold).toBe(true)
+
+  await page.getByRole('button', { name:`${renamed} 더보기` }).click()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('menuitem', { name:'삭제' }).click()
+  await expect(page.getByText(renamed, { exact:true })).toHaveCount(0)
+  await expect(page.getByText(copyTitle, { exact:true })).toBeVisible()
+  await page.request.delete(`/api/v1/workbooks/${copied.id}`)
+})
+
 test('undoes and redoes an acknowledged cell operation', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

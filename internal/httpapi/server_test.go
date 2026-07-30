@@ -60,6 +60,36 @@ func TestWorkbookCellVersionFlow(t *testing.T) {
 	}
 }
 
+func TestWorkbookDuplicateRESTAndMCPPreserveStructure(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	source := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "원본", "workspace_id": "finance"}, http.StatusCreated)
+	detail := request[workbook.Sheet](t, server, http.MethodPost, "/api/v1/workbooks/"+source.ID+"/sheets", map[string]any{"name": "상세", "color": "#2563eb"}, http.StatusCreated)
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+detail.ID+"/cells:batch", map[string]any{"base_version": 2, "idempotency_key": "copy-http-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 4, "style": map[string]any{"bold": true}}, {"row": 2, "column": 1, "formula": "=A1*2"}}}, http.StatusOK)
+
+	copy := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks/"+source.ID+"/duplicate", map[string]any{}, http.StatusCreated)
+	if copy.ID == source.ID || copy.Title != "원본 복사본" || copy.WorkspaceID != "finance" || copy.Version != 1 || len(copy.Sheets) != 2 || copy.Sheets[1].ID == detail.ID {
+		t.Fatalf("REST workbook duplicate: %#v", copy)
+	}
+	copiedCells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+copy.Sheets[1].ID+"/ranges/A1:A2", nil, http.StatusOK)
+	if len(copiedCells.Items) != 2 || string(copiedCells.Items[0].Value) != "4" || copiedCells.Items[1].Formula != "=A1*2" || string(copiedCells.Items[1].Value) != "8" {
+		t.Fatalf("REST copied cells: %#v", copiedCells.Items)
+	}
+
+	mcpCopy := request[struct {
+		Result struct {
+			Structured workbook.Workbook `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.workbook.duplicate", "arguments": map[string]any{"workbook_id": source.ID, "title": "에이전트 복사본"}}}, http.StatusOK)
+	if mcpCopy.Result.Structured.Title != "에이전트 복사본" || mcpCopy.Result.Structured.Version != 1 || len(mcpCopy.Result.Structured.Sheets) != 2 {
+		t.Fatalf("MCP workbook duplicate: %#v", mcpCopy.Result.Structured)
+	}
+}
+
 func TestConcurrentSameCellReportsConflict(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

@@ -57,6 +57,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}", s.getWorkbook)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/duplicate", s.duplicateWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sheets", s.createSheet)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/duplicate", s.duplicateSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}", s.updateSheet)
@@ -151,6 +152,20 @@ func (s *Server) getWorkbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) duplicateWorkbook(w http.ResponseWriter, r *http.Request) {
+	var input workbook.DuplicateWorkbookInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.OwnerID = actorID(r)
+	item, err := s.repository.DuplicateWorkbook(r.Context(), r.PathValue("workbookId"), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
 }
 
 func (s *Server) updateWorkbook(w http.ResponseWriter, r *http.Request) {

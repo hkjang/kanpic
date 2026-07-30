@@ -169,6 +169,67 @@ func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	}
 }
 
+func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	source, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres original", WorkspaceID: "integration", OwnerID: "owner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), source.ID)
+	detail, err := repository.CreateSheet(ctx, source.ID, workbook.CreateSheetInput{Name: "detail", Color: "#2563eb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden := true
+	if _, err := repository.UpdateSheet(ctx, detail.ID, workbook.UpdateSheetInput{Hidden: &hidden}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: detail.ID, ActorID: "owner-a", BaseVersion: 3, IdempotencyKey: "postgres-workbook-copy-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`7`), Style: json.RawMessage(`{"bold":true}`)}, {Row: 2, Column: 1, Formula: "=A1*2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	duplicated, err := repository.DuplicateWorkbook(ctx, source.ID, workbook.DuplicateWorkbookInput{OwnerID: "owner-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), duplicated.ID)
+	if duplicated.ID == source.ID || duplicated.Title != "postgres original 복사본" || duplicated.OwnerID != "owner-b" || duplicated.Version != 1 || len(duplicated.Sheets) != 2 || duplicated.Sheets[1].ID == detail.ID || duplicated.Sheets[1].Color != "#2563eb" || !duplicated.Sheets[1].Hidden {
+		t.Fatalf("duplicated workbook: %#v", duplicated)
+	}
+	selected, _ := cellrange.Parse("A1:A2")
+	cells, err := repository.ReadRange(ctx, duplicated.Sheets[1].ID, selected)
+	var copiedStyle map[string]any
+	if len(cells) > 0 {
+		_ = json.Unmarshal(cells[0].Style, &copiedStyle)
+	}
+	if err != nil || len(cells) != 2 || cells[0].SheetID != duplicated.Sheets[1].ID || string(cells[0].Value) != "7" || copiedStyle["bold"] != true || cells[1].Formula != "=A1*2" || string(cells[1].Value) != "14" {
+		t.Fatalf("duplicated cells: %#v, %v", cells, err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: detail.ID, ActorID: "owner-a", BaseVersion: 4, IdempotencyKey: "postgres-change-original", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`9`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	cells, err = repository.ReadRange(ctx, duplicated.Sheets[1].ID, selected)
+	if err != nil || string(cells[0].Value) != "7" || string(cells[1].Value) != "14" {
+		t.Fatalf("copy changed with source: %#v, %v", cells, err)
+	}
+	if err := repository.DeleteWorkbook(ctx, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetWorkbook(ctx, duplicated.ID); err != nil {
+		t.Fatalf("copy was deleted with source: %v", err)
+	}
+}
+
 func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

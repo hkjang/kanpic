@@ -114,6 +114,11 @@ type CreateWorkbookInput struct {
 	OwnerID     string `json:"owner_id"`
 }
 
+type DuplicateWorkbookInput struct {
+	Title   string `json:"title,omitempty"`
+	OwnerID string `json:"owner_id,omitempty"`
+}
+
 type UpdateWorkbookInput struct {
 	Title    *string `json:"title,omitempty"`
 	Favorite *bool   `json:"favorite,omitempty"`
