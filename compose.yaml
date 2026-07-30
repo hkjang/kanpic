@@ -1,0 +1,38 @@
+name: kanpic
+
+services:
+  api:
+    image: kanpic:v0.1.0
+    build:
+      context: .
+      args:
+        VERSION: v0.1.0
+        COMMIT: local
+        BUILD_TIME: local
+    environment:
+      POSTGRES_DSN: postgres://kanpic:kanpic-local@postgres:5432/kanpic?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: kanpic
+      POSTGRES_USER: kanpic
+      POSTGRES_PASSWORD: kanpic-local
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanpic -d kanpic"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - kanpic-postgres:/var/lib/postgresql/data
+
+volumes:
+  kanpic-postgres:

@@ -1,0 +1,12 @@
+export type BuildInfo = { product: string; version: string; commit: string; build_time: string; go_version: string }
+export type User = { id: string; email?: string; display_name: string; roles: string[]; expires_at: string }
+export type Session = { authenticated: boolean; user?: User; admin?: boolean }
+export type Sheet = { id: string; workbook_id: string; name: string; position: number; color?: string; hidden: boolean; created_at: string }
+export type Workbook = { id: string; workspace_id: string; title: string; owner_id: string; favorite: boolean; version: number; created_at: string; updated_at: string; sheets: Sheet[] }
+export type Cell = { sheet_id: string; row: number; column: number; value?: unknown; formula?: string; style?: Record<string, unknown>; updated_at: string }
+export type MutationResult = { operation_id: string; workbook_id: string; sheet_id: string; base_version: number; server_version: number; applied_cells: number; duplicate: boolean; conflicts: Array<{row:number;column:number;changed_at_version:number;previous_value?:unknown;submitted_value?:unknown}> }
+export type SystemSetting = { key: string; value?: unknown; value_type: 'string'|'number'|'boolean'|'string_list'|'object'; description?: string; secret: boolean; updated_at: string; updated_by: string }
+export type SettingVersion = { revision:number; change_summary:string; actor_id:string; created_at:string }
+export type LogEntry = { id:number; logged_at:string; level:string; message:string; attributes:Record<string,unknown>; trace_id?:string }
+export type ApiKey = { id:string; user_id:string; name:string; prefix:string; scopes:string[]; expires_at?:string; last_used_at?:string; revoked_at?:string; created_at:string }
+export type CreatedApiKey = ApiKey & { secret:string }
