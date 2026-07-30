@@ -177,3 +177,47 @@ test('pastes more than 1000 cells without truncation in one version', async ({ p
   const updated=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   expect(updated.version).toBe(2)
 })
+
+test('manages the complete sheet lifecycle without losing copied cells', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+
+  await page.getByRole('button',{name:'시트 추가'}).click()
+  await expect(page.getByRole('button',{name:'Sheet2 시트 메뉴'})).toBeVisible()
+  await page.getByRole('button',{name:'Sheet2 시트 메뉴'}).click()
+  await page.getByRole('menuitem',{name:'이름 변경'}).click()
+  await page.getByRole('textbox',{name:'시트 이름'}).fill('Raw Data')
+  await page.getByRole('button',{name:'시트 이름 저장'}).click()
+  await expect(page.getByRole('button',{name:'Raw Data 시트 메뉴'})).toBeVisible()
+
+  const canvas=page.locator('canvas.grid-canvas')
+  await canvas.dblclick({position:{x:70,y:42}})
+  await page.locator('input.cell-editor').fill('9')
+  await page.locator('input.cell-editor').press('Enter')
+  await page.getByRole('button',{name:'Raw Data 시트 메뉴'}).click()
+  await page.getByRole('menuitem',{name:'복제'}).click()
+  await expect(page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'})).toBeVisible()
+
+  const currentWorkbook=async()=>page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  await expect.poll(async()=>((await currentWorkbook()).sheets as Array<{name:string}>).map(sheet=>sheet.name)).toEqual(['Sheet1','Raw Data','Raw Data 복사본'])
+  let book=await currentWorkbook()
+  let copied=book.sheets.find((sheet:{name:string})=>sheet.name==='Raw Data 복사본')
+  const copiedCell=await page.request.get(`/api/v1/sheets/${copied.id}/ranges/A1`).then(response=>response.json())
+  expect(copiedCell.items[0]?.value).toBe(9)
+
+  await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
+  await page.getByRole('button',{name:'시트 색상 #3b82f6'}).click()
+  await expect.poll(async()=>((await currentWorkbook()).sheets as Array<{name:string;color:string}>).find(sheet=>sheet.name==='Raw Data 복사본')?.color).toBe('#3b82f6')
+  await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
+  await page.getByRole('button',{name:'왼쪽',exact:true}).click()
+  await expect.poll(async()=>((await currentWorkbook()).sheets as Array<{name:string;position:number}>).map(sheet=>`${sheet.position}:${sheet.name}`)).toEqual(['0:Sheet1','1:Raw Data 복사본','2:Raw Data'])
+
+  await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('menuitem',{name:'삭제'}).click()
+  await expect(page.getByRole('button',{name:'Sheet1 시트 메뉴'})).toBeVisible()
+  book=await currentWorkbook()
+  expect(book.sheets.map((sheet:{name:string;position:number})=>`${sheet.position}:${sheet.name}`)).toEqual(['0:Sheet1','1:Raw Data'])
+})

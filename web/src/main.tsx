@@ -5,6 +5,7 @@ import { App } from './App'
 import './styles.css'
 import './collaboration.css'
 import './version-history.css'
+import './sheet-tabs.css'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: 1 }, mutations: { retry: 0 } } })
 

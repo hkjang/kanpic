@@ -41,6 +41,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.workbook.delete", "워크북을 삭제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.sheet.list", "워크북의 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.sheet.create", "워크북에 시트를 추가합니다.", "workbook.write", requiredProps2("workbook_id", "string", "name", "string")),
+	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.update", "시트 이름, 순서, 색상, 숨김 상태를 변경합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.delete", "시트를 삭제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.range.read", "A1 범위의 비어 있지 않은 셀을 조회합니다.", "range.read", requiredProps2("sheet_id", "string", "range", "string")),
@@ -153,6 +154,14 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		var input workbook.CreateSheetInput
 		decodeMCP(args, &input)
 		item, err := s.repository.CreateSheet(ctx, stringArg(args, "workbook_id"), input)
+		if err == nil {
+			s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		}
+		return item, err
+	case "spreadsheet.sheet.duplicate":
+		var input workbook.DuplicateSheetInput
+		decodeMCP(args, &input)
+		item, err := s.repository.DuplicateSheet(ctx, stringArg(args, "sheet_id"), input)
 		if err == nil {
 			s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
 		}

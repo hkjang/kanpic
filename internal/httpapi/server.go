@@ -58,6 +58,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sheets", s.createSheet)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/duplicate", s.duplicateSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}", s.updateSheet)
 	mux.HandleFunc("DELETE /api/v1/sheets/{sheetId}", s.deleteSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:batch", s.applyCells)
@@ -199,6 +200,20 @@ func (s *Server) updateSheet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishCurrentVersion(r.Context(), item.WorkbookID, actorID(r), "")
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) duplicateSheet(w http.ResponseWriter, r *http.Request) {
+	var input workbook.DuplicateSheetInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	item, err := s.repository.DuplicateSheet(r.Context(), r.PathValue("sheetId"), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.publishCurrentVersion(r.Context(), item.WorkbookID, actorID(r), "")
+	writeJSON(w, http.StatusCreated, item)
 }
 
 func (s *Server) deleteSheet(w http.ResponseWriter, r *http.Request) {

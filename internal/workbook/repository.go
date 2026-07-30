@@ -27,6 +27,7 @@ type Repository interface {
 	DeleteWorkbook(context.Context, string) error
 
 	CreateSheet(context.Context, string, CreateSheetInput) (Sheet, error)
+	DuplicateSheet(context.Context, string, DuplicateSheetInput) (Sheet, error)
 	UpdateSheet(context.Context, string, UpdateSheetInput) (Sheet, error)
 	DeleteSheet(context.Context, string) error
 

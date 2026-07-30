@@ -242,6 +242,38 @@ func (r *MemoryRepository) CreateSheet(_ context.Context, workbookID string, inp
 	return sheet, nil
 }
 
+func (r *MemoryRepository) DuplicateSheet(_ context.Context, sheetID string, input DuplicateSheetInput) (Sheet, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, source, err := r.sheetState(sheetID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	name, err := availableDuplicateName(source.Name, input.Name, sheetNames(state.sheets))
+	if err != nil {
+		return Sheet{}, err
+	}
+	for id, sheet := range state.sheets {
+		if sheet.Position > source.Position {
+			sheet.Position++
+			state.sheets[id] = sheet
+		}
+	}
+	now := r.now()
+	duplicated := Sheet{ID: identity.New(), WorkbookID: source.WorkbookID, Name: name, Position: source.Position + 1, Color: source.Color, Hidden: source.Hidden, CreatedAt: now}
+	state.sheets[duplicated.ID] = duplicated
+	state.cells[duplicated.ID] = make(map[cellKey]Cell, len(state.cells[source.ID]))
+	for key, sourceCell := range state.cells[source.ID] {
+		cell := cloneCell(sourceCell)
+		cell.SheetID = duplicated.ID
+		cell.UpdatedAt = now
+		state.cells[duplicated.ID][key] = cell
+	}
+	r.sheetToWB[duplicated.ID] = source.WorkbookID
+	r.bump(state)
+	return duplicated, nil
+}
+
 func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input UpdateSheetInput) (Sheet, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -249,6 +281,7 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 	if err != nil {
 		return Sheet{}, err
 	}
+	next := sheet
 	if input.Name != nil {
 		name := strings.TrimSpace(*input.Name)
 		if name == "" {
@@ -259,26 +292,44 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 				return Sheet{}, ErrDuplicateName
 			}
 		}
-		sheet.Name = name
+		next.Name = name
 	}
-	if input.Position != nil && *input.Position >= 0 {
-		sheet.Position = *input.Position
+	if input.Position != nil && (*input.Position < 0 || *input.Position >= len(state.sheets)) {
+		return Sheet{}, fmt.Errorf("%w: position must be between 0 and %d", ErrInvalid, len(state.sheets)-1)
 	}
 	if input.Color != nil {
-		sheet.Color = *input.Color
+		next.Color = *input.Color
 	}
 	if input.Hidden != nil {
-		sheet.Hidden = *input.Hidden
+		next.Hidden = *input.Hidden
 	}
-	state.sheets[sheetID] = sheet
+	if input.Position != nil && *input.Position != sheet.Position {
+		target := *input.Position
+		for id, candidate := range state.sheets {
+			if id == sheetID {
+				continue
+			}
+			if sheet.Position < target && candidate.Position > sheet.Position && candidate.Position <= target {
+				candidate.Position--
+			} else if sheet.Position > target && candidate.Position >= target && candidate.Position < sheet.Position {
+				candidate.Position++
+			}
+			state.sheets[id] = candidate
+		}
+		next.Position = target
+	}
+	if next == sheet {
+		return sheet, nil
+	}
+	state.sheets[sheetID] = next
 	r.bump(state)
-	return sheet, nil
+	return next, nil
 }
 
 func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	state, _, err := r.sheetState(sheetID)
+	state, deleted, err := r.sheetState(sheetID)
 	if err != nil {
 		return err
 	}
@@ -288,6 +339,12 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	delete(state.sheets, sheetID)
 	delete(state.cells, sheetID)
 	delete(r.sheetToWB, sheetID)
+	for id, sheet := range state.sheets {
+		if sheet.Position > deleted.Position {
+			sheet.Position--
+			state.sheets[id] = sheet
+		}
+	}
 	r.bump(state)
 	return nil
 }
@@ -504,6 +561,37 @@ func cloneSheets(source map[string]Sheet) map[string]Sheet {
 		result[id] = sheet
 	}
 	return result
+}
+
+func sheetNames(source map[string]Sheet) []string {
+	result := make([]string, 0, len(source))
+	for _, sheet := range source {
+		result = append(result, sheet.Name)
+	}
+	return result
+}
+
+func availableDuplicateName(sourceName, requested string, existing []string) (string, error) {
+	used := make(map[string]struct{}, len(existing))
+	for _, name := range existing {
+		used[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	if name := strings.TrimSpace(requested); name != "" {
+		if _, found := used[strings.ToLower(name)]; found {
+			return "", ErrDuplicateName
+		}
+		return name, nil
+	}
+	base := strings.TrimSpace(sourceName) + " 복사본"
+	if _, found := used[strings.ToLower(base)]; !found {
+		return base, nil
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s (%d)", base, suffix)
+		if _, found := used[strings.ToLower(candidate)]; !found {
+			return candidate, nil
+		}
+	}
 }
 
 func (r *MemoryRepository) workbookWithSheets(state *workbookState) Workbook {

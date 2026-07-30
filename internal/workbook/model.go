@@ -130,6 +130,10 @@ type UpdateSheetInput struct {
 	Hidden   *bool   `json:"hidden,omitempty"`
 }
 
+type DuplicateSheetInput struct {
+	Name string `json:"name,omitempty"`
+}
+
 type ImportSheet struct {
 	Name  string      `json:"name"`
 	Color string      `json:"color,omitempty"`

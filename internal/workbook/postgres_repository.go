@@ -335,27 +335,139 @@ func (r *PostgresRepository) CreateSheet(ctx context.Context, workbookID string,
 		return Sheet{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var lockedID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workbookID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
+	var duplicate bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sheets WHERE workbook_id=$1 AND lower(name)=lower($2))`, workbookID, name).Scan(&duplicate); err != nil {
+		return Sheet{}, err
+	}
+	if duplicate {
+		return Sheet{}, ErrDuplicateName
+	}
 	var position int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sheets WHERE workbook_id=$1`, workbookID).Scan(&position); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1)+1 FROM sheets WHERE workbook_id=$1`, workbookID).Scan(&position); err != nil {
 		return Sheet{}, err
 	}
 	now := r.now()
 	sheet := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: position, Color: input.Color, CreatedAt: now}
 	properties, _ := json.Marshal(sheetProperties{Color: input.Color})
-	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) SELECT $1,id,$3,$4,$5,$6 FROM workbooks WHERE id=$2 AND deleted_at IS NULL`, sheet.ID, workbookID, name, position, properties, now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, workbookID, name, position, properties, now); err != nil {
 		return Sheet{}, mapPostgresError(err)
 	}
-	command, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1 AND deleted_at IS NULL`, workbookID, now)
-	if err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
 		return Sheet{}, err
-	}
-	if command.RowsAffected() == 0 {
-		return Sheet{}, ErrNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Sheet{}, err
 	}
 	return sheet, nil
+}
+
+func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string, input DuplicateSheetInput) (Sheet, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Sheet{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var workbookID string
+	if err := tx.QueryRow(ctx, `SELECT workbook_id::text FROM sheets WHERE id=$1`, sheetID).Scan(&workbookID); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workbookID).Scan(&workbookID); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
+	var source Sheet
+	var propertiesData []byte
+	if err := tx.QueryRow(ctx, `SELECT id::text,workbook_id::text,name,position,properties,created_at FROM sheets WHERE id=$1 FOR UPDATE`, sheetID).Scan(&source.ID, &source.WorkbookID, &source.Name, &source.Position, &propertiesData, &source.CreatedAt); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT name FROM sheets WHERE workbook_id=$1 ORDER BY position,id`, workbookID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return Sheet{}, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Sheet{}, err
+	}
+	rows.Close()
+	name, err := availableDuplicateName(source.Name, input.Name, names)
+	if err != nil {
+		return Sheet{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position+1 WHERE workbook_id=$1 AND position>$2`, workbookID, source.Position); err != nil {
+		return Sheet{}, err
+	}
+	now := r.now()
+	duplicated := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: source.Position + 1, CreatedAt: now}
+	var properties sheetProperties
+	_ = json.Unmarshal(propertiesData, &properties)
+	duplicated.Color, duplicated.Hidden = properties.Color, properties.Hidden
+	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, duplicated.ID, workbookID, name, duplicated.Position, propertiesData, now); err != nil {
+		return Sheet{}, mapPostgresError(err)
+	}
+	type copiedBlock struct {
+		row, column int
+		payload     []byte
+	}
+	blockRows, err := tx.Query(ctx, `SELECT block_row,block_column,payload FROM cell_blocks WHERE sheet_id=$1 ORDER BY block_row,block_column`, source.ID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	blocks := make([]copiedBlock, 0)
+	for blockRows.Next() {
+		var block copiedBlock
+		if err := blockRows.Scan(&block.row, &block.column, &block.payload); err != nil {
+			blockRows.Close()
+			return Sheet{}, err
+		}
+		blocks = append(blocks, block)
+	}
+	if err := blockRows.Err(); err != nil {
+		blockRows.Close()
+		return Sheet{}, err
+	}
+	blockRows.Close()
+	for _, block := range blocks {
+		var payload map[string]Cell
+		if err := json.Unmarshal(block.payload, &payload); err != nil {
+			return Sheet{}, err
+		}
+		for coordinate, cell := range payload {
+			cell.SheetID = duplicated.ID
+			cell.UpdatedAt = now
+			payload[coordinate] = cell
+		}
+		data, _ := json.Marshal(payload)
+		if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, duplicated.ID, block.row, block.column, data, now); err != nil {
+			return Sheet{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
+		return Sheet{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Sheet{}, err
+	}
+	return duplicated, nil
 }
 
 func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, input UpdateSheetInput) (Sheet, error) {
@@ -364,26 +476,51 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 		return Sheet{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var sheet Sheet
-	var propertiesData []byte
-	err = tx.QueryRow(ctx, `SELECT id::text,workbook_id::text,name,position,properties,created_at FROM sheets WHERE id=$1 FOR UPDATE`, sheetID).Scan(&sheet.ID, &sheet.WorkbookID, &sheet.Name, &sheet.Position, &propertiesData, &sheet.CreatedAt)
+	var workbookID string
+	err = tx.QueryRow(ctx, `SELECT workbook_id::text FROM sheets WHERE id=$1`, sheetID).Scan(&workbookID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Sheet{}, ErrNotFound
 	}
 	if err != nil {
 		return Sheet{}, err
 	}
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workbookID).Scan(&workbookID); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
+	var sheet Sheet
+	var propertiesData []byte
+	if err := tx.QueryRow(ctx, `SELECT id::text,workbook_id::text,name,position,properties,created_at FROM sheets WHERE id=$1 FOR UPDATE`, sheetID).Scan(&sheet.ID, &sheet.WorkbookID, &sheet.Name, &sheet.Position, &propertiesData, &sheet.CreatedAt); errors.Is(err, pgx.ErrNoRows) {
+		return Sheet{}, ErrNotFound
+	} else if err != nil {
+		return Sheet{}, err
+	}
 	var properties sheetProperties
 	_ = json.Unmarshal(propertiesData, &properties)
+	sheet.Color, sheet.Hidden = properties.Color, properties.Hidden
+	original := sheet
+	originalProperties := properties
 	if input.Name != nil {
 		sheet.Name = strings.TrimSpace(*input.Name)
 		if sheet.Name == "" {
 			return Sheet{}, fmt.Errorf("%w: sheet name cannot be empty", ErrInvalid)
 		}
+		var duplicate bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sheets WHERE workbook_id=$1 AND id<>$2 AND lower(name)=lower($3))`, workbookID, sheetID, sheet.Name).Scan(&duplicate); err != nil {
+			return Sheet{}, err
+		}
+		if duplicate {
+			return Sheet{}, ErrDuplicateName
+		}
 	}
 	if input.Position != nil {
-		if *input.Position < 0 {
-			return Sheet{}, fmt.Errorf("%w: position cannot be negative", ErrInvalid)
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM sheets WHERE workbook_id=$1`, workbookID).Scan(&count); err != nil {
+			return Sheet{}, err
+		}
+		if *input.Position < 0 || *input.Position >= count {
+			return Sheet{}, fmt.Errorf("%w: position must be between 0 and %d", ErrInvalid, count-1)
 		}
 		sheet.Position = *input.Position
 	}
@@ -394,6 +531,18 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 		properties.Hidden = *input.Hidden
 	}
 	sheet.Color, sheet.Hidden = properties.Color, properties.Hidden
+	if sheet == original && properties == originalProperties {
+		return sheet, tx.Commit(ctx)
+	}
+	if sheet.Position != original.Position {
+		if original.Position < sheet.Position {
+			if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position-1 WHERE workbook_id=$1 AND id<>$2 AND position>$3 AND position<=$4`, workbookID, sheetID, original.Position, sheet.Position); err != nil {
+				return Sheet{}, err
+			}
+		} else if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position+1 WHERE workbook_id=$1 AND id<>$2 AND position>=$3 AND position<$4`, workbookID, sheetID, sheet.Position, original.Position); err != nil {
+			return Sheet{}, err
+		}
+	}
 	propertiesData, _ = json.Marshal(properties)
 	if _, err := tx.Exec(ctx, `UPDATE sheets SET name=$2,position=$3,properties=$4 WHERE id=$1`, sheetID, sheet.Name, sheet.Position, propertiesData); err != nil {
 		return Sheet{}, mapPostgresError(err)
@@ -414,8 +563,20 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var workbookID string
-	var count int
-	err = tx.QueryRow(ctx, `SELECT workbook_id::text,(SELECT count(*) FROM sheets s2 WHERE s2.workbook_id=s.workbook_id) FROM sheets s WHERE id=$1 FOR UPDATE`, sheetID).Scan(&workbookID, &count)
+	err = tx.QueryRow(ctx, `SELECT workbook_id::text FROM sheets WHERE id=$1`, sheetID).Scan(&workbookID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workbookID).Scan(&workbookID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var position, count int
+	err = tx.QueryRow(ctx, `SELECT position,(SELECT count(*) FROM sheets WHERE workbook_id=$2) FROM sheets WHERE id=$1 FOR UPDATE`, sheetID, workbookID).Scan(&position, &count)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -426,6 +587,9 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM sheets WHERE id=$1`, sheetID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position-1 WHERE workbook_id=$1 AND position>$2`, workbookID, position); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, r.now()); err != nil {

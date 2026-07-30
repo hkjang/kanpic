@@ -198,6 +198,86 @@ func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	}
 }
 
+func TestPostgresSheetLifecyclePreservesDataAndPositions(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres sheet lifecycle", WorkspaceID: "integration", OwnerID: "sheet-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	source, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Data", Color: "#2563eb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Tail"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: source.ID, ActorID: "sheet-user", BaseVersion: 3, IdempotencyKey: "postgres-sheet-data", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`7`)}, {Row: 2, Column: 1, Formula: "=A1*2", Style: json.RawMessage(`{"bold":true}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	duplicated, err := repository.DuplicateSheet(ctx, source.ID, workbook.DuplicateSheetInput{})
+	if err != nil || duplicated.Name != "Data 복사본" || duplicated.Position != 2 || duplicated.Color != source.Color {
+		t.Fatalf("duplicate: %#v, %v", duplicated, err)
+	}
+	selected, _ := cellrange.Parse("A1:A2")
+	cells, err := repository.ReadRange(ctx, duplicated.ID, selected)
+	var copiedStyle map[string]any
+	if len(cells) == 2 {
+		_ = json.Unmarshal(cells[1].Style, &copiedStyle)
+	}
+	if err != nil || len(cells) != 2 || cells[0].SheetID != duplicated.ID || string(cells[0].Value) != "7" || cells[1].Formula != "=A1*2" || string(cells[1].Value) != "14" || copiedStyle["bold"] != true {
+		t.Fatalf("duplicated cells: %#v, %v", cells, err)
+	}
+	position := 0
+	if _, err := repository.UpdateSheet(ctx, duplicated.ID, workbook.UpdateSheetInput{Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	afterMove, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil || afterMove.Version != 6 || len(afterMove.Sheets) != 4 {
+		t.Fatalf("after move: %#v, %v", afterMove, err)
+	}
+	expected := []string{"Data 복사본", "Sheet1", "Data", "Tail"}
+	for index, name := range expected {
+		if afterMove.Sheets[index].Position != index || afterMove.Sheets[index].Name != name {
+			t.Fatalf("position %d: %#v", index, afterMove.Sheets[index])
+		}
+	}
+	if _, err := repository.UpdateSheet(ctx, duplicated.ID, workbook.UpdateSheetInput{}); err != nil {
+		t.Fatal(err)
+	}
+	afterNoop, _ := repository.GetWorkbook(ctx, book.ID)
+	if afterNoop.Version != afterMove.Version {
+		t.Fatalf("no-op changed version: %d -> %d", afterMove.Version, afterNoop.Version)
+	}
+	duplicateName := "DATA"
+	if _, err := repository.UpdateSheet(ctx, duplicated.ID, workbook.UpdateSheetInput{Name: &duplicateName}); !errors.Is(err, workbook.ErrDuplicateName) {
+		t.Fatalf("case-insensitive duplicate name: %v", err)
+	}
+	if err := repository.DeleteSheet(ctx, book.Sheets[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	afterDelete, _ := repository.GetWorkbook(ctx, book.ID)
+	if afterDelete.Version != 7 || len(afterDelete.Sheets) != 3 {
+		t.Fatalf("after delete: %#v", afterDelete)
+	}
+	for index, sheet := range afterDelete.Sheets {
+		if sheet.Position != index {
+			t.Fatalf("compacted position %d: %#v", index, sheet)
+		}
+	}
+}
+
 func TestPostgresAtomicImportExport(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

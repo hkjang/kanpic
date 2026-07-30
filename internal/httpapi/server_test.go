@@ -119,6 +119,38 @@ func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {
 	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", map[string]any{"base_version": 3, "idempotency_key": "paste-too-large", "cells": tooMany}, http.StatusBadRequest)
 }
 
+func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "sheet duplicate"}, http.StatusCreated)
+	source := created.Sheets[0]
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+source.ID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "sheet-data", "cells": []map[string]any{{"row": 1, "column": 1, "value": 42}}}, http.StatusOK)
+	restCopy := request[workbook.Sheet](t, server, http.MethodPost, "/api/v1/sheets/"+source.ID+"/duplicate", map[string]any{}, http.StatusCreated)
+	if restCopy.Name != "Sheet1 복사본" || restCopy.Position != 1 {
+		t.Fatalf("REST duplicate: %#v", restCopy)
+	}
+	copied := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+restCopy.ID+"/ranges/A1", nil, http.StatusOK)
+	if len(copied.Items) != 1 || string(copied.Items[0].Value) != "42" {
+		t.Fatalf("REST duplicate data: %#v", copied.Items)
+	}
+	mcpCopy := request[struct {
+		Result struct {
+			Structured workbook.Sheet `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.sheet.duplicate", "arguments": map[string]any{"sheet_id": source.ID, "name": "Agent Copy"}}}, http.StatusOK)
+	if mcpCopy.Result.Structured.Name != "Agent Copy" || mcpCopy.Result.Structured.Position != 1 {
+		t.Fatalf("MCP duplicate: %#v", mcpCopy.Result.Structured)
+	}
+	book := request[workbook.Workbook](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID, nil, http.StatusOK)
+	if book.Version != 4 || len(book.Sheets) != 3 || book.Sheets[0].Name != "Sheet1" || book.Sheets[1].Name != "Agent Copy" || book.Sheets[2].Name != "Sheet1 복사본" {
+		t.Fatalf("sheet order after MCP duplicate: %#v", book)
+	}
+}
+
 func TestFormulaEvaluationAndStoredResult(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()
