@@ -57,9 +57,17 @@ export function CanvasGrid({sheetId,version,onVersion}:{sheetId:string;version:n
       const style=cell.style??{}
       if(typeof style.background==='string'){context.fillStyle=style.background;context.fillRect(x+1,y+1,columnWidth-2,rowHeight-2)}
       const formulaError=typeof cell.value==='string'&&cell.value.startsWith('#')
-      context.fillStyle=formulaError?'#c2413b':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.bold||formulaError?'600 ':'400 '}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign=typeof cell.value==='number'?'right':'left'
-      const padding=context.textAlign==='right'?columnWidth-7:7
-      context.fillText(cell.value==null?'':String(cell.value),x+padding,y+rowHeight/2,columnWidth-12)
+      const fontSize=typeof style.font_size==='number'?style.font_size:12,fontFamily=typeof style.font_family==='string'?JSON.stringify(style.font_family):'Inter, Pretendard, sans-serif'
+      context.fillStyle=formulaError?'#c2413b':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.italic===true?'italic ':''}${style.bold||formulaError?'600':'400'} ${fontSize*zoom}px ${fontFamily}`
+      const alignment=style.horizontal_align==='left'||style.horizontal_align==='center'||style.horizontal_align==='right'?style.horizontal_align:typeof cell.value==='number'?'right':'left'
+      context.textAlign=alignment
+      const text=cell.value==null?'':String(cell.value),textX=alignment==='right'?x+columnWidth-7:alignment==='center'?x+columnWidth/2:x+7
+      const vertical=style.vertical_align==='top'||style.vertical_align==='bottom'||style.vertical_align==='middle'?style.vertical_align:'middle'
+      const textY=vertical==='top'?y+Math.max(4,fontSize*zoom/2+3):vertical==='bottom'?y+rowHeight-Math.max(4,fontSize*zoom/2+3):y+rowHeight/2
+      const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,columnWidth-12)
+      context.save();context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(text,0,0,maxTextWidth)
+      if(text&&(style.underline===true||style.strike===true)){const width=Math.min(context.measureText(text).width,maxTextWidth),start=alignment==='right'?-width:alignment==='center'?-width/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+width,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+width,0);context.stroke()}}
+      context.restore()
     })
     Object.values(collaborators).forEach(user=>{
       if(user.client_id===collaborationClientId()||user.selection?.sheet_id!==sheetId)return

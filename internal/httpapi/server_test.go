@@ -119,6 +119,68 @@ func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {
 	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", map[string]any{"base_version": 3, "idempotency_key": "paste-too-large", "cells": tooMany}, http.StatusBadRequest)
 }
 
+func TestRangeFormatRESTAndMCPPreserveContent(t *testing.T) {
+	t.Parallel()
+	formatTool, found := findMCPTool("spreadsheet.range.format")
+	required, requiredOK := formatTool.InputSchema["required"].([]string)
+	if !found || formatTool.Meta["required_scope"] != "format.write" || !requiredOK || len(required) != 4 {
+		t.Fatalf("MCP format tool schema: %#v", formatTool)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/ranges:format", nil)); scope != "format.write" {
+		t.Fatalf("REST format scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "format api"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "format-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 5}, {"row": 2, "column": 1, "formula": "=A1*2"}},
+	}, http.StatusOK)
+
+	body := map[string]any{"base_version": 2, "idempotency_key": "format-rest", "client_id": "browser", "range": "A1:A3", "style": map[string]any{"bold": true, "background": "#fef3c7", "horizontal_align": "center"}}
+	formatted := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", body, http.StatusOK)
+	if formatted.ServerVersion != 3 || formatted.AppliedCells != 3 || len(formatted.RecalculatedCells) != 0 {
+		t.Fatalf("REST format result: %#v", formatted)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 3 {
+		t.Fatalf("REST format idempotency: %#v", duplicate)
+	}
+	formattedCells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:A3", nil, http.StatusOK)
+	if len(formattedCells.Items) != 3 || string(formattedCells.Items[0].Value) != "5" || formattedCells.Items[1].Formula != "=A1*2" || string(formattedCells.Items[1].Value) != "10" {
+		t.Fatalf("REST format changed content: %#v", formattedCells.Items)
+	}
+	for _, cell := range formattedCells.Items {
+		var style map[string]any
+		if json.Unmarshal(cell.Style, &style) != nil || style["bold"] != true || style["background"] != "#fef3c7" || style["horizontal_align"] != "center" {
+			t.Fatalf("REST cell style: %s", cell.Style)
+		}
+	}
+
+	mcpFormat := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.range.format", "arguments": map[string]any{"sheet_id": sheetID, "base_version": 3, "idempotency_key": "format-mcp", "client_id": "agent", "range": "A1:A3", "style": map[string]any{"italic": true, "color": "#2563eb"}}}}, http.StatusOK)
+	if mcpFormat.Result.Structured.ServerVersion != 4 || mcpFormat.Result.Structured.AppliedCells != 3 {
+		t.Fatalf("MCP format result: %#v", mcpFormat.Result.Structured)
+	}
+	formattedCells = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:A3", nil, http.StatusOK)
+	var mergedStyle map[string]any
+	_ = json.Unmarshal(formattedCells.Items[1].Style, &mergedStyle)
+	if string(formattedCells.Items[0].Value) != "5" || formattedCells.Items[1].Formula != "=A1*2" || mergedStyle["bold"] != true || mergedStyle["italic"] != true || mergedStyle["color"] != "#2563eb" {
+		t.Fatalf("MCP format did not merge style: cells=%#v style=%#v", formattedCells.Items, mergedStyle)
+	}
+
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 4, "idempotency_key": "format-invalid", "range": "A1", "style": map[string]any{"color": "red"}}, http.StatusBadRequest)
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 4, "idempotency_key": "format-large", "range": "A1:A10001", "style": map[string]any{"bold": true}}, http.StatusBadRequest)
+}
+
 func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

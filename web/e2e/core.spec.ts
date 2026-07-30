@@ -66,6 +66,53 @@ test('undoes and redoes an acknowledged cell operation', async ({ page }) => {
   await expect.poll(valueAtA1).toBe(3)
 })
 
+test('formats a selected range without changing values or formulas and resends offline changes', async ({ page, context }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId = page.url().split('/workbooks/')[1]
+  const workbook = await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response => response.json())
+  const sheetId = workbook.sheets[0].id as string
+  const canvas = page.locator('canvas.grid-canvas')
+  const edit = async (position:{x:number;y:number}, value:string) => {
+    await canvas.dblclick({ position })
+    await page.locator('input.cell-editor').fill(value)
+    await page.locator('input.cell-editor').press('Enter')
+  }
+  const range = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:A2`).then(response => response.json())
+
+  await edit({ x:70, y:42 }, '5')
+  await edit({ x:70, y:69 }, '=A1*2')
+  await expect.poll(async () => (await range()).items.map((cell:{value:unknown}) => cell.value)).toEqual([5, 10])
+  await canvas.click({ position:{ x:70, y:42 } })
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(page.locator('.name-box')).toHaveText('A1:A2')
+
+  await page.getByRole('button', { name:'굵게' }).click()
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.bold)).toEqual([true, true])
+  await page.getByRole('button', { name:'가운데 정렬' }).click()
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.horizontal_align)).toEqual(['center', 'center'])
+  await page.getByLabel('셀 배경색').fill('#fef3c7')
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.background)).toEqual(['#fef3c7', '#fef3c7'])
+  await page.getByLabel('글꼴 크기').selectOption('14')
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.font_size)).toEqual([14, 14])
+
+  let result = await range()
+  expect(result.items.map((cell:{value:unknown}) => cell.value)).toEqual([5, 10])
+  expect(result.items[1].formula).toBe('=A1*2')
+  await page.getByRole('button', { name:'실행 취소' }).click()
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.font_size)).toEqual([undefined, undefined])
+  result = await range()
+  expect(result.items.map((cell:{value:unknown}) => cell.value)).toEqual([5, 10])
+  expect(result.items[1].formula).toBe('=A1*2')
+
+  await context.setOffline(true)
+  await page.getByRole('button', { name:'기울임' }).click()
+  await expect(page.getByText('오프라인 · 로컬 저장', { exact:true })).toBeVisible()
+  await context.setOffline(false)
+  await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.italic), { timeout:15_000 }).toEqual([true, true])
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

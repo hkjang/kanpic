@@ -356,6 +356,11 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if len(mutation.Cells) == 0 || len(mutation.Cells) > MaxPasteCells {
 		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, MaxPasteCells)
 	}
+	if len(mutation.StylePatch) > 0 {
+		if err := ValidateStylePatch(mutation.StylePatch); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, _, err := r.sheetState(mutation.SheetID)
@@ -396,11 +401,32 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 			}
 		}
+		if len(mutation.StylePatch) > 0 {
+			input, err = applyStylePatch(current, input, mutation.StylePatch)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			if stylesEqual(current.Style, input.Style) {
+				continue
+			}
+		}
 		effective = append(effective, input)
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.cells[mutation.SheetID], effective)
-	if err != nil {
-		return MutationResult{}, err
+	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
+		result := MutationResult{WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: state.workbook.Version, Conflicts: conflicts, CreatedAt: r.now()}
+		state.idempotent[key] = result
+		return result, nil
+	}
+	var expanded []CellInput
+	var recalculated []CellCoordinate
+	var formulaErrors []CellFormulaError
+	if len(mutation.StylePatch) > 0 {
+		expanded = append([]CellInput(nil), effective...)
+	} else {
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.cells[mutation.SheetID], effective)
+		if err != nil {
+			return MutationResult{}, err
+		}
 	}
 	before := make(map[cellKey]Cell, len(expanded))
 	after := make(map[cellKey]Cell, len(expanded))

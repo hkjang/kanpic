@@ -63,6 +63,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("DELETE /api/v1/sheets/{sheetId}", s.deleteSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:batch", s.applyCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
@@ -239,6 +240,52 @@ func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pasteCells(w http.ResponseWriter, r *http.Request) {
 	s.applyCellsWithLimit(w, r, workbook.MaxPasteCells, "cells.paste")
+}
+
+type rangeFormatRequest struct {
+	BaseVersion    int64           `json:"base_version"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	ClientID       string          `json:"client_id"`
+	Range          string          `json:"range"`
+	Style          json.RawMessage `json:"style"`
+}
+
+func (s *Server) formatRange(w http.ResponseWriter, r *http.Request) {
+	var input rangeFormatRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	result, cells, err := s.applyRangeFormat(r.Context(), r.PathValue("sheetId"), actorID(r), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate && result.AppliedCells > 0 {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) applyRangeFormat(ctx context.Context, sheetID, actor string, input rangeFormatRequest) (workbook.MutationResult, []workbook.CellInput, error) {
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return workbook.MutationResult{}, nil, fmt.Errorf("%w: invalid range", workbook.ErrInvalid)
+	}
+	rows, columns := selected.End.Row-selected.Start.Row+1, selected.End.Column-selected.Start.Column+1
+	if rows < 1 || columns < 1 || rows > workbook.MaxPasteCells || columns > workbook.MaxPasteCells || rows > workbook.MaxPasteCells/columns {
+		return workbook.MutationResult{}, nil, fmt.Errorf("%w: formatted range must contain 1 to %d cells", workbook.ErrInvalid, workbook.MaxPasteCells)
+	}
+	if err := workbook.ValidateStylePatch(input.Style); err != nil {
+		return workbook.MutationResult{}, nil, err
+	}
+	cells := make([]workbook.CellInput, 0, rows*columns)
+	for row := selected.Start.Row; row <= selected.End.Row; row++ {
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			cells = append(cells, workbook.CellInput{Row: row, Column: column})
+		}
+	}
+	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, StylePatch: input.Style, OperationType: "range.format"})
+	return result, cells, err
 }
 
 func (s *Server) applyCellsWithLimit(w http.ResponseWriter, r *http.Request, limit int, operationType string) {
@@ -546,6 +593,9 @@ func requiredScope(r *http.Request) string {
 			return "profile.read"
 		}
 		return "profile.write"
+	}
+	if strings.Contains(path, "ranges:format") {
+		return "format.write"
 	}
 	if strings.Contains(path, "/ranges/") {
 		return "range.read"

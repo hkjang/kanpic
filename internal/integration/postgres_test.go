@@ -118,6 +118,57 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	}
 }
 
+func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres formatting", WorkspaceID: "integration", OwnerID: "format-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "format-user", BaseVersion: 1, IdempotencyKey: "postgres-format-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`5`)}, {Row: 2, Column: 1, Formula: "=A1*2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	formatted, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "format-user", BaseVersion: 2, IdempotencyKey: "postgres-format-range", OperationType: "range.format", StylePatch: json.RawMessage(`{"bold":true,"background":"#fef3c7","horizontal_align":"center"}`), Cells: []workbook.CellInput{{Row: 1, Column: 1}, {Row: 2, Column: 1}, {Row: 3, Column: 1}}})
+	if err != nil || formatted.ServerVersion != 3 || formatted.AppliedCells != 3 || len(formatted.RecalculatedCells) != 0 {
+		t.Fatalf("format result: %#v, %v", formatted, err)
+	}
+	duplicate, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "format-user", BaseVersion: 2, IdempotencyKey: "postgres-format-range", OperationType: "range.format", StylePatch: json.RawMessage(`{"bold":false}`), Cells: []workbook.CellInput{{Row: 1, Column: 1}}})
+	if err != nil || !duplicate.Duplicate || duplicate.ServerVersion != 3 {
+		t.Fatalf("format duplicate: %#v, %v", duplicate, err)
+	}
+	selected, _ := cellrange.Parse("A1:A3")
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 3 || string(cells[0].Value) != "5" || cells[1].Formula != "=A1*2" || string(cells[1].Value) != "10" {
+		t.Fatalf("formatted content: %#v, %v", cells, err)
+	}
+	for _, cell := range cells {
+		var style map[string]any
+		if json.Unmarshal(cell.Style, &style) != nil || style["bold"] != true || style["background"] != "#fef3c7" || style["horizontal_align"] != "center" {
+			t.Fatalf("formatted style: %s", cell.Style)
+		}
+	}
+	undone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: formatted.OperationID, ActorID: "format-user", IdempotencyKey: "postgres-format-undo"})
+	if err != nil || undone.ServerVersion != 4 || undone.AppliedCells != 3 {
+		t.Fatalf("format undo: %#v, %v", undone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 2 || len(cells[0].Style) != 0 || len(cells[1].Style) != 0 || string(cells[0].Value) != "5" || cells[1].Formula != "=A1*2" {
+		t.Fatalf("content after format undo: %#v, %v", cells, err)
+	}
+}
+
 func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

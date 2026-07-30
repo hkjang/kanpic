@@ -52,6 +52,7 @@ type CellMutation struct {
 	BaseVersion       int64           `json:"base_version"`
 	IdempotencyKey    string          `json:"idempotency_key"`
 	Cells             []CellInput     `json:"cells"`
+	StylePatch        json.RawMessage `json:"-"`
 	Expected          map[string]Cell `json:"-"`
 	OperationType     string          `json:"-"`
 	UndoOfOperationID string          `json:"-"`

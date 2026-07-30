@@ -1,7 +1,7 @@
 export type OutboxOperation = {
   id: string
   sheetId: string
-  endpoint?: 'batch'|'paste'
+  endpoint?: 'batch'|'paste'|'format'
   body: Record<string, unknown>
   attempts: number
   createdAt: number
@@ -49,8 +49,8 @@ export async function flushOutbox(onApplied?: (operation:OutboxOperation, result
   let flushed = 0
   for (const item of items) {
     try {
-      const action=item.endpoint==='paste'?'paste':'batch'
-      const response = await fetch(`/api/v1/sheets/${item.sheetId}/cells:${action}`, { method:'PATCH', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item.body) })
+      const path=item.endpoint==='format'?`/api/v1/sheets/${item.sheetId}/ranges:format`:`/api/v1/sheets/${item.sheetId}/cells:${item.endpoint==='paste'?'paste':'batch'}`
+      const response = await fetch(path, { method:'PATCH', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item.body) })
       if (!response.ok) {
         if (response.status >= 400 && response.status < 500 && response.status !== 409) await remove(item.id)
         break

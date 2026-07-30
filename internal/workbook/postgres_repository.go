@@ -605,6 +605,11 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if len(mutation.Cells) == 0 || len(mutation.Cells) > MaxPasteCells {
 		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, MaxPasteCells)
 	}
+	if len(mutation.StylePatch) > 0 {
+		if err := ValidateStylePatch(mutation.StylePatch); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	for _, cell := range mutation.Cells {
 		if cell.Row < 1 || cell.Column < 1 {
 			return MutationResult{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
@@ -673,23 +678,43 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 
 	effective := make([]CellInput, 0, len(mutation.Cells))
 	for _, input := range mutation.Cells {
+		current := existing[cellKey{input.Row, input.Column}]
 		if mutation.Expected != nil {
 			expected, exists := mutation.Expected[coordinateKey(input.Row, input.Column)]
 			if !exists {
 				return MutationResult{}, fmt.Errorf("%w: expected cell state is missing", ErrInvalid)
 			}
-			current := existing[cellKey{input.Row, input.Column}]
 			if !cellsEqual(current, expected) {
 				changedVersion := currentVersion
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 				continue
 			}
 		}
+		if len(mutation.StylePatch) > 0 {
+			input, err = applyStylePatch(current, input, mutation.StylePatch)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			if stylesEqual(current.Style, input.Style) {
+				continue
+			}
+		}
 		effective = append(effective, input)
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(existing, effective)
-	if err != nil {
-		return MutationResult{}, err
+	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
+		result := MutationResult{WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion, Conflicts: conflicts, CreatedAt: r.now()}
+		return result, tx.Commit(ctx)
+	}
+	var expanded []CellInput
+	var recalculated []CellCoordinate
+	var formulaErrors []CellFormulaError
+	if len(mutation.StylePatch) > 0 {
+		expanded = append([]CellInput(nil), effective...)
+	} else {
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(existing, effective)
+		if err != nil {
+			return MutationResult{}, err
+		}
 	}
 	before := make(map[string]Cell, len(expanded))
 	after := make(map[string]Cell, len(expanded))
