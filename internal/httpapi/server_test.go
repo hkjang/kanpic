@@ -258,6 +258,62 @@ func TestRangeFormatRESTAndMCPPreserveContent(t *testing.T) {
 	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 4, "idempotency_key": "format-large", "range": "A1:A10001", "style": map[string]any{"bold": true}}, http.StatusBadRequest)
 }
 
+func TestRangeMergeRESTMCPAndUndoPreserveEveryCell(t *testing.T) {
+	t.Parallel()
+	mergeTool, mergeFound := findMCPTool("spreadsheet.range.merge")
+	unmergeTool, unmergeFound := findMCPTool("spreadsheet.range.unmerge")
+	if !mergeFound || !unmergeFound || mergeTool.Meta["required_scope"] != "format.write" || unmergeTool.Meta["required_scope"] != "format.write" {
+		t.Fatalf("merge MCP tools: merge=%#v unmerge=%#v", mergeTool, unmergeTool)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "merge api"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "merge-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": "title", "style": map[string]any{"bold": true}}, {"row": 2, "column": 2, "value": 9}}}, http.StatusOK)
+	body := map[string]any{"base_version": 2, "idempotency_key": "merge-rest", "client_id": "browser", "range": "A1:B2"}
+	merged := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:merge", body, http.StatusOK)
+	if merged.ServerVersion != 3 || merged.AppliedCells != 4 {
+		t.Fatalf("REST merge: %#v", merged)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:merge", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 3 {
+		t.Fatalf("merge idempotency: %#v", duplicate)
+	}
+	selected := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B2", nil, http.StatusOK)
+	if len(selected.Items) != 4 || string(selected.Items[0].Value) != `"title"` || string(selected.Items[3].Value) != "9" {
+		t.Fatalf("merged cells lost content: %#v", selected.Items)
+	}
+	for _, cell := range selected.Items {
+		metadata, exists, err := workbook.CellMerge(cell)
+		if err != nil || !exists || metadata.StartRow != 1 || metadata.EndColumn != 2 {
+			t.Fatalf("merge metadata: cell=%#v metadata=%#v exists=%v err=%v", cell, metadata, exists, err)
+		}
+	}
+	unmerged := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.range.unmerge", "arguments": map[string]any{"sheet_id": sheetID, "range": "A1:B2", "base_version": 3, "idempotency_key": "unmerge-mcp", "client_id": "agent"}}}, http.StatusOK)
+	if unmerged.Result.Structured.ServerVersion != 4 || unmerged.Result.Structured.AppliedCells != 4 {
+		t.Fatalf("MCP unmerge: %#v", unmerged.Result.Structured)
+	}
+	undone := request[workbook.MutationResult](t, server, http.MethodPost, "/api/v1/operations/"+unmerged.Result.Structured.OperationID+":undo", map[string]any{"idempotency_key": "undo-unmerge", "client_id": "agent"}, http.StatusOK)
+	if undone.ServerVersion != 5 || undone.AppliedCells != 4 {
+		t.Fatalf("unmerge undo: %#v", undone)
+	}
+	selected = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B2", nil, http.StatusOK)
+	for _, cell := range selected.Items {
+		if _, exists, err := workbook.CellMerge(cell); err != nil || !exists {
+			t.Fatalf("undo did not restore merge: cell=%#v exists=%v err=%v", cell, exists, err)
+		}
+	}
+}
+
 func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

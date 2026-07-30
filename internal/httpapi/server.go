@@ -66,6 +66,8 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:fill", s.fillCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:merge", s.mergeRange)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
@@ -270,6 +272,13 @@ type rangeFormatRequest struct {
 	Style          json.RawMessage `json:"style"`
 }
 
+type rangeMergeRequest struct {
+	BaseVersion    int64  `json:"base_version"`
+	IdempotencyKey string `json:"idempotency_key"`
+	ClientID       string `json:"client_id"`
+	Range          string `json:"range"`
+}
+
 func (s *Server) formatRange(w http.ResponseWriter, r *http.Request) {
 	var input rangeFormatRequest
 	if !decodeJSON(w, r, &input) {
@@ -305,6 +314,51 @@ func (s *Server) applyRangeFormat(ctx context.Context, sheetID, actor string, in
 		}
 	}
 	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, StylePatch: input.Style, OperationType: "range.format"})
+	return result, cells, err
+}
+
+func (s *Server) mergeRange(w http.ResponseWriter, r *http.Request) {
+	s.changeRangeMerge(w, r, true)
+}
+
+func (s *Server) unmergeRange(w http.ResponseWriter, r *http.Request) {
+	s.changeRangeMerge(w, r, false)
+}
+
+func (s *Server) changeRangeMerge(w http.ResponseWriter, r *http.Request, merge bool) {
+	var input rangeMergeRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	result, cells, err := s.applyRangeMerge(r.Context(), r.PathValue("sheetId"), actorID(r), input, merge)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate && result.AppliedCells > 0 {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) applyRangeMerge(ctx context.Context, sheetID, actor string, input rangeMergeRequest, merge bool) (workbook.MutationResult, []workbook.CellInput, error) {
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return workbook.MutationResult{}, nil, fmt.Errorf("%w: invalid range", workbook.ErrInvalid)
+	}
+	existing, err := s.repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		return workbook.MutationResult{}, nil, err
+	}
+	cells, err := workbook.BuildMergeCells(existing, selected, merge)
+	if err != nil {
+		return workbook.MutationResult{}, nil, err
+	}
+	operationType := "range.merge"
+	if !merge {
+		operationType = "range.unmerge"
+	}
+	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, OperationType: operationType})
 	return result, cells, err
 }
 

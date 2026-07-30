@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -241,9 +242,17 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 			return ParsedWorkbook{}, err
 		}
 		rows.Close()
+		storedBeforeMerges := len(imported.Cells)
 		merges, mergeErr := file.GetMergeCells(sheetName)
-		if mergeErr == nil && len(merges) > 0 {
-			parsed.Preview.Warnings = append(parsed.Preview.Warnings, fmt.Sprintf("%s: %d merged ranges are imported as individual cells", sheetName, len(merges)))
+		if mergeErr != nil {
+			return ParsedWorkbook{}, fmt.Errorf("read merged cells from sheet %s: %w", sheetName, mergeErr)
+		}
+		if err := applyImportedMerges(&imported, merges, &rowIndex, &maxColumns); err != nil {
+			return ParsedWorkbook{}, fmt.Errorf("import merged cells from sheet %s: %w", sheetName, err)
+		}
+		parsed.Preview.TotalCells += len(imported.Cells) - storedBeforeMerges
+		if parsed.Preview.TotalCells > MaxImportCells {
+			return ParsedWorkbook{}, errors.New("import exceeds one million stored cells")
 		}
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
@@ -354,6 +363,7 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		if err != nil {
 			return ExportedFile{}, err
 		}
+		mergedRanges := make(map[string]workbook.MergeMetadata)
 		for _, cell := range cells {
 			coordinate := cellrange.Address(cell.Row, cell.Column)
 			var value any
@@ -368,12 +378,17 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 					return ExportedFile{}, err
 				}
 			}
-			if len(cell.Style) > 0 {
-				key := string(cell.Style)
+			if metadata, merged, mergeErr := workbook.CellMerge(cell); mergeErr != nil {
+				return ExportedFile{}, mergeErr
+			} else if merged {
+				mergedRanges[fmt.Sprintf("%d:%d:%d:%d", metadata.StartRow, metadata.StartColumn, metadata.EndRow, metadata.EndColumn)] = metadata
+			}
+			if styleData := xlsxStyle(cell.Style); len(styleData) > 0 {
+				key := string(styleData)
 				styleID, exists := styleCache[key]
 				if !exists {
 					var style excelize.Style
-					if json.Unmarshal(cell.Style, &style) == nil {
+					if json.Unmarshal(styleData, &style) == nil {
 						styleID, err = file.NewStyle(&style)
 						if err == nil {
 							styleCache[key] = styleID
@@ -385,12 +400,88 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 				}
 			}
 		}
+		mergeKeys := make([]string, 0, len(mergedRanges))
+		for key := range mergedRanges {
+			mergeKeys = append(mergeKeys, key)
+		}
+		sort.Strings(mergeKeys)
+		for _, key := range mergeKeys {
+			metadata := mergedRanges[key]
+			if err := file.MergeCell(name, cellrange.Address(metadata.StartRow, metadata.StartColumn), cellrange.Address(metadata.EndRow, metadata.EndColumn)); err != nil {
+				return ExportedFile{}, err
+			}
+		}
 	}
 	var buffer bytes.Buffer
 	if err := file.Write(&buffer); err != nil {
 		return ExportedFile{}, err
 	}
 	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes()}, nil
+}
+
+func applyImportedMerges(imported *workbook.ImportSheet, merges []excelize.MergeCell, maxRow, maxColumn *int) error {
+	byCoordinate := make(map[string]workbook.CellInput, len(imported.Cells))
+	for _, input := range imported.Cells {
+		byCoordinate[coordinateKey(input.Row, input.Column)] = input
+	}
+	for _, merged := range merges {
+		selected, err := cellrange.Parse(merged.GetStartAxis() + ":" + merged.GetEndAxis())
+		if err != nil {
+			return err
+		}
+		rows, columns := selected.End.Row-selected.Start.Row+1, selected.End.Column-selected.Start.Column+1
+		if rows < 1 || columns < 1 || rows > workbook.MaxPasteCells || columns > workbook.MaxPasteCells || rows > workbook.MaxPasteCells/columns {
+			return fmt.Errorf("merged range must contain 1 to %d cells", workbook.MaxPasteCells)
+		}
+		existing := make([]workbook.Cell, 0, rows*columns)
+		for row := selected.Start.Row; row <= selected.End.Row; row++ {
+			for column := selected.Start.Column; column <= selected.End.Column; column++ {
+				if input, exists := byCoordinate[coordinateKey(row, column)]; exists {
+					existing = append(existing, workbook.Cell{Row: row, Column: column, Value: input.Value, Formula: input.Formula, Style: input.Style})
+				}
+			}
+		}
+		inputs, err := workbook.BuildMergeCells(existing, selected, true)
+		if err != nil {
+			return err
+		}
+		for _, input := range inputs {
+			byCoordinate[coordinateKey(input.Row, input.Column)] = input
+		}
+		if selected.End.Row > *maxRow {
+			*maxRow = selected.End.Row
+		}
+		if selected.End.Column > *maxColumn {
+			*maxColumn = selected.End.Column
+		}
+	}
+	imported.Cells = imported.Cells[:0]
+	for _, input := range byCoordinate {
+		imported.Cells = append(imported.Cells, input)
+	}
+	sort.Slice(imported.Cells, func(i, j int) bool {
+		if imported.Cells[i].Row == imported.Cells[j].Row {
+			return imported.Cells[i].Column < imported.Cells[j].Column
+		}
+		return imported.Cells[i].Row < imported.Cells[j].Row
+	})
+	return nil
+}
+
+func xlsxStyle(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var style map[string]json.RawMessage
+	if json.Unmarshal(raw, &style) != nil || style == nil {
+		return raw
+	}
+	delete(style, "merge")
+	if len(style) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(style)
+	return data
 }
 
 func detectDelimiter(data []byte) rune {

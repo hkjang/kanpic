@@ -151,6 +151,46 @@ test('formats a selected range without changing values or formulas and resends o
   await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.italic), { timeout:15_000 }).toEqual([true, true])
 })
 
+test('merges cells without data loss and supports undo redo and offline unmerge', async ({ page, context }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name:'새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const cells=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B2`).then(response=>response.json())
+
+  await edit({x:70,y:42},'merged title')
+  await edit({x:170,y:69},'kept')
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowRight')
+  await page.keyboard.press('Shift+ArrowDown')
+  await page.getByRole('button',{name:'셀 병합'}).click()
+  await expect.poll(async()=>{const result=await cells();return result.items.filter((cell:{style?:Record<string,unknown>})=>cell.style?.merge).length}).toBe(4)
+  let merged=await cells()
+  expect(merged.items.find((cell:{row:number;column:number})=>cell.row===1&&cell.column===1).value).toBe('merged title')
+  expect(merged.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2).value).toBe('kept')
+
+  await canvas.click({position:{x:170,y:69}})
+  await expect(page.locator('.name-box')).toHaveText('A1:B2')
+  await expect(page.getByLabel('수식 입력창')).toHaveValue('merged title')
+  await page.getByRole('button',{name:'실행 취소'}).click()
+  await expect.poll(async()=>{const result=await cells();return result.items.some((cell:{style?:Record<string,unknown>})=>cell.style?.merge)}).toBe(false)
+  await page.getByRole('button',{name:'다시 실행'}).click()
+  await expect.poll(async()=>{const result=await cells();return result.items.filter((cell:{style?:Record<string,unknown>})=>cell.style?.merge).length}).toBe(4)
+
+  await canvas.click({position:{x:170,y:69}})
+  await context.setOffline(true)
+  await page.getByRole('button',{name:'병합 해제'}).click()
+  await expect(page.getByText('오프라인 · 로컬 저장',{exact:true})).toBeVisible()
+  await context.setOffline(false)
+  await expect.poll(async()=>{const result=await cells();return result.items.some((cell:{style?:Record<string,unknown>})=>cell.style?.merge)},{timeout:15_000}).toBe(false)
+  merged=await cells()
+  expect(merged.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2).value).toBe('kept')
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

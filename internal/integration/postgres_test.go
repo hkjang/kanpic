@@ -169,6 +169,65 @@ func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	}
 }
 
+func TestPostgresMergedRangePersistsAndUndoRestoresContent(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres merge", WorkspaceID: "integration", OwnerID: "merge-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "merge-user", BaseVersion: 1, IdempotencyKey: "postgres-merge-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"title"`), Style: json.RawMessage(`{"bold":true}`)}, {Row: 2, Column: 2, Value: json.RawMessage(`9`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A1:B2")
+	existing, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := workbook.BuildMergeCells(existing, selected, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "merge-user", BaseVersion: 2, IdempotencyKey: "postgres-merge", OperationType: "range.merge", Cells: inputs})
+	if err != nil || merged.ServerVersion != 3 || merged.AppliedCells != 4 {
+		t.Fatalf("merge result: %#v, %v", merged, err)
+	}
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 4 || string(cells[0].Value) != `"title"` || string(cells[3].Value) != "9" {
+		t.Fatalf("persisted merged cells: %#v, %v", cells, err)
+	}
+	for _, cell := range cells {
+		if metadata, exists, err := workbook.CellMerge(cell); err != nil || !exists || metadata.EndRow != 2 || metadata.EndColumn != 2 {
+			t.Fatalf("persisted merge metadata: cell=%#v metadata=%#v exists=%v err=%v", cell, metadata, exists, err)
+		}
+	}
+	undone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: merged.OperationID, ActorID: "merge-user", IdempotencyKey: "postgres-merge-undo"})
+	if err != nil || undone.ServerVersion != 4 || undone.AppliedCells != 4 {
+		t.Fatalf("merge undo: %#v, %v", undone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 2 || string(cells[0].Value) != `"title"` || string(cells[1].Value) != "9" {
+		t.Fatalf("content after merge undo: %#v, %v", cells, err)
+	}
+	for _, cell := range cells {
+		if _, exists, err := workbook.CellMerge(cell); err != nil || exists {
+			t.Fatalf("merge metadata remained after undo: cell=%#v exists=%v err=%v", cell, exists, err)
+		}
+	}
+}
+
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

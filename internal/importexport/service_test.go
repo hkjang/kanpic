@@ -55,14 +55,22 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Sheets) != 1 || parsed.Preview.TotalCells != 4 || len(parsed.Preview.Warnings) != 1 {
+	if len(parsed.Sheets) != 1 || parsed.Preview.TotalCells != 6 || len(parsed.Preview.Warnings) != 0 {
 		t.Fatalf("preview: %#v", parsed.Preview)
 	}
-	if parsed.Sheets[0].Cells[3].Formula != "=SUM(A2:A3)" {
-		t.Fatalf("formula not preserved: %#v", parsed.Sheets[0].Cells[3])
+	formula := findInput(parsed.Sheets[0].Cells, 4, 1)
+	if formula.Formula != "=SUM(A2:A3)" {
+		t.Fatalf("formula not preserved: %#v", formula)
 	}
 	if len(parsed.Sheets[0].Cells[0].Style) == 0 {
 		t.Fatal("style not preserved")
+	}
+	for column := 2; column <= 3; column++ {
+		input := findInput(parsed.Sheets[0].Cells, 1, column)
+		metadata, exists, mergeErr := workbook.CellMerge(workbook.Cell{Row: input.Row, Column: input.Column, Style: input.Style})
+		if mergeErr != nil || !exists || metadata.StartColumn != 2 || metadata.EndColumn != 3 {
+			t.Fatalf("imported merge at column %d: metadata=%#v exists=%v err=%v", column, metadata, exists, mergeErr)
+		}
 	}
 
 	repository := workbook.NewMemoryRepository()
@@ -80,8 +88,11 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roundTrip.Sheets) != 1 || roundTrip.Sheets[0].Cells[3].Formula != "=SUM(A2:A3)" {
+	if len(roundTrip.Sheets) != 1 || findInput(roundTrip.Sheets[0].Cells, 4, 1).Formula != "=SUM(A2:A3)" {
 		t.Fatalf("round trip: %#v", roundTrip.Preview)
+	}
+	if _, exists, mergeErr := workbook.CellMerge(workbook.Cell{Row: 1, Column: 3, Style: findInput(roundTrip.Sheets[0].Cells, 1, 3).Style}); mergeErr != nil || !exists {
+		t.Fatalf("merge was not preserved by XLSX round trip: exists=%v err=%v", exists, mergeErr)
 	}
 }
 
@@ -120,4 +131,13 @@ func assertRawJSON(t *testing.T, raw json.RawMessage, want any) {
 	if got != want {
 		t.Fatalf("value = %#v, want %#v", got, want)
 	}
+}
+
+func findInput(cells []workbook.CellInput, row, column int) workbook.CellInput {
+	for _, cell := range cells {
+		if cell.Row == row && cell.Column == column {
+			return cell
+		}
+	}
+	return workbook.CellInput{}
 }

@@ -50,6 +50,8 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.fill", "계산된 자동 채우기 셀 최대 1만 개를 하나의 원자적·실행 취소 가능한 작업으로 적용합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식을 원자적으로 병합합니다.", "format.write", requiredProps4("sheet_id", "string", "range", "string", "style", "object", "idempotency_key", "string")),
+	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
+	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -227,6 +229,17 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		input.Range = stringArg(args, "range")
 		result, cells, err := s.applyRangeFormat(ctx, stringArg(args, "sheet_id"), actor, input)
+		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
+			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+		}
+		return result, err
+	case "spreadsheet.range.merge", "spreadsheet.range.unmerge":
+		var input rangeMergeRequest
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.Range = stringArg(args, "range")
+		result, cells, err := s.applyRangeMerge(ctx, stringArg(args, "sheet_id"), actor, input, name == "spreadsheet.range.merge")
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}
@@ -411,6 +424,9 @@ func requiredProps(name, kind string) map[string]any {
 }
 func requiredProps2(a, ak, b, bk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}}, "required": []string{a, b}}
+}
+func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}}, "required": []string{a, b, c}}
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
