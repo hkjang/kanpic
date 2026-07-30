@@ -5,6 +5,8 @@ type SaveState = 'saved'|'saving'|'offline'|'conflict'|'error'
 type EditorState = {
   activeRow:number
   activeColumn:number
+  anchorRow:number
+  anchorColumn:number
   editing:boolean
   zoom:number
   cells:Map<string,Cell>
@@ -12,7 +14,7 @@ type EditorState = {
   conflicts:number
   undoStack:string[]
   redoStack:string[]
-  select:(row:number,column:number)=>void
+  select:(row:number,column:number,extend?:boolean)=>void
   setEditing:(editing:boolean)=>void
   setZoom:(zoom:number)=>void
   putCells:(cells:Cell[])=>void
@@ -32,8 +34,8 @@ type EditorState = {
 const key=(row:number,column:number)=>`${row}:${column}`
 
 export const useEditorStore=create<EditorState>((set,get)=>({
-  activeRow:1,activeColumn:1,editing:false,zoom:1,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[],
-  select:(activeRow,activeColumn)=>set({activeRow,activeColumn,editing:false}),
+  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,zoom:1,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[],
+  select:(activeRow,activeColumn,extend=false)=>set((state)=>({activeRow,activeColumn,anchorRow:extend?state.anchorRow:activeRow,anchorColumn:extend?state.anchorColumn:activeColumn,editing:false})),
   setEditing:(editing)=>set({editing}),
   setZoom:(zoom)=>set({zoom:Math.max(.5,Math.min(2,zoom))}),
   putCells:(cells)=>set((state)=>{const next=new Map(state.cells);cells.forEach((cell)=>next.set(key(cell.row,cell.column),cell));return{cells:next}}),
@@ -47,7 +49,8 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   takeRedo:()=>{const stack=get().redoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({redoStack:stack.slice(0,-1)});return operationId},
   restoreRedo:(operationId)=>set((state)=>({redoStack:[...state.redoStack,operationId].slice(-100)})),
   completeRedo:(redoOperationId)=>set((state)=>({undoStack:[...state.undoStack,redoOperationId].slice(-100)})),
-  reset:()=>set({activeRow:1,activeColumn:1,editing:false,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
+  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
 }))
 
 export const cellKey=key
+export function selectedBounds(state:Pick<EditorState,'activeRow'|'activeColumn'|'anchorRow'|'anchorColumn'>){return{startRow:Math.min(state.anchorRow,state.activeRow),startColumn:Math.min(state.anchorColumn,state.activeColumn),endRow:Math.max(state.anchorRow,state.activeRow),endColumn:Math.max(state.anchorColumn,state.activeColumn)}}

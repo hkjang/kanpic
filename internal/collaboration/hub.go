@@ -183,6 +183,10 @@ func (h *Hub) handle(ctx context.Context, peer *client, incoming inboundEvent) {
 			h.sendError(peer, incoming.ID, "invalid_operation", "operation payload is invalid")
 			return
 		}
+		if len(operation.Cells) == 0 || len(operation.Cells) > workbook.MaxBatchCells {
+			h.sendError(peer, incoming.ID, "invalid_operation", "operation must contain 1 to 1000 cells")
+			return
+		}
 		book, err := h.repository.GetWorkbook(ctx, peer.workbookID)
 		if err != nil {
 			h.sendError(peer, incoming.ID, "operation_rejected", err.Error())

@@ -438,8 +438,8 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if strings.TrimSpace(mutation.IdempotencyKey) == "" {
 		return MutationResult{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
 	}
-	if len(mutation.Cells) == 0 || len(mutation.Cells) > 1000 {
-		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to 1000 entries", ErrInvalid)
+	if len(mutation.Cells) == 0 || len(mutation.Cells) > MaxPasteCells {
+		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, MaxPasteCells)
 	}
 	for _, cell := range mutation.Cells {
 		if cell.Row < 1 || cell.Column < 1 {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useEditorStore } from './editor'
+import { selectedBounds, useEditorStore } from './editor'
 
 beforeEach(() => useEditorStore.getState().reset())
 
@@ -25,5 +25,16 @@ describe('editor operation history', () => {
 
     expect(useEditorStore.getState().redoStack).toEqual([])
     expect(useEditorStore.getState().undoStack).toEqual(['operation-new'])
+  })
+})
+
+describe('editor range selection', () => {
+  it('keeps the anchor while extending and normalizes its bounds', () => {
+    useEditorStore.getState().select(4,5)
+    useEditorStore.getState().select(2,8,true)
+    const state=useEditorStore.getState()
+    expect(selectedBounds(state)).toEqual({startRow:2,startColumn:5,endRow:4,endColumn:8})
+    expect(state.activeRow).toBe(2)
+    expect(state.activeColumn).toBe(8)
   })
 })

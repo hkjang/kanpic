@@ -45,6 +45,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.sheet.delete", "시트를 삭제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.range.read", "A1 범위의 비어 있지 않은 셀을 조회합니다.", "range.read", requiredProps2("sheet_id", "string", "range", "string")),
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
+	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -178,7 +179,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		return s.repository.ReadRange(ctx, stringArg(args, "sheet_id"), selected)
-	case "spreadsheet.range.write":
+	case "spreadsheet.range.write", "spreadsheet.range.paste":
 		var input struct {
 			SheetID        string               `json:"sheet_id"`
 			BaseVersion    int64                `json:"base_version"`
@@ -189,7 +190,14 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		if err := decodeMCP(args, &input); err != nil {
 			return nil, err
 		}
-		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells})
+		limit, operationType := workbook.MaxBatchCells, ""
+		if name == "spreadsheet.range.paste" {
+			limit, operationType = workbook.MaxPasteCells, "cells.paste"
+		}
+		if len(input.Cells) == 0 || len(input.Cells) > limit {
+			return nil, fmt.Errorf("cells must contain 1 to %d entries", limit)
+		}
+		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells, OperationType: operationType})
 		if err == nil && !result.Duplicate {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, input.Cells, result)
 		}

@@ -61,6 +61,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}", s.updateSheet)
 	mux.HandleFunc("DELETE /api/v1/sheets/{sheetId}", s.deleteSheet)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:batch", s.applyCells)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
@@ -210,19 +211,33 @@ func (s *Server) deleteSheet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type cellMutationRequest struct {
+	BaseVersion    int64                `json:"base_version"`
+	IdempotencyKey string               `json:"idempotency_key"`
+	ClientID       string               `json:"client_id"`
+	Cells          []workbook.CellInput `json:"cells"`
+}
+
 func (s *Server) applyCells(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		BaseVersion    int64                `json:"base_version"`
-		IdempotencyKey string               `json:"idempotency_key"`
-		ClientID       string               `json:"client_id"`
-		Cells          []workbook.CellInput `json:"cells"`
-	}
+	s.applyCellsWithLimit(w, r, workbook.MaxBatchCells, "")
+}
+
+func (s *Server) pasteCells(w http.ResponseWriter, r *http.Request) {
+	s.applyCellsWithLimit(w, r, workbook.MaxPasteCells, "cells.paste")
+}
+
+func (s *Server) applyCellsWithLimit(w http.ResponseWriter, r *http.Request, limit int, operationType string) {
+	var input cellMutationRequest
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if len(input.Cells) == 0 || len(input.Cells) > limit {
+		s.writeError(w, r, fmt.Errorf("%w: cells must contain 1 to %d entries", workbook.ErrInvalid, limit))
 		return
 	}
 	result, err := s.repository.ApplyCells(r.Context(), workbook.CellMutation{
 		SheetID: r.PathValue("sheetId"), ActorID: actorID(r), ClientID: input.ClientID,
-		BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: input.Cells,
+		BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: input.Cells, OperationType: operationType,
 	})
 	if err != nil {
 		s.writeError(w, r, err)
@@ -520,7 +535,7 @@ func requiredScope(r *http.Request) string {
 	if strings.Contains(path, "/ranges/") {
 		return "range.read"
 	}
-	if strings.Contains(path, "cells:batch") {
+	if strings.Contains(path, "cells:") {
 		return "range.write"
 	}
 	if strings.Contains(path, "/formulas") {

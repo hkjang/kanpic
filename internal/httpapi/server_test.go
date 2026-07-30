@@ -74,6 +74,51 @@ func TestConcurrentSameCellReportsConflict(t *testing.T) {
 	}
 }
 
+func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "large paste"}, http.StatusCreated)
+	cells := make([]map[string]any, workbook.MaxBatchCells+1)
+	for index := range cells {
+		cells[index] = map[string]any{"row": index + 1, "column": 1, "value": index + 1}
+	}
+	body := map[string]any{"base_version": 1, "idempotency_key": "paste-1001", "client_id": "test", "cells": cells}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:batch", body, http.StatusBadRequest)
+	result := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", body, http.StatusOK)
+	if result.AppliedCells != workbook.MaxBatchCells+1 || result.ServerVersion != 2 {
+		t.Fatalf("paste result: %#v", result)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 2 {
+		t.Fatalf("paste idempotency: %#v", duplicate)
+	}
+	selected := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+created.Sheets[0].ID+"/ranges/A1001", nil, http.StatusOK)
+	if len(selected.Items) != 1 || string(selected.Items[0].Value) != "1001" {
+		t.Fatalf("last pasted cell: %#v", selected.Items)
+	}
+	mcpCells := make([]map[string]any, len(cells))
+	for index, cell := range cells {
+		mcpCells[index] = map[string]any{"row": cell["row"], "column": 2, "value": cell["value"]}
+	}
+	mcpPaste := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.range.paste", "arguments": map[string]any{"sheet_id": created.Sheets[0].ID, "base_version": 2, "idempotency_key": "mcp-paste-1001", "cells": mcpCells}}}, http.StatusOK)
+	if mcpPaste.Result.Structured.AppliedCells != workbook.MaxBatchCells+1 || mcpPaste.Result.Structured.ServerVersion != 3 {
+		t.Fatalf("MCP paste result: %#v", mcpPaste.Result.Structured)
+	}
+	tooMany := make([]map[string]any, workbook.MaxPasteCells+1)
+	for index := range tooMany {
+		tooMany[index] = map[string]any{"row": index + 1, "column": 2, "value": index}
+	}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+created.Sheets[0].ID+"/cells:paste", map[string]any{"base_version": 3, "idempotency_key": "paste-too-large", "cells": tooMany}, http.StatusBadRequest)
+}
+
 func TestFormulaEvaluationAndStoredResult(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

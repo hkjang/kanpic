@@ -103,6 +103,19 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	if err != nil || len(cells) != 1 || string(cells[0].Value) != "9" {
 		t.Fatalf("selective undo overwrote later value: %#v %v", cells, err)
 	}
+	largePaste := make([]workbook.CellInput, workbook.MaxBatchCells+1)
+	for index := range largePaste {
+		largePaste[index] = workbook.CellInput{Row: index + 1, Column: 2, Value: json.RawMessage(`1`)}
+	}
+	pasted, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "test-user", ClientID: "integration", BaseVersion: 10, IdempotencyKey: "large-paste", OperationType: "cells.paste", Cells: largePaste})
+	if err != nil || pasted.AppliedCells != workbook.MaxBatchCells+1 || pasted.ServerVersion != 11 {
+		t.Fatalf("atomic large paste: %#v %v", pasted, err)
+	}
+	selected, _ = cellrange.Parse("B1001")
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "1" {
+		t.Fatalf("last large paste cell: %#v %v", cells, err)
+	}
 }
 
 func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {

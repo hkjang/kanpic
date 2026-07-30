@@ -1,15 +1,10 @@
 /// <reference lib="webworker" />
-self.onmessage = (event: MessageEvent<{text:string;startRow:number;startColumn:number}>) => {
-  const {text,startRow,startColumn}=event.data
-  const cells: Array<{row:number;column:number;value:unknown}> = []
-  text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').forEach((line,rowOffset)=>{
-    if(rowOffset===text.split(/\r?\n/).length-1 && line==='')return
-    line.split('\t').forEach((raw,columnOffset)=>{
-      let value:unknown=raw
-      if(raw!=='' && Number.isFinite(Number(raw)))value=Number(raw)
-      else if(raw.toLowerCase()==='true'||raw.toLowerCase()==='false')value=raw.toLowerCase()==='true'
-      cells.push({row:startRow+rowOffset,column:startColumn+columnOffset,value})
-    })
-  })
-  self.postMessage(cells)
+import { materializePaste } from '../lib/clipboard'
+
+self.onmessage = (event: MessageEvent<{text:string;internal?:string;startRow:number;startColumn:number}>) => {
+  try{
+    self.postMessage({cells:materializePaste(event.data.text,event.data.internal,event.data.startRow,event.data.startColumn)})
+  }catch(error){
+    self.postMessage({error:error instanceof Error?error.message:'붙여넣기 데이터를 처리하지 못했습니다.'})
+  }
 }

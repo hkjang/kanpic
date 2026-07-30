@@ -124,3 +124,56 @@ test('creates a named version and restores it with an automatic backup', async (
   await expect(page.locator('.formula-bar input')).toHaveValue('10')
   await expect(page.locator('.workbook-version').filter({ hasText: '복원 전 자동 백업' })).toBeVisible()
 })
+
+test('selects a range and pastes copied formulas with relative references', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId = page.url().split('/workbooks/')[1]
+  const workbook = await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response => response.json())
+  const sheetId = workbook.sheets[0].id as string
+  const canvas = page.locator('canvas.grid-canvas')
+  const edit = async (position:{x:number;y:number},value:string) => {
+    await canvas.dblclick({ position })
+    await page.locator('input.cell-editor').fill(value)
+    await page.locator('input.cell-editor').press('Enter')
+  }
+  await edit({x:70,y:42},'2')
+  await edit({x:170,y:42},'=A1*2')
+
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowRight')
+  await expect(page.locator('.name-box')).toHaveText('A1:B1')
+  await page.keyboard.press('Control+C')
+  await canvas.click({position:{x:390,y:120}})
+  await page.keyboard.press('Control+V')
+
+  const pasted = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/D4:E4`).then(response => response.json())
+  await expect.poll(async()=>{
+    const result=await pasted()
+    return result.items.map((cell:{value:unknown})=>cell.value)
+  }).toEqual([2,4])
+  const result=await pasted()
+  expect(result.items[1].formula).toBe('=D4*2')
+})
+
+test('pastes more than 1000 cells without truncation in one version', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId = page.url().split('/workbooks/')[1]
+  const workbook = await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response => response.json())
+  const sheetId = workbook.sheets[0].id as string
+  const text=Array.from({length:1001},(_,index)=>String(index+1)).join('\n')
+  await page.locator('.grid-viewport').evaluate((element,pasteText)=>{
+    const clipboardData=new DataTransfer()
+    clipboardData.setData('text/plain',pasteText)
+    element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData}))
+  },text)
+  await expect.poll(async()=>{
+    const result=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1001`).then(response=>response.json())
+    return result.items[0]?.value
+  }).toBe(1001)
+  const updated=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  expect(updated.version).toBe(2)
+})

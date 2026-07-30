@@ -296,8 +296,8 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if strings.TrimSpace(mutation.IdempotencyKey) == "" {
 		return MutationResult{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
 	}
-	if len(mutation.Cells) == 0 || len(mutation.Cells) > 1000 {
-		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to 1000 entries", ErrInvalid)
+	if len(mutation.Cells) == 0 || len(mutation.Cells) > MaxPasteCells {
+		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, MaxPasteCells)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

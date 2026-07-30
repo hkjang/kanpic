@@ -7,6 +7,11 @@ import (
 	"kanpic/pkg/cellrange"
 )
 
+const (
+	MaxBatchCells = 1_000
+	MaxPasteCells = 10_000
+)
+
 var (
 	ErrNotFound      = errors.New("resource not found")
 	ErrInvalid       = errors.New("invalid input")
