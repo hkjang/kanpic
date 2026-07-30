@@ -31,6 +31,11 @@ type Repository interface {
 	DuplicateSheet(context.Context, string, DuplicateSheetInput) (Sheet, error)
 	UpdateSheet(context.Context, string, UpdateSheetInput) (Sheet, error)
 	DeleteSheet(context.Context, string) error
+	CreateFilterView(context.Context, string, string, CreateFilterViewInput) (FilterView, error)
+	ListFilterViews(context.Context, string, string) ([]FilterView, error)
+	GetFilterView(context.Context, string, string) (FilterView, error)
+	UpdateFilterView(context.Context, string, string, UpdateFilterViewInput) (FilterView, error)
+	DeleteFilterView(context.Context, string, string) error
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)

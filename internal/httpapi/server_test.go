@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"kanpic/internal/workbook"
@@ -378,6 +379,118 @@ func TestRangeSortRESTMCPIsStableAtomicAndUndoable(t *testing.T) {
 	if string(selected.Items[3].Value) != `"Alpha"` || string(selected.Items[9].Value) != `"beta"` {
 		t.Fatalf("sort undo order: %#v", selected.Items)
 	}
+}
+
+func TestFilterViewRESTAndMCPCRUDUseLatestCellsAndPersonalScopes(t *testing.T) {
+	t.Parallel()
+	for name, scope := range map[string]string{
+		"spreadsheet.filter_view.list": "range.read", "spreadsheet.filter_view.get": "range.read", "spreadsheet.filter_view.evaluate": "range.read",
+		"spreadsheet.filter_view.create": "range.write", "spreadsheet.filter_view.update": "range.write", "spreadsheet.filter_view.delete": "range.write",
+	} {
+		tool, found := findMCPTool(name)
+		if !found || tool.Meta["required_scope"] != scope {
+			t.Fatalf("filter tool %s: %#v", name, tool)
+		}
+	}
+	createTool, _ := findMCPTool("spreadsheet.filter_view.create")
+	properties, _ := createTool.InputSchema["properties"].(map[string]any)
+	criteriaSchema, _ := properties["criteria"].(map[string]any)
+	criterionItems, _ := criteriaSchema["items"].(map[string]any)
+	criterionProperties, _ := criterionItems["properties"].(map[string]any)
+	if properties["active"] == nil || properties["header_rows"] == nil || criterionProperties["operator"] == nil || criterionProperties["values"] == nil || criterionProperties["color"] == nil {
+		t.Fatalf("filter MCP schema is incomplete: %#v", createTool.InputSchema)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/sheets/s/filter-views", nil)); scope != "range.read" {
+		t.Fatalf("filter list scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/filter-views/id:evaluate", nil)); scope != "range.read" {
+		t.Fatalf("filter evaluate scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/sheets/s/filter-views", nil)); scope != "range.write" {
+		t.Fatalf("filter create scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "filter api"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	seed := []map[string]any{
+		{"row": 1, "column": 1, "value": "Region"}, {"row": 1, "column": 2, "value": "Amount"}, {"row": 1, "column": 3, "value": "Status"},
+		{"row": 2, "column": 1, "value": "Seoul"}, {"row": 2, "column": 2, "value": 12}, {"row": 2, "column": 3, "value": "open", "style": map[string]any{"background": "#fef3c7"}},
+		{"row": 3, "column": 1, "value": "Busan"}, {"row": 3, "column": 2, "value": 7}, {"row": 3, "column": 3, "value": "open", "style": map[string]any{"background": "#fef3c7"}},
+		{"row": 4, "column": 1, "value": "Daejeon"}, {"row": 4, "column": 2, "value": 20}, {"row": 4, "column": 3, "value": "open", "style": map[string]any{"background": "#fef3c7"}},
+		{"row": 5, "column": 1, "value": "Seoul"}, {"row": 5, "column": 2, "value": 15}, {"row": 5, "column": 3, "value": "closed", "style": map[string]any{"background": "#ffffff"}},
+	}
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "filter-seed", "cells": seed}, http.StatusOK)
+	createBody := map[string]any{"idempotency_key": "filter-view-create", "name": "qualified", "range": "A1:C5", "header_rows": 1, "active": true, "criteria": []map[string]any{{"column": 1, "operator": "values", "values": []any{"Seoul", "Busan"}}, {"column": 2, "operator": "greater_or_equal", "value": 10}, {"column": 3, "operator": "background_color", "color": "#fef3c7"}}}
+	view := request[workbook.FilterView](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/filter-views", createBody, http.StatusCreated)
+	duplicate := request[workbook.FilterView](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/filter-views", map[string]any{"idempotency_key": "filter-view-create", "name": "", "range": "invalid"}, http.StatusCreated)
+	if view.ID == "" || duplicate.ID != view.ID || !view.Active {
+		t.Fatalf("created filter: view=%#v duplicate=%#v", view, duplicate)
+	}
+	result := request[workbook.FilterResult](t, server, http.MethodPost, "/api/v1/filter-views/"+view.ID+":evaluate", map[string]any{}, http.StatusOK)
+	if result.VisibleCount != 1 || result.HiddenCount != 3 || !reflect.DeepEqual(result.HiddenRows, []int{3, 4, 5}) {
+		t.Fatalf("REST filter result: %#v", result)
+	}
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 2, "idempotency_key": "filter-latest-cell", "cells": []map[string]any{{"row": 3, "column": 2, "value": 11}}}, http.StatusOK)
+	result = request[workbook.FilterResult](t, server, http.MethodPost, "/api/v1/filter-views/"+view.ID+":evaluate", map[string]any{}, http.StatusOK)
+	if !reflect.DeepEqual(result.HiddenRows, []int{4, 5}) {
+		t.Fatalf("filter did not use latest cells: %#v", result)
+	}
+	listed := request[struct {
+		Items []workbook.FilterView `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/filter-views", nil, http.StatusOK)
+	if len(listed.Items) != 1 || listed.Items[0].ID != view.ID {
+		t.Fatalf("filter list: %#v", listed.Items)
+	}
+	mcpCreated := request[struct {
+		Result struct {
+			Structured workbook.FilterView `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.create", "arguments": map[string]any{"sheet_id": sheetID, "idempotency_key": "filter-mcp-create", "name": "amounts", "range": "A1:C5", "header_rows": 1, "active": true, "criteria": []map[string]any{{"column": 2, "operator": "greater_than", "value": 15}}}}}, http.StatusOK)
+	if mcpCreated.Result.Structured.ID == "" || !mcpCreated.Result.Structured.Active {
+		t.Fatalf("MCP filter create: %#v", mcpCreated)
+	}
+	view = request[workbook.FilterView](t, server, http.MethodGet, "/api/v1/filter-views/"+view.ID, nil, http.StatusOK)
+	if view.Active {
+		t.Fatalf("previous filter remained active: %#v", view)
+	}
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.FilterView `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 14, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.update", "arguments": map[string]any{"filter_view_id": mcpCreated.Result.Structured.ID, "name": "amounts-updated"}}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.Name != "amounts-updated" {
+		t.Fatalf("MCP filter update: %#v", mcpUpdated)
+	}
+	mcpGet := request[struct {
+		Result struct {
+			Structured workbook.FilterView `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 15, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.get", "arguments": map[string]any{"filter_view_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.Name != "amounts-updated" {
+		t.Fatalf("MCP filter get: %#v", mcpGet)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.FilterView `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 16, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 2 {
+		t.Fatalf("MCP filter list: %#v", mcpList)
+	}
+	mcpEvaluated := request[struct {
+		Result struct {
+			Structured workbook.FilterResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.evaluate", "arguments": map[string]any{"filter_view_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	if !reflect.DeepEqual(mcpEvaluated.Result.Structured.HiddenRows, []int{2, 3, 5}) {
+		t.Fatalf("MCP filter evaluate: %#v", mcpEvaluated)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 13, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.delete", "arguments": map[string]any{"filter_view_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/filter-views/"+mcpCreated.Result.Structured.ID, nil, http.StatusNotFound)
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/filter-views/"+view.ID, nil, http.StatusNoContent)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/filter-views/"+view.ID, nil, http.StatusNotFound)
 }
 
 func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {

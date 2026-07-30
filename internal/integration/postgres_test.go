@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -321,6 +323,110 @@ func TestPostgresRangeSortMovesFormulasStylesAndUndoRestoresRows(t *testing.T) {
 	assertSortedRow(2, "beta", 2, 4, "=B2*2", true)
 	assertSortedRow(3, "Alpha", 10, 20, "=B3*2", false)
 	assertSortedRow(4, "alpha", 5, 10, "=B4*2", false)
+}
+
+func TestPostgresFilterViewsPersistActorIsolationActivationAndLatestEvaluation(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres filters", WorkspaceID: "integration", OwnerID: "filter-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed := []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"Name"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"Amount"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"alpha"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`12`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"beta"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`7`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`"gamma"`)}, {Row: 4, Column: 2, Value: json.RawMessage(`20`)},
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "filter-user", BaseVersion: 1, IdempotencyKey: "postgres-filter-seed", Cells: seed}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repository.CreateFilterView(ctx, sheetID, "alice", workbook.CreateFilterViewInput{IdempotencyKey: "postgres-filter-first", Name: "amount", Range: "A1:B4", HeaderRows: 1, Active: true, Criteria: []workbook.FilterCriterion{{Column: 2, Operator: "greater_than", Value: json.RawMessage(`10`)}}})
+	if err != nil || !first.Active {
+		t.Fatalf("create postgres filter: %#v, %v", first, err)
+	}
+	duplicate, err := repository.CreateFilterView(ctx, sheetID, "alice", workbook.CreateFilterViewInput{IdempotencyKey: "postgres-filter-first", Name: "", Range: "invalid"})
+	if err != nil || duplicate.ID != first.ID {
+		t.Fatalf("postgres filter idempotency: %#v, %v", duplicate, err)
+	}
+	second, err := repository.CreateFilterView(ctx, sheetID, "alice", workbook.CreateFilterViewInput{IdempotencyKey: "postgres-filter-second", Name: "names", Range: "A1:B4", HeaderRows: 1, Active: true, Criteria: []workbook.FilterCriterion{{Column: 1, Operator: "contains", Value: json.RawMessage(`"a"`)}}})
+	if err != nil || !second.Active {
+		t.Fatalf("second postgres filter: %#v, %v", second, err)
+	}
+	items, err := repository.ListFilterViews(ctx, sheetID, "alice")
+	if err != nil || len(items) != 2 || items[0].ID != second.ID || !items[0].Active || items[1].Active {
+		t.Fatalf("postgres filter activation: %#v, %v", items, err)
+	}
+	if bob, err := repository.ListFilterViews(ctx, sheetID, "bob"); err != nil || len(bob) != 0 {
+		t.Fatalf("postgres filter actor isolation: %#v, %v", bob, err)
+	}
+	active := true
+	first, err = repository.UpdateFilterView(ctx, first.ID, "alice", workbook.UpdateFilterViewInput{Active: &active})
+	if err != nil || !first.Active {
+		t.Fatalf("reactivate postgres filter: %#v, %v", first, err)
+	}
+	selected, _ := cellrange.Parse(first.Range)
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := workbook.EvaluateFilter(first, cells)
+	if err != nil || !reflect.DeepEqual(result.HiddenRows, []int{3}) {
+		t.Fatalf("postgres filter result: %#v, %v", result, err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "filter-user", BaseVersion: 2, IdempotencyKey: "postgres-filter-latest", Cells: []workbook.CellInput{{Row: 3, Column: 2, Value: json.RawMessage(`15`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	cells, _ = repository.ReadRange(ctx, sheetID, selected)
+	result, err = workbook.EvaluateFilter(first, cells)
+	if err != nil || len(result.HiddenRows) != 0 {
+		t.Fatalf("postgres filter latest result: %#v, %v", result, err)
+	}
+	if err := repository.DeleteFilterView(ctx, first.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetFilterView(ctx, first.ID, "alice"); !errors.Is(err, workbook.ErrNotFound) {
+		t.Fatalf("deleted postgres filter error = %v", err)
+	}
+	var wait sync.WaitGroup
+	errorsFound := make(chan error, 2)
+	for index := 0; index < 2; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			_, createErr := repository.CreateFilterView(ctx, sheetID, "alice", workbook.CreateFilterViewInput{IdempotencyKey: fmt.Sprintf("postgres-filter-concurrent-%d", index), Name: fmt.Sprintf("concurrent-%d", index), Range: "A1:B4", HeaderRows: 1, Active: true, Criteria: []workbook.FilterCriterion{{Column: 2, Operator: "is_not_blank"}}})
+			errorsFound <- createErr
+		}(index)
+	}
+	wait.Wait()
+	close(errorsFound)
+	for createErr := range errorsFound {
+		if createErr != nil {
+			t.Fatalf("concurrent active filter: %v", createErr)
+		}
+	}
+	items, err = repository.ListFilterViews(ctx, sheetID, "alice")
+	activeCount := 0
+	for _, item := range items {
+		if item.Active {
+			activeCount++
+		}
+	}
+	if err != nil || activeCount != 1 {
+		t.Fatalf("concurrent filter activation: active=%d items=%#v err=%v", activeCount, items, err)
+	}
 }
 
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {

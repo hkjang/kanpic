@@ -11,3 +11,7 @@ export type SettingVersion = { revision:number; change_summary:string; actor_id:
 export type LogEntry = { id:number; logged_at:string; level:string; message:string; attributes:Record<string,unknown>; trace_id?:string }
 export type ApiKey = { id:string; user_id:string; name:string; prefix:string; scopes:string[]; expires_at?:string; last_used_at?:string; revoked_at?:string; created_at:string }
 export type CreatedApiKey = ApiKey & { secret:string }
+export type FilterOperator = 'values'|'equals'|'not_equals'|'contains'|'not_contains'|'starts_with'|'ends_with'|'greater_than'|'greater_or_equal'|'less_than'|'less_or_equal'|'is_blank'|'is_not_blank'|'background_color'|'text_color'
+export type FilterCriterion = { column:number; operator:FilterOperator; value?:unknown; values?:unknown[]; color?:string; case_sensitive?:boolean }
+export type FilterView = { id:string; sheet_id:string; actor_id:string; name:string; range:string; header_rows:number; criteria:FilterCriterion[]; active:boolean; created_at:string; updated_at:string }
+export type FilterResult = { filter_view_id:string; range:string; hidden_rows:number[]; visible_count:number; hidden_count:number; total_count:number }

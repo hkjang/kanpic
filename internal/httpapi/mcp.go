@@ -53,6 +53,12 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
+	tool("spreadsheet.filter_view.list", "현재 사용자가 저장한 시트 필터 보기를 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.filter_view.get", "현재 사용자의 필터 보기 정의를 조회합니다.", "range.read", requiredProps("filter_view_id", "string")),
+	tool("spreadsheet.filter_view.create", "값·조건·색상 기준의 사용자별 필터 보기를 멱등 생성합니다.", "range.write", filterViewSchema(true)),
+	tool("spreadsheet.filter_view.update", "필터 보기 정의나 활성 상태를 변경합니다.", "range.write", filterViewSchema(false)),
+	tool("spreadsheet.filter_view.delete", "현재 사용자의 필터 보기를 삭제합니다.", "range.write", requiredProps("filter_view_id", "string")),
+	tool("spreadsheet.filter_view.evaluate", "최신 서버 셀을 기준으로 숨길 행을 평가합니다.", "range.read", requiredProps("filter_view_id", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -256,6 +262,26 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}
 		return result, err
+	case "spreadsheet.filter_view.list":
+		return s.repository.ListFilterViews(ctx, stringArg(args, "sheet_id"), actor)
+	case "spreadsheet.filter_view.get":
+		return s.repository.GetFilterView(ctx, stringArg(args, "filter_view_id"), actor)
+	case "spreadsheet.filter_view.create":
+		var input workbook.CreateFilterViewInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.CreateFilterView(ctx, stringArg(args, "sheet_id"), actor, input)
+	case "spreadsheet.filter_view.update":
+		var input workbook.UpdateFilterViewInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.UpdateFilterView(ctx, stringArg(args, "filter_view_id"), actor, input)
+	case "spreadsheet.filter_view.delete":
+		return okResult(s.repository.DeleteFilterView(ctx, stringArg(args, "filter_view_id"), actor))
+	case "spreadsheet.filter_view.evaluate":
+		return s.applyFilterView(ctx, stringArg(args, "filter_view_id"), actor)
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -442,6 +468,26 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+func filterViewSchema(create bool) map[string]any {
+	operators := []string{"values", "equals", "not_equals", "contains", "not_contains", "starts_with", "ends_with", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "is_blank", "is_not_blank", "background_color", "text_color"}
+	criterion := map[string]any{"type": "object", "properties": map[string]any{
+		"column": map[string]any{"type": "integer", "minimum": 1}, "operator": map[string]any{"type": "string", "enum": operators},
+		"value": map[string]any{}, "values": map[string]any{"type": "array", "maxItems": 1000}, "color": map[string]any{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, "case_sensitive": map[string]any{"type": "boolean"},
+	}, "required": []string{"column", "operator"}}
+	properties := map[string]any{
+		"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "range": map[string]any{"type": "string"},
+		"header_rows": map[string]any{"type": "integer", "minimum": 0}, "criteria": map[string]any{"type": "array", "items": criterion}, "active": map[string]any{"type": "boolean"},
+	}
+	required := []string{"filter_view_id"}
+	properties["filter_view_id"] = map[string]any{"type": "string"}
+	if create {
+		delete(properties, "filter_view_id")
+		properties["sheet_id"] = map[string]any{"type": "string"}
+		properties["idempotency_key"] = map[string]any{"type": "string", "minLength": 1}
+		required = []string{"sheet_id", "idempotency_key", "name", "range"}
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
 }
 func findMCPTool(name string) (mcpTool, bool) {
 	for _, item := range mcpTools {

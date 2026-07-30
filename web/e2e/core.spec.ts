@@ -261,6 +261,75 @@ test('sorts a range by multiple keys with formulas, undo, and offline resend', a
   expect(sorted.slice(1).map(row=>row.total)).toEqual([20,10,4])
 })
 
+test('persists personal filter views and compresses filtered canvas rows', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const seed=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:1,idempotency_key:`filter-seed-${workbookId}`,cells:[
+    {row:1,column:1,value:'Region'},{row:1,column:2,value:'Amount'},{row:1,column:3,value:'Status'},
+    {row:2,column:1,value:'Seoul'},{row:2,column:2,value:12},{row:2,column:3,value:'open',style:{background:'#fef3c7'}},
+    {row:3,column:1,value:'Busan'},{row:3,column:2,value:7},{row:3,column:3,value:'open',style:{background:'#fef3c7'}},
+    {row:4,column:1,value:'Daejeon'},{row:4,column:2,value:20},{row:4,column:3,value:'open',style:{background:'#fef3c7'}},
+    {row:5,column:1,value:'Seoul'},{row:5,column:2,value:15},{row:5,column:3,value:'closed',style:{background:'#ffffff'}},
+  ]}})
+  expect(seed.ok()).toBe(true)
+  await page.reload()
+  const canvas=page.locator('canvas.grid-canvas')
+  await expect(canvas).toBeVisible()
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowRight');await page.keyboard.press('Shift+ArrowRight')
+  for(let index=0;index<4;index++)await page.keyboard.press('Shift+ArrowDown')
+  await expect(page.locator('.name-box')).toHaveText('A1:C5')
+
+  await page.getByRole('button',{name:'필터 보기'}).click()
+  await expect(page.getByRole('dialog',{name:'필터 보기'})).toBeVisible()
+  await page.getByLabel('필터 보기 이름').fill('qualified')
+  await page.getByLabel('1차 필터 값').fill('Seoul, Busan')
+  await page.getByRole('button',{name:/기준 추가/}).click()
+  await page.getByLabel('2차 필터 조건').selectOption('greater_or_equal')
+  await page.getByLabel('2차 필터 값').fill('10')
+  await page.getByRole('button',{name:/기준 추가/}).click()
+  await page.getByLabel('3차 필터 조건').selectOption('background_color')
+  await page.getByLabel('3차 필터 색상').fill('#fef3c7')
+  await page.getByRole('button',{name:'저장 및 적용'}).click()
+  await expect(page.getByText('전체 4행 중 1행 표시 · 3행 숨김')).toBeVisible()
+  const filterViews=async(headers?:Record<string,string>)=>page.request.get(`/api/v1/sheets/${sheetId}/filter-views`,{headers}).then(response=>response.json())
+  const filterResult=async(id:string)=>page.request.post(`/api/v1/filter-views/${id}:evaluate`).then(response=>response.json())
+  await expect.poll(async()=>{const result=await filterViews();return result.items[0]?.id}).not.toBeUndefined()
+  const viewId=(await filterViews()).items[0].id as string
+  await expect.poll(async()=>(await filterResult(viewId)).hidden_rows).toEqual([3,4,5])
+  const otherUser=await filterViews({'X-Kanpic-Actor':'other-filter-user'})
+  expect(otherUser.items).toEqual([])
+  await page.getByRole('button',{name:'필터 닫기'}).click()
+
+  await page.reload()
+  await expect(canvas).toBeVisible()
+  await expect(page.getByRole('button',{name:'필터 보기'})).toHaveClass(/active/)
+  await canvas.click({position:{x:70,y:96}})
+  await expect(page.locator('.name-box')).toHaveText('A6')
+  await page.getByRole('button',{name:'필터 보기'}).click()
+  await page.getByRole('button',{name:/qualified.*적용 중/}).click()
+  await page.getByRole('button',{name:'필터 해제'}).click()
+  await expect.poll(async()=>Boolean((await filterViews()).items[0]?.active)).toBe(false)
+  await page.getByRole('button',{name:'필터 닫기'}).click()
+  await canvas.click({position:{x:70,y:96}})
+  await expect(page.locator('.name-box')).toHaveText('A3')
+
+  await page.getByRole('button',{name:'필터 보기'}).click()
+  await page.getByRole('button',{name:/qualified/}).click()
+  await page.getByRole('button',{name:'필터 적용'}).click()
+  await expect.poll(async()=>Boolean((await filterViews()).items[0]?.active)).toBe(true)
+  await page.getByRole('button',{name:'필터 닫기'}).click()
+  const latest=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:latest.version,idempotency_key:`filter-latest-${workbookId}`,cells:[{row:3,column:2,value:11}]}})
+  await expect.poll(async()=>(await filterResult(viewId)).hidden_rows).toEqual([4,5])
+  await canvas.click({position:{x:70,y:96}})
+  await expect(page.locator('.name-box')).toHaveText('A3')
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

@@ -49,6 +49,7 @@ type MemoryRepository struct {
 	sheetToWB map[string]string
 	now       func() time.Time
 	imports   map[string]string
+	filters   map[string]FilterView
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -57,6 +58,7 @@ func NewMemoryRepository() *MemoryRepository {
 		sheetToWB: make(map[string]string),
 		now:       func() time.Time { return time.Now().UTC() },
 		imports:   make(map[string]string),
+		filters:   make(map[string]FilterView),
 	}
 }
 
@@ -249,6 +251,11 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 		return ErrNotFound
 	}
 	for sheetID := range state.sheets {
+		for filterID, view := range r.filters {
+			if view.SheetID == sheetID {
+				delete(r.filters, filterID)
+			}
+		}
 		delete(r.sheetToWB, sheetID)
 	}
 	delete(r.workbooks, id)
@@ -375,6 +382,11 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	}
 	delete(state.sheets, sheetID)
 	delete(state.cells, sheetID)
+	for filterID, view := range r.filters {
+		if view.SheetID == sheetID {
+			delete(r.filters, filterID)
+		}
+	}
 	delete(r.sheetToWB, sheetID)
 	for id, sheet := range state.sheets {
 		if sheet.Position > deleted.Position {

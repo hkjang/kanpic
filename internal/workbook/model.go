@@ -156,3 +156,52 @@ type ImportWorkbookInput struct {
 	Format         string        `json:"format"`
 	Sheets         []ImportSheet `json:"sheets"`
 }
+
+type FilterCriterion struct {
+	Column        int               `json:"column"`
+	Operator      string            `json:"operator"`
+	Value         json.RawMessage   `json:"value,omitempty"`
+	Values        []json.RawMessage `json:"values,omitempty"`
+	Color         string            `json:"color,omitempty"`
+	CaseSensitive bool              `json:"case_sensitive,omitempty"`
+}
+
+type FilterView struct {
+	ID         string            `json:"id"`
+	SheetID    string            `json:"sheet_id"`
+	ActorID    string            `json:"actor_id"`
+	CreateKey  string            `json:"-"`
+	Name       string            `json:"name"`
+	Range      string            `json:"range"`
+	HeaderRows int               `json:"header_rows"`
+	Criteria   []FilterCriterion `json:"criteria"`
+	Active     bool              `json:"active"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+type CreateFilterViewInput struct {
+	IdempotencyKey string            `json:"idempotency_key"`
+	Name           string            `json:"name"`
+	Range          string            `json:"range"`
+	HeaderRows     int               `json:"header_rows"`
+	Criteria       []FilterCriterion `json:"criteria"`
+	Active         bool              `json:"active"`
+}
+
+type UpdateFilterViewInput struct {
+	Name       *string            `json:"name,omitempty"`
+	Range      *string            `json:"range,omitempty"`
+	HeaderRows *int               `json:"header_rows,omitempty"`
+	Criteria   *[]FilterCriterion `json:"criteria,omitempty"`
+	Active     *bool              `json:"active,omitempty"`
+}
+
+type FilterResult struct {
+	FilterViewID string `json:"filter_view_id"`
+	Range        string `json:"range"`
+	HiddenRows   []int  `json:"hidden_rows"`
+	VisibleCount int    `json:"visible_count"`
+	HiddenCount  int    `json:"hidden_count"`
+	TotalCount   int    `json:"total_count"`
+}

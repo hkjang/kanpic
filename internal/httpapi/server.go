@@ -70,6 +70,12 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:sort", s.sortRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/filter-views", s.listFilterViews)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/filter-views", s.createFilterView)
+	mux.HandleFunc("GET /api/v1/filter-views/{filterViewId}", s.getFilterView)
+	mux.HandleFunc("PATCH /api/v1/filter-views/{filterViewId}", s.updateFilterView)
+	mux.HandleFunc("DELETE /api/v1/filter-views/{filterViewId}", s.deleteFilterView)
+	mux.HandleFunc("POST /api/v1/filter-views/{filterAction}", s.evaluateFilterView)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
 	// net/http wildcards cannot contain a literal suffix. The action-form API
@@ -711,6 +717,15 @@ func requiredScope(r *http.Request) string {
 			return "profile.read"
 		}
 		return "profile.write"
+	}
+	if strings.Contains(path, "/filter-views/") && strings.HasSuffix(path, ":evaluate") {
+		return "range.read"
+	}
+	if strings.Contains(path, "/filter-views") {
+		if r.Method == http.MethodGet {
+			return "range.read"
+		}
+		return "range.write"
 	}
 	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") {
 		return "format.write"
