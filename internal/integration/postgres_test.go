@@ -105,6 +105,86 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	}
 }
 
+func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "snapshot original", WorkspaceID: "integration", OwnerID: "version-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	favorite := true
+	if _, err := repository.UpdateWorkbook(ctx, book.ID, workbook.UpdateWorkbookInput{Favorite: &favorite}); err != nil {
+		t.Fatal(err)
+	}
+	firstName, color, hidden := "summary", "#2563eb", true
+	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, workbook.UpdateSheetInput{Name: &firstName, Color: &color, Hidden: &hidden}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "detail", Color: "#16a34a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: detail.ID, ActorID: "version-user", ClientID: "integration", BaseVersion: 4, IdempotencyKey: "version-detail", Cells: []workbook.CellInput{{Row: 2, Column: 2, Value: json.RawMessage(`42`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := repository.CreateVersion(ctx, book.ID, "structural target", "version-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changedTitle := "snapshot changed"
+	favorite = false
+	if _, err := repository.UpdateWorkbook(ctx, book.ID, workbook.UpdateWorkbookInput{Title: &changedTitle, Favorite: &favorite}); err != nil {
+		t.Fatal(err)
+	}
+	changedName := "temporary summary"
+	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, workbook.UpdateSheetInput{Name: &changedName}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteSheet(ctx, detail.ID); err != nil {
+		t.Fatal(err)
+	}
+	temporary, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "temporary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := repository.RestoreVersion(ctx, target.ID, "version-user")
+	if err != nil || restored.ServerVersion != 10 {
+		t.Fatalf("restore: %#v, %v", restored, err)
+	}
+	after, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Title != "snapshot original" || !after.Favorite || len(after.Sheets) != 2 || after.Sheets[0].Name != "summary" || after.Sheets[1].ID != detail.ID {
+		t.Fatalf("restored workbook: %#v", after)
+	}
+	selected, _ := cellrange.Parse("B2")
+	cells, err := repository.ReadRange(ctx, detail.ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "42" {
+		t.Fatalf("restored detail: %#v, %v", cells, err)
+	}
+	if _, err := repository.ReadRange(ctx, temporary.ID, selected); !errors.Is(err, workbook.ErrNotFound) {
+		t.Fatalf("temporary sheet survived: %v", err)
+	}
+	versions, err := repository.ListVersions(ctx, book.ID)
+	if err != nil || len(versions) != 2 || versions[0].Name != "복원 전 자동 백업" || versions[0].WorkbookVersion != 9 {
+		t.Fatalf("automatic backup: %#v, %v", versions, err)
+	}
+}
+
 func TestPostgresAtomicImportExport(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

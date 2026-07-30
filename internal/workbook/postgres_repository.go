@@ -48,8 +48,24 @@ type snapshotBlock struct {
 	Payload     json.RawMessage `json:"payload"`
 }
 
+type snapshotWorkbook struct {
+	Title    string `json:"title"`
+	Favorite bool   `json:"favorite"`
+}
+
+type snapshotSheet struct {
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Position   int             `json:"position"`
+	Properties json.RawMessage `json:"properties"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
 type snapshotDocument struct {
-	Blocks []snapshotBlock `json:"blocks"`
+	SchemaVersion int              `json:"schema_version,omitempty"`
+	Workbook      snapshotWorkbook `json:"workbook,omitempty"`
+	Sheets        []snapshotSheet  `json:"sheets,omitempty"`
+	Blocks        []snapshotBlock  `json:"blocks"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -252,24 +268,53 @@ func (r *PostgresRepository) GetWorkbook(ctx context.Context, id string) (Workbo
 }
 
 func (r *PostgresRepository) UpdateWorkbook(ctx context.Context, id string, input UpdateWorkbookInput) (Workbook, error) {
-	current, err := r.GetWorkbook(ctx, id)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return Workbook{}, err
 	}
-	if input.Title != nil {
-		current.Title = strings.TrimSpace(*input.Title)
-		if current.Title == "" {
-			return Workbook{}, fmt.Errorf("%w: title cannot be empty", ErrInvalid)
-		}
-	}
-	if input.Favorite != nil {
-		current.Favorite = *input.Favorite
-	}
-	err = r.pool.QueryRow(ctx, `UPDATE workbooks SET title=$2,favorite=$3,updated_at=$4 WHERE id=$1 AND deleted_at IS NULL RETURNING updated_at`, id, current.Title, current.Favorite, r.now()).Scan(&current.UpdatedAt)
+	defer func() { _ = tx.Rollback(ctx) }()
+	var current Workbook
+	err = tx.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&current.ID, &current.WorkspaceID, &current.Title, &current.OwnerID, &current.Favorite, &current.Version, &current.CreatedAt, &current.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workbook{}, ErrNotFound
 	}
-	return current, err
+	if err != nil {
+		return Workbook{}, err
+	}
+	changed := false
+	if input.Title != nil {
+		title := strings.TrimSpace(*input.Title)
+		if title == "" {
+			return Workbook{}, fmt.Errorf("%w: title cannot be empty", ErrInvalid)
+		}
+		if title != current.Title {
+			current.Title = title
+			changed = true
+		}
+	}
+	if input.Favorite != nil && *input.Favorite != current.Favorite {
+		current.Favorite = *input.Favorite
+		changed = true
+	}
+	if !changed {
+		current.Sheets, err = r.listSheets(ctx, tx, id)
+		if err != nil {
+			return Workbook{}, err
+		}
+		return current, tx.Commit(ctx)
+	}
+	err = tx.QueryRow(ctx, `UPDATE workbooks SET title=$2,favorite=$3,version=version+1,updated_at=$4 WHERE id=$1 AND deleted_at IS NULL RETURNING version,updated_at`, id, current.Title, current.Favorite, r.now()).Scan(&current.Version, &current.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Workbook{}, ErrNotFound
+	}
+	if err != nil {
+		return Workbook{}, err
+	}
+	current.Sheets, err = r.listSheets(ctx, tx, id)
+	if err != nil {
+		return Workbook{}, err
+	}
+	return current, tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) DeleteWorkbook(ctx context.Context, id string) error {
@@ -640,29 +685,69 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 	} else if err != nil {
 		return Version{}, err
 	}
-	rows, err := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1`, workbookID)
+	document, err := r.buildSnapshot(ctx, tx, workbookID)
 	if err != nil {
 		return Version{}, err
 	}
-	blocks := make([]snapshotBlock, 0)
+	version, err := r.insertSnapshot(ctx, tx, workbookID, current, name, actorID, document)
+	if err != nil {
+		return Version{}, err
+	}
+	return version, tx.Commit(ctx)
+}
+
+func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
+	document := snapshotDocument{SchemaVersion: 2, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0)}
+	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
+		return snapshotDocument{}, ErrNotFound
+	} else if err != nil {
+		return snapshotDocument{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text,name,position,properties,created_at FROM sheets WHERE workbook_id=$1 ORDER BY position,id`, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	for rows.Next() {
+		var sheet snapshotSheet
+		if err := rows.Scan(&sheet.ID, &sheet.Name, &sheet.Position, &sheet.Properties, &sheet.CreatedAt); err != nil {
+			rows.Close()
+			return snapshotDocument{}, err
+		}
+		document.Sheets = append(document.Sheets, sheet)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return snapshotDocument{}, err
+	}
+	if len(document.Sheets) == 0 {
+		return snapshotDocument{}, fmt.Errorf("%w: a snapshot must contain at least one sheet", ErrInvalid)
+	}
+	rows, err = tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1 ORDER BY b.sheet_id,b.block_row,b.block_column`, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
 	for rows.Next() {
 		var block snapshotBlock
 		if err := rows.Scan(&block.SheetID, &block.BlockRow, &block.BlockColumn, &block.Payload); err != nil {
 			rows.Close()
-			return Version{}, err
+			return snapshotDocument{}, err
 		}
-		blocks = append(blocks, block)
+		document.Blocks = append(document.Blocks, block)
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
+	return document, rows.Err()
+}
+
+func (r *PostgresRepository) insertSnapshot(ctx context.Context, tx pgx.Tx, workbookID string, workbookVersion int64, name, actorID string, document snapshotDocument) (Version, error) {
+	data, err := json.Marshal(document)
+	if err != nil {
 		return Version{}, err
 	}
-	document, _ := json.Marshal(snapshotDocument{Blocks: blocks})
-	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: current, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	if _, err := tx.Exec(ctx, `INSERT INTO workbook_versions(id,workbook_id,workbook_version,name,actor_id,snapshot,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, version.ID, workbookID, current, version.Name, actorID, document, version.CreatedAt); err != nil {
+	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: workbookVersion, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
+	if _, err := tx.Exec(ctx, `INSERT INTO workbook_versions(id,workbook_id,workbook_version,name,actor_id,snapshot,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, version.ID, workbookID, workbookVersion, version.Name, actorID, data, version.CreatedAt); err != nil {
 		return Version{}, err
 	}
-	return version, tx.Commit(ctx)
+	return version, nil
 }
 
 func (r *PostgresRepository) ListVersions(ctx context.Context, workbookID string) ([]Version, error) {
@@ -717,11 +802,87 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return MutationResult{}, err
 	}
+	currentSnapshot, err := r.buildSnapshot(ctx, tx, workbookID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	backup, err := r.insertSnapshot(ctx, tx, workbookID, base, "복원 전 자동 백업", actorID, currentSnapshot)
+	if err != nil {
+		return MutationResult{}, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks USING sheets WHERE cell_blocks.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
 	now := r.now()
+	desiredSheetIDs := make(map[string]struct{})
+	if snapshot.SchemaVersion >= 2 {
+		if strings.TrimSpace(snapshot.Workbook.Title) == "" || len(snapshot.Sheets) == 0 {
+			return MutationResult{}, fmt.Errorf("%w: version snapshot is missing workbook structure", ErrInvalid)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE sheets SET name='__kanpic_restore__' || gen_random_uuid()::text WHERE workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
+		rows, err := tx.Query(ctx, `SELECT id::text FROM sheets WHERE workbook_id=$1`, workbookID)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		currentSheetIDs := make([]string, 0)
+		for rows.Next() {
+			var sheetID string
+			if err := rows.Scan(&sheetID); err != nil {
+				rows.Close()
+				return MutationResult{}, err
+			}
+			currentSheetIDs = append(currentSheetIDs, sheetID)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return MutationResult{}, err
+		}
+		desiredSheetIDs = make(map[string]struct{}, len(snapshot.Sheets))
+		for _, sheet := range snapshot.Sheets {
+			if strings.TrimSpace(sheet.ID) == "" || strings.TrimSpace(sheet.Name) == "" {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains an invalid sheet", ErrInvalid)
+			}
+			if _, duplicate := desiredSheetIDs[sheet.ID]; duplicate {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains duplicate sheets", ErrInvalid)
+			}
+			desiredSheetIDs[sheet.ID] = struct{}{}
+		}
+		for _, sheetID := range currentSheetIDs {
+			if _, keep := desiredSheetIDs[sheetID]; !keep {
+				if _, err := tx.Exec(ctx, `DELETE FROM sheets WHERE id=$1 AND workbook_id=$2`, sheetID, workbookID); err != nil {
+					return MutationResult{}, err
+				}
+			}
+		}
+		for _, sheet := range snapshot.Sheets {
+			properties := sheet.Properties
+			if len(properties) == 0 {
+				properties = json.RawMessage(`{}`)
+			}
+			createdAt := sheet.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = now
+			}
+			command, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET name=excluded.name,position=excluded.position,properties=excluded.properties,created_at=excluded.created_at WHERE sheets.workbook_id=excluded.workbook_id`, sheet.ID, workbookID, sheet.Name, sheet.Position, properties, createdAt)
+			if err != nil {
+				return MutationResult{}, mapPostgresError(err)
+			}
+			if command.RowsAffected() != 1 {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot references a sheet owned by another workbook", ErrInvalid)
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workbooks SET title=$2,favorite=$3 WHERE id=$1`, workbookID, snapshot.Workbook.Title, snapshot.Workbook.Favorite); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	for _, block := range snapshot.Blocks {
+		if snapshot.SchemaVersion >= 2 {
+			if _, found := desiredSheetIDs[block.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a block for an unknown sheet", ErrInvalid)
+			}
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, block.SheetID, block.BlockRow, block.BlockColumn, block.Payload, now); err != nil {
 			return MutationResult{}, err
 		}
@@ -731,7 +892,8 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 		return MutationResult{}, err
 	}
 	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, BaseVersion: base, ServerVersion: serverVersion, CreatedAt: now}
-	if _, err := tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,actor_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,'version.restore','{}',$7)`, result.OperationID, "restore:"+versionID+":"+strconv.FormatInt(base, 10), workbookID, actorID, base, serverVersion, now); err != nil {
+	payload, _ := json.Marshal(map[string]string{"restored_version_id": versionID, "backup_version_id": backup.ID})
+	if _, err := tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,actor_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,'version.restore',$7,$8)`, result.OperationID, "restore:"+versionID+":"+strconv.FormatInt(base, 10), workbookID, actorID, base, serverVersion, payload, now); err != nil {
 		return MutationResult{}, err
 	}
 	return result, tx.Commit(ctx)

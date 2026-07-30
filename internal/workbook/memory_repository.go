@@ -28,8 +28,10 @@ type operation struct {
 }
 
 type snapshot struct {
-	version Version
-	cells   map[string]map[cellKey]Cell
+	version  Version
+	workbook Workbook
+	sheets   map[string]Sheet
+	cells    map[string]map[cellKey]Cell
 }
 
 type workbookState struct {
@@ -181,16 +183,24 @@ func (r *MemoryRepository) UpdateWorkbook(_ context.Context, id string, input Up
 	if !ok {
 		return Workbook{}, ErrNotFound
 	}
+	changed := false
 	if input.Title != nil {
-		if strings.TrimSpace(*input.Title) == "" {
+		title := strings.TrimSpace(*input.Title)
+		if title == "" {
 			return Workbook{}, fmt.Errorf("%w: title cannot be empty", ErrInvalid)
 		}
-		state.workbook.Title = strings.TrimSpace(*input.Title)
+		if title != state.workbook.Title {
+			state.workbook.Title = title
+			changed = true
+		}
 	}
-	if input.Favorite != nil {
+	if input.Favorite != nil && *input.Favorite != state.workbook.Favorite {
 		state.workbook.Favorite = *input.Favorite
+		changed = true
 	}
-	state.workbook.UpdatedAt = r.now()
+	if changed {
+		r.bump(state)
+	}
 	return r.workbookWithSheets(state), nil
 }
 
@@ -440,7 +450,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, cells: cloneAllCells(state.cells)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells)})
 	return version, nil
 }
 
@@ -467,7 +477,18 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 				continue
 			}
 			base := state.workbook.Version
+			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells)})
+			for sheetID := range state.sheets {
+				delete(r.sheetToWB, sheetID)
+			}
+			state.workbook.Title = snap.workbook.Title
+			state.workbook.Favorite = snap.workbook.Favorite
+			state.sheets = cloneSheets(snap.sheets)
 			state.cells = cloneAllCells(snap.cells)
+			for sheetID := range state.sheets {
+				r.sheetToWB[sheetID] = state.workbook.ID
+			}
 			r.bump(state)
 			result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, BaseVersion: base, ServerVersion: state.workbook.Version, CreatedAt: r.now()}
 			state.operations = append(state.operations, operation{result: result})
@@ -475,6 +496,14 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 		}
 	}
 	return MutationResult{}, ErrNotFound
+}
+
+func cloneSheets(source map[string]Sheet) map[string]Sheet {
+	result := make(map[string]Sheet, len(source))
+	for id, sheet := range source {
+		result[id] = sheet
+	}
+	return result
 }
 
 func (r *MemoryRepository) workbookWithSheets(state *workbookState) Workbook {

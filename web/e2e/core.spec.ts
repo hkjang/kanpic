@@ -87,3 +87,40 @@ test('synchronizes presence and edits between two browser tabs', async ({ page, 
   await second.close()
   await expect(page.locator('.collaboration-count')).toContainText('1명 접속')
 })
+
+test('creates a named version and restores it with an automatic backup', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId = page.url().split('/workbooks/')[1]
+  const workbook = await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response => response.json())
+  const sheetId = workbook.sheets[0].id as string
+  const valueAtA1 = async () => {
+    const body = await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1`).then(response => response.json())
+    return body.items[0]?.value
+  }
+  const editA1 = async (value:string) => {
+    const canvas = page.locator('canvas.grid-canvas')
+    await canvas.dblclick({ position: { x: 70, y: 42 } })
+    await page.locator('input.cell-editor').fill(value)
+    await page.locator('input.cell-editor').press('Enter')
+  }
+
+  await editA1('10')
+  await expect.poll(valueAtA1).toBe(10)
+  await page.locator('.toolbar').getByRole('button', { name: '버전 이력', exact: true }).click()
+  await expect(page.getByText('버전 이력', { exact: true })).toBeVisible()
+  await page.getByPlaceholder('예: 2026년 3분기 확정').fill('기준 버전')
+  await page.getByRole('button', { name: '저장', exact: true }).click()
+  await expect(page.locator('.workbook-version').filter({ hasText: '기준 버전' })).toBeVisible()
+
+  await page.locator('.toolbar').getByRole('button', { name: '버전 이력', exact: true }).click()
+  await editA1('20')
+  await expect.poll(valueAtA1).toBe(20)
+  await page.locator('.toolbar').getByRole('button', { name: '버전 이력', exact: true }).click()
+  page.once('dialog', dialog => dialog.accept())
+  await page.locator('.workbook-version').filter({ hasText: '기준 버전' }).getByRole('button', { name: '복원' }).click()
+  await expect.poll(valueAtA1).toBe(10)
+  await expect(page.locator('.formula-bar input')).toHaveValue('10')
+  await expect(page.locator('.workbook-version').filter({ hasText: '복원 전 자동 백업' })).toBeVisible()
+})

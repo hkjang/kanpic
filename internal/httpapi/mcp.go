@@ -138,7 +138,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.workbook.update":
 		var input workbook.UpdateWorkbookInput
 		decodeMCP(args, &input)
-		return s.repository.UpdateWorkbook(ctx, stringArg(args, "workbook_id"), input)
+		item, err := s.repository.UpdateWorkbook(ctx, stringArg(args, "workbook_id"), input)
+		if err == nil {
+			s.collab.PublishVersion(item.ID, actor, "", "", item.Version)
+		}
+		return item, err
 	case "spreadsheet.workbook.delete":
 		return okResult(s.repository.DeleteWorkbook(ctx, stringArg(args, "workbook_id")))
 	case "spreadsheet.sheet.list":

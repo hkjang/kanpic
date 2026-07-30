@@ -160,6 +160,7 @@ func (s *Server) updateWorkbook(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.collab.PublishVersion(item.ID, actorID(r), "", "", item.Version)
 	writeJSON(w, http.StatusOK, item)
 }
 
