@@ -89,20 +89,20 @@ function mdToHtml(md) {
   }
   text = newLines.join('\n');
 
-  // 5. Headings (h6 down to h1)
-  text = text.replace(/^###### (.*$)/gim, (m, g1) => `<h6>${formatInline(g1)}</h6>`);
-  text = text.replace(/^##### (.*$)/gim, (m, g1) => `<h5>${formatInline(g1)}</h5>`);
-  text = text.replace(/^#### (.*$)/gim, (m, g1) => `<h4>${formatInline(g1)}</h4>`);
-  text = text.replace(/^### (.*$)/gim, (m, g1) => `<h3>${formatInline(g1)}</h3>`);
-  text = text.replace(/^## (.*$)/gim, (m, g1) => `<h2>${formatInline(g1)}</h2>`);
-  text = text.replace(/^# (.*$)/gim, (m, g1) => `<h1>${formatInline(g1)}</h1>`);
+  // 5. Headings (h6 down to h1) with double newline isolation
+  text = text.replace(/^###### (.*$)/gim, (m, g1) => `\n\n<h6>${formatInline(g1)}</h6>\n\n`);
+  text = text.replace(/^##### (.*$)/gim, (m, g1) => `\n\n<h5>${formatInline(g1)}</h5>\n\n`);
+  text = text.replace(/^#### (.*$)/gim, (m, g1) => `\n\n<h4>${formatInline(g1)}</h4>\n\n`);
+  text = text.replace(/^### (.*$)/gim, (m, g1) => `\n\n<h3>${formatInline(g1)}</h3>\n\n`);
+  text = text.replace(/^## (.*$)/gim, (m, g1) => `\n\n<h2>${formatInline(g1)}</h2>\n\n`);
+  text = text.replace(/^# (.*$)/gim, (m, g1) => `\n\n<h1>${formatInline(g1)}</h1>\n\n`);
 
   // Horizontal Rule (---, ***, ___)
-  text = text.replace(/^\s*[-*_]{3,}\s*$/gm, '<hr>');
+  text = text.replace(/^\s*[-*_]{3,}\s*$/gm, '\n\n<hr>\n\n');
 
   // Unordered Lists (*, -, +)
   text = text.replace(/^\s*[-*+]\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
-  text = text.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
+  text = text.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '\n\n<ul>$1</ul>\n\n');
 
   // Ordered Lists (1., 2., etc.)
   text = text.replace(/^\s*\d+\.\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
