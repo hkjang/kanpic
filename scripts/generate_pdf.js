@@ -89,7 +89,10 @@ function mdToHtml(md) {
   }
   text = newLines.join('\n');
 
-  // 5. Headings & Lists
+  // 5. Headings (h6 down to h1)
+  text = text.replace(/^###### (.*$)/gim, (m, g1) => `<h6>${formatInline(g1)}</h6>`);
+  text = text.replace(/^##### (.*$)/gim, (m, g1) => `<h5>${formatInline(g1)}</h5>`);
+  text = text.replace(/^#### (.*$)/gim, (m, g1) => `<h4>${formatInline(g1)}</h4>`);
   text = text.replace(/^### (.*$)/gim, (m, g1) => `<h3>${formatInline(g1)}</h3>`);
   text = text.replace(/^## (.*$)/gim, (m, g1) => `<h2>${formatInline(g1)}</h2>`);
   text = text.replace(/^# (.*$)/gim, (m, g1) => `<h1>${formatInline(g1)}</h1>`);
@@ -219,6 +222,22 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
       color: #334155;
       margin-top: 16px;
       margin-bottom: 8px;
+      font-weight: 700;
+      page-break-after: avoid;
+    }
+    h4 {
+      font-size: 13px;
+      color: #0f766e;
+      margin-top: 14px;
+      margin-bottom: 6px;
+      font-weight: 700;
+      page-break-after: avoid;
+    }
+    h5, h6 {
+      font-size: 12.5px;
+      color: #334155;
+      margin-top: 12px;
+      margin-bottom: 6px;
       font-weight: 700;
       page-break-after: avoid;
     }
