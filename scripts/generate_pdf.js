@@ -2,6 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require(path.join(__dirname, '../web/node_modules/playwright-core'));
 
+function formatInline(text) {
+  if (!text) return '';
+  let s = text;
+  // Escaping html entities if not html tag
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  return s;
+}
+
 function mdToHtml(md) {
   const placeholders = [];
 
@@ -39,7 +50,7 @@ function mdToHtml(md) {
     };
     const div = `<div class="callout callout-${typeClass}">
       <div class="callout-title">${titles[typeClass] || type}</div>
-      <div class="callout-content">${cleanBody}</div>
+      <div class="callout-content">${formatInline(cleanBody)}</div>
     </div>`;
     return addPlaceholder(div);
   });
@@ -114,13 +125,13 @@ function renderTable(rows) {
 
   let html = '<div class="table-container"><table><thead><tr>';
   header.forEach(h => {
-    html += `<th>${h}</th>`;
+    html += `<th>${formatInline(h)}</th>`;
   });
   html += '</tr></thead><tbody>';
   bodyRows.forEach(row => {
     html += '<tr>';
     row.forEach(c => {
-      html += `<td>${c}</td>`;
+      html += `<td>${formatInline(c)}</td>`;
     });
     html += '</tr>';
   });
@@ -244,7 +255,11 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
       border: none;
     }
     .table-container {
-      margin: 16px 0;
+      margin: 18px 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
       page-break-inside: avoid;
     }
     table {
@@ -255,16 +270,27 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
     }
     th, td {
       border: 1px solid #cbd5e1;
-      padding: 8px 12px;
+      padding: 9px 13px;
       text-align: left;
+      vertical-align: top;
+      line-height: 1.5;
     }
     th {
       background: #f0fdf4;
       color: #0f766e;
       font-weight: 700;
+      border-bottom: 2px solid #0f766e;
+      font-size: 12px;
     }
     tr:nth-child(even) {
       background: #f8fafc;
+    }
+    td strong {
+      color: #0f766e;
+      font-weight: 700;
+    }
+    td code {
+      font-size: 10.5px;
     }
     hr {
       border: 0;
