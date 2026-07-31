@@ -5,9 +5,31 @@ const { chromium } = require(path.join(__dirname, '../web/node_modules/playwrigh
 function mdToHtml(md) {
   let html = md;
 
+  // Mermaid diagrams
+  html = html.replace(/```mermaid\n([\s\S]*?)```/g, (match, content) => {
+    return `<div class="mermaid-container"><div class="mermaid">${content.trim()}</div></div>`;
+  });
+
   // Code blocks
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
     return `<pre><code class="language-${lang}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`;
+  });
+
+  // Callouts > [!NOTE], > [!TIP], > [!WARNING]
+  html = html.replace(/^>\s*\[\!(NOTE|TIP|WARNING|IMPORTANT|CAUTION)\]\s*\n((?:^>.*$\n?)+)/gim, (match, type, body) => {
+    const cleanBody = body.replace(/^>\s?/gm, '').trim();
+    const typeClass = type.toLowerCase();
+    const titles = {
+      note: '참고 (Note)',
+      tip: '팁 (Tip)',
+      warning: '경고 (Warning)',
+      important: '중요 (Important)',
+      caution: '주의 (Caution)'
+    };
+    return `<div class="callout callout-${typeClass}">
+      <div class="callout-title">${titles[typeClass] || type}</div>
+      <div class="callout-content">${cleanBody}</div>
+    </div>`;
   });
 
   // Inline code
@@ -65,7 +87,7 @@ function mdToHtml(md) {
   const blocks = html.split(/\n\n+/);
   html = blocks.map(block => {
     block = block.trim();
-    if (block.startsWith('<h') || block.startsWith('<pre') || block.startsWith('<ul') || block.startsWith('<ol') || block.startsWith('<table') || block.startsWith('<hr')) {
+    if (block.startsWith('<h') || block.startsWith('<pre') || block.startsWith('<ul') || block.startsWith('<ol') || block.startsWith('<table') || block.startsWith('<hr') || block.startsWith('<div')) {
       return block;
     }
     return `<p>${block}</p>`;
@@ -78,10 +100,9 @@ function renderTable(rows) {
   if (rows.length < 2) return '';
   const parseRow = r => r.split('|').slice(1, -1).map(c => c.trim());
   const header = parseRow(rows[0]);
-  // rows[1] is separator | --- | --- |
   const bodyRows = rows.slice(2).map(parseRow);
 
-  let html = '<table><thead><tr>';
+  let html = '<div class="table-container"><table><thead><tr>';
   header.forEach(h => {
     html += `<th>${h}</th>`;
   });
@@ -93,7 +114,7 @@ function renderTable(rows) {
     });
     html += '</tr>';
   });
-  html += 'tbody></table>';
+  html += '</tbody></table></div>';
   return html;
 }
 
@@ -107,67 +128,76 @@ async function convertFile(mdPath, pdfPath, title) {
 <head>
   <meta charset="UTF-8">
   <title>${title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     @page {
       size: A4;
-      margin: 20mm 15mm 20mm 15mm;
-      @bottom-right {
-        content: counter(page);
-      }
+      margin: 18mm 15mm 20mm 15mm;
     }
     body {
       font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: #1e293b;
-      line-height: 1.6;
-      font-size: 13px;
+      line-height: 1.65;
+      font-size: 12.5px;
       margin: 0;
       padding: 0;
+      background: #ffffff;
     }
     header.doc-header {
       border-bottom: 3px solid #0f766e;
-      padding-bottom: 12px;
-      margin-bottom: 24px;
+      padding-bottom: 10px;
+      margin-bottom: 22px;
       display: flex;
       justify-content: space-between;
       align-items: flex-end;
     }
-    header.doc-header h1 {
+    header.doc-header .brand-title {
       font-size: 24px;
       color: #0f766e;
       margin: 0;
       font-weight: 800;
+      letter-spacing: -0.03em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    header.doc-header span {
-      font-size: 11px;
+    header.doc-header .doc-subtitle {
+      font-size: 12px;
       color: #64748b;
       font-weight: 600;
     }
     h1 {
-      font-size: 22px;
+      font-size: 20px;
       color: #0f766e;
-      margin-top: 24px;
-      margin-bottom: 14px;
-      font-weight: 700;
+      margin-top: 26px;
+      margin-bottom: 12px;
+      font-weight: 800;
       border-bottom: 1px solid #e2e8f0;
       padding-bottom: 6px;
+      letter-spacing: -0.02em;
+      page-break-after: avoid;
     }
     h2 {
-      font-size: 17px;
+      font-size: 16px;
       color: #0f766e;
       margin-top: 20px;
       margin-bottom: 10px;
       font-weight: 700;
+      letter-spacing: -0.01em;
+      page-break-after: avoid;
     }
     h3 {
-      font-size: 14px;
+      font-size: 13.5px;
       color: #334155;
       margin-top: 16px;
       margin-bottom: 8px;
-      font-weight: 600;
+      font-weight: 700;
+      page-break-after: avoid;
     }
     p {
       margin: 8px 0;
+      word-break: keep-all;
     }
     ul, ol {
       padding-left: 20px;
@@ -175,6 +205,7 @@ async function convertFile(mdPath, pdfPath, title) {
     }
     li {
       margin-bottom: 4px;
+      word-break: keep-all;
     }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -183,6 +214,7 @@ async function convertFile(mdPath, pdfPath, title) {
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 11px;
+      border: 1px solid #e2e8f0;
     }
     pre {
       background: #0f172a;
@@ -192,17 +224,24 @@ async function convertFile(mdPath, pdfPath, title) {
       overflow-x: auto;
       font-size: 11px;
       line-height: 1.5;
+      page-break-inside: avoid;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
     }
     pre code {
       background: transparent;
       color: inherit;
       padding: 0;
+      border: none;
+    }
+    .table-container {
+      margin: 16px 0;
+      page-break-inside: avoid;
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      margin: 16px 0;
-      font-size: 12px;
+      font-size: 11.5px;
+      background: #ffffff;
     }
     th, td {
       border: 1px solid #cbd5e1;
@@ -226,29 +265,66 @@ async function convertFile(mdPath, pdfPath, title) {
     strong {
       color: #0f172a;
     }
-    .footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 30px;
-      font-size: 10px;
-      color: #94a3b8;
+    .callout {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin: 14px 0;
+      page-break-inside: avoid;
+      font-size: 12px;
+    }
+    .callout-note {
+      background: #f0fdfa;
+      border-left: 4px solid #0f766e;
+      color: #115e59;
+    }
+    .callout-tip {
+      background: #f0fdf4;
+      border-left: 4px solid #16a34a;
+      color: #166534;
+    }
+    .callout-warning {
+      background: #fffbeb;
+      border-left: 4px solid #f59e0b;
+      color: #92400e;
+    }
+    .callout-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .mermaid-container {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-top: 1px solid #e2e8f0;
+      justify-content: center;
+      margin: 18px 0;
+      padding: 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      page-break-inside: avoid;
+    }
+    .mermaid {
+      width: 100%;
+      text-align: center;
     }
   </style>
 </head>
 <body>
   <header class="doc-header">
-    <h1>kanpic</h1>
-    <span>${title} | Enterprise Document</span>
+    <div class="brand-title">
+      <span>kanpic</span>
+    </div>
+    <div class="doc-subtitle">${title} | Enterprise Official Document</div>
   </header>
   <div class="content">
     ${bodyHtml}
   </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'neutral',
+      fontFamily: 'Pretendard, sans-serif'
+    });
+  </script>
 </body>
 </html>
   `;
@@ -256,21 +332,29 @@ async function convertFile(mdPath, pdfPath, title) {
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.setContent(fullHtml, { waitUntil: 'networkidle' });
+
+  // Wait for mermaid rendering to finish
+  try {
+    await page.waitForSelector('.mermaid svg', { timeout: 4000 });
+  } catch (e) {
+    // If no mermaid diagrams, ignore timeout
+  }
+
   await page.pdf({
     path: pdfPath,
     format: 'A4',
-    margin: { top: '15mm', bottom: '20mm', left: '15mm', right: '15mm' },
+    margin: { top: '16mm', bottom: '20mm', left: '15mm', right: '15mm' },
     printBackground: true,
     displayHeaderFooter: true,
     footerTemplate: `
       <div style="font-size: 9px; color: #94a3b8; width: 100%; padding: 0 15mm; display: flex; justify-content: space-between; font-family: Pretendard, sans-serif;">
-        <span>kanpic Platform Documentation</span>
+        <span>kanpic Platform Official Documentation</span>
         <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
       </div>
     `
   });
   await browser.close();
-  console.log(`Generated: ${pdfPath}`);
+  console.log(`Generated high-quality PDF: ${pdfPath}`);
 }
 
 async function main() {
