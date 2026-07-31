@@ -97,15 +97,15 @@ function mdToHtml(md) {
   text = text.replace(/^## (.*$)/gim, (m, g1) => `<h2>${formatInline(g1)}</h2>`);
   text = text.replace(/^# (.*$)/gim, (m, g1) => `<h1>${formatInline(g1)}</h1>`);
 
+  // Horizontal Rule (---, ***, ___)
+  text = text.replace(/^\s*[-*_]{3,}\s*$/gm, '<hr>');
+
   // Unordered Lists (*, -, +)
   text = text.replace(/^\s*[-*+]\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
   text = text.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
 
   // Ordered Lists (1., 2., etc.)
   text = text.replace(/^\s*\d+\.\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
-
-  // Horizontal Rule
-  text = text.replace(/^---$/gim, '<hr>');
 
   // 6. Paragraph splitting
   const blocks = text.split(/\n\n+/);
@@ -324,8 +324,8 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
     hr {
       border: 0;
       height: 1px;
-      background: #e2e8f0;
-      margin: 20px 0;
+      background: #cbd5e1;
+      margin: 22px 0;
     }
     strong {
       color: #0f172a;
