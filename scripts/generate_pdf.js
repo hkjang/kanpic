@@ -5,10 +5,13 @@ const { chromium } = require(path.join(__dirname, '../web/node_modules/playwrigh
 function formatInline(text) {
   if (!text) return '';
   let s = text;
-  // Escaping html entities if not html tag
+  // Code `code`
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Bold **bold**
+  s = s.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+  // Italic *italic*
+  s = s.replace(/(^|[^\*])\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*/g, '$1<em>$2</em>');
+  // Strikethrough ~~del~~
   s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   return s;
 }
@@ -86,16 +89,19 @@ function mdToHtml(md) {
   }
   text = newLines.join('\n');
 
-  // 5. Inline formatting & Headings
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-  text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-  text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-  text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  text = text.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
+  // 5. Headings & Lists
+  text = text.replace(/^### (.*$)/gim, (m, g1) => `<h3>${formatInline(g1)}</h3>`);
+  text = text.replace(/^## (.*$)/gim, (m, g1) => `<h2>${formatInline(g1)}</h2>`);
+  text = text.replace(/^# (.*$)/gim, (m, g1) => `<h1>${formatInline(g1)}</h1>`);
+
+  // Unordered Lists (*, -, +)
+  text = text.replace(/^\s*[-*+]\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
   text = text.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
-  text = text.replace(/^\s*\d+\.\s+(.*$)/gim, '<li>$1</li>');
+
+  // Ordered Lists (1., 2., etc.)
+  text = text.replace(/^\s*\d+\.\s+(.*$)/gim, (m, g1) => `<li>${formatInline(g1)}</li>`);
+
+  // Horizontal Rule
   text = text.replace(/^---$/gim, '<hr>');
 
   // 6. Paragraph splitting
@@ -106,7 +112,7 @@ function mdToHtml(md) {
     if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') || block.startsWith('<hr') || block.startsWith('___PLACEHOLDER_')) {
       return block;
     }
-    return `<p>${block}</p>`;
+    return `<p>${formatInline(block)}</p>`;
   }).filter(Boolean).join('\n\n');
 
   // 7. Restore placeholders
@@ -228,6 +234,10 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
       margin-bottom: 4px;
       word-break: keep-all;
     }
+    li strong {
+      color: #0f766e;
+      font-weight: 700;
+    }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       background: #f1f5f9;
@@ -300,6 +310,7 @@ async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
     }
     strong {
       color: #0f172a;
+      font-weight: 700;
     }
     .callout {
       padding: 12px 16px;
