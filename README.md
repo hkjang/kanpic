@@ -54,3 +54,8 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 ```bash
 ./scripts/release.sh v0.1.0
 ```
+
+## 문의 및 연락처 (Contact & Support)
+
+- **도입 & 구축 문의 이메일**: [gagagiga@naver.com](mailto:gagagiga@naver.com)
+- **GitHub Pages 홍보 페이지**: [https://hkjang.github.io/kanpic/](https://hkjang.github.io/kanpic/)

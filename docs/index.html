@@ -7,7 +7,7 @@
 
   <!-- Primary Meta Tags -->
   <meta name="title" content="kanpic - 온프레미스 & 폐쇄망을 위한 1등 AI 데이터 협업 플랫폼">
-  <meta name="description" content="Redis-Free 단일 인프라, Canvas 2D 초고속 그리드, Keycloak OIDC SSO, Model Context Protocol(MCP) 기반 AI 에이전트 연동까지 — 기업의 데이터 주권을 완벽히 지키는 차세대 스프레드시트.">
+  <meta name="description" content="Redis-Free 단일 인프라, Canvas 2D 초고속 그리드, Keycloak OIDC SSO, Model Context Protocol(MCP) 기반 AI 에이전트 연동까지 — 기업의 데이터 주권을 완벽히 지키는 차세대 스프레드시트. 문의: gagagiga@naver.com">
   <meta name="keywords" content="kanpic, 스프레드시트, 온프레미스, 폐쇄망, Air-Gapped, Canvas 2D, Keycloak, OIDC, MCP, AI 에이전트, 데이터 유효성 검사, Data Validation">
   <meta name="author" content="kanpic Core Architecture Team">
 
@@ -15,7 +15,7 @@
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://hkjang.github.io/kanpic/">
   <meta property="og:title" content="kanpic | 온프레미스 & 폐쇄망을 위한 1등 AI 데이터 협업 플랫폼">
-  <meta property="og:description" content="Canvas 2D 초고속 그리드 엔진과 MCP AI 에이전트 연동을 탑재한 기업 전용 데이터 협업 플랫폼">
+  <meta property="og:description" content="Canvas 2D 초고속 그리드 엔진과 MCP AI 에이전트 연동을 탑재한 기업 전용 데이터 협업 플랫폼. 도입 문의: gagagiga@naver.com">
   <meta property="og:image" content="images/logo.svg">
 
   <!-- Favicon -->
@@ -178,6 +178,17 @@
       background: rgba(255, 255, 255, 0.12);
       color: #ffffff;
       border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-contact {
+      background: rgba(20, 184, 166, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(20, 184, 166, 0.4);
+    }
+
+    .btn-contact:hover {
+      background: rgba(20, 184, 166, 0.25);
+      border-color: var(--accent);
     }
 
     /* Hero Section */
@@ -557,6 +568,59 @@
       margin: 12px 0;
     }
 
+    /* Contact Banner Section */
+    section.contact-section {
+      padding: 80px 0;
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.15) 0%, rgba(20, 184, 166, 0.05) 100%);
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .contact-card {
+      background: var(--bg-card);
+      border: 1px solid rgba(20, 184, 166, 0.3);
+      border-radius: var(--radius-lg);
+      padding: 48px;
+      text-align: center;
+      max-width: 860px;
+      margin: 0 auto;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .contact-card h2 {
+      font-size: 32px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      color: var(--text-main);
+    }
+
+    .contact-card p {
+      color: var(--text-muted);
+      font-size: 17px;
+      margin-bottom: 32px;
+      word-break: keep-all;
+    }
+
+    .contact-email-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 32px;
+      background: var(--gradient-teal);
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: 700;
+      border-radius: 50px;
+      text-decoration: none;
+      box-shadow: 0 8px 24px rgba(15, 118, 110, 0.4);
+      transition: all 0.3s ease;
+    }
+
+    .contact-email-badge:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 12px 32px rgba(20, 184, 166, 0.6);
+    }
+
     /* Documentation Section */
     section.docs-section {
       padding: 100px 0;
@@ -681,9 +745,13 @@
         <li><a href="#features" class="nav-link">핵심 기능</a></li>
         <li><a href="#showcase" class="nav-link">데모 시뮬레이션</a></li>
         <li><a href="#roi" class="nav-link">TCO 절감 인디케이터</a></li>
+        <li><a href="#contact" class="nav-link">도입 문의</a></li>
         <li><a href="#docs" class="nav-link">기술 문서 다운로드</a></li>
       </ul>
       <div class="nav-actions">
+        <a href="mailto:gagagiga@naver.com" class="btn btn-contact">
+          <i data-lucide="mail"></i> 문의: gagagiga@naver.com
+        </a>
         <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-secondary">
           <i data-lucide="file-text"></i> 임원 보고서 (PDF)
         </a>
@@ -709,14 +777,14 @@
       </p>
 
       <div class="hero-btns">
-        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-primary">
-          <i data-lucide="download"></i> 임원보고서 다운로드 (PDF)
+        <a href="mailto:gagagiga@naver.com" class="btn btn-primary">
+          <i data-lucide="mail"></i> 도입 & PoC 구축 문의 (gagagiga@naver.com)
+        </a>
+        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-secondary">
+          <i data-lucide="download"></i> 임원보고서 (PDF)
         </a>
         <a href="USER_GUIDE.pdf" target="_blank" class="btn btn-secondary">
           <i data-lucide="book-open"></i> 사용자가이드 (PDF)
-        </a>
-        <a href="https://github.com/hkjang/kanpic" target="_blank" class="btn btn-secondary">
-          <i data-lucide="code-2"></i> 소스코드 보기
         </a>
       </div>
 
@@ -961,6 +1029,21 @@
     </div>
   </section>
 
+  <!-- Contact Banner Section -->
+  <section id="contact" class="contact-section">
+    <div class="container">
+      <div class="contact-card">
+        <h2>도입 및 기술 제휴 문의</h2>
+        <p>
+          사내 온프레미스 구축, 폐쇄망 PoC 신청, 데모 시연 요청 및 사내 시스템(Keycloak/ERP) 연동에 대한 기술 문의를 이메일로 빠르게 안내해 드립니다.
+        </p>
+        <a href="mailto:gagagiga@naver.com" class="contact-email-badge">
+          <i data-lucide="mail"></i> gagagiga@naver.com
+        </a>
+      </div>
+    </div>
+  </section>
+
   <!-- Documentation Section -->
   <section id="docs" class="docs-section">
     <div class="container">
@@ -1037,13 +1120,14 @@
           <span class="brand-text">kanpic</span>
         </a>
         <ul class="footer-links">
+          <li><a href="mailto:gagagiga@naver.com">이메일 문의: gagagiga@naver.com</a></li>
           <li><a href="USER_GUIDE.html" target="_blank">온라인 사용자 가이드</a></li>
           <li><a href="ADMIN_GUIDE.html" target="_blank">온라인 관리자 가이드</a></li>
           <li><a href="https://github.com/hkjang/kanpic" target="_blank">GitHub Repository</a></li>
         </ul>
       </div>
       <div class="copyright">
-        © 2026 kanpic Platform Core Team. Released under the MIT License. Built for Enterprise Closed-Network & AI Collaboration.
+        © 2026 kanpic Platform Core Team. Contact: <a href="mailto:gagagiga@naver.com" style="color: var(--accent);">gagagiga@naver.com</a>. Built for Enterprise Closed-Network & AI Collaboration.
       </div>
     </div>
   </footer>
