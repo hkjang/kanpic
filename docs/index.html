@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kanpic | 온프레미스 & 폐쇄망을 위한 1등 AI 데이터 협업 플랫폼</title>
+
+  <!-- Primary Meta Tags -->
+  <meta name="title" content="kanpic - 온프레미스 & 폐쇄망을 위한 1등 AI 데이터 협업 플랫폼">
+  <meta name="description" content="Redis-Free 단일 인프라, Canvas 2D 초고속 그리드, Keycloak OIDC SSO, Model Context Protocol(MCP) 기반 AI 에이전트 연동까지 — 기업의 데이터 주권을 완벽히 지키는 차세대 스프레드시트.">
+  <meta name="keywords" content="kanpic, 스프레드시트, 온프레미스, 폐쇄망, Air-Gapped, Canvas 2D, Keycloak, OIDC, MCP, AI 에이전트, 데이터 유효성 검사, Data Validation">
+  <meta name="author" content="kanpic Core Architecture Team">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://hkjang.github.io/kanpic/">
+  <meta property="og:title" content="kanpic | 온프레미스 & 폐쇄망을 위한 1등 AI 데이터 협업 플랫폼">
+  <meta property="og:description" content="Canvas 2D 초고속 그리드 엔진과 MCP AI 에이전트 연동을 탑재한 기업 전용 데이터 협업 플랫폼">
+  <meta property="og:image" content="images/logo.svg">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
+
+  <!-- Fonts & Icons -->
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    :root {
+      --primary: #0f766e;
+      --primary-light: #14b8a6;
+      --primary-dark: #0d5c56;
+      --accent: #2dd4bf;
+      --bg-dark: #090d16;
+      --bg-card: #111827;
+      --bg-card-hover: #1f2937;
+      --border-color: rgba(255, 255, 255, 0.1);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --gradient-teal: linear-gradient(135deg, #14b8a6 0%, #0f766e 100%);
+      --gradient-glow: radial-gradient(circle at 50% -20%, rgba(20, 184, 166, 0.25), transparent 70%);
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 24px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      line-height: 1.6;
+    }
+
+    body {
+      overflow-x: hidden;
+      background: var(--bg-dark);
+      background-image: var(--gradient-glow);
+    }
+
+    /* Container */
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header & Navigation */
+    header.navbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      z-index: 1000;
+      background: rgba(9, 13, 22, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-color);
+      transition: all 0.3s ease;
+    }
+
+    .nav-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 76px;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text-main);
+    }
+
+    .brand-logo img {
+      height: 36px;
+      width: auto;
+    }
+
+    .brand-text {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 26px;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-menu {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-link:hover {
+      color: var(--accent);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.25s ease;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--gradient-teal);
+      color: #ffffff;
+      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.4);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(20, 184, 166, 0.5);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Hero Section */
+    section.hero {
+      padding: 160px 0 100px;
+      text-align: center;
+      position: relative;
+    }
+
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: rgba(20, 184, 166, 0.12);
+      border: 1px solid rgba(20, 184, 166, 0.3);
+      border-radius: 50px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    .hero-title {
+      font-size: 54px;
+      font-weight: 800;
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+      margin-bottom: 24px;
+      background: linear-gradient(180deg, #ffffff 40%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-title span {
+      background: linear-gradient(135deg, #2dd4bf 0%, #14b8a6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      max-width: 800px;
+      margin: 0 auto 40px;
+      font-size: 19px;
+      color: var(--text-muted);
+      font-weight: 400;
+      word-break: keep-all;
+    }
+
+    .hero-btns {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 60px;
+      flex-wrap: wrap;
+    }
+
+    .hero-btns .btn {
+      padding: 14px 28px;
+      font-size: 16px;
+      border-radius: var(--radius-md);
+    }
+
+    /* Hero Demo Canvas Simulator */
+    .hero-demo-wrapper {
+      position: relative;
+      max-width: 1060px;
+      margin: 0 auto;
+      border-radius: var(--radius-lg);
+      padding: 8px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), rgba(20, 184, 166, 0.2));
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+    }
+
+    .demo-window {
+      background: var(--bg-card);
+      border-radius: calc(var(--radius-lg) - 4px);
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+
+    .demo-window-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: rgba(15, 23, 42, 0.9);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+
+    .window-title {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-family: 'Outfit', sans-serif;
+    }
+
+    /* Live Interactive Canvas Mock */
+    .grid-mockup {
+      padding: 16px;
+      background: #0b1120;
+      font-family: monospace;
+      font-size: 13px;
+      overflow-x: auto;
+    }
+
+    .toolbar-mock {
+      display: flex;
+      gap: 12px;
+      padding: 10px;
+      background: #1e293b;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+
+    .formula-bar-mock {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #0f172a;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      color: var(--accent);
+      flex-grow: 1;
+    }
+
+    .grid-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    .grid-table th, .grid-table td {
+      border: 1px solid #1e293b;
+      padding: 8px 12px;
+    }
+
+    .grid-table th {
+      background: #1e293b;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .grid-table td {
+      background: #0f172a;
+      color: var(--text-main);
+    }
+
+    .grid-table td.selected {
+      outline: 2px solid var(--primary-light);
+      background: rgba(20, 184, 166, 0.15);
+    }
+
+    .chip-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .chip-approved { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }
+    .chip-pending { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #d97706; }
+
+    /* Features Grid Section */
+    section.features {
+      padding: 100px 0;
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+
+    .section-title {
+      font-size: 38px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+
+    .section-subtitle {
+      font-size: 17px;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 32px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-6px);
+      border-color: rgba(20, 184, 166, 0.4);
+      background: var(--bg-card-hover);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    .feature-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
+      background: rgba(20, 184, 166, 0.12);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text-main);
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 14.5px;
+      line-height: 1.6;
+    }
+
+    /* Interactive Showcase Section */
+    section.showcase {
+      padding: 100px 0;
+      background: rgba(15, 23, 42, 0.6);
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tab-navigation {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 40px;
+      flex-wrap: wrap;
+    }
+
+    .tab-btn {
+      padding: 12px 24px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: var(--gradient-teal);
+      color: #ffffff;
+      border-color: transparent;
+      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.4);
+    }
+
+    .tab-content {
+      display: none;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+    }
+
+    .tab-content.active {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      align-items: center;
+    }
+
+    .showcase-text h3 {
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      color: var(--accent);
+    }
+
+    .showcase-text p {
+      color: var(--text-muted);
+      font-size: 16px;
+      margin-bottom: 24px;
+    }
+
+    .showcase-list {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+
+    .showcase-list li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      color: var(--text-main);
+      font-size: 15px;
+    }
+
+    .showcase-list li i {
+      color: var(--accent);
+    }
+
+    /* ROI Calculator Section */
+    section.roi-calculator {
+      padding: 100px 0;
+    }
+
+    .calculator-box {
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(17, 24, 39, 0.95));
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 48px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .calc-inputs label {
+      display: block;
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .calc-inputs input[type="range"] {
+      width: 100%;
+      accent-color: var(--primary-light);
+      margin-bottom: 24px;
+    }
+
+    .calc-result {
+      background: rgba(20, 184, 166, 0.08);
+      border: 1px solid rgba(20, 184, 166, 0.25);
+      border-radius: var(--radius-md);
+      padding: 36px;
+      text-align: center;
+    }
+
+    .savings-amount {
+      font-size: 44px;
+      font-weight: 800;
+      color: var(--accent);
+      font-family: 'Outfit', sans-serif;
+      margin: 12px 0;
+    }
+
+    /* Documentation Section */
+    section.docs-section {
+      padding: 100px 0;
+      background: rgba(15, 23, 42, 0.4);
+    }
+
+    .docs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+    }
+
+    .doc-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 24px;
+      text-decoration: none;
+      color: var(--text-main);
+      transition: all 0.3s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .doc-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--primary-light);
+      background: var(--bg-card-hover);
+    }
+
+    .doc-type {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .doc-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text-main);
+    }
+
+    .doc-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+    }
+
+    .doc-download-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--primary-light);
+    }
+
+    /* Footer */
+    footer.footer {
+      border-top: 1px solid var(--border-color);
+      padding: 60px 0 40px;
+      background: #050811;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .footer-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 40px;
+      flex-wrap: wrap;
+      gap: 24px;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover {
+      color: var(--text-main);
+    }
+
+    .copyright {
+      text-align: center;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .hero-title { font-size: 38px; }
+      .hero-subtitle { font-size: 16px; }
+      .tab-content.active { grid-template-columns: 1fr; }
+      .calculator-box { grid-template-columns: 1fr; }
+      .nav-menu { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation Bar -->
+  <header class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="brand-logo">
+        <img src="images/logo-icon.svg" alt="kanpic Logo Mark">
+        <span class="brand-text">kanpic</span>
+      </a>
+      <ul class="nav-menu">
+        <li><a href="#features" class="nav-link">핵심 기능</a></li>
+        <li><a href="#showcase" class="nav-link">데모 시뮬레이션</a></li>
+        <li><a href="#roi" class="nav-link">TCO 절감 인디케이터</a></li>
+        <li><a href="#docs" class="nav-link">기술 문서 다운로드</a></li>
+      </ul>
+      <div class="nav-actions">
+        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-secondary">
+          <i data-lucide="file-text"></i> 임원 보고서 (PDF)
+        </a>
+        <a href="https://github.com/hkjang/kanpic" target="_blank" class="btn btn-primary">
+          <i data-lucide="github"></i> GitHub 저장소
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="badge-pill">
+        <i data-lucide="shield-check"></i> 100% Air-Gapped & Redis-Free Architecture
+      </div>
+      <h1 class="hero-title">
+        온프레미스 & 폐쇄망을 위한<br>
+        <span>1등 AI 데이터 협업 플랫폼</span>
+      </h1>
+      <p class="hero-subtitle">
+        단일 Go 바이너리로 구동되는 Redis-Free 인프라, Canvas 2D 기반 초고속 그리드, Keycloak OIDC SSO, 그리고 Model Context Protocol(MCP) 탑재까지 — 사내 데이터 주권을 완벽히 보호하는 차세대 인프라 솔루션입니다.
+      </p>
+
+      <div class="hero-btns">
+        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-primary">
+          <i data-lucide="download"></i> 임원보고서 다운로드 (PDF)
+        </a>
+        <a href="USER_GUIDE.pdf" target="_blank" class="btn btn-secondary">
+          <i data-lucide="book-open"></i> 사용자가이드 (PDF)
+        </a>
+        <a href="https://github.com/hkjang/kanpic" target="_blank" class="btn btn-secondary">
+          <i data-lucide="code-2"></i> 소스코드 보기
+        </a>
+      </div>
+
+      <!-- Live Mockup Window -->
+      <div class="hero-demo-wrapper">
+        <div class="demo-window">
+          <div class="demo-window-header">
+            <div class="window-dots">
+              <span class="dot dot-red"></span>
+              <span class="dot dot-yellow"></span>
+              <span class="dot dot-green"></span>
+            </div>
+            <div class="window-title">kanpic Workbooks — 2026_재무_실적보고서.kanpic</div>
+            <div style="width: 50px;"></div>
+          </div>
+          <div class="grid-mockup">
+            <div class="toolbar-mock">
+              <span style="font-weight: bold; color: var(--accent);">[fx]</span>
+              <div class="formula-bar-mock">
+                =IF(B3 >= 1000000, "달성", "미달")
+              </div>
+              <span class="chip-tag chip-approved">Reject Input: True</span>
+            </div>
+            <table class="grid-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>A (부서명)</th>
+                  <th>B (2026 매출 실적)</th>
+                  <th>C (목표 달성 여부)</th>
+                  <th>D (입력 유효성 상태)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>1</td>
+                  <td>경영기획실</td>
+                  <td>1,450,000,000 원</td>
+                  <td><span class="chip-tag chip-approved">달성</span></td>
+                  <td><span style="color: #34d399;">✓ Validated</span></td>
+                </tr>
+                <tr class="selected">
+                  <td>2</td>
+                  <td>AI 혁신연구소</td>
+                  <td>2,100,000,000 원</td>
+                  <td><span class="chip-tag chip-approved">달성</span></td>
+                  <td><span style="color: #34d399;">✓ Validated</span></td>
+                </tr>
+                <tr>
+                  <td>3</td>
+                  <td>스마트 팩토리 공정팀</td>
+                  <td>980,000,000 원</td>
+                  <td><span class="chip-tag chip-pending">미달</span></td>
+                  <td><span style="color: #34d399;">✓ Validated</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Features Grid Section -->
+  <section id="features" class="features">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">왜 kanpic 인가?</h2>
+        <p class="section-subtitle">기존 외산 SaaS와 오픈소스의 한계를 한 번에 해결하는 4대 엔터프라이즈 차별성</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="shield-alert"></i>
+          </div>
+          <h3>100% 완전 폐쇄망 (Air-Gapped)</h3>
+          <p>사외 인터넷 연결이 완전히 차단된 에어갭 환경에서도 외부 통신 없이 독립 실행됩니다. 외부 데이터 유출 우려를 100% 근절합니다.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="cpu"></i>
+          </div>
+          <h3>Redis-Free 인프라 TCO 절감</h3>
+          <p>Redis, RabbitMQ 등 복잡한 서드파티 미들웨어 없이 PostgreSQL 1개만으로 동작하는 단일 바이너리 구조로 운영 TCO를 70% 절감합니다.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="zap"></i>
+          </div>
+          <h3>Canvas 2D 초고속 그리드</h3>
+          <p>HTML DOM의 렌더링 한계를 극복한 Canvas 2D 그래픽 엔진으로 10만 행 이상의 셀 데이터도 60fps 무지연 스크롤과 편집을 지원합니다.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="bot"></i>
+          </div>
+          <h3>Model Context Protocol (MCP)</h3>
+          <p>Anthropic MCP 표준 `/mcp` HTTP JSON-RPC 2.0 엔드포인트를 탑재하여 사내 LLM 에이전트가 데이터 읽기/쓰기 및 수식을 자율 제어합니다.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="key-round"></i>
+          </div>
+          <h3>Keycloak OIDC PKCE SSO</h3>
+          <p>사내 계정 관리 시스템(Keycloak)과 연동하여 2FA/SSO 중앙집중식 권한 관리 및 SHA-256 개인 API 키 관리 기능을 제공합니다.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i data-lucide="check-check"></i>
+          </div>
+          <h3>Data Validation (유효성 검사)</h3>
+          <p>목록 드롭다운 칩(Chip), 범위 및 Custom Formula 검증과 `Reject Input` 차단 옵션을 탑재하여 데이터 오입력을 사전 차단합니다.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Showcase Section -->
+  <section id="showcase" class="showcase">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">엔터프라이즈 핵심 기능 시뮬레이션</h2>
+        <p class="section-subtitle">탭을 클릭하여 kanpic의 주요 모듈 동작 방식을 확인해보세요.</p>
+      </div>
+
+      <div class="tab-navigation">
+        <button class="tab-btn active" onclick="switchTab('tab-grid')">Canvas 그리드 & 수식</button>
+        <button class="tab-btn" onclick="switchTab('tab-validation')">Data Validation (유효성)</button>
+        <button class="tab-btn" onclick="switchTab('tab-filter')">비파괴 필터 뷰 & 버전</button>
+        <button class="tab-btn" onclick="switchTab('tab-mcp')">MCP AI 에이전트 연동</button>
+      </div>
+
+      <!-- Tab 1: Grid & Formula -->
+      <div id="tab-grid" class="tab-content active">
+        <div class="showcase-text">
+          <h3>Canvas 2D 그리드 & 실시간 수식 파서</h3>
+          <p>Go 기반 백엔드가 브라우저와 동기화되어 고성능 수식 연산을 즉시 수행합니다.</p>
+          <ul class="showcase-list">
+            <li><i data-lucide="check-circle-2"></i> 수학/통계/텍스트/논리 함수 지원 (`SUM`, `AVERAGE`, `IF`, `CONCAT`)</li>
+            <li><i data-lucide="check-circle-2"></i> Goroutine Worker Pool을 통한 셀 수식 병렬 재계산</li>
+            <li><i data-lucide="check-circle-2"></i> MS Excel 단축키 (`Ctrl+C/V`, `Shift+방향키`) 100% 호환</li>
+          </ul>
+        </div>
+        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+          <div style="font-family: monospace; font-size: 13px; color: var(--accent);">
+            // 수식 계산 시뮬레이션 예시<br>
+            A1: 1500 | B1: 2500<br>
+            C1: =SUM(A1:B1) -> <span style="color: #34d399; font-weight: bold;">4000</span><br>
+            D1: =IF(C1>=3000, "목표 달성", "미달") -> <span style="color: #34d399; font-weight: bold;">"목표 달성"</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Validation -->
+      <div id="tab-validation" class="tab-content">
+        <div class="showcase-text">
+          <h3>데이터 유효성 검사 (Data Validation)</h3>
+          <p>승인되지 않은 잘못된 값 입력을 셀 수준에서 차단하여 정합성을 보장합니다.</p>
+          <ul class="showcase-list">
+            <li><i data-lucide="check-circle-2"></i> 드롭다운 칩 (Chip Style Validation)으로 클릭 한 번에 입력</li>
+            <li><i data-lucide="check-circle-2"></i> `Reject Input = True` 설정으로 잘못된 값 입력 시 즉시 차단</li>
+            <li><i data-lucide="check-circle-2"></i> 경고 뱃지 및 상세 오류 툴팁 표시</li>
+          </ul>
+        </div>
+        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+          <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+            <span class="chip-tag chip-approved">승인</span>
+            <span class="chip-tag chip-pending">대기</span>
+            <span class="chip-tag" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626;">불량 (Reject)</span>
+          </div>
+          <p style="font-size: 13px; color: var(--text-muted);">규칙 위반 입력 시: <span style="color: #f87171;">"오류: 0 이상의 숫자만 입력 가능합니다."</span></p>
+        </div>
+      </div>
+
+      <!-- Tab 3: Filter & Version -->
+      <div id="tab-filter" class="tab-content">
+        <div class="showcase-text">
+          <h3>비파괴 필터 뷰 & 타임스탬프 버전 복원</h3>
+          <p>타 사용자에게 방해를 주지 않는 필터 탐색과 원클릭 상태 복원을 제공합니다.</p>
+          <ul class="showcase-list">
+            <li><i data-lucide="check-circle-2"></i> 팀원의 화면 행 순서를 바꾸지 않는 개인별 비파괴 필터 뷰</li>
+            <li><i data-lucide="check-circle-2"></i> 워크북 변경 델타 타임스탬프 이력 자동 기록</li>
+            <li><i data-lucide="check-circle-2"></i> 실수로 삭제된 수식/데이터 원클릭 복원</li>
+          </ul>
+        </div>
+        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-size: 13px; color: var(--text-muted);">
+          🕒 2026-07-31 18:30 — 김민수 팀장 (Data Validation 규칙 추가)<br>
+          🕒 2026-07-31 15:10 — 이수진 연구원 (MCP AI 수식 자동 생성)<br>
+          <button class="btn btn-secondary" style="margin-top: 12px; font-size: 12px; padding: 6px 12px;">[ 이 버전으로 원클릭 복원 ]</button>
+        </div>
+      </div>
+
+      <!-- Tab 4: MCP -->
+      <div id="tab-mcp" class="tab-content">
+        <div class="showcase-text">
+          <h3>Model Context Protocol (MCP) AI 연동</h3>
+          <p>HTTP JSON-RPC 2.0 표준 엔드포인트를 통해 사내 AI 모델과 자율 연동됩니다.</p>
+          <ul class="showcase-list">
+            <li><i data-lucide="check-circle-2"></i> `/mcp` 엔드포인트 지원 및 `mcp.use` 보안 스코프 적용</li>
+            <li><i data-lucide="check-circle-2"></i> AI 에이전트의 자동 데이터 요약, 수식 생성, 이상치 검출</li>
+            <li><i data-lucide="check-circle-2"></i> Python / Curl 스크립트 기반 파이프라인 자동화</li>
+          </ul>
+        </div>
+        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-family: monospace; font-size: 12px; color: #a7f3d0;">
+          POST /mcp HTTP/1.1<br>
+          Authorization: Bearer kanpic_live_sk_8f9a2b...<br>
+          {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate_summary"}}
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ROI / TCO Calculator -->
+  <section id="roi" class="roi-calculator">
+    <div class="container">
+      <div class="calculator-box">
+        <div class="calc-inputs">
+          <h2 style="font-size: 28px; font-weight: 800; margin-bottom: 12px;">TCO 절감 시뮬레이터</h2>
+          <p style="color: var(--text-muted); margin-bottom: 24px;">외산 SaaS 및 기존 인프라 대비 연간 예산 절감액을 직접 계산해보세요.</p>
+
+          <label>사용 인원 (명): <span id="user-count-val" style="color: var(--accent); font-weight: bold;">100</span> 명</label>
+          <input type="range" id="user-count" min="10" max="2000" value="100" oninput="calculateROI()">
+
+          <label>기존 인프라 서버 수 (대): <span id="server-count-val" style="color: var(--accent); font-weight: bold;">5</span> 대</label>
+          <input type="range" id="server-count" min="1" max="50" value="5" oninput="calculateROI()">
+        </div>
+
+        <div class="calc-result">
+          <div style="font-size: 15px; color: var(--text-muted);">kanpic 도입 시 연간 예상 절감 예산</div>
+          <div class="savings-amount" id="savings-val">₩ 34,200,000</div>
+          <p style="font-size: 13px; color: var(--text-muted);">* 외산 SaaS 라이선스비 및 Redis/MQ 미들웨어 라이선스/운영 공수 감축 기준 절감액</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Documentation Section -->
+  <section id="docs" class="docs-section">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title">공식 기술 문서 및 보고서 다운로드</h2>
+        <p class="section-subtitle">kanpic의 아키텍처, 사용법, 관리 매뉴얼 및 단기·중기·장기 전략 로드맵 문서 모음</p>
+      </div>
+
+      <div class="docs-grid">
+        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="doc-card">
+          <div>
+            <div class="doc-type">Executive Report</div>
+            <div class="doc-title">임원 보고서 (PDF)</div>
+            <div class="doc-desc">경영진 보고용 종합 보고서 (TCO, 도입 효과, 경쟁력 비교)</div>
+          </div>
+          <div class="doc-download-btn">
+            <i data-lucide="download"></i> PDF 열기 / 다운로드
+          </div>
+        </a>
+
+        <a href="USER_GUIDE.pdf" target="_blank" class="doc-card">
+          <div>
+            <div class="doc-type">User Manual</div>
+            <div class="doc-title">사용자 가이드 (PDF)</div>
+            <div class="doc-desc">엔드유저용 상세 기능 가이드 (단축키, 수식, 유효성 검사, 필터)</div>
+          </div>
+          <div class="doc-download-btn">
+            <i data-lucide="download"></i> PDF 열기 / 다운로드
+          </div>
+        </a>
+
+        <a href="ADMIN_GUIDE.pdf" target="_blank" class="doc-card">
+          <div>
+            <div class="doc-type">Admin Manual</div>
+            <div class="doc-title">관리자 가이드 (PDF)</div>
+            <div class="doc-desc">DevOps 및 관리자용 매뉴얼 (Keycloak SSO, 백업/복구, MCP)</div>
+          </div>
+          <div class="doc-download-btn">
+            <i data-lucide="download"></i> PDF 열기 / 다운로드
+          </div>
+        </a>
+
+        <a href="ROADMAP_PLAN.pdf" target="_blank" class="doc-card">
+          <div>
+            <div class="doc-type">Strategic Roadmap</div>
+            <div class="doc-title">단기·중기·장기 로드맵 (PDF)</div>
+            <div class="doc-desc">사업 및 기술 마일스톤 실행 계획서 (Gantt, KPI, 리스크)</div>
+          </div>
+          <div class="doc-download-btn">
+            <i data-lucide="download"></i> PDF 열기 / 다운로드
+          </div>
+        </a>
+
+        <a href="USER_GROUPS_ANALYSIS.pdf" target="_blank" class="doc-card">
+          <div>
+            <div class="doc-type">User Analysis</div>
+            <div class="doc-title">타겟 유저 분석 명세서 (PDF)</div>
+            <div class="doc-desc">5대 페르소나 및 유즈케이스 기능 호환성 매트릭스</div>
+          </div>
+          <div class="doc-download-btn">
+            <i data-lucide="download"></i> PDF 열기 / 다운로드
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <a href="#" class="brand-logo">
+          <img src="images/logo-icon.svg" alt="kanpic Logo Mark">
+          <span class="brand-text">kanpic</span>
+        </a>
+        <ul class="footer-links">
+          <li><a href="USER_GUIDE.html" target="_blank">온라인 사용자 가이드</a></li>
+          <li><a href="ADMIN_GUIDE.html" target="_blank">온라인 관리자 가이드</a></li>
+          <li><a href="https://github.com/hkjang/kanpic" target="_blank">GitHub Repository</a></li>
+        </ul>
+      </div>
+      <div class="copyright">
+        © 2026 kanpic Platform Core Team. Released under the MIT License. Built for Enterprise Closed-Network & AI Collaboration.
+      </div>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // Tab Switcher
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    // ROI Calculator Logic
+    function calculateROI() {
+      const users = parseInt(document.getElementById('user-count').value);
+      const servers = parseInt(document.getElementById('server-count').value);
+
+      document.getElementById('user-count-val').innerText = users.toLocaleString();
+      document.getElementById('server-count-val').innerText = servers.toLocaleString();
+
+      // SaaS license cost (~180,000 KRW / user / year) + Middleware ops cost (~3,000,000 KRW / server / year)
+      const saasSavings = users * 180000;
+      const infraSavings = servers * 3200000;
+      const totalSavings = saasSavings + infraSavings;
+
+      document.getElementById('savings-val').innerText = '₩ ' + totalSavings.toLocaleString();
+    }
+
+    // Initial calculation
+    calculateROI();
+  </script>
+</body>
+</html>
