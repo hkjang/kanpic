@@ -431,6 +431,8 @@ async function main() {
   await convertFile(path.join(docsDir, 'USER_GUIDE.md'), path.join(docsDir, 'USER_GUIDE.pdf'), '사용자 가이드 (User Guide)', path.join(artifactDir, 'user_guide_preview.png'));
   await convertFile(path.join(docsDir, 'ADMIN_GUIDE.md'), path.join(docsDir, 'ADMIN_GUIDE.pdf'), '관리자 가이드 (Admin Guide)', path.join(artifactDir, 'admin_guide_preview.png'));
   await convertFile(path.join(docsDir, 'EXECUTIVE_REPORT.md'), path.join(docsDir, 'EXECUTIVE_REPORT.pdf'), '임원 보고서 (Executive Report)', path.join(artifactDir, 'executive_report_preview.png'));
+  await convertFile(path.join(docsDir, 'ROADMAP_PLAN.md'), path.join(docsDir, 'ROADMAP_PLAN.pdf'), '단기·중기·장기 사업 및 기술 전략 로드맵', path.join(artifactDir, 'roadmap_plan_preview.png'));
+  await convertFile(path.join(docsDir, 'USER_GROUPS_ANALYSIS.md'), path.join(docsDir, 'USER_GROUPS_ANALYSIS.pdf'), '타겟 사용자 그룹 분석 및 유즈케이스 명세서', path.join(artifactDir, 'user_groups_preview.png'));
 }
 
 main().catch(err => {
