@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"kanpic/internal/workbook"
@@ -491,6 +492,116 @@ func TestFilterViewRESTAndMCPCRUDUseLatestCellsAndPersonalScopes(t *testing.T) {
 	request[map[string]any](t, server, http.MethodGet, "/api/v1/filter-views/"+mcpCreated.Result.Structured.ID, nil, http.StatusNotFound)
 	request[map[string]any](t, server, http.MethodDelete, "/api/v1/filter-views/"+view.ID, nil, http.StatusNoContent)
 	request[map[string]any](t, server, http.MethodGet, "/api/v1/filter-views/"+view.ID, nil, http.StatusNotFound)
+}
+
+func TestDataValidationRESTAndMCPCRUDEnforceWrites(t *testing.T) {
+	t.Parallel()
+	for name, scope := range map[string]string{
+		"spreadsheet.data_validation.list": "range.read", "spreadsheet.data_validation.get": "range.read", "spreadsheet.data_validation.evaluate": "range.read",
+		"spreadsheet.data_validation.create": "range.write", "spreadsheet.data_validation.update": "range.write", "spreadsheet.data_validation.delete": "range.write",
+	} {
+		tool, found := findMCPTool(name)
+		if !found || tool.Meta["required_scope"] != scope {
+			t.Fatalf("validation tool %s: %#v", name, tool)
+		}
+	}
+	createTool, _ := findMCPTool("spreadsheet.data_validation.create")
+	properties := createTool.InputSchema["properties"].(map[string]any)
+	options := properties["options"].(map[string]any)
+	optionProperties := options["items"].(map[string]any)["properties"].(map[string]any)
+	if properties["rule_type"] == nil || properties["display_style"] == nil || properties["reject_input"] == nil || optionProperties["color"] == nil {
+		t.Fatalf("validation MCP schema incomplete: %#v", createTool.InputSchema)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/sheets/s/data-validations", nil)); scope != "range.read" {
+		t.Fatalf("validation list scope=%q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/data-validations/id:evaluate", nil)); scope != "range.read" {
+		t.Fatalf("validation evaluation scope=%q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/data-validations/id", nil)); scope != "range.write" {
+		t.Fatalf("validation update scope=%q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "validation api"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	createBody := map[string]any{"idempotency_key": "rest-validation", "range": "A1:A3", "rule_type": "list", "options": []map[string]any{{"value": "open", "color": "#dcfce7"}, {"value": "closed", "color": "#fee2e2"}}, "display_style": "chip", "allow_blank": true, "reject_input": true, "show_dropdown": true}
+	rule := request[workbook.DataValidation](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/data-validations", createBody, http.StatusCreated)
+	duplicate := request[workbook.DataValidation](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/data-validations", map[string]any{"idempotency_key": "rest-validation", "range": "invalid", "rule_type": "invalid"}, http.StatusCreated)
+	if rule.ID == "" || duplicate.ID != rule.ID || rule.WorkbookVersion != 2 || rule.Options[0].Color != "#dcfce7" {
+		t.Fatalf("REST validation create=%#v duplicate=%#v", rule, duplicate)
+	}
+	listed := request[struct {
+		Items []workbook.DataValidation `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/data-validations", nil, http.StatusOK)
+	if len(listed.Items) != 1 || listed.Items[0].ID != rule.ID {
+		t.Fatalf("REST validation list=%#v", listed.Items)
+	}
+	request[workbook.DataValidation](t, server, http.MethodGet, "/api/v1/data-validations/"+rule.ID, nil, http.StatusOK)
+	failure := request[struct {
+		Error struct {
+			Code       string                         `json:"code"`
+			Violations []workbook.ValidationViolation `json:"violations"`
+		} `json:"error"`
+	}](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 2, "idempotency_key": "validation-reject", "cells": []map[string]any{{"row": 1, "column": 1, "value": "other"}}}, http.StatusUnprocessableEntity)
+	if failure.Error.Code != "validation_failed" || len(failure.Error.Violations) != 1 || failure.Error.Violations[0].ValidationID != rule.ID {
+		t.Fatalf("validation failure=%#v", failure)
+	}
+	reject := false
+	rule = request[workbook.DataValidation](t, server, http.MethodPatch, "/api/v1/data-validations/"+rule.ID, map[string]any{"reject_input": reject, "expected_revision": rule.Revision}, http.StatusOK)
+	written := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{"base_version": 3, "idempotency_key": "validation-warning", "cells": []map[string]any{{"row": 1, "column": 1, "value": "other"}}}, http.StatusOK)
+	if len(written.ValidationWarnings) != 1 {
+		t.Fatalf("validation warning=%#v", written)
+	}
+	evaluated := request[workbook.ValidationEvaluation](t, server, http.MethodPost, "/api/v1/data-validations/"+rule.ID+":evaluate", map[string]any{}, http.StatusOK)
+	if len(evaluated.InvalidCells) != 1 || evaluated.InvalidCells[0].Row != 1 {
+		t.Fatalf("REST validation evaluation=%#v", evaluated)
+	}
+	mcpCreated := request[struct {
+		Result struct {
+			Structured workbook.DataValidation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.create", "arguments": map[string]any{"sheet_id": sheetID, "idempotency_key": "mcp-validation", "range": "B1:B3", "rule_type": "number", "operator": "greater_or_equal", "value": 10}}}, http.StatusOK)
+	if mcpCreated.Result.Structured.ID == "" {
+		t.Fatalf("MCP validation create=%#v", mcpCreated)
+	}
+	mcpGet := request[struct {
+		Result struct {
+			Structured workbook.DataValidation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 22, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.get", "arguments": map[string]any{"validation_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.RuleType != "number" {
+		t.Fatalf("MCP validation get=%#v", mcpGet)
+	}
+	formula := "=B1>=5"
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.DataValidation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 23, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.update", "arguments": map[string]any{"validation_id": mcpCreated.Result.Structured.ID, "rule_type": "custom_formula", "operator": "custom", "formula": formula, "expected_revision": mcpCreated.Result.Structured.Revision}}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.RuleType != "custom_formula" || mcpUpdated.Result.Structured.Revision != 2 {
+		t.Fatalf("MCP validation update=%#v", mcpUpdated)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.DataValidation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 24, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 2 {
+		t.Fatalf("MCP validation list=%#v", mcpList)
+	}
+	mcpEvaluation := request[struct {
+		Result struct {
+			Structured workbook.ValidationEvaluation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 25, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.evaluate", "arguments": map[string]any{"validation_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	if mcpEvaluation.Result.Structured.ValidationID != mcpCreated.Result.Structured.ID {
+		t.Fatalf("MCP validation evaluate=%#v", mcpEvaluation)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 26, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.delete", "arguments": map[string]any{"validation_id": mcpCreated.Result.Structured.ID, "expected_revision": 2}}}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/data-validations/"+mcpCreated.Result.Structured.ID, nil, http.StatusNotFound)
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/data-validations/"+rule.ID+"?expected_revision="+strconv.FormatInt(rule.Revision, 10), nil, http.StatusNoContent)
 }
 
 func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {

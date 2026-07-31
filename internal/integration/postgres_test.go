@@ -430,6 +430,90 @@ func TestPostgresFilterViewsPersistActorIsolationActivationAndLatestEvaluation(t
 	}
 }
 
+func TestPostgresDataValidationPersistsAndEnforcesEveryWritePath(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres validations", WorkspaceID: "integration", OwnerID: "validation-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	created, err := repository.CreateDataValidation(ctx, sheetID, "alice", workbook.CreateDataValidationInput{IdempotencyKey: "validation-create", Range: "A1:A3", RuleType: "list", Options: []workbook.ValidationOption{{Value: json.RawMessage(`"open"`), Color: "#dcfce7"}, {Value: json.RawMessage(`"closed"`), Color: "#fee2e2"}}})
+	if err != nil || created.Revision != 1 || created.WorkbookVersion != 2 {
+		t.Fatalf("create validation=%#v err=%v", created, err)
+	}
+	duplicate, err := repository.CreateDataValidation(ctx, sheetID, "bob", workbook.CreateDataValidationInput{IdempotencyKey: "validation-create", Range: "invalid"})
+	if err != nil || duplicate.ID != created.ID || duplicate.WorkbookVersion != 2 {
+		t.Fatalf("idempotent validation=%#v err=%v", duplicate, err)
+	}
+	if _, err := repository.CreateDataValidation(ctx, sheetID, "alice", workbook.CreateDataValidationInput{IdempotencyKey: "validation-overlap", Range: "A3:B4", RuleType: "number", Operator: "greater_than", Value: json.RawMessage(`0`)}); !errors.Is(err, workbook.ErrInvalid) {
+		t.Fatalf("overlap error=%v", err)
+	}
+	items, err := repository.ListDataValidations(ctx, sheetID)
+	if err != nil || len(items) != 1 || items[0].ID != created.ID || items[0].Options[0].Color != "#dcfce7" {
+		t.Fatalf("list validations=%#v err=%v", items, err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "agent", BaseVersion: 2, IdempotencyKey: "validation-reject", OperationType: "cells.paste", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"other"`)}}}); !errors.Is(err, workbook.ErrValidation) {
+		t.Fatalf("invalid write error=%v", err)
+	}
+	if cells, err := repository.ReadAllCells(ctx, sheetID); err != nil || len(cells) != 0 {
+		t.Fatalf("rejected write persisted %#v err=%v", cells, err)
+	}
+	reject := false
+	expected := created.Revision
+	updated, err := repository.UpdateDataValidation(ctx, created.ID, "bob", workbook.UpdateDataValidationInput{RejectInput: &reject, ExpectedRevision: &expected})
+	if err != nil || updated.Revision != 2 || updated.WorkbookVersion != 3 || updated.UpdatedBy != "bob" {
+		t.Fatalf("update validation=%#v err=%v", updated, err)
+	}
+	accepted, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "agent", BaseVersion: 3, IdempotencyKey: "validation-warning", OperationType: "cells.fill", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"other"`)}}})
+	if err != nil || accepted.ServerVersion != 4 || len(accepted.ValidationWarnings) != 1 {
+		t.Fatalf("warning write=%#v err=%v", accepted, err)
+	}
+	retried, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "agent", BaseVersion: 3, IdempotencyKey: "validation-warning", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"open"`)}}})
+	if err != nil || !retried.Duplicate || len(retried.ValidationWarnings) != 1 {
+		t.Fatalf("warning retry=%#v err=%v", retried, err)
+	}
+	selected, _ := cellrange.Parse(updated.Range)
+	cells, _ := repository.ReadRange(ctx, sheetID, selected)
+	evaluated, err := workbook.EvaluateDataValidation(updated, cells)
+	if err != nil || len(evaluated.InvalidCells) != 1 || evaluated.InvalidCells[0].Row != 1 {
+		t.Fatalf("validation evaluation=%#v err=%v", evaluated, err)
+	}
+	saved, err := repository.CreateVersion(ctx, book.ID, "validation snapshot", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := int64(1)
+	if err := repository.DeleteDataValidation(ctx, created.ID, "alice", &stale); !errors.Is(err, workbook.ErrRevision) {
+		t.Fatalf("stale delete error=%v", err)
+	}
+	current := updated.Revision
+	if err := repository.DeleteDataValidation(ctx, created.ID, "alice", &current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetDataValidation(ctx, created.ID); !errors.Is(err, workbook.ErrNotFound) {
+		t.Fatalf("deleted validation error=%v", err)
+	}
+	if _, err := repository.RestoreVersion(ctx, saved.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.GetDataValidation(ctx, created.ID)
+	if err != nil || restored.Revision != updated.Revision || restored.Range != updated.Range || restored.Options[0].Color != "#dcfce7" {
+		t.Fatalf("restored validation=%#v err=%v", restored, err)
+	}
+}
+
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

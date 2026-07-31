@@ -17,6 +17,8 @@ var (
 	ErrInvalid       = errors.New("invalid input")
 	ErrVersionAhead  = errors.New("base version is newer than the server version")
 	ErrDuplicateName = errors.New("name already exists")
+	ErrValidation    = errors.New("data validation failed")
+	ErrRevision      = errors.New("revision conflict")
 )
 
 type Repository interface {
@@ -36,6 +38,11 @@ type Repository interface {
 	GetFilterView(context.Context, string, string) (FilterView, error)
 	UpdateFilterView(context.Context, string, string, UpdateFilterViewInput) (FilterView, error)
 	DeleteFilterView(context.Context, string, string) error
+	CreateDataValidation(context.Context, string, string, CreateDataValidationInput) (DataValidation, error)
+	ListDataValidations(context.Context, string) ([]DataValidation, error)
+	GetDataValidation(context.Context, string) (DataValidation, error)
+	UpdateDataValidation(context.Context, string, string, UpdateDataValidationInput) (DataValidation, error)
+	DeleteDataValidation(context.Context, string, string, *int64) error
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)

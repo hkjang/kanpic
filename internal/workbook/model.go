@@ -86,17 +86,100 @@ type CellFormulaError struct {
 }
 
 type MutationResult struct {
-	OperationID       string             `json:"operation_id"`
-	WorkbookID        string             `json:"workbook_id"`
-	SheetID           string             `json:"sheet_id"`
-	BaseVersion       int64              `json:"base_version"`
-	ServerVersion     int64              `json:"server_version"`
-	AppliedCells      int                `json:"applied_cells"`
-	RecalculatedCells []CellCoordinate   `json:"recalculated_cells"`
-	FormulaErrors     []CellFormulaError `json:"formula_errors"`
-	Duplicate         bool               `json:"duplicate"`
-	Conflicts         []CellConflict     `json:"conflicts"`
-	CreatedAt         time.Time          `json:"created_at"`
+	OperationID        string                `json:"operation_id"`
+	WorkbookID         string                `json:"workbook_id"`
+	SheetID            string                `json:"sheet_id"`
+	BaseVersion        int64                 `json:"base_version"`
+	ServerVersion      int64                 `json:"server_version"`
+	AppliedCells       int                   `json:"applied_cells"`
+	RecalculatedCells  []CellCoordinate      `json:"recalculated_cells"`
+	FormulaErrors      []CellFormulaError    `json:"formula_errors"`
+	ValidationWarnings []ValidationViolation `json:"validation_warnings"`
+	Duplicate          bool                  `json:"duplicate"`
+	Conflicts          []CellConflict        `json:"conflicts"`
+	CreatedAt          time.Time             `json:"created_at"`
+}
+
+type ValidationOption struct {
+	Value json.RawMessage `json:"value"`
+	Label string          `json:"label,omitempty"`
+	Color string          `json:"color,omitempty"`
+}
+
+// DataValidation is a shared, server-authoritative rule applied to one sheet
+// range. A cell may be covered by only one rule so browser, REST and MCP
+// clients always observe the same editing contract.
+type DataValidation struct {
+	ID              string             `json:"id"`
+	WorkbookID      string             `json:"workbook_id"`
+	WorkbookVersion int64              `json:"workbook_version"`
+	SheetID         string             `json:"sheet_id"`
+	CreateKey       string             `json:"-"`
+	Range           string             `json:"range"`
+	RuleType        string             `json:"rule_type"`
+	Operator        string             `json:"operator"`
+	Options         []ValidationOption `json:"options,omitempty"`
+	Value           json.RawMessage    `json:"value,omitempty"`
+	Value2          json.RawMessage    `json:"value2,omitempty"`
+	Formula         string             `json:"formula,omitempty"`
+	AllowBlank      bool               `json:"allow_blank"`
+	RejectInput     bool               `json:"reject_input"`
+	ShowDropdown    bool               `json:"show_dropdown"`
+	DisplayStyle    string             `json:"display_style"`
+	HelpText        string             `json:"help_text,omitempty"`
+	Revision        int64              `json:"revision"`
+	CreatedBy       string             `json:"created_by"`
+	UpdatedBy       string             `json:"updated_by"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
+type CreateDataValidationInput struct {
+	IdempotencyKey string             `json:"idempotency_key"`
+	Range          string             `json:"range"`
+	RuleType       string             `json:"rule_type"`
+	Operator       string             `json:"operator,omitempty"`
+	Options        []ValidationOption `json:"options,omitempty"`
+	Value          json.RawMessage    `json:"value,omitempty"`
+	Value2         json.RawMessage    `json:"value2,omitempty"`
+	Formula        string             `json:"formula,omitempty"`
+	AllowBlank     *bool              `json:"allow_blank,omitempty"`
+	RejectInput    *bool              `json:"reject_input,omitempty"`
+	ShowDropdown   *bool              `json:"show_dropdown,omitempty"`
+	DisplayStyle   string             `json:"display_style,omitempty"`
+	HelpText       string             `json:"help_text,omitempty"`
+}
+
+type UpdateDataValidationInput struct {
+	Range            *string             `json:"range,omitempty"`
+	RuleType         *string             `json:"rule_type,omitempty"`
+	Operator         *string             `json:"operator,omitempty"`
+	Options          *[]ValidationOption `json:"options,omitempty"`
+	Value            *json.RawMessage    `json:"value,omitempty"`
+	Value2           *json.RawMessage    `json:"value2,omitempty"`
+	Formula          *string             `json:"formula,omitempty"`
+	AllowBlank       *bool               `json:"allow_blank,omitempty"`
+	RejectInput      *bool               `json:"reject_input,omitempty"`
+	ShowDropdown     *bool               `json:"show_dropdown,omitempty"`
+	DisplayStyle     *string             `json:"display_style,omitempty"`
+	HelpText         *string             `json:"help_text,omitempty"`
+	ExpectedRevision *int64              `json:"expected_revision,omitempty"`
+}
+
+type ValidationViolation struct {
+	ValidationID string `json:"validation_id"`
+	Row          int    `json:"row"`
+	Column       int    `json:"column"`
+	Message      string `json:"message"`
+}
+
+type ValidationEvaluation struct {
+	ValidationID string                `json:"validation_id"`
+	Range        string                `json:"range"`
+	CheckedCells int                   `json:"checked_cells"`
+	ValidCells   int                   `json:"valid_cells"`
+	InvalidCells []ValidationViolation `json:"invalid_cells"`
+	Truncated    bool                  `json:"truncated"`
 }
 
 type Version struct {

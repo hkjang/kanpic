@@ -59,6 +59,12 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.filter_view.update", "필터 보기 정의나 활성 상태를 변경합니다.", "range.write", filterViewSchema(false)),
 	tool("spreadsheet.filter_view.delete", "현재 사용자의 필터 보기를 삭제합니다.", "range.write", requiredProps("filter_view_id", "string")),
 	tool("spreadsheet.filter_view.evaluate", "최신 서버 셀을 기준으로 숨길 행을 평가합니다.", "range.read", requiredProps("filter_view_id", "string")),
+	tool("spreadsheet.data_validation.list", "시트의 데이터 검증과 컬러 드롭다운 규칙을 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.data_validation.get", "데이터 검증 규칙과 revision을 조회합니다.", "range.read", requiredProps("validation_id", "string")),
+	tool("spreadsheet.data_validation.create", "목록·숫자·날짜·사용자 수식 검증 규칙을 멱등 생성합니다.", "range.write", dataValidationSchema(true)),
+	tool("spreadsheet.data_validation.update", "expected_revision으로 데이터 검증 규칙을 안전하게 변경합니다.", "range.write", dataValidationSchema(false)),
+	tool("spreadsheet.data_validation.delete", "데이터 검증 규칙을 삭제합니다.", "range.write", dataValidationDeleteSchema()),
+	tool("spreadsheet.data_validation.evaluate", "기존 범위 값을 데이터 검증 규칙으로 검사합니다.", "range.read", requiredProps("validation_id", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -288,6 +294,51 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return okResult(s.repository.DeleteFilterView(ctx, stringArg(args, "filter_view_id"), actor))
 	case "spreadsheet.filter_view.evaluate":
 		return s.applyFilterView(ctx, stringArg(args, "filter_view_id"), actor)
+	case "spreadsheet.data_validation.list":
+		return s.repository.ListDataValidations(ctx, stringArg(args, "sheet_id"))
+	case "spreadsheet.data_validation.get":
+		return s.repository.GetDataValidation(ctx, stringArg(args, "validation_id"))
+	case "spreadsheet.data_validation.create":
+		var input workbook.CreateDataValidationInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.CreateDataValidation(ctx, stringArg(args, "sheet_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.data_validation.update":
+		var input workbook.UpdateDataValidationInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.UpdateDataValidation(ctx, stringArg(args, "validation_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.data_validation.delete":
+		id := stringArg(args, "validation_id")
+		item, err := s.repository.GetDataValidation(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		var expected *int64
+		if value, found := args["expected_revision"]; found && value != nil {
+			revision, err := numberArg(args, "expected_revision")
+			if err != nil || revision < 1 {
+				return nil, fmt.Errorf("expected_revision must be a positive integer")
+			}
+			expected = &revision
+		}
+		if err := s.repository.DeleteDataValidation(ctx, id, actor, expected); err != nil {
+			return nil, err
+		}
+		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		return map[string]any{"ok": true}, nil
+	case "spreadsheet.data_validation.evaluate":
+		return s.applyDataValidation(ctx, stringArg(args, "validation_id"))
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -494,6 +545,35 @@ func filterViewSchema(create bool) map[string]any {
 		required = []string{"sheet_id", "idempotency_key", "name", "range"}
 	}
 	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func dataValidationSchema(create bool) map[string]any {
+	option := map[string]any{"type": "object", "properties": map[string]any{
+		"value": map[string]any{}, "label": map[string]any{"type": "string", "maxLength": 128}, "color": map[string]any{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+	}, "required": []string{"value"}}
+	properties := map[string]any{
+		"validation_id": map[string]any{"type": "string"}, "sheet_id": map[string]any{"type": "string"}, "idempotency_key": map[string]any{"type": "string", "minLength": 1},
+		"range": map[string]any{"type": "string"}, "rule_type": map[string]any{"type": "string", "enum": []string{"list", "number", "date", "custom_formula"}},
+		"operator": map[string]any{"type": "string", "enum": []string{"in_list", "between", "not_between", "equal", "not_equal", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "custom"}},
+		"options":  map[string]any{"type": "array", "minItems": 1, "maxItems": workbook.MaxValidationOptions, "items": option}, "value": map[string]any{}, "value2": map[string]any{},
+		"formula": map[string]any{"type": "string", "maxLength": 2000}, "allow_blank": map[string]any{"type": "boolean"}, "reject_input": map[string]any{"type": "boolean"},
+		"show_dropdown": map[string]any{"type": "boolean"}, "display_style": map[string]any{"type": "string", "enum": []string{"chip", "arrow", "plain"}}, "help_text": map[string]any{"type": "string", "maxLength": 500},
+		"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}
+	required := []string{"validation_id"}
+	if create {
+		delete(properties, "validation_id")
+		delete(properties, "expected_revision")
+		required = []string{"sheet_id", "idempotency_key", "range", "rule_type"}
+	} else {
+		delete(properties, "sheet_id")
+		delete(properties, "idempotency_key")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func dataValidationDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"validation_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"validation_id"}}
 }
 func findMCPTool(name string) (mcpTool, bool) {
 	for _, item := range mcpTools {

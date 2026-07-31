@@ -28,10 +28,11 @@ type operation struct {
 }
 
 type snapshot struct {
-	version  Version
-	workbook Workbook
-	sheets   map[string]Sheet
-	cells    map[string]map[cellKey]Cell
+	version     Version
+	workbook    Workbook
+	sheets      map[string]Sheet
+	cells       map[string]map[cellKey]Cell
+	validations map[string]DataValidation
 }
 
 type workbookState struct {
@@ -44,21 +45,23 @@ type workbookState struct {
 }
 
 type MemoryRepository struct {
-	mu        sync.RWMutex
-	workbooks map[string]*workbookState
-	sheetToWB map[string]string
-	now       func() time.Time
-	imports   map[string]string
-	filters   map[string]FilterView
+	mu          sync.RWMutex
+	workbooks   map[string]*workbookState
+	sheetToWB   map[string]string
+	now         func() time.Time
+	imports     map[string]string
+	filters     map[string]FilterView
+	validations map[string]DataValidation
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		workbooks: make(map[string]*workbookState),
-		sheetToWB: make(map[string]string),
-		now:       func() time.Time { return time.Now().UTC() },
-		imports:   make(map[string]string),
-		filters:   make(map[string]FilterView),
+		workbooks:   make(map[string]*workbookState),
+		sheetToWB:   make(map[string]string),
+		now:         func() time.Time { return time.Now().UTC() },
+		imports:     make(map[string]string),
+		filters:     make(map[string]FilterView),
+		validations: make(map[string]DataValidation),
 	}
 }
 
@@ -196,12 +199,14 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 	}
 	copyWorkbook := Workbook{ID: identity.New(), WorkspaceID: source.workbook.WorkspaceID, Title: title, OwnerID: ownerID, Version: 1, CreatedAt: now, UpdatedAt: now}
 	copyState := &workbookState{workbook: copyWorkbook, sheets: make(map[string]Sheet, len(source.sheets)), cells: make(map[string]map[cellKey]Cell, len(source.cells)), idempotent: make(map[string]MutationResult)}
+	sheetIDs := make(map[string]string, len(source.sheets))
 	for _, sourceSheet := range source.sheets {
 		copySheet := sourceSheet
 		copySheet.ID = identity.New()
 		copySheet.WorkbookID = copyWorkbook.ID
 		copySheet.CreatedAt = now
 		copyState.sheets[copySheet.ID] = copySheet
+		sheetIDs[sourceSheet.ID] = copySheet.ID
 		copyState.cells[copySheet.ID] = make(map[cellKey]Cell, len(source.cells[sourceSheet.ID]))
 		for coordinate, sourceCell := range source.cells[sourceSheet.ID] {
 			copyCell := cloneCell(sourceCell)
@@ -210,6 +215,24 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 			copyState.cells[copySheet.ID][coordinate] = copyCell
 		}
 		r.sheetToWB[copySheet.ID] = copyWorkbook.ID
+	}
+	for _, sourceRule := range r.validations {
+		copySheetID, found := sheetIDs[sourceRule.SheetID]
+		if !found {
+			continue
+		}
+		copyRule := cloneDataValidation(sourceRule)
+		copyRule.ID = identity.New()
+		copyRule.WorkbookID = copyWorkbook.ID
+		copyRule.WorkbookVersion = 1
+		copyRule.SheetID = copySheetID
+		copyRule.CreateKey = "copy:" + copyRule.ID
+		copyRule.Revision = 1
+		copyRule.CreatedBy = ownerID
+		copyRule.UpdatedBy = ownerID
+		copyRule.CreatedAt = now
+		copyRule.UpdatedAt = now
+		r.validations[copyRule.ID] = copyRule
 	}
 	r.workbooks[copyWorkbook.ID] = copyState
 	return r.workbookWithSheets(copyState), nil
@@ -254,6 +277,11 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 		for filterID, view := range r.filters {
 			if view.SheetID == sheetID {
 				delete(r.filters, filterID)
+			}
+		}
+		for validationID, rule := range r.validations {
+			if rule.SheetID == sheetID {
+				delete(r.validations, validationID)
 			}
 		}
 		delete(r.sheetToWB, sheetID)
@@ -312,6 +340,20 @@ func (r *MemoryRepository) DuplicateSheet(_ context.Context, sheetID string, inp
 		cell.SheetID = duplicated.ID
 		cell.UpdatedAt = now
 		state.cells[duplicated.ID][key] = cell
+	}
+	for _, sourceRule := range r.validations {
+		if sourceRule.SheetID != source.ID {
+			continue
+		}
+		copyRule := cloneDataValidation(sourceRule)
+		copyRule.ID = identity.New()
+		copyRule.WorkbookID = source.WorkbookID
+		copyRule.SheetID = duplicated.ID
+		copyRule.CreateKey = "copy:" + copyRule.ID
+		copyRule.Revision = 1
+		copyRule.CreatedAt = now
+		copyRule.UpdatedAt = now
+		r.validations[copyRule.ID] = copyRule
 	}
 	r.sheetToWB[duplicated.ID] = source.WorkbookID
 	r.bump(state)
@@ -385,6 +427,11 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	for filterID, view := range r.filters {
 		if view.SheetID == sheetID {
 			delete(r.filters, filterID)
+		}
+	}
+	for validationID, rule := range r.validations {
+		if rule.SheetID == sheetID {
+			delete(r.validations, validationID)
 		}
 	}
 	delete(r.sheetToWB, sheetID)
@@ -469,10 +516,15 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	var expanded []CellInput
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
+	var validationWarnings []ValidationViolation
 	if len(mutation.StylePatch) > 0 {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
 		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.cells[mutation.SheetID], effective)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		validationWarnings, err = ValidateCellInputs(r.dataValidationsForSheetLocked(mutation.SheetID), state.cells[mutation.SheetID], expanded, effective)
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -494,7 +546,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, Conflicts: conflicts, CreatedAt: now}
 	operationType := mutation.OperationType
 	if operationType == "" {
 		operationType = "cells.batch"
@@ -582,7 +634,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), validations: cloneValidationsForSheets(r.validations, state.sheets)})
 	return version, nil
 }
 
@@ -610,7 +662,7 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			base := state.workbook.Version
 			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
-			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells)})
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), validations: cloneValidationsForSheets(r.validations, state.sheets)})
 			for sheetID := range state.sheets {
 				delete(r.sheetToWB, sheetID)
 			}
@@ -618,6 +670,14 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			state.workbook.Favorite = snap.workbook.Favorite
 			state.sheets = cloneSheets(snap.sheets)
 			state.cells = cloneAllCells(snap.cells)
+			for validationID, rule := range r.validations {
+				if rule.WorkbookID == state.workbook.ID {
+					delete(r.validations, validationID)
+				}
+			}
+			for validationID, rule := range snap.validations {
+				r.validations[validationID] = cloneDataValidation(rule)
+			}
 			for sheetID := range state.sheets {
 				r.sheetToWB[sheetID] = state.workbook.ID
 			}
@@ -634,6 +694,16 @@ func cloneSheets(source map[string]Sheet) map[string]Sheet {
 	result := make(map[string]Sheet, len(source))
 	for id, sheet := range source {
 		result[id] = sheet
+	}
+	return result
+}
+
+func cloneValidationsForSheets(source map[string]DataValidation, sheets map[string]Sheet) map[string]DataValidation {
+	result := make(map[string]DataValidation)
+	for id, rule := range source {
+		if _, found := sheets[rule.SheetID]; found {
+			result[id] = cloneDataValidation(rule)
+		}
 	}
 	return result
 }

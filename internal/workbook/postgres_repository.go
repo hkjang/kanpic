@@ -31,14 +31,15 @@ type sheetProperties struct {
 }
 
 type operationDocument struct {
-	Before            map[string]Cell    `json:"before,omitempty"`
-	After             map[string]Cell    `json:"after,omitempty"`
-	SubmittedCells    []CellCoordinate   `json:"submitted_cells,omitempty"`
-	Conflicts         []CellConflict     `json:"conflicts,omitempty"`
-	AppliedCells      int                `json:"applied_cells"`
-	RecalculatedCells []CellCoordinate   `json:"recalculated_cells,omitempty"`
-	FormulaErrors     []CellFormulaError `json:"formula_errors,omitempty"`
-	UndoOfOperationID string             `json:"undo_of_operation_id,omitempty"`
+	Before             map[string]Cell       `json:"before,omitempty"`
+	After              map[string]Cell       `json:"after,omitempty"`
+	SubmittedCells     []CellCoordinate      `json:"submitted_cells,omitempty"`
+	Conflicts          []CellConflict        `json:"conflicts,omitempty"`
+	AppliedCells       int                   `json:"applied_cells"`
+	RecalculatedCells  []CellCoordinate      `json:"recalculated_cells,omitempty"`
+	FormulaErrors      []CellFormulaError    `json:"formula_errors,omitempty"`
+	ValidationWarnings []ValidationViolation `json:"validation_warnings,omitempty"`
+	UndoOfOperationID  string                `json:"undo_of_operation_id,omitempty"`
 }
 
 type snapshotBlock struct {
@@ -66,6 +67,7 @@ type snapshotDocument struct {
 	Workbook      snapshotWorkbook `json:"workbook,omitempty"`
 	Sheets        []snapshotSheet  `json:"sheets,omitempty"`
 	Blocks        []snapshotBlock  `json:"blocks"`
+	Validations   []DataValidation `json:"validations,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -382,6 +384,43 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 			return Workbook{}, err
 		}
 	}
+	rows, err = tx.Query(ctx, `SELECT `+validationColumns+` FROM data_validations d JOIN sheets s ON s.id=d.sheet_id JOIN workbooks w ON w.id=s.workbook_id WHERE w.id=$1 ORDER BY d.created_at,d.id`, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	copiedValidations := make([]DataValidation, 0)
+	for rows.Next() {
+		rule, err := scanDataValidation(rows)
+		if err != nil {
+			rows.Close()
+			return Workbook{}, err
+		}
+		copiedValidations = append(copiedValidations, rule)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Workbook{}, err
+	}
+	rows.Close()
+	for _, sourceRule := range copiedValidations {
+		destinationSheetID, found := sheetIDs[sourceRule.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: data validation references an unknown sheet", ErrInvalid)
+		}
+		sourceRule.ID = identity.New()
+		sourceRule.WorkbookID = duplicated.ID
+		sourceRule.WorkbookVersion = 1
+		sourceRule.SheetID = destinationSheetID
+		sourceRule.CreateKey = "copy:" + sourceRule.ID
+		sourceRule.Revision = 1
+		sourceRule.CreatedBy = ownerID
+		sourceRule.UpdatedBy = ownerID
+		sourceRule.CreatedAt = now
+		sourceRule.UpdatedAt = now
+		if err := insertDataValidationTx(ctx, tx, sourceRule); err != nil {
+			return Workbook{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Workbook{}, err
 	}
@@ -579,6 +618,35 @@ func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string,
 		}
 		data, _ := json.Marshal(payload)
 		if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, duplicated.ID, block.row, block.column, data, now); err != nil {
+			return Sheet{}, err
+		}
+	}
+	validationRows, err := tx.Query(ctx, `SELECT `+validationColumns+` FROM data_validations d JOIN sheets s ON s.id=d.sheet_id JOIN workbooks w ON w.id=s.workbook_id WHERE d.sheet_id=$1 ORDER BY d.created_at,d.id`, source.ID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	validations := make([]DataValidation, 0)
+	for validationRows.Next() {
+		rule, err := scanDataValidation(validationRows)
+		if err != nil {
+			validationRows.Close()
+			return Sheet{}, err
+		}
+		validations = append(validations, rule)
+	}
+	if err := validationRows.Err(); err != nil {
+		validationRows.Close()
+		return Sheet{}, err
+	}
+	validationRows.Close()
+	for _, rule := range validations {
+		rule.ID = identity.New()
+		rule.SheetID = duplicated.ID
+		rule.CreateKey = "copy:" + rule.ID
+		rule.Revision = 1
+		rule.CreatedAt = now
+		rule.UpdatedAt = now
+		if err := insertDataValidationTx(ctx, tx, rule); err != nil {
 			return Sheet{}, err
 		}
 	}
@@ -829,10 +897,19 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	var expanded []CellInput
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
+	var validationWarnings []ValidationViolation
 	if len(mutation.StylePatch) > 0 {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
 		expanded, recalculated, formulaErrors, err = recalculateCellInputs(existing, effective)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		rules, err := listDataValidationsTx(ctx, tx, mutation.SheetID)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		validationWarnings, err = ValidateCellInputs(rules, existing, expanded, effective)
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -876,12 +953,12 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, Conflicts: conflicts, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, Conflicts: conflicts, CreatedAt: now}
 	operationType := mutation.OperationType
 	if operationType == "" {
 		operationType = "cells.batch"
 	}
-	document, _ := json.Marshal(operationDocument{Before: before, After: after, SubmittedCells: submittedCoordinates(effective), Conflicts: conflicts, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, UndoOfOperationID: mutation.UndoOfOperationID})
+	document, _ := json.Marshal(operationDocument{Before: before, After: after, SubmittedCells: submittedCoordinates(effective), Conflicts: conflicts, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, UndoOfOperationID: mutation.UndoOfOperationID})
 	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, operationType, document, now)
 	if err != nil {
 		return MutationResult{}, mapPostgresError(err)
@@ -1007,7 +1084,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 2, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0)}
+	document := snapshotDocument{SchemaVersion: 3, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Validations: make([]DataValidation, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1043,6 +1120,22 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 			return snapshotDocument{}, err
 		}
 		document.Blocks = append(document.Blocks, block)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return snapshotDocument{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT `+validationColumns+` FROM data_validations d JOIN sheets s ON s.id=d.sheet_id JOIN workbooks w ON w.id=s.workbook_id WHERE w.id=$1 ORDER BY d.created_at,d.id`, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	for rows.Next() {
+		rule, err := scanDataValidation(rows)
+		if err != nil {
+			rows.Close()
+			return snapshotDocument{}, err
+		}
+		document.Validations = append(document.Validations, rule)
 	}
 	rows.Close()
 	return document, rows.Err()
@@ -1123,6 +1216,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 	if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks USING sheets WHERE cell_blocks.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM data_validations USING sheets WHERE data_validations.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
+		return MutationResult{}, err
+	}
 	now := r.now()
 	desiredSheetIDs := make(map[string]struct{})
 	if snapshot.SchemaVersion >= 2 {
@@ -1197,6 +1293,34 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			return MutationResult{}, err
 		}
 	}
+	if snapshot.SchemaVersion >= 3 {
+		for _, rule := range snapshot.Validations {
+			if _, found := desiredSheetIDs[rule.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a validation for an unknown sheet", ErrInvalid)
+			}
+			normalized, _, err := NormalizeDataValidation(rule)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.CreateKey = "restore:" + normalized.ID
+			normalized.WorkbookID = workbookID
+			normalized.WorkbookVersion = base + 1
+			if normalized.Revision < 1 {
+				normalized.Revision = 1
+			}
+			if normalized.CreatedBy == "" {
+				normalized.CreatedBy = actorID
+			}
+			normalized.UpdatedBy = actorID
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			normalized.UpdatedAt = now
+			if err := insertDataValidationTx(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
 	serverVersion := base + 1
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
@@ -1251,6 +1375,7 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 	result.AppliedCells = document.AppliedCells
 	result.RecalculatedCells = document.RecalculatedCells
 	result.FormulaErrors = document.FormulaErrors
+	result.ValidationWarnings = document.ValidationWarnings
 	result.Conflicts = document.Conflicts
 	return result, true, nil
 }

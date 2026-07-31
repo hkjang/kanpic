@@ -76,6 +76,12 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/filter-views/{filterViewId}", s.updateFilterView)
 	mux.HandleFunc("DELETE /api/v1/filter-views/{filterViewId}", s.deleteFilterView)
 	mux.HandleFunc("POST /api/v1/filter-views/{filterAction}", s.evaluateFilterView)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/data-validations", s.listDataValidations)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/data-validations", s.createDataValidation)
+	mux.HandleFunc("GET /api/v1/data-validations/{validationId}", s.getDataValidation)
+	mux.HandleFunc("PATCH /api/v1/data-validations/{validationId}", s.updateDataValidation)
+	mux.HandleFunc("DELETE /api/v1/data-validations/{validationId}", s.deleteDataValidation)
+	mux.HandleFunc("POST /api/v1/data-validations/{validationAction}", s.evaluateDataValidation)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
 	// net/http wildcards cannot contain a literal suffix. The action-form API
@@ -627,6 +633,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	var validationFailure *workbook.ValidationFailure
+	if errors.As(err, &validationFailure) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": map[string]any{"code": "validation_failed", "message": validationFailure.Error(), "trace_id": w.Header().Get("X-Trace-ID"), "violations": validationFailure.Violations}})
+		return
+	}
 	status, code, message := http.StatusInternalServerError, "internal_error", "요청을 처리하지 못했습니다."
 	switch {
 	case errors.Is(err, workbook.ErrNotFound):
@@ -637,6 +648,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code, message = http.StatusConflict, "duplicate_name", "같은 이름이 이미 존재합니다."
 	case errors.Is(err, workbook.ErrVersionAhead):
 		status, code, message = http.StatusConflict, "invalid_base_version", "클라이언트 버전이 서버보다 최신입니다. 다시 동기화하세요."
+	case errors.Is(err, workbook.ErrRevision):
+		status, code, message = http.StatusConflict, "revision_conflict", "다른 사용자가 규칙을 변경했습니다. 다시 불러오세요."
 	default:
 		s.logger.Error("request failed", "error", err, "path", r.URL.Path)
 	}
@@ -723,6 +736,15 @@ func requiredScope(r *http.Request) string {
 		return "range.read"
 	}
 	if strings.Contains(path, "/filter-views") {
+		if r.Method == http.MethodGet {
+			return "range.read"
+		}
+		return "range.write"
+	}
+	if strings.Contains(path, "/data-validations/") && strings.HasSuffix(path, ":evaluate") {
+		return "range.read"
+	}
+	if strings.Contains(path, "/data-validations") {
 		if r.Method == http.MethodGet {
 			return "range.read"
 		}

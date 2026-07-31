@@ -54,7 +54,11 @@ export async function flushOutbox(onApplied?: (operation:OutboxOperation, result
       const path=rangeAction?`/api/v1/sheets/${item.sheetId}/ranges:${item.endpoint}`:`/api/v1/sheets/${item.sheetId}/cells:${action}`
       const response = await fetch(path, { method:'PATCH', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item.body) })
       if (!response.ok) {
-        if (response.status >= 400 && response.status < 500 && response.status !== 409) await remove(item.id)
+        if (response.status >= 400 && response.status < 500 && response.status !== 409) {
+          const payload=await response.json().catch(()=>null) as {error?:{code?:string;message?:string}}|null
+          await remove(item.id)
+          window.dispatchEvent(new CustomEvent('kanpic:outbox-rejected',{detail:{operation:item,status:response.status,code:payload?.error?.code??'request_rejected',message:payload?.error?.message??`요청 실패 (${response.status})`}}))
+        }
         break
       }
       const result = await response.json()

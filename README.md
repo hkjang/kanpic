@@ -1,4 +1,4 @@
-# kanpic
+# <img src="web/public/logo-icon.svg" alt="kanpic logo" width="36" height="36" align="absmiddle" /> kanpic
 
 kanpic은 온프레미스와 폐쇄망을 우선 지원하는 웹 기반 AI 스프레드시트 및 데이터 협업 플랫폼입니다. 초기 버전은 Go 모듈형 모놀리스, React Canvas 편집기, PostgreSQL 서버 권위 저장소로 구성되며 Redis 없이 실행됩니다.
 

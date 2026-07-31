@@ -330,6 +330,68 @@ test('persists personal filter views and compresses filtered canvas rows', async
   await expect(page.locator('.name-box')).toHaveText('A3')
 })
 
+test('creates colored dropdown validation and rejects invalid writes', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowDown');await page.keyboard.press('Shift+ArrowDown')
+  await expect(page.locator('.name-box')).toHaveText('A1:A3')
+
+  await page.getByRole('button',{name:'데이터 검증'}).click()
+  await expect(page.getByRole('dialog',{name:'데이터 검증'})).toBeVisible()
+  await page.getByLabel('목록 항목 1 값').fill('open')
+  await page.getByLabel('목록 항목 1 라벨').fill('Open')
+  await page.getByLabel('목록 항목 1 색상').fill('#dcfce7')
+  await page.getByRole('button',{name:/항목 추가/}).click()
+  await page.getByLabel('목록 항목 2 값').fill('closed')
+  await page.getByLabel('목록 항목 2 라벨').fill('Closed')
+  await page.getByLabel('목록 항목 2 색상').fill('#fee2e2')
+  await page.getByLabel('검증 도움말').fill('상태 목록에서 선택하세요.')
+  await page.getByRole('button',{name:'규칙 저장'}).click()
+  const rules=async()=>page.request.get(`/api/v1/sheets/${sheetId}/data-validations`).then(response=>response.json())
+  await expect.poll(async()=>{const result=await rules();return result.items[0]?.range}).toBe('A1:A3')
+  const rule=(await rules()).items[0]
+  expect(rule.options.map((option:{value:string;color:string})=>[option.value,option.color])).toEqual([['open','#dcfce7'],['closed','#fee2e2']])
+  await page.getByRole('button',{name:'기존 데이터 검사'}).click()
+  await expect(page.getByText('검사 3셀 · 정상 3셀 · 오류 0셀')).toBeVisible()
+  await page.getByRole('button',{name:'데이터 검증 닫기'}).click()
+
+  await canvas.click({position:{x:70,y:42}})
+  await page.locator('.cell-dropdown-trigger').click()
+  await page.getByRole('option',{name:'드롭다운 값 Open'}).click()
+  const valueAt=async(row:number)=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A${row}`).then(response=>response.json()).then(body=>body.items[0]?.value)
+  await expect.poll(()=>valueAt(1)).toBe('open')
+  await canvas.click({position:{x:70,y:69}})
+  await page.locator('.cell-dropdown-trigger').click()
+  await page.getByRole('option',{name:'드롭다운 값 Closed'}).click()
+  await expect.poll(()=>valueAt(2)).toBe('closed')
+
+  const latest=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const rejected=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:latest.version,idempotency_key:`validation-invalid-${workbookId}`,cells:[{row:3,column:1,value:'invalid'}]}})
+  expect(rejected.status()).toBe(422)
+  const rejection=await rejected.json();expect(rejection.error.code).toBe('validation_failed');expect(rejection.error.violations[0].validation_id).toBe(rule.id)
+  expect(await valueAt(3)).toBeUndefined()
+
+  await canvas.click({position:{x:70,y:96}})
+  page.once('dialog',dialog=>{expect(dialog.message()).toContain('상태 목록에서 선택하세요.');dialog.accept()})
+  await page.locator('.grid-viewport').evaluate(element=>{const data=new DataTransfer();data.setData('text/plain','invalid');element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})
+  await expect.poll(()=>valueAt(3)).toBeUndefined()
+
+  await page.reload();await expect(canvas).toBeVisible()
+  await canvas.click({position:{x:70,y:42}})
+  await expect(page.locator('.cell-dropdown-trigger')).toBeVisible()
+  await page.getByRole('button',{name:'데이터 검증'}).click()
+  await page.locator('.validation-layout>aside button').nth(1).click()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('button',{name:'삭제'}).click()
+  await expect.poll(async()=>(await rules()).items).toEqual([])
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()
