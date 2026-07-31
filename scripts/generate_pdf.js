@@ -3,20 +3,31 @@ const path = require('path');
 const { chromium } = require(path.join(__dirname, '../web/node_modules/playwright-core'));
 
 function mdToHtml(md) {
-  let html = md;
+  const placeholders = [];
 
-  // Mermaid diagrams
-  html = html.replace(/```mermaid\n([\s\S]*?)```/g, (match, content) => {
-    return `<div class="mermaid-container"><div class="mermaid">${content.trim()}</div></div>`;
+  function addPlaceholder(htmlSnippet) {
+    const id = `___PLACEHOLDER_${placeholders.length}___`;
+    placeholders.push({ id, htmlSnippet });
+    return id;
+  }
+
+  let text = md;
+
+  // 1. Extract Mermaid blocks
+  text = text.replace(/```mermaid\s*\n([\s\S]*?)```/g, (match, code) => {
+    const div = `<div class="mermaid-container"><div class="mermaid">\n${code.trim()}\n</div></div>`;
+    return addPlaceholder(div);
   });
 
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`;
+  // 2. Extract Code blocks
+  text = text.replace(/```(\w*)\s*\n([\s\S]*?)```/g, (match, lang, code) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const pre = `<pre><code class="language-${lang}">${escaped}</code></pre>`;
+    return addPlaceholder(pre);
   });
 
-  // Callouts > [!NOTE], > [!TIP], > [!WARNING]
-  html = html.replace(/^>\s*\[\!(NOTE|TIP|WARNING|IMPORTANT|CAUTION)\]\s*\n((?:^>.*$\n?)+)/gim, (match, type, body) => {
+  // 3. Extract Callouts (> [!NOTE], etc.)
+  text = text.replace(/^>\s*\[\!(NOTE|TIP|WARNING|IMPORTANT|CAUTION)\]\s*\n((?:^>.*$\n?)+)/gim, (match, type, body) => {
     const cleanBody = body.replace(/^>\s?/gm, '').trim();
     const typeClass = type.toLowerCase();
     const titles = {
@@ -26,17 +37,15 @@ function mdToHtml(md) {
       important: '중요 (Important)',
       caution: '주의 (Caution)'
     };
-    return `<div class="callout callout-${typeClass}">
+    const div = `<div class="callout callout-${typeClass}">
       <div class="callout-title">${titles[typeClass] || type}</div>
       <div class="callout-content">${cleanBody}</div>
     </div>`;
+    return addPlaceholder(div);
   });
 
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Tables
-  const lines = html.split('\n');
+  // 4. Extract Tables
+  const lines = text.split('\n');
   let inTable = false;
   let tableBuffer = [];
   let newLines = [];
@@ -52,7 +61,8 @@ function mdToHtml(md) {
       }
     } else {
       if (inTable) {
-        newLines.push(renderTable(tableBuffer));
+        const tableHtml = renderTable(tableBuffer);
+        newLines.push(addPlaceholder(tableHtml));
         inTable = false;
         tableBuffer = [];
       }
@@ -60,40 +70,40 @@ function mdToHtml(md) {
     }
   }
   if (inTable) {
-    newLines.push(renderTable(tableBuffer));
+    const tableHtml = renderTable(tableBuffer);
+    newLines.push(addPlaceholder(tableHtml));
   }
-  html = newLines.join('\n');
+  text = newLines.join('\n');
 
-  // Headings
-  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  // 5. Inline formatting & Headings
+  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+  text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  text = text.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
+  text = text.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
+  text = text.replace(/^\s*\d+\.\s+(.*$)/gim, '<li>$1</li>');
+  text = text.replace(/^---$/gim, '<hr>');
 
-  // Bold & Italic
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-  // Lists
-  html = html.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
-  html = html.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
-
-  // Ordered lists
-  html = html.replace(/^\s*\d+\.\s+(.*$)/gim, '<li>$1</li>');
-
-  // Horizontal rule
-  html = html.replace(/^---$/gim, '<hr>');
-
-  // Paragraphs
-  const blocks = html.split(/\n\n+/);
-  html = blocks.map(block => {
+  // 6. Paragraph splitting
+  const blocks = text.split(/\n\n+/);
+  text = blocks.map(block => {
     block = block.trim();
-    if (block.startsWith('<h') || block.startsWith('<pre') || block.startsWith('<ul') || block.startsWith('<ol') || block.startsWith('<table') || block.startsWith('<hr') || block.startsWith('<div')) {
+    if (!block) return '';
+    if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') || block.startsWith('<hr') || block.startsWith('___PLACEHOLDER_')) {
       return block;
     }
     return `<p>${block}</p>`;
-  }).join('\n\n');
+  }).filter(Boolean).join('\n\n');
 
-  return html;
+  // 7. Restore placeholders
+  placeholders.forEach(({ id, htmlSnippet }) => {
+    text = text.replace(id, htmlSnippet);
+  });
+
+  return text;
 }
 
 function renderTable(rows) {
@@ -118,7 +128,7 @@ function renderTable(rows) {
   return html;
 }
 
-async function convertFile(mdPath, pdfPath, title) {
+async function convertFile(mdPath, pdfPath, title, screenshotPath = null) {
   const mdContent = fs.readFileSync(mdPath, 'utf8');
   const bodyHtml = mdToHtml(mdContent);
 
@@ -295,7 +305,7 @@ async function convertFile(mdPath, pdfPath, title) {
       display: flex;
       justify-content: center;
       margin: 18px 0;
-      padding: 14px;
+      padding: 16px;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
@@ -320,8 +330,9 @@ async function convertFile(mdPath, pdfPath, title) {
 
   <script>
     mermaid.initialize({
-      startOnLoad: true,
+      startOnLoad: false,
       theme: 'neutral',
+      securityLevel: 'loose',
       fontFamily: 'Pretendard, sans-serif'
     });
   </script>
@@ -330,14 +341,33 @@ async function convertFile(mdPath, pdfPath, title) {
   `;
 
   const browser = await chromium.launch();
-  const page = await browser.newPage();
+  const page = await browser.newPage({ viewport: { width: 1000, height: 1400 } });
+  
+  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+  page.on('pageerror', err => console.log('PAGE ERROR:', err));
+
   await page.setContent(fullHtml, { waitUntil: 'networkidle' });
 
-  // Wait for mermaid rendering to finish
+  // Run mermaid explicitly in page context
+  await page.evaluate(async () => {
+    if (window.mermaid) {
+      await window.mermaid.run();
+    }
+  });
+
+  // Wait until all .mermaid divs contain <svg>
   try {
-    await page.waitForSelector('.mermaid svg', { timeout: 4000 });
+    await page.waitForFunction(() => {
+      const mermaids = document.querySelectorAll('.mermaid');
+      if (mermaids.length === 0) return true;
+      return Array.from(mermaids).every(m => m.querySelector('svg') !== null);
+    }, { timeout: 8000 });
   } catch (e) {
-    // If no mermaid diagrams, ignore timeout
+    console.warn('Warning: Some mermaid diagrams may not have rendered SVG:', e.message);
+  }
+
+  if (screenshotPath) {
+    await page.screenshot({ path: screenshotPath, fullPage: true });
   }
 
   await page.pdf({
@@ -359,9 +389,11 @@ async function convertFile(mdPath, pdfPath, title) {
 
 async function main() {
   const docsDir = path.join(__dirname, '../docs');
-  await convertFile(path.join(docsDir, 'USER_GUIDE.md'), path.join(docsDir, 'USER_GUIDE.pdf'), '사용자 가이드 (User Guide)');
-  await convertFile(path.join(docsDir, 'ADMIN_GUIDE.md'), path.join(docsDir, 'ADMIN_GUIDE.pdf'), '관리자 가이드 (Admin Guide)');
-  await convertFile(path.join(docsDir, 'EXECUTIVE_REPORT.md'), path.join(docsDir, 'EXECUTIVE_REPORT.pdf'), '임원 보고서 (Executive Report)');
+  const artifactDir = '/home/gaga/.gemini/antigravity-cli/brain/32ad408d-1ecc-4757-9010-f97145ba4320';
+
+  await convertFile(path.join(docsDir, 'USER_GUIDE.md'), path.join(docsDir, 'USER_GUIDE.pdf'), '사용자 가이드 (User Guide)', path.join(artifactDir, 'user_guide_preview.png'));
+  await convertFile(path.join(docsDir, 'ADMIN_GUIDE.md'), path.join(docsDir, 'ADMIN_GUIDE.pdf'), '관리자 가이드 (Admin Guide)', path.join(artifactDir, 'admin_guide_preview.png'));
+  await convertFile(path.join(docsDir, 'EXECUTIVE_REPORT.md'), path.join(docsDir, 'EXECUTIVE_REPORT.pdf'), '임원 보고서 (Executive Report)', path.join(artifactDir, 'executive_report_preview.png'));
 }
 
 main().catch(err => {
