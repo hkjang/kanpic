@@ -51,25 +51,29 @@ type workbookState struct {
 }
 
 type MemoryRepository struct {
-	mu          sync.RWMutex
-	workbooks   map[string]*workbookState
-	sheetToWB   map[string]string
-	now         func() time.Time
-	imports     map[string]string
-	filters     map[string]FilterView
-	validations map[string]DataValidation
-	namedRanges map[string]NamedRange
+	mu            sync.RWMutex
+	workbooks     map[string]*workbookState
+	sheetToWB     map[string]string
+	now           func() time.Time
+	imports       map[string]string
+	filters       map[string]FilterView
+	validations   map[string]DataValidation
+	namedRanges   map[string]NamedRange
+	comments      map[string]CommentThread
+	notifications map[string]MentionNotification
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		workbooks:   make(map[string]*workbookState),
-		sheetToWB:   make(map[string]string),
-		now:         func() time.Time { return time.Now().UTC() },
-		imports:     make(map[string]string),
-		filters:     make(map[string]FilterView),
-		validations: make(map[string]DataValidation),
-		namedRanges: make(map[string]NamedRange),
+		workbooks:     make(map[string]*workbookState),
+		sheetToWB:     make(map[string]string),
+		now:           func() time.Time { return time.Now().UTC() },
+		imports:       make(map[string]string),
+		filters:       make(map[string]FilterView),
+		validations:   make(map[string]DataValidation),
+		namedRanges:   make(map[string]NamedRange),
+		comments:      make(map[string]CommentThread),
+		notifications: make(map[string]MentionNotification),
 	}
 }
 
@@ -391,6 +395,16 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 			delete(r.namedRanges, rangeID)
 		}
 	}
+	for threadID, thread := range r.comments {
+		if thread.WorkbookID == id {
+			delete(r.comments, threadID)
+		}
+	}
+	for notificationID, notification := range r.notifications {
+		if notification.WorkbookID == id {
+			delete(r.notifications, notificationID)
+		}
+	}
 	delete(r.workbooks, id)
 	return nil
 }
@@ -585,6 +599,16 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	for validationID, rule := range r.validations {
 		if rule.SheetID == sheetID {
 			delete(r.validations, validationID)
+		}
+	}
+	for threadID, thread := range r.comments {
+		if thread.SheetID == sheetID {
+			delete(r.comments, threadID)
+		}
+	}
+	for notificationID, notification := range r.notifications {
+		if notification.SheetID == sheetID {
+			delete(r.notifications, notificationID)
 		}
 	}
 	delete(r.sheetToWB, sheetID)

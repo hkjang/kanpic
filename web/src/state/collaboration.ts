@@ -11,7 +11,7 @@ export type ServerEvent = { type:string; workbook_id:string; actor_id?:string; c
 type CollaborationState = {
   status:ConnectionState
   users:Record<string,Presence>
-  connect:(workbookId:string,onVersion:(version:number,event:ServerEvent)=>void)=>void
+  connect:(workbookId:string,onVersion:(version:number,event:ServerEvent)=>void,onEvent?:(event:ServerEvent)=>void)=>void
   disconnect:()=>void
   sendCursor:(cursor:Cursor)=>void
   sendSelection:(selection:Selection)=>void
@@ -27,7 +27,7 @@ function eventId() { return crypto.randomUUID?.() ?? `${Date.now()}-${Math.rando
 
 export const useCollaborationStore=create<CollaborationState>((set,get)=>({
   status:'offline',users:{},
-  connect:(workbookId,onVersion)=>{
+  connect:(workbookId,onVersion,onEvent)=>{
     generation+=1
     const currentGeneration=generation
     retryCount=0
@@ -46,6 +46,7 @@ export const useCollaborationStore=create<CollaborationState>((set,get)=>({
         let event:ServerEvent
         try{event=JSON.parse(String(message.data)) as ServerEvent}catch{return}
         if(event.workbook_id!==workbookId)return
+        onEvent?.(event)
         if(event.server_version)onVersion(event.server_version,event)
         if(event.type==='presence.snapshot'){
           const users=eventData<{users:Presence[]}>(event)?.users??[]

@@ -167,6 +167,10 @@ func (h *Hub) PublishStructure(result workbook.MutationResult, actorID, clientID
 	}}, "")
 }
 
+func (h *Hub) PublishComment(workbookID, actorID string, data any) {
+	h.broadcast(workbookID, Event{ID: identity.New(), Type: "comment.changed", WorkbookID: workbookID, ActorID: actorID, Data: data}, "")
+}
+
 func (h *Hub) handle(ctx context.Context, peer *client, incoming inboundEvent) {
 	switch incoming.Type {
 	case "cursor.update":

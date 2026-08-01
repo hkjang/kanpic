@@ -44,6 +44,16 @@ type Repository interface {
 	GetDataValidation(context.Context, string) (DataValidation, error)
 	UpdateDataValidation(context.Context, string, string, UpdateDataValidationInput) (DataValidation, error)
 	DeleteDataValidation(context.Context, string, string, *int64) error
+	CreateCommentThread(context.Context, string, string, CreateCommentThreadInput) (CommentThread, error)
+	ListCommentThreads(context.Context, string, string, bool) ([]CommentThread, error)
+	GetCommentThread(context.Context, string) (CommentThread, error)
+	AddCommentReply(context.Context, string, string, CreateCommentReplyInput) (CommentThread, error)
+	UpdateCommentMessage(context.Context, string, string, UpdateCommentMessageInput) (CommentThread, error)
+	DeleteCommentMessage(context.Context, string, string, int64) (CommentThread, error)
+	UpdateCommentThread(context.Context, string, string, UpdateCommentThreadInput) (CommentThread, error)
+	DeleteCommentThread(context.Context, string, string) error
+	ListMentionNotifications(context.Context, []string, bool, int) ([]MentionNotification, error)
+	MarkMentionNotificationRead(context.Context, string, []string) (MentionNotification, error)
 	CreateNamedRange(context.Context, string, string, CreateNamedRangeInput) (NamedRange, error)
 	ListNamedRanges(context.Context, string) ([]NamedRange, error)
 	GetNamedRange(context.Context, string) (NamedRange, error)

@@ -104,6 +104,29 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			transformedFilters = append(transformedFilters, updated)
 		}
 	}
+	commentRows, err := tx.Query(ctx, `SELECT id::text,workbook_id::text,sheet_id::text,cell_range,resolved,revision,created_by,resolved_by,resolved_at,created_at,updated_at FROM comment_threads WHERE sheet_id=$1 FOR UPDATE`, target.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	transformedComments := make([]CommentThread, 0)
+	for commentRows.Next() {
+		var thread CommentThread
+		if err := commentRows.Scan(&thread.ID, &thread.WorkbookID, &thread.SheetID, &thread.Range, &thread.Resolved, &thread.Revision, &thread.CreatedBy, &thread.ResolvedBy, &thread.ResolvedAt, &thread.CreatedAt, &thread.UpdatedAt); err != nil {
+			commentRows.Close()
+			return MutationResult{}, err
+		}
+		updated, transformErr := transformCommentForStructure(thread, target.ID, input, now)
+		if transformErr != nil {
+			commentRows.Close()
+			return MutationResult{}, transformErr
+		}
+		transformedComments = append(transformedComments, updated)
+	}
+	if err := commentRows.Err(); err != nil {
+		commentRows.Close()
+		return MutationResult{}, err
+	}
+	commentRows.Close()
 	nextCells, err := transformStructureCells(sheets, existing, target.ID, input)
 	if err != nil {
 		return MutationResult{}, err
@@ -137,6 +160,14 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 	}
 	for _, view := range transformedFilters {
 		if err := insertFilterViewForStructure(ctx, tx, view); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	for _, thread := range transformedComments {
+		if _, err := tx.Exec(ctx, `UPDATE comment_threads SET cell_range=$2,revision=$3,updated_at=$4 WHERE id=$1`, thread.ID, thread.Range, thread.Revision, thread.UpdatedAt); err != nil {
+			return MutationResult{}, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE mention_notifications SET cell_range=$2 WHERE thread_id=$1`, thread.ID, thread.Range); err != nil {
 			return MutationResult{}, err
 		}
 	}

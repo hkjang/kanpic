@@ -240,6 +240,24 @@ func transformFilterForStructure(view FilterView, input StructuralMutation, now 
 	return normalized, true
 }
 
+func transformCommentForStructure(thread CommentThread, targetSheetID string, input StructuralMutation, now time.Time) (CommentThread, error) {
+	if thread.SheetID != targetSheetID || thread.Range == "#REF!" {
+		return thread, nil
+	}
+	transformed, exists, err := formula.TransformRangeAddress(thread.Range, formulaStructuralChange(input, "", ""))
+	if err != nil {
+		return CommentThread{}, fmt.Errorf("%w: comment range exceeds spreadsheet bounds", ErrInvalid)
+	}
+	if !exists {
+		transformed = "#REF!"
+	}
+	if transformed == thread.Range {
+		return thread, nil
+	}
+	thread.Range, thread.Revision, thread.UpdatedAt = transformed, thread.Revision+1, now
+	return thread, nil
+}
+
 func applyRecalculatedInputs(cells map[string]map[cellKey]Cell, inputs []CellInput, now time.Time) {
 	for _, input := range inputs {
 		key := cellKey{input.Row, input.Column}
@@ -353,6 +371,18 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			delete(nextFilters, id)
 		}
 	}
+	nextComments := make(map[string]CommentThread, len(r.comments))
+	for id, thread := range r.comments {
+		nextComments[id] = cloneCommentThread(thread)
+		if thread.WorkbookID != state.workbook.ID || thread.SheetID != target.ID {
+			continue
+		}
+		updated, transformErr := transformCommentForStructure(thread, target.ID, input, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		nextComments[id] = updated
+	}
 	nextCells, err := transformStructureCells(state.sheets, state.cells, target.ID, input)
 	if err != nil {
 		return MutationResult{}, err
@@ -367,7 +397,15 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	appliedCells := changedCellCount(state.cells, nextCells)
 	target.Layout = transformLayoutForStructure(target.Layout, input)
 	state.sheets[target.ID] = target
-	state.cells, r.namedRanges, r.validations, r.filters = nextCells, nextNames, nextValidations, nextFilters
+	nextNotifications := make(map[string]MentionNotification, len(r.notifications))
+	for id, notification := range r.notifications {
+		copy := cloneMentionNotification(notification)
+		if thread, found := nextComments[notification.ThreadID]; found {
+			copy.Range = thread.Range
+		}
+		nextNotifications[id] = copy
+	}
+	state.cells, r.namedRanges, r.validations, r.filters, r.comments, r.notifications = nextCells, nextNames, nextValidations, nextFilters, nextComments, nextNotifications
 	r.bump(state)
 	for id, item := range r.namedRanges {
 		if item.WorkbookID == state.workbook.ID {

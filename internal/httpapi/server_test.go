@@ -99,6 +99,107 @@ func TestWorkbookSearchRESTAndMCPShareContract(t *testing.T) {
 	request[map[string]any](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID+"/search?q=needle&limit=invalid", nil, http.StatusBadRequest)
 }
 
+func TestCommentsAndMentionNotificationsShareRESTAndMCPContracts(t *testing.T) {
+	t.Parallel()
+	for _, expectation := range []struct {
+		name  string
+		scope string
+	}{
+		{"spreadsheet.comment.list", "comment.read"},
+		{"spreadsheet.comment.get", "comment.read"},
+		{"spreadsheet.comment.create", "comment.write"},
+		{"spreadsheet.comment.reply", "comment.write"},
+		{"spreadsheet.comment.resolve", "comment.write"},
+		{"spreadsheet.comment.delete", "comment.write"},
+		{"spreadsheet.comment.message.update", "comment.write"},
+		{"spreadsheet.comment.message.delete", "comment.write"},
+		{"spreadsheet.notification.list", "comment.read"},
+		{"spreadsheet.notification.mark_read", "comment.write"},
+	} {
+		definition, found := findMCPTool(expectation.name)
+		if !found || definition.Meta["required_scope"] != expectation.scope {
+			t.Fatalf("MCP tool %s = %#v", expectation.name, definition)
+		}
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/workbooks/book/comments", nil)); scope != "comment.read" {
+		t.Fatalf("comments list scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/comment-messages/message", nil)); scope != "comment.write" {
+		t.Fatalf("comment message scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/me/notifications", nil)); scope != "comment.read" {
+		t.Fatalf("notification scope = %q", scope)
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "댓글 협업"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	created := requestAs[workbook.CommentThread](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/comments", map[string]any{
+		"idempotency_key": "rest-comment", "sheet_id": sheetID, "range": "B2:C3", "content": "@bob@example.com 검토 부탁드립니다",
+	}, http.StatusCreated)
+	if created.CreatedBy != "alice" || created.Range != "B2:C3" || len(created.Messages) != 1 {
+		t.Fatalf("REST comment create = %#v", created)
+	}
+	listed := requestAs[struct {
+		Items []workbook.CommentThread `json:"items"`
+	}](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book.ID+"/comments?sheet_id="+sheetID, nil, http.StatusOK)
+	if len(listed.Items) != 1 || listed.Items[0].ID != created.ID {
+		t.Fatalf("REST comments list = %#v", listed)
+	}
+
+	mcpReply := requestAs[struct {
+		Result struct {
+			Structured workbook.CommentThread `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, "charlie", http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 31, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.comment.reply", "arguments": map[string]any{"comment_id": created.ID, "idempotency_key": "mcp-reply", "content": "확인했습니다 @dana"},
+		},
+	}, http.StatusOK)
+	if mcpReply.Result.Structured.Revision != 2 || len(mcpReply.Result.Structured.Messages) != 2 || mcpReply.Result.Structured.Messages[1].AuthorID != "charlie" {
+		t.Fatalf("MCP comment reply = %#v", mcpReply)
+	}
+
+	bobNotifications := requestAs[struct {
+		Items []workbook.MentionNotification `json:"items"`
+	}](t, server, "bob@example.com", http.MethodGet, "/api/v1/me/notifications?unread_only=true", nil, http.StatusOK)
+	if len(bobNotifications.Items) != 1 || bobNotifications.Items[0].ThreadID != created.ID || bobNotifications.Items[0].Range != "B2:C3" {
+		t.Fatalf("REST mention notifications = %#v", bobNotifications)
+	}
+	read := requestAs[workbook.MentionNotification](t, server, "bob@example.com", http.MethodPatch, "/api/v1/me/notifications/"+bobNotifications.Items[0].ID, map[string]any{}, http.StatusOK)
+	if read.ReadAt == nil {
+		t.Fatalf("notification was not marked read: %#v", read)
+	}
+
+	updated := requestAs[workbook.CommentThread](t, server, "alice", http.MethodPatch, "/api/v1/comment-messages/"+created.Messages[0].ID, map[string]any{
+		"content": "검토 완료 @erin", "expected_revision": created.Messages[0].Revision,
+	}, http.StatusOK)
+	if updated.Revision != 3 || updated.Messages[0].Revision != 2 || updated.Messages[0].Content != "검토 완료 @erin" {
+		t.Fatalf("REST comment update = %#v", updated)
+	}
+	resolved := requestAs[workbook.CommentThread](t, server, "alice", http.MethodPatch, "/api/v1/comments/"+created.ID, map[string]any{
+		"resolved": true, "expected_revision": updated.Revision,
+	}, http.StatusOK)
+	if !resolved.Resolved || resolved.Revision != 4 {
+		t.Fatalf("REST resolve = %#v", resolved)
+	}
+	requestAs[map[string]any](t, server, "alice", http.MethodPatch, "/api/v1/comments/"+created.ID, map[string]any{"expected_revision": resolved.Revision}, http.StatusBadRequest)
+	active := requestAs[struct {
+		Items []workbook.CommentThread `json:"items"`
+	}](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book.ID+"/comments", nil, http.StatusOK)
+	if len(active.Items) != 0 {
+		t.Fatalf("resolved comment returned in active list: %#v", active)
+	}
+	all := requestAs[struct {
+		Items []workbook.CommentThread `json:"items"`
+	}](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book.ID+"/comments?include_resolved=true", nil, http.StatusOK)
+	if len(all.Items) != 1 || !all.Items[0].Resolved {
+		t.Fatalf("resolved comment missing from complete list: %#v", all)
+	}
+}
+
 func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
 	t.Parallel()
 	definition, found := findMCPTool("spreadsheet.structure.apply")
@@ -1208,6 +1309,10 @@ func multipartRequest(t *testing.T, server *httptest.Server, method, path, fileN
 }
 
 func request[T any](t *testing.T, server *httptest.Server, method, path string, input any, status int) T {
+	return requestAs[T](t, server, "", method, path, input, status)
+}
+
+func requestAs[T any](t *testing.T, server *httptest.Server, actor, method, path string, input any, status int) T {
 	t.Helper()
 	var body io.Reader
 	if input != nil {
@@ -1223,6 +1328,9 @@ func request[T any](t *testing.T, server *httptest.Server, method, path string, 
 	}
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if actor != "" {
+		req.Header.Set("X-Kanpic-Actor", actor)
 	}
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {

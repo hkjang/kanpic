@@ -73,6 +73,16 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.data_validation.update", "expected_revision으로 데이터 검증 규칙을 안전하게 변경합니다.", "range.write", dataValidationSchema(false)),
 	tool("spreadsheet.data_validation.delete", "데이터 검증 규칙을 삭제합니다.", "range.write", dataValidationDeleteSchema()),
 	tool("spreadsheet.data_validation.evaluate", "기존 범위 값을 데이터 검증 규칙으로 검사합니다.", "range.read", requiredProps("validation_id", "string")),
+	tool("spreadsheet.comment.list", "워크북 또는 시트의 댓글 스레드와 답글을 조회합니다.", "comment.read", commentListSchema()),
+	tool("spreadsheet.comment.get", "댓글 스레드와 전체 답글을 조회합니다.", "comment.read", requiredProps("comment_id", "string")),
+	tool("spreadsheet.comment.create", "셀 또는 범위에 멱등 댓글 스레드를 생성하고 @멘션 알림을 만듭니다.", "comment.write", commentCreateSchema()),
+	tool("spreadsheet.comment.reply", "댓글 스레드에 멱등 답글을 추가하고 @멘션 알림을 만듭니다.", "comment.write", commentReplySchema()),
+	tool("spreadsheet.comment.resolve", "revision을 확인하여 댓글 스레드를 해결 또는 재열기합니다.", "comment.write", commentResolveSchema()),
+	tool("spreadsheet.comment.delete", "자신이 만든 댓글 스레드를 삭제합니다.", "comment.write", requiredProps("comment_id", "string")),
+	tool("spreadsheet.comment.message.update", "자신의 댓글 메시지를 revision 기반으로 수정합니다.", "comment.write", commentMessageUpdateSchema()),
+	tool("spreadsheet.comment.message.delete", "자신의 댓글 메시지를 revision 기반으로 삭제합니다.", "comment.write", commentMessageDeleteSchema()),
+	tool("spreadsheet.notification.list", "현재 사용자에게 온 @멘션 알림을 조회합니다.", "comment.read", notificationListSchema()),
+	tool("spreadsheet.notification.mark_read", "현재 사용자의 @멘션 알림을 읽음 처리합니다.", "comment.write", requiredProps("notification_id", "string")),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -418,6 +428,89 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return map[string]any{"ok": true}, nil
 	case "spreadsheet.data_validation.evaluate":
 		return s.applyDataValidation(ctx, stringArg(args, "validation_id"))
+	case "spreadsheet.comment.list":
+		var input struct {
+			WorkbookID      string `json:"workbook_id"`
+			SheetID         string `json:"sheet_id"`
+			IncludeResolved bool   `json:"include_resolved"`
+		}
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.ListCommentThreads(ctx, input.WorkbookID, input.SheetID, input.IncludeResolved)
+	case "spreadsheet.comment.get":
+		return s.repository.GetCommentThread(ctx, stringArg(args, "comment_id"))
+	case "spreadsheet.comment.create":
+		var input workbook.CreateCommentThreadInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		thread, err := s.repository.CreateCommentThread(ctx, stringArg(args, "workbook_id"), actor, input)
+		if err == nil {
+			s.publishComment(thread, actor, "created")
+		}
+		return thread, err
+	case "spreadsheet.comment.reply":
+		var input workbook.CreateCommentReplyInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		thread, err := s.repository.AddCommentReply(ctx, stringArg(args, "comment_id"), actor, input)
+		if err == nil {
+			s.publishComment(thread, actor, "replied")
+		}
+		return thread, err
+	case "spreadsheet.comment.resolve":
+		var input workbook.UpdateCommentThreadInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		thread, err := s.repository.UpdateCommentThread(ctx, stringArg(args, "comment_id"), actor, input)
+		if err == nil {
+			s.publishComment(thread, actor, "status_changed")
+		}
+		return thread, err
+	case "spreadsheet.comment.delete":
+		thread, err := s.repository.GetCommentThread(ctx, stringArg(args, "comment_id"))
+		if err != nil {
+			return nil, err
+		}
+		if err := s.repository.DeleteCommentThread(ctx, thread.ID, actor); err != nil {
+			return nil, err
+		}
+		s.collab.PublishComment(thread.WorkbookID, actor, map[string]any{"thread_id": thread.ID, "action": "deleted"})
+		return map[string]any{"ok": true}, nil
+	case "spreadsheet.comment.message.update":
+		var input workbook.UpdateCommentMessageInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		thread, err := s.repository.UpdateCommentMessage(ctx, stringArg(args, "message_id"), actor, input)
+		if err == nil {
+			s.publishComment(thread, actor, "message_updated")
+		}
+		return thread, err
+	case "spreadsheet.comment.message.delete":
+		revision, err := numberArg(args, "expected_revision")
+		if err != nil {
+			return nil, err
+		}
+		thread, err := s.repository.DeleteCommentMessage(ctx, stringArg(args, "message_id"), actor, revision)
+		if err == nil {
+			s.publishComment(thread, actor, "message_deleted")
+		}
+		return thread, err
+	case "spreadsheet.notification.list":
+		var input struct {
+			UnreadOnly bool `json:"unread_only"`
+			Limit      int  `json:"limit"`
+		}
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.ListMentionNotifications(ctx, actorAliases(r), input.UnreadOnly, input.Limit)
+	case "spreadsheet.notification.mark_read":
+		return s.repository.MarkMentionNotificationRead(ctx, stringArg(args, "notification_id"), actorAliases(r))
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -617,6 +710,49 @@ func workbookSearchSchema() map[string]any {
 		},
 		"required": []string{"workbook_id", "query"},
 	}
+}
+
+func commentListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id": map[string]any{"type": "string", "minLength": 1}, "sheet_id": map[string]any{"type": "string"}, "include_resolved": map[string]any{"type": "boolean"},
+	}, "required": []string{"workbook_id"}}
+}
+
+func commentCreateSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id": map[string]any{"type": "string", "minLength": 1}, "sheet_id": map[string]any{"type": "string", "minLength": 1}, "range": map[string]any{"type": "string"},
+		"content": map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxCommentContentRunes}, "idempotency_key": map[string]any{"type": "string", "minLength": 1},
+	}, "required": []string{"workbook_id", "sheet_id", "range", "content", "idempotency_key"}}
+}
+
+func commentReplySchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"comment_id": map[string]any{"type": "string", "minLength": 1}, "content": map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxCommentContentRunes}, "idempotency_key": map[string]any{"type": "string", "minLength": 1},
+	}, "required": []string{"comment_id", "content", "idempotency_key"}}
+}
+
+func commentResolveSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"comment_id": map[string]any{"type": "string", "minLength": 1}, "resolved": map[string]any{"type": "boolean"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}, "required": []string{"comment_id", "resolved", "expected_revision"}}
+}
+
+func commentMessageUpdateSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"message_id": map[string]any{"type": "string", "minLength": 1}, "content": map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxCommentContentRunes}, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}, "required": []string{"message_id", "content", "expected_revision"}}
+}
+
+func commentMessageDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"message_id": map[string]any{"type": "string", "minLength": 1}, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}, "required": []string{"message_id", "expected_revision"}}
+}
+
+func notificationListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"unread_only": map[string]any{"type": "boolean"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 200},
+	}}
 }
 
 func rangeFormatSchema() map[string]any {

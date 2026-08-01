@@ -1,9 +1,9 @@
 # kanpic 사용자 가이드 (Enterprise User Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.3.0  
+- **시스템 버전**: v0.9.0
 - **문서 버전**: v1.0  
-- **최종 수정일**: 2026년 7월 31일  
+- **최종 수정일**: 2026년 8월 1일
 - **문서 분류**: 엔드유저용 최종 사용 설명서 (End-User Manual)  
 
 ---
@@ -213,12 +213,26 @@ kanpic의 필터 뷰는 원본 데이터를 수정하지 않고 나만의 시각
 
 ---
 
-## 7. 개인화 설정 및 개인 API 키 (`/preferences`)
+## 7. 셀·범위 댓글과 멘션 알림
 
-### 7.1 테마 및 개인화
+1. 댓글을 연결할 셀 또는 범위를 선택합니다.
+2. 편집기 도구 모음의 **댓글** 버튼을 눌러 오른쪽 댓글 패널을 엽니다.
+3. 새 댓글을 입력하고 **등록**을 누릅니다. `@사용자ID` 또는 `@이메일` 형식으로 담당자를 멘션할 수 있습니다.
+4. 스레드에서 답글을 작성하거나 자신의 메시지를 수정·삭제할 수 있습니다. 작업이 끝나면 **해결**을 누르고, 다시 논의해야 하면 **재열기**를 누릅니다.
+5. 상단 종 모양 **알림** 버튼에는 읽지 않은 멘션 수가 표시됩니다. 알림을 선택하면 읽음 처리한 뒤 해당 워크북·시트·범위와 댓글 스레드로 이동합니다.
+
+댓글 위치는 행·열 삽입 및 삭제를 따라 자동 이동합니다. 연결된 범위가 완전히 삭제되면 위치가 `#REF!`로 표시되지만 대화 내용은 보존됩니다. 동시에 수정된 메시지나 스레드는 revision 충돌로 거부되며, 최신 댓글을 다시 불러온 후 재시도해야 합니다. 댓글 본문은 일반 텍스트로만 표시되어 HTML이나 스크립트가 실행되지 않습니다.
+
+에이전트는 `comment.read`/`comment.write` scope로 `spreadsheet.comment.list`, `spreadsheet.comment.get`, `spreadsheet.comment.create`, `spreadsheet.comment.reply`, `spreadsheet.comment.resolve`, `spreadsheet.comment.delete`, `spreadsheet.comment.message.update`, `spreadsheet.comment.message.delete`, `spreadsheet.notification.list`, `spreadsheet.notification.mark_read` MCP 도구를 사용할 수 있습니다.
+
+---
+
+## 8. 개인화 설정 및 개인 API 키 (`/preferences`)
+
+### 8.1 테마 및 개인화
 - `/preferences` 페이지에서 화면 테마(Light/Dark/System)를 설정할 수 있습니다.
 
-### 7.2 개인 API 키 (Personal API Keys) 발급
+### 8.2 개인 API 키 (Personal API Keys) 발급
 파이썬 스크립트나 커스텀 애플리케이션에서 kanpic 데이터에 프로그램 방식으로 접근할 수 있습니다.
 
 ```python
@@ -239,7 +253,7 @@ print(response.json())
 
 ---
 
-## 8. 자주 묻는 질문 및 문제 해결 (FAQ)
+## 9. 자주 묻는 질문 및 문제 해결 (FAQ)
 
 > [!NOTE]
 > **Q1. 네트워크가 갑자기 연결 끊기면 작성 중이던 내용이 날아가나요?**  

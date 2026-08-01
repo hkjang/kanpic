@@ -164,6 +164,94 @@ func TestPostgresWorkbookSearchUsesCellBlocks(t *testing.T) {
 	}
 }
 
+func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres comments", WorkspaceID: "integration", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheet := book.Sheets[0]
+	thread, err := repository.CreateCommentThread(ctx, book.ID, "alice", workbook.CreateCommentThreadInput{IdempotencyKey: "pg-comment", SheetID: sheet.ID, Range: "B2:C3", Content: "@bob@example.com 확인 부탁드립니다"})
+	if err != nil || len(thread.Messages) != 1 || thread.Messages[0].AuthorID != "alice" || thread.Messages[0].Revision != 1 {
+		t.Fatalf("PostgreSQL comment create = %#v, %v", thread, err)
+	}
+	duplicate, err := repository.CreateCommentThread(ctx, book.ID, "alice", workbook.CreateCommentThreadInput{IdempotencyKey: "pg-comment", SheetID: sheet.ID, Range: "A1", Content: "ignored"})
+	if err != nil || duplicate.ID != thread.ID || duplicate.Messages[0].Content != thread.Messages[0].Content {
+		t.Fatalf("PostgreSQL comment idempotency = %#v, %v", duplicate, err)
+	}
+	replied, err := repository.AddCommentReply(ctx, thread.ID, "charlie", workbook.CreateCommentReplyInput{IdempotencyKey: "pg-reply", Content: "처리 중입니다 @dana"})
+	if err != nil || replied.Revision != 2 || len(replied.Messages) != 2 || replied.Messages[1].AuthorID != "charlie" {
+		t.Fatalf("PostgreSQL reply = %#v, %v", replied, err)
+	}
+	listed, err := repository.ListCommentThreads(ctx, book.ID, sheet.ID, false)
+	if err != nil || len(listed) != 1 || len(listed[0].Messages) != 2 {
+		t.Fatalf("PostgreSQL comment list = %#v, %v", listed, err)
+	}
+	bob, err := repository.ListMentionNotifications(ctx, []string{"BOB@example.com"}, true, 50)
+	if err != nil || len(bob) != 1 || bob[0].ThreadID != thread.ID || bob[0].Range != "B2:C3" {
+		t.Fatalf("PostgreSQL mention list = %#v, %v", bob, err)
+	}
+	read, err := repository.MarkMentionNotificationRead(ctx, bob[0].ID, []string{"bob@example.com"})
+	if err != nil || read.ReadAt == nil || read.SheetName != sheet.Name {
+		t.Fatalf("PostgreSQL mention read = %#v, %v", read, err)
+	}
+	updated, err := repository.UpdateCommentMessage(ctx, thread.Messages[0].ID, "alice", workbook.UpdateCommentMessageInput{Content: "담당자 변경 @erin", ExpectedRevision: thread.Messages[0].Revision})
+	if err != nil || updated.Revision != 3 || updated.Messages[0].Revision != 2 {
+		t.Fatalf("PostgreSQL message update = %#v, %v", updated, err)
+	}
+	if old, err := repository.ListMentionNotifications(ctx, []string{"bob@example.com"}, false, 50); err != nil || len(old) != 0 {
+		t.Fatalf("PostgreSQL stale mention = %#v, %v", old, err)
+	}
+	resolvedValue := true
+	resolved, err := repository.UpdateCommentThread(ctx, thread.ID, "alice", workbook.UpdateCommentThreadInput{Resolved: &resolvedValue, ExpectedRevision: updated.Revision})
+	if err != nil || !resolved.Resolved || resolved.ResolvedAt == nil || resolved.Revision != 4 {
+		t.Fatalf("PostgreSQL resolve = %#v, %v", resolved, err)
+	}
+	if active, err := repository.ListCommentThreads(ctx, book.ID, "", false); err != nil || len(active) != 0 {
+		t.Fatalf("PostgreSQL active comments = %#v, %v", active, err)
+	}
+	inserted, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "pg-comment-insert", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetCommentThread(ctx, thread.ID)
+	if err != nil || moved.Range != "B3:C4" || moved.Revision != 5 {
+		t.Fatalf("PostgreSQL moved comment = %#v, %v", moved, err)
+	}
+	erin, err := repository.ListMentionNotifications(ctx, []string{"erin"}, false, 50)
+	if err != nil || len(erin) != 1 || erin[0].Range != "B3:C4" {
+		t.Fatalf("PostgreSQL moved mention = %#v, %v", erin, err)
+	}
+	if _, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: inserted.ServerVersion, IdempotencyKey: "pg-comment-delete", Axis: "row", Action: "delete", Index: 3, Count: 2}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := repository.GetCommentThread(ctx, thread.ID)
+	if err != nil || removed.Range != "#REF!" || removed.Revision != 6 {
+		t.Fatalf("PostgreSQL deleted comment anchor = %#v, %v", removed, err)
+	}
+	if err := repository.DeleteWorkbook(ctx, book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if hidden, err := repository.ListMentionNotifications(ctx, []string{"erin"}, false, 50); err != nil || len(hidden) != 0 {
+		t.Fatalf("deleted workbook notifications remain visible = %#v, %v", hidden, err)
+	}
+	if _, err := repository.GetCommentThread(ctx, thread.ID); !errors.Is(err, workbook.ErrNotFound) {
+		t.Fatalf("deleted workbook comment remains accessible: %v", err)
+	}
+}
+
 func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
