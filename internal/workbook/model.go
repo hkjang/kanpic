@@ -105,6 +105,38 @@ type MutationResult struct {
 	CreatedAt          time.Time             `json:"created_at"`
 }
 
+// NamedRange is a workbook-level reusable name whose target belongs to one of
+// the workbook's sheets. Revision protects concurrent definition edits while
+// WorkbookVersion lets realtime clients refresh formula results atomically.
+type NamedRange struct {
+	ID              string    `json:"id"`
+	WorkbookID      string    `json:"workbook_id"`
+	WorkbookVersion int64     `json:"workbook_version"`
+	SheetID         string    `json:"sheet_id"`
+	CreateKey       string    `json:"-"`
+	Name            string    `json:"name"`
+	Range           string    `json:"range"`
+	Revision        int64     `json:"revision"`
+	CreatedBy       string    `json:"created_by"`
+	UpdatedBy       string    `json:"updated_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type CreateNamedRangeInput struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	Name           string `json:"name"`
+	SheetID        string `json:"sheet_id"`
+	Range          string `json:"range"`
+}
+
+type UpdateNamedRangeInput struct {
+	Name             *string `json:"name,omitempty"`
+	SheetID          *string `json:"sheet_id,omitempty"`
+	Range            *string `json:"range,omitempty"`
+	ExpectedRevision *int64  `json:"expected_revision,omitempty"`
+}
+
 type ValidationOption struct {
 	Value json.RawMessage `json:"value"`
 	Label string          `json:"label,omitempty"`

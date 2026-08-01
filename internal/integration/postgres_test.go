@@ -653,6 +653,86 @@ func TestPostgresCrossSheetFormulaRecalculatesPersistsAndConflicts(t *testing.T)
 	}
 }
 
+func TestPostgresNamedRangeLifecycleAndVersionRestore(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres named range", OwnerID: "named-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "named-user", BaseVersion: 1, IdempotencyKey: "pg-named-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`12`)}, {Row: 2, Column: 1, Value: json.RawMessage(`18`)}, {Row: 1, Column: 2, Formula: "=SUM(Sales_Data)"},
+	}})
+	if err != nil || seed.ServerVersion != 2 || len(seed.FormulaErrors) != 1 || seed.FormulaErrors[0].Code != "#NAME?" {
+		t.Fatalf("PostgreSQL missing named formula = %#v, error=%v", seed, err)
+	}
+	created, err := repository.CreateNamedRange(ctx, book.ID, "named-user", workbook.CreateNamedRangeInput{IdempotencyKey: "pg-named-create", Name: "Sales_Data", SheetID: sheetID, Range: "A1:A2"})
+	if err != nil || created.WorkbookVersion != 3 || created.Revision != 1 {
+		t.Fatalf("PostgreSQL named create = %#v, error=%v", created, err)
+	}
+	duplicate, err := repository.CreateNamedRange(ctx, book.ID, "named-user", workbook.CreateNamedRangeInput{IdempotencyKey: "pg-named-create", Name: "ignored", SheetID: sheetID, Range: "A1"})
+	if err != nil || duplicate.ID != created.ID || duplicate.WorkbookVersion != 3 {
+		t.Fatalf("PostgreSQL named idempotency = %#v, error=%v", duplicate, err)
+	}
+	assertPostgresNamedFormula(t, ctx, repository, sheetID, "=SUM(Sales_Data)", "30")
+	expectedOne := int64(1)
+	name, selectedRange := "Revenue", "A1"
+	updated, err := repository.UpdateNamedRange(ctx, created.ID, "named-user", workbook.UpdateNamedRangeInput{Name: &name, Range: &selectedRange, ExpectedRevision: &expectedOne})
+	if err != nil || updated.WorkbookVersion != 4 || updated.Revision != 2 {
+		t.Fatalf("PostgreSQL named update = %#v, error=%v", updated, err)
+	}
+	assertPostgresNamedFormula(t, ctx, repository, sheetID, "=SUM(Revenue)", "12")
+	version, err := repository.CreateVersion(ctx, book.ID, "named snapshot", "named-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedTwo := int64(2)
+	if err := repository.DeleteNamedRange(ctx, created.ID, "named-user", &expectedTwo); err != nil {
+		t.Fatal(err)
+	}
+	assertPostgresNamedFormula(t, ctx, repository, sheetID, "=SUM(Revenue)", `"#NAME?"`)
+	restored, err := repository.RestoreVersion(ctx, version.ID, "named-user")
+	if err != nil || restored.ServerVersion != 6 {
+		t.Fatalf("PostgreSQL named restore = %#v, error=%v", restored, err)
+	}
+	ranges, err := repository.ListNamedRanges(ctx, book.ID)
+	if err != nil || len(ranges) != 1 || ranges[0].Name != "Revenue" || ranges[0].Range != "A1" {
+		t.Fatalf("PostgreSQL restored named ranges = %#v, error=%v", ranges, err)
+	}
+	assertPostgresNamedFormula(t, ctx, repository, sheetID, "=SUM(Revenue)", "12")
+	copy, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{OwnerID: "named-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copy.ID)
+	copyRanges, err := repository.ListNamedRanges(ctx, copy.ID)
+	if err != nil || len(copyRanges) != 1 || copyRanges[0].SheetID == sheetID {
+		t.Fatalf("PostgreSQL copied named ranges = %#v, error=%v", copyRanges, err)
+	}
+	assertPostgresNamedFormula(t, ctx, repository, copy.Sheets[0].ID, "=SUM(Revenue)", "12")
+}
+
+func assertPostgresNamedFormula(t *testing.T, ctx context.Context, repository workbook.Repository, sheetID, formula, value string) {
+	t.Helper()
+	selected, _ := cellrange.Parse("B1")
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || cells[0].Formula != formula || string(cells[0].Value) != value {
+		t.Fatalf("PostgreSQL named formula = %#v, error=%v; want formula=%s value=%s", cells, err, formula, value)
+	}
+}
+
 func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

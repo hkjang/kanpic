@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var a1ReferencePattern = regexp.MustCompile(`(\$?)([A-Za-z]{1,3})(\$?)([1-9][0-9]*)`)
@@ -83,6 +85,72 @@ func RenameSheetReferences(input, oldName, newName string) string {
 		inString = !inString
 	}
 	flush()
+	return result.String()
+}
+
+// RenameNamedRangeReferences rewrites standalone workbook names while leaving
+// string literals, quoted sheet names, function calls, and sheet qualifiers
+// untouched.
+func RenameNamedRangeReferences(input, oldName, newName string) string {
+	if input == "" || strings.TrimSpace(oldName) == "" || strings.EqualFold(oldName, newName) {
+		return input
+	}
+	var result strings.Builder
+	inString, inQuotedSheet := false, false
+	for index := 0; index < len(input); {
+		character, size := utf8.DecodeRuneInString(input[index:])
+		if character == '"' && !inQuotedSheet {
+			result.WriteRune(character)
+			index += size
+			if inString && index < len(input) && input[index] == '"' {
+				result.WriteByte('"')
+				index++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if character == '\'' && !inString {
+			result.WriteRune(character)
+			index += size
+			if inQuotedSheet && index < len(input) && input[index] == '\'' {
+				result.WriteByte('\'')
+				index++
+				continue
+			}
+			inQuotedSheet = !inQuotedSheet
+			continue
+		}
+		if !inString && !inQuotedSheet && (unicode.IsLetter(character) || character == '_' || character == '$') {
+			start := index
+			index += size
+			for index < len(input) {
+				current, currentSize := utf8.DecodeRuneInString(input[index:])
+				if !unicode.IsLetter(current) && !unicode.IsDigit(current) && current != '_' && current != '.' && current != '$' {
+					break
+				}
+				index += currentSize
+			}
+			identifier := input[start:index]
+			next := index
+			for next < len(input) {
+				current, currentSize := utf8.DecodeRuneInString(input[next:])
+				if !unicode.IsSpace(current) {
+					break
+				}
+				next += currentSize
+			}
+			functionOrSheet := next < len(input) && (input[next] == '(' || input[next] == '!')
+			if strings.EqualFold(identifier, oldName) && !functionOrSheet {
+				result.WriteString(newName)
+			} else {
+				result.WriteString(identifier)
+			}
+			continue
+		}
+		result.WriteRune(character)
+		index += size
+	}
 	return result.String()
 }
 

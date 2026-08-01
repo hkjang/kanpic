@@ -81,7 +81,15 @@ func (s *Server) getFormulaInfo(ctx context.Context, sheetID, address string) (f
 		sheetNames[sheet.Name] = sheet.ID
 		idNames[strings.ToUpper(sheet.ID)] = sheet.Name
 	}
-	evaluator := formula.NewScoped(sheetID, sheetNames)
+	namedRanges, err := s.repository.ListNamedRanges(ctx, book.ID)
+	if err != nil {
+		return formulaInfoResult{}, err
+	}
+	formulaNames := make(map[string]formula.NamedRange, len(namedRanges))
+	for _, item := range namedRanges {
+		formulaNames[item.Name] = formula.NamedRange{SheetID: item.SheetID, Range: item.Range}
+	}
+	evaluator := formula.NewScopedWithNames(sheetID, sheetNames, formulaNames)
 	dependencies, formulaErr := evaluator.Dependencies(selectedCells[0].Formula)
 	if formulaErr != nil {
 		return formulaInfoResult{}, fmt.Errorf("%w: %s", workbook.ErrInvalid, formulaErr.Message)
@@ -97,7 +105,7 @@ func (s *Server) getFormulaInfo(ctx context.Context, sheetID, address string) (f
 		if readErr != nil {
 			return formulaInfoResult{}, readErr
 		}
-		candidateEvaluator := formula.NewScoped(sheet.ID, sheetNames)
+		candidateEvaluator := formula.NewScopedWithNames(sheet.ID, sheetNames, formulaNames)
 		for _, candidate := range allCells {
 			if candidate.Formula == "" {
 				continue

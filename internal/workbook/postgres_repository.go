@@ -69,6 +69,7 @@ type snapshotDocument struct {
 	Sheets        []snapshotSheet  `json:"sheets,omitempty"`
 	Blocks        []snapshotBlock  `json:"blocks"`
 	Validations   []DataValidation `json:"validations,omitempty"`
+	NamedRanges   []NamedRange     `json:"named_ranges,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -143,7 +144,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		wb.Sheets = append(wb.Sheets, sheet)
 		sheets[sheet.ID] = sheet
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true)
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nil)
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -441,6 +442,27 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 		sourceRule.CreatedAt = now
 		sourceRule.UpdatedAt = now
 		if err := insertDataValidationTx(ctx, tx, sourceRule); err != nil {
+			return Workbook{}, err
+		}
+	}
+	copiedRanges, err := listNamedRangesTx(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, sourceRange := range copiedRanges {
+		destinationSheetID, found := sheetIDs[sourceRange.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: named range references an unknown sheet", ErrInvalid)
+		}
+		sourceRange.ID = identity.New()
+		sourceRange.WorkbookID = duplicated.ID
+		sourceRange.WorkbookVersion = 1
+		sourceRange.SheetID = destinationSheetID
+		sourceRange.CreateKey = "copy:" + sourceRange.ID
+		sourceRange.Revision = 1
+		sourceRange.CreatedBy, sourceRange.UpdatedBy = ownerID, ownerID
+		sourceRange.CreatedAt, sourceRange.UpdatedAt = now, now
+		if err := insertNamedRangeTx(ctx, tx, sourceRange); err != nil {
 			return Workbook{}, err
 		}
 	}
@@ -896,7 +918,11 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 		return err
 	}
 	rows.Close()
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true)
+	namedRanges, err := listNamedRangesTx(ctx, tx, workbookID)
+	if err != nil {
+		return err
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges))
 	if err != nil {
 		return err
 	}
@@ -1064,7 +1090,11 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if len(mutation.StylePatch) > 0 {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false)
+		namedRanges, rangeErr := listNamedRangesTx(ctx, tx, workbookID)
+		if rangeErr != nil {
+			return MutationResult{}, rangeErr
+		}
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, formulaNamedRanges(namedRanges))
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -1254,7 +1284,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 3, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Validations: make([]DataValidation, 0)}
+	document := snapshotDocument{SchemaVersion: 4, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1308,7 +1338,14 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 		document.Validations = append(document.Validations, rule)
 	}
 	rows.Close()
-	return document, rows.Err()
+	if err := rows.Err(); err != nil {
+		return snapshotDocument{}, err
+	}
+	document.NamedRanges, err = listNamedRangesTx(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	return document, nil
 }
 
 func (r *PostgresRepository) insertSnapshot(ctx context.Context, tx pgx.Tx, workbookID string, workbookVersion int64, name, actorID string, document snapshotDocument) (Version, error) {
@@ -1387,6 +1424,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 		return MutationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM data_validations USING sheets WHERE data_validations.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
+		return MutationResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM named_ranges WHERE workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
 	now := r.now()
@@ -1487,6 +1527,34 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			}
 			normalized.UpdatedAt = now
 			if err := insertDataValidationTx(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
+	if snapshot.SchemaVersion >= 4 {
+		for _, item := range snapshot.NamedRanges {
+			if _, found := desiredSheetIDs[item.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a named range for an unknown sheet", ErrInvalid)
+			}
+			normalized, err := normalizeNamedRange(item)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.CreateKey = "restore:" + normalized.ID
+			normalized.WorkbookID = workbookID
+			normalized.WorkbookVersion = base + 1
+			if normalized.Revision < 1 {
+				normalized.Revision = 1
+			}
+			if normalized.CreatedBy == "" {
+				normalized.CreatedBy = actorID
+			}
+			normalized.UpdatedBy = actorID
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			normalized.UpdatedAt = now
+			if err := insertNamedRangeTx(ctx, tx, normalized); err != nil {
 				return MutationResult{}, err
 			}
 		}

@@ -8,6 +8,15 @@ import "strings"
 type Scope struct {
 	CurrentSheet string
 	Sheets       map[string]string
+	NamedRanges  map[string]NamedRange
+}
+
+// NamedRange points a workbook-level name at a stable sheet identifier and
+// normalized A1 range. Keeping the sheet identifier out of formula text makes
+// names resilient to sheet renames.
+type NamedRange struct {
+	SheetID string
+	Range   string
 }
 
 func normalizeSheetName(value string) string {
@@ -42,12 +51,20 @@ func SplitCellKey(value string) (string, string, bool) {
 	return sheet, address, sheet != "" && isReference(address)
 }
 
-func newScope(currentSheet string, sheets map[string]string) Scope {
+func newScope(currentSheet string, sheets map[string]string, namedRanges map[string]NamedRange) Scope {
 	result := Scope{CurrentSheet: strings.ToUpper(strings.TrimSpace(currentSheet))}
 	if sheets != nil {
 		result.Sheets = make(map[string]string, len(sheets))
 		for name, id := range sheets {
 			result.Sheets[normalizeSheetName(name)] = strings.ToUpper(strings.TrimSpace(id))
+		}
+	}
+	if namedRanges != nil {
+		result.NamedRanges = make(map[string]NamedRange, len(namedRanges))
+		for name, target := range namedRanges {
+			target.SheetID = strings.ToUpper(strings.TrimSpace(target.SheetID))
+			target.Range = normalizeCellAddress(target.Range)
+			result.NamedRanges[normalizeSheetName(name)] = target
 		}
 	}
 	return result
@@ -67,4 +84,15 @@ func (s Scope) resolveCell(qualifier, address string) (string, error) {
 		}
 	}
 	return CellKey(sheetID, address), nil
+}
+
+func (s Scope) resolveNamedRange(name string) (NamedRange, error) {
+	target, found := s.NamedRanges[normalizeSheetName(name)]
+	if !found {
+		return NamedRange{}, formulaError("#NAME?", "unknown name "+name)
+	}
+	if target.SheetID == "" || target.Range == "" {
+		return NamedRange{}, formulaError("#REF!", "named range "+name+" has an invalid target")
+	}
+	return target, nil
 }

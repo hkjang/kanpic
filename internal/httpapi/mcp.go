@@ -45,6 +45,11 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.update", "시트 이름, 순서, 색상, 숨김 상태를 변경합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.delete", "시트를 삭제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.named_range.list", "워크북의 이름 범위 정의와 revision을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.named_range.get", "이름 범위 정의를 조회합니다.", "workbook.read", requiredProps("named_range_id", "string")),
+	tool("spreadsheet.named_range.create", "수식과 API에서 재사용할 워크북 이름 범위를 멱등 생성합니다.", "formula.write", namedRangeSchema(true)),
+	tool("spreadsheet.named_range.update", "expected_revision으로 이름 범위의 이름이나 대상을 변경합니다.", "formula.write", namedRangeSchema(false)),
+	tool("spreadsheet.named_range.delete", "이름 범위를 삭제하고 종속 수식을 #NAME?으로 재계산합니다.", "formula.write", namedRangeDeleteSchema()),
 	tool("spreadsheet.range.read", "A1 범위의 비어 있지 않은 셀을 조회합니다.", "range.read", requiredProps2("sheet_id", "string", "range", "string")),
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
@@ -211,6 +216,49 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.publishCurrentVersion(ctx, workbookID, actor, "")
 		}
 		return okResult(err)
+	case "spreadsheet.named_range.list":
+		return s.repository.ListNamedRanges(ctx, stringArg(args, "workbook_id"))
+	case "spreadsheet.named_range.get":
+		return s.repository.GetNamedRange(ctx, stringArg(args, "named_range_id"))
+	case "spreadsheet.named_range.create":
+		var input workbook.CreateNamedRangeInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.CreateNamedRange(ctx, stringArg(args, "workbook_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.named_range.update":
+		var input workbook.UpdateNamedRangeInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.UpdateNamedRange(ctx, stringArg(args, "named_range_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.named_range.delete":
+		id := stringArg(args, "named_range_id")
+		item, err := s.repository.GetNamedRange(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		var expected *int64
+		if value, found := args["expected_revision"]; found && value != nil {
+			revision, revisionErr := numberArg(args, "expected_revision")
+			if revisionErr != nil || revision < 1 {
+				return nil, fmt.Errorf("expected_revision must be a positive integer")
+			}
+			expected = &revision
+		}
+		if err := s.repository.DeleteNamedRange(ctx, id, actor, expected); err != nil {
+			return nil, err
+		}
+		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		return map[string]any{"ok": true}, nil
 	case "spreadsheet.range.read":
 		selected, err := cellrange.Parse(stringArg(args, "range"))
 		if err != nil {
@@ -574,6 +622,28 @@ func dataValidationSchema(create bool) map[string]any {
 
 func dataValidationDeleteSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"validation_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"validation_id"}}
+}
+
+func namedRangeSchema(create bool) map[string]any {
+	properties := map[string]any{
+		"named_range_id": map[string]any{"type": "string"}, "workbook_id": map[string]any{"type": "string"}, "sheet_id": map[string]any{"type": "string"},
+		"idempotency_key": map[string]any{"type": "string", "minLength": 1}, "name": map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
+		"range": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}
+	required := []string{"named_range_id"}
+	if create {
+		delete(properties, "named_range_id")
+		delete(properties, "expected_revision")
+		required = []string{"workbook_id", "sheet_id", "idempotency_key", "name", "range"}
+	} else {
+		delete(properties, "workbook_id")
+		delete(properties, "idempotency_key")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func namedRangeDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"named_range_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"named_range_id"}}
 }
 func findMCPTool(name string) (mcpTool, bool) {
 	for _, item := range mcpTools {

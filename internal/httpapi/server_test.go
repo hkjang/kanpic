@@ -824,6 +824,74 @@ func TestCrossSheetFormulaThroughRESTAndMCP(t *testing.T) {
 	}
 }
 
+func TestNamedRangeCRUDThroughRESTAndMCP(t *testing.T) {
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.Default()))
+	defer server.Close()
+	for name, scope := range map[string]string{
+		"spreadsheet.named_range.list": "workbook.read", "spreadsheet.named_range.get": "workbook.read",
+		"spreadsheet.named_range.create": "formula.write", "spreadsheet.named_range.update": "formula.write", "spreadsheet.named_range.delete": "formula.write",
+	} {
+		definition, found := findMCPTool(name)
+		if !found || definition.Meta["required_scope"] != scope {
+			t.Fatalf("named range MCP tool %s = %#v", name, definition)
+		}
+	}
+
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "named api"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "named-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 10}, {"row": 2, "column": 1, "value": 20}, {"row": 1, "column": 2, "formula": "=SUM(Sales_Data)"}},
+	}, http.StatusOK)
+	created := request[workbook.NamedRange](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/named-ranges", map[string]any{
+		"idempotency_key": "named-create", "name": "Sales_Data", "sheet_id": sheetID, "range": "A1:A2",
+	}, http.StatusCreated)
+	if created.Revision != 1 || created.WorkbookVersion != 3 {
+		t.Fatalf("REST named range create = %#v", created)
+	}
+	listed := request[struct {
+		Items []workbook.NamedRange `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/named-ranges", nil, http.StatusOK)
+	if len(listed.Items) != 1 || listed.Items[0].ID != created.ID {
+		t.Fatalf("REST named range list = %#v", listed)
+	}
+	assertHTTPFormulaCell(t, server, sheetID, "B1", "=SUM(Sales_Data)", "30")
+
+	mcpGet := request[struct {
+		Result struct {
+			Structured workbook.NamedRange `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 71, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.named_range.get", "arguments": map[string]any{"named_range_id": created.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.Name != "Sales_Data" {
+		t.Fatalf("MCP named range get = %#v", mcpGet)
+	}
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.NamedRange `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 72, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.named_range.update", "arguments": map[string]any{"named_range_id": created.ID, "name": "Revenue", "range": "A1", "expected_revision": 1}}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.Name != "Revenue" || mcpUpdated.Result.Structured.Revision != 2 || mcpUpdated.Result.Structured.WorkbookVersion != 4 {
+		t.Fatalf("MCP named range update = %#v", mcpUpdated)
+	}
+	assertHTTPFormulaCell(t, server, sheetID, "B1", "=SUM(Revenue)", "10")
+	info := request[formulaInfoResult](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/formulas/B1", nil, http.StatusOK)
+	if !reflect.DeepEqual(info.Dependencies, []string{"A1"}) {
+		t.Fatalf("named formula info = %#v", info)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 73, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.named_range.delete", "arguments": map[string]any{"named_range_id": created.ID, "expected_revision": 2}}}, http.StatusOK)
+	assertHTTPFormulaCell(t, server, sheetID, "B1", "=SUM(Revenue)", `"#NAME?"`)
+}
+
+func assertHTTPFormulaCell(t *testing.T, server *httptest.Server, sheetID, address, formula, value string) {
+	t.Helper()
+	result := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/"+address, nil, http.StatusOK)
+	if len(result.Items) != 1 || result.Items[0].Formula != formula || string(result.Items[0].Value) != value {
+		t.Fatalf("HTTP formula cell %s = %#v; want formula=%s value=%s", address, result.Items, formula, value)
+	}
+}
+
 func TestCircularFormulaIsStoredAsExplicitError(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

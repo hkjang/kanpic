@@ -32,3 +32,11 @@ func TestRenameSheetReferencesPreservesStringsAndQuotesNewName(t *testing.T) {
 		t.Fatalf("quoted RenameSheetReferences() = %q", got)
 	}
 }
+
+func TestRenameNamedRangeReferences(t *testing.T) {
+	input := `=SUM(Sales_Data)+Sales_Data+"Sales_Data"+'Sales_Data'!A1+Sales_Data!B1`
+	want := `=SUM(Revenue)+Revenue+"Sales_Data"+'Sales_Data'!A1+Sales_Data!B1`
+	if got := RenameNamedRangeReferences(input, "Sales_Data", "Revenue"); got != want {
+		t.Fatalf("RenameNamedRangeReferences() = %q, want %q", got, want)
+	}
+}

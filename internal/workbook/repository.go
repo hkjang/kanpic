@@ -43,6 +43,11 @@ type Repository interface {
 	GetDataValidation(context.Context, string) (DataValidation, error)
 	UpdateDataValidation(context.Context, string, string, UpdateDataValidationInput) (DataValidation, error)
 	DeleteDataValidation(context.Context, string, string, *int64) error
+	CreateNamedRange(context.Context, string, string, CreateNamedRangeInput) (NamedRange, error)
+	ListNamedRanges(context.Context, string) ([]NamedRange, error)
+	GetNamedRange(context.Context, string) (NamedRange, error)
+	UpdateNamedRange(context.Context, string, string, UpdateNamedRangeInput) (NamedRange, error)
+	DeleteNamedRange(context.Context, string, string, *int64) error
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)

@@ -16,16 +16,17 @@ docker compose up --build
 
 ## 오프라인 설치
 
-GitHub Release의 `kanpic-v0.1.0.tar.gz`는 Docker 이미지 아카이브입니다.
+GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-sha256sum -c kanpic-v0.1.0.tar.gz.sha256
-gzip -dc kanpic-v0.1.0.tar.gz | docker load
+VERSION=v0.4.0
+sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
+gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
   -e POSTGRES_DSN='postgres://kanpic:password@postgres.internal:5432/kanpic?sslmode=require' \
   -e BOOTSTRAP_ADMIN_ID='admin' \
   -e BOOTSTRAP_ADMIN_PASSWORD='충분히-긴-초기-비밀번호' \
-  kanpic:v0.1.0
+  "kanpic:${VERSION}"
 ```
 
 런타임에는 외부 인터넷 연결이 필요하지 않습니다. 애플리케이션 이미지에 웹 자산, CA 인증서 묶음, 시간대 데이터와 마이그레이션이 모두 포함됩니다.
@@ -47,12 +48,12 @@ go test ./...
 cd web && npm ci && npm test && npm run build
 ```
 
-CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 현재 워크북을 XLSX 또는 CSV로 내보낼 수 있으며, 동일 기능은 REST API와 MCP 도구에서도 제공됩니다.
+CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 시트 간 참조와 이름 범위를 포함한 수식을 사용할 수 있고, 현재 워크북을 XLSX 또는 CSV로 내보낼 수 있습니다. 동일 기능은 REST API와 MCP 도구에서도 제공됩니다.
 
 릴리즈 번들은 다음 명령으로 만듭니다.
 
 ```bash
-./scripts/release.sh v0.1.0
+./scripts/release.sh vX.Y.Z
 ```
 
 ## 문의 및 연락처 (Contact & Support)

@@ -124,7 +124,7 @@ test('formats a selected range without changing values or formulas and resends o
   await expect.poll(async () => (await range()).items.map((cell:{value:unknown}) => cell.value)).toEqual([5, 10])
   await canvas.click({ position:{ x:70, y:42 } })
   await page.keyboard.press('Shift+ArrowDown')
-  await expect(page.locator('.name-box')).toHaveText('A1:A2')
+  await expect(page.locator('.name-box')).toHaveValue('A1:A2')
 
   await page.getByRole('button', { name:'굵게' }).click()
   await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.bold)).toEqual([true, true])
@@ -174,7 +174,7 @@ test('merges cells without data loss and supports undo redo and offline unmerge'
   expect(merged.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2).value).toBe('kept')
 
   await canvas.click({position:{x:170,y:69}})
-  await expect(page.locator('.name-box')).toHaveText('A1:B2')
+  await expect(page.locator('.name-box')).toHaveValue('A1:B2')
   await expect(page.getByLabel('수식 입력창')).toHaveValue('merged title')
   await page.getByRole('button',{name:'실행 취소'}).click()
   await expect.poll(async()=>{const result=await cells();return result.items.some((cell:{style?:Record<string,unknown>})=>cell.style?.merge)}).toBe(false)
@@ -228,7 +228,7 @@ test('sorts a range by multiple keys with formulas, undo, and offline resend', a
     await page.keyboard.press('Shift+ArrowDown')
     await page.keyboard.press('Shift+ArrowDown')
     await page.keyboard.press('Shift+ArrowDown')
-    await expect(page.locator('.name-box')).toHaveText('A1:C4')
+    await expect(page.locator('.name-box')).toHaveValue('A1:C4')
   }
 
   await selectRange()
@@ -282,7 +282,7 @@ test('persists personal filter views and compresses filtered canvas rows', async
   await canvas.click({position:{x:70,y:42}})
   await page.keyboard.press('Shift+ArrowRight');await page.keyboard.press('Shift+ArrowRight')
   for(let index=0;index<4;index++)await page.keyboard.press('Shift+ArrowDown')
-  await expect(page.locator('.name-box')).toHaveText('A1:C5')
+  await expect(page.locator('.name-box')).toHaveValue('A1:C5')
 
   await page.getByRole('button',{name:'필터 보기'}).click()
   await expect(page.getByRole('dialog',{name:'필터 보기'})).toBeVisible()
@@ -309,14 +309,14 @@ test('persists personal filter views and compresses filtered canvas rows', async
   await expect(canvas).toBeVisible()
   await expect(page.getByRole('button',{name:'필터 보기'})).toHaveClass(/active/)
   await canvas.click({position:{x:70,y:96}})
-  await expect(page.locator('.name-box')).toHaveText('A6')
+  await expect(page.locator('.name-box')).toHaveValue('A6')
   await page.getByRole('button',{name:'필터 보기'}).click()
   await page.getByRole('button',{name:/qualified.*적용 중/}).click()
   await page.getByRole('button',{name:'필터 해제'}).click()
   await expect.poll(async()=>Boolean((await filterViews()).items[0]?.active)).toBe(false)
   await page.getByRole('button',{name:'필터 닫기'}).click()
   await canvas.click({position:{x:70,y:96}})
-  await expect(page.locator('.name-box')).toHaveText('A3')
+  await expect(page.locator('.name-box')).toHaveValue('A3')
 
   await page.getByRole('button',{name:'필터 보기'}).click()
   await page.getByRole('button',{name:/qualified/}).click()
@@ -327,7 +327,7 @@ test('persists personal filter views and compresses filtered canvas rows', async
   await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:latest.version,idempotency_key:`filter-latest-${workbookId}`,cells:[{row:3,column:2,value:11}]}})
   await expect.poll(async()=>(await filterResult(viewId)).hidden_rows).toEqual([4,5])
   await canvas.click({position:{x:70,y:96}})
-  await expect(page.locator('.name-box')).toHaveText('A3')
+  await expect(page.locator('.name-box')).toHaveValue('A3')
 })
 
 test('creates colored dropdown validation and rejects invalid writes', async ({ page }) => {
@@ -340,7 +340,7 @@ test('creates colored dropdown validation and rejects invalid writes', async ({ 
   const canvas=page.locator('canvas.grid-canvas')
   await canvas.click({position:{x:70,y:42}})
   await page.keyboard.press('Shift+ArrowDown');await page.keyboard.press('Shift+ArrowDown')
-  await expect(page.locator('.name-box')).toHaveText('A1:A3')
+  await expect(page.locator('.name-box')).toHaveValue('A1:A3')
 
   await page.getByRole('button',{name:'데이터 검증'}).click()
   await expect(page.getByRole('dialog',{name:'데이터 검증'})).toBeVisible()
@@ -426,7 +426,7 @@ test('spills FILTER results and protects generated cells in the editor', async (
 
   await canvas.click({position:{x:390,y:69}})
   await page.keyboard.press('F2')
-  await expect(page.locator('.name-box')).toHaveText('D1')
+  await expect(page.locator('.name-box')).toHaveValue('D1')
   await expect(page.locator('input.cell-editor')).toHaveValue('=FILTER(A1:B3,B1:B3>=20)')
   await page.locator('input.cell-editor').press('Escape')
 
@@ -475,6 +475,49 @@ test('recalculates cross-sheet formulas entered in the editor and preserves them
   await expect.poll(async()=>(await reportValue())?.formula).toBe(`='Raw Data'!A1*2`)
 })
 
+test('creates named ranges from the name box and keeps formulas valid through rename', async ({ page }) => {
+  const workbook=await page.request.post('/api/v1/workbooks',{data:{title:`이름 범위 ${Date.now()}`,workspace_id:'default'}}).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:1,idempotency_key:`named-seed-${workbook.id}`,cells:[{row:1,column:1,value:10},{row:2,column:1,value:20}]}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  const nameBox=page.getByRole('combobox',{name:'이름 상자'})
+  await nameBox.fill('A1:A2')
+  await nameBox.press('Enter')
+  await expect(nameBox).toHaveValue('A1:A2')
+  await page.getByRole('button',{name:'이름 범위 관리'}).click()
+  await page.getByRole('textbox',{name:'이름 범위 이름'}).fill('Sales_Data')
+  await expect(page.getByRole('textbox',{name:'이름 범위 대상'})).toHaveValue('A1:A2')
+  await page.getByRole('button',{name:'저장',exact:true}).click()
+  await expect.poll(async()=>page.request.get(`/api/v1/workbooks/${workbook.id}/named-ranges`).then(response=>response.json()).then(body=>body.items[0]?.name)).toBe('Sales_Data')
+  await page.getByRole('button',{name:'이름 범위 닫기'}).click()
+
+  await nameBox.fill('B1')
+  await nameBox.press('Enter')
+  const canvas=page.locator('canvas.grid-canvas')
+  await canvas.dblclick({position:{x:208,y:42}})
+  await page.locator('input.cell-editor').fill('=SUM(Sales_Data)')
+  await page.locator('input.cell-editor').press('Enter')
+  const formulaCell=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json()).then(body=>body.items[0])
+  await expect.poll(async()=>(await formulaCell())?.value).toBe(30)
+
+  await page.getByRole('button',{name:'이름 범위 관리'}).click()
+  await page.getByRole('button',{name:/Sales_Data/}).click()
+  await page.getByRole('textbox',{name:'이름 범위 이름'}).fill('Revenue')
+  await page.getByRole('textbox',{name:'이름 범위 대상'}).fill('A1')
+  await page.getByRole('button',{name:'저장',exact:true}).click()
+  await expect.poll(async()=>({formula:(await formulaCell())?.formula,value:(await formulaCell())?.value})).toEqual({formula:'=SUM(Revenue)',value:10})
+  await page.getByRole('button',{name:'이름 범위 닫기'}).click()
+  await nameBox.fill('Revenue')
+  await nameBox.press('Enter')
+  await expect(nameBox).toHaveValue('A1')
+
+  await page.getByRole('button',{name:'이름 범위 관리'}).click()
+  await page.getByRole('button',{name:/Revenue/}).click()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('button',{name:'삭제',exact:true}).click()
+  await expect.poll(async()=>(await formulaCell())?.value).toBe('#NAME?')
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()
@@ -491,7 +534,7 @@ test('synchronizes presence and edits between two browser tabs', async ({ page, 
   await firstCanvas.dblclick({ position: { x: 70, y: 42 } })
   await page.locator('input.cell-editor').fill('17')
   await page.locator('input.cell-editor').press('Enter')
-  await expect(second.locator('.formula-bar input')).toHaveValue('17')
+  await expect(second.getByLabel('수식 입력창')).toHaveValue('17')
 
   await second.close()
   await expect(page.locator('.collaboration-count')).toContainText('1명 접속')
@@ -530,7 +573,7 @@ test('creates a named version and restores it with an automatic backup', async (
   page.once('dialog', dialog => dialog.accept())
   await page.locator('.workbook-version').filter({ hasText: '기준 버전' }).getByRole('button', { name: '복원' }).click()
   await expect.poll(valueAtA1).toBe(10)
-  await expect(page.locator('.formula-bar input')).toHaveValue('10')
+  await expect(page.getByLabel('수식 입력창')).toHaveValue('10')
   await expect(page.locator('.workbook-version').filter({ hasText: '복원 전 자동 백업' })).toBeVisible()
 })
 
@@ -552,7 +595,7 @@ test('selects a range and pastes copied formulas with relative references', asyn
 
   await canvas.click({position:{x:70,y:42}})
   await page.keyboard.press('Shift+ArrowRight')
-  await expect(page.locator('.name-box')).toHaveText('A1:B1')
+  await expect(page.locator('.name-box')).toHaveValue('A1:B1')
   await page.keyboard.press('Control+C')
   await canvas.click({position:{x:390,y:120}})
   await page.keyboard.press('Control+V')

@@ -60,3 +60,37 @@ func TestUnscopedEvaluatorAcceptsQualifiedCellMaps(t *testing.T) {
 		t.Fatalf("unscoped qualified result = %#v, error=%v", result.Value, result.Error)
 	}
 }
+
+func TestScopedEvaluatorResolvesWorkbookNamedRanges(t *testing.T) {
+	t.Parallel()
+	evaluator := NewScopedWithNames("sheet-report", map[string]string{"Input": "sheet-input", "Report": "sheet-report"}, map[string]NamedRange{
+		"Quarter_Sales": {SheetID: "sheet-input", Range: "B1:B3"},
+		"TaxRate":       {SheetID: "sheet-input", Range: "C1"},
+		"XFE1":          {SheetID: "sheet-input", Range: "D1"},
+		"A1048577":      {SheetID: "sheet-input", Range: "E1"},
+	})
+	cells := map[string]any{
+		CellKey("sheet-input", "B1"): 10,
+		CellKey("sheet-input", "B2"): 20,
+		CellKey("sheet-input", "B3"): 30,
+		CellKey("sheet-input", "C1"): .1,
+		CellKey("sheet-input", "D1"): 2,
+		CellKey("sheet-input", "E1"): 3,
+	}
+	result := evaluator.Evaluate("=SUM(Quarter_Sales)*(1+TaxRate)", cells)
+	if result.Error != nil || result.Value != float64(66) {
+		t.Fatalf("named result = %#v, error=%v", result.Value, result.Error)
+	}
+	want := []string{CellKey("sheet-input", "B1"), CellKey("sheet-input", "B2"), CellKey("sheet-input", "B3"), CellKey("sheet-input", "C1")}
+	if !reflect.DeepEqual(result.Dependencies, want) {
+		t.Fatalf("named dependencies = %#v, want %#v", result.Dependencies, want)
+	}
+	missing := evaluator.Evaluate("=MissingName", cells)
+	if missing.Error == nil || missing.Error.Code != "#NAME?" {
+		t.Fatalf("missing named range error = %#v", missing.Error)
+	}
+	outOfBoundsNames := evaluator.Evaluate("=XFE1+A1048577", cells)
+	if outOfBoundsNames.Error != nil || outOfBoundsNames.Value != float64(5) {
+		t.Fatalf("out-of-bounds reference names = %#v, error=%v", outOfBoundsNames.Value, outOfBoundsNames.Error)
+	}
+}

@@ -49,7 +49,7 @@ func parseCoordinateKey(value string) (CellCoordinate, error) {
 	return CellCoordinate{Row: row, Column: column}, nil
 }
 
-func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
+func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, namedRanges map[string]formula.NamedRange) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
 	prospective := cloneAllCells(existing)
 	if prospective[currentSheetID] == nil {
 		return nil, nil, nil, ErrNotFound
@@ -107,7 +107,7 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		sheetNames[sheet.Name] = sheetID
 		sheetIDs[strings.ToUpper(sheetID)] = sheetID
 	}
-	evaluator := formula.NewScoped("", sheetNames)
+	evaluator := formula.NewScopedWithNames("", sheetNames, namedRanges)
 	forcedSpills := make(map[string]*formula.Error)
 	recalculatedSet := make(map[scopedCellKey]struct{})
 	formulaErrors := make(map[scopedCellKey]CellFormulaError)

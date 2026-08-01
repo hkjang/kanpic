@@ -35,7 +35,13 @@ func New() *Evaluator { return &Evaluator{} }
 // names to stable identifiers; currentSheet is the stable identifier used for
 // unqualified A1 references.
 func NewScoped(currentSheet string, sheets map[string]string) *Evaluator {
-	return &Evaluator{scope: newScope(currentSheet, sheets)}
+	return NewScopedWithNames(currentSheet, sheets, nil)
+}
+
+// NewScopedWithNames creates a workbook-aware evaluator with workbook-level
+// named ranges in addition to visible sheet names.
+func NewScopedWithNames(currentSheet string, sheets map[string]string, namedRanges map[string]NamedRange) *Evaluator {
+	return &Evaluator{scope: newScope(currentSheet, sheets, namedRanges)}
 }
 
 func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
@@ -597,11 +603,38 @@ func (p *parser) primary() (node, error) {
 			return literalNode{false}, nil
 		}
 		if !isReference(name) {
-			return nil, fmt.Errorf("unknown name %q", current.text)
+			return p.namedRange(current.text)
 		}
 		return p.cellReference("", current.text)
 	}
 	return nil, fmt.Errorf("unexpected token %q", current.text)
+}
+
+func (p *parser) namedRange(name string) (node, error) {
+	target, err := p.scope.resolveNamedRange(name)
+	if err != nil {
+		return nil, err
+	}
+	selected, parseErr := cellrange.Parse(target.Range)
+	if parseErr != nil {
+		return nil, formulaError("#REF!", "named range "+name+" has an invalid target")
+	}
+	count := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
+	if count > 100_000 {
+		return nil, formulaError("#VALUE!", "range is too large")
+	}
+	addresses := make([]string, 0, count)
+	for row := selected.Start.Row; row <= selected.End.Row; row++ {
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			key := CellKey(target.SheetID, cellrange.Address(row, column))
+			p.dependencies[key] = struct{}{}
+			addresses = append(addresses, key)
+		}
+	}
+	if len(addresses) == 1 {
+		return referenceNode{address: addresses[0]}, nil
+	}
+	return rangeNode{rows: selected.End.Row - selected.Start.Row + 1, columns: selected.End.Column - selected.Start.Column + 1, addresses: addresses}, nil
 }
 
 func (p *parser) cellReference(qualifier, startText string) (node, error) {
@@ -664,14 +697,16 @@ func operatorPrecedence(operator string) int {
 
 func isReference(value string) bool {
 	index := 0
+	column := 0
 	for index < len(value) && value[index] >= 'A' && value[index] <= 'Z' {
+		column = column*26 + int(value[index]-'A'+1)
 		index++
 	}
-	if index == 0 || index == len(value) {
+	if index == 0 || index == len(value) || column > 16_384 {
 		return false
 	}
 	row, err := strconv.Atoi(value[index:])
-	return err == nil && row > 0
+	return err == nil && row > 0 && row <= 1_048_576
 }
 func toNumber(value any) (float64, bool) {
 	switch typed := value.(type) {
