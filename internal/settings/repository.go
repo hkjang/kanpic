@@ -2,6 +2,8 @@ package settings
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,6 +82,12 @@ var defaults = []Setting{
 	{Key: "files.max_import_mb", Value: json.RawMessage(`20`), ValueType: "number", Description: "Import 파일 최대 크기"},
 	{Key: "ai.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "AI 기능 사용"},
 	{Key: "ai.gateway_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 OpenAI 호환 LLM Gateway"},
+	{Key: "ai.model", Value: json.RawMessage(`"kanpic-default"`), ValueType: "string", Description: "AI 작업에 사용할 모델"},
+	{Key: "ai.api_key", Value: json.RawMessage(`""`), ValueType: "string", Description: "LLM Gateway API Key (선택)", Secret: true},
+	{Key: "ai.ca_pem", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 LLM Gateway CA 인증서 PEM", Secret: true},
+	{Key: "ai.timeout_seconds", Value: json.RawMessage(`30`), ValueType: "number", Description: "AI Gateway 요청 제한 시간(초)"},
+	{Key: "ai.max_input_cells", Value: json.RawMessage(`200`), ValueType: "number", Description: "AI에 전달할 선택 범위 최대 셀 수"},
+	{Key: "ai.max_changes", Value: json.RawMessage(`100`), ValueType: "number", Description: "AI 계획 한 건의 최대 변경 셀 수"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},
 	{Key: "observability.log_retention_days", Value: json.RawMessage(`30`), ValueType: "number", Description: "서버 로그 보존 일수"},
 }
@@ -209,6 +217,13 @@ func (r *Repository) Validate(ctx context.Context) (ValidationResult, error) {
 			}
 		}
 	}
+	if enabled, ok := boolValue(values["ai.enabled"]); ok && enabled {
+		for _, key := range []string{"ai.gateway_url", "ai.model"} {
+			if value, ok := stringValue(values[key]); !ok || strings.TrimSpace(value) == "" {
+				issues = append(issues, ValidationIssue{Key: key, Severity: "error", Message: "AI를 사용할 때 필수입니다."})
+			}
+		}
+	}
 	return ValidationResult{Valid: len(issues) == 0, Issues: issues}, nil
 }
 
@@ -239,6 +254,11 @@ func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
 			}
 		}
 		results = append(results, TestResult{Name: "Keycloak OIDC", Success: testErr == nil, Message: resultMessage(testErr, "Discovery 연결 성공"), DurationMS: time.Since(started).Milliseconds()})
+	}
+	if enabled, _ := values["ai.enabled"].(bool); enabled {
+		started = time.Now()
+		testErr := testAIGateway(ctx, values)
+		results = append(results, TestResult{Name: "사내 LLM Gateway", Success: testErr == nil, Message: resultMessage(testErr, "OpenAI 호환 models 연결 성공"), DurationMS: time.Since(started).Milliseconds()})
 	}
 	return results, nil
 }
@@ -377,6 +397,14 @@ func validateValue(item Setting) string {
 			}
 		}
 	}
+	if item.Key == "ai.gateway_url" {
+		if text, _ := value.(string); text != "" {
+			parsed, err := url.Parse(text)
+			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return "AI Gateway URL은 http 또는 https URL이어야 합니다."
+			}
+		}
+	}
 	if item.Key == "editor.autosave_batch_ms" {
 		number, _ := value.(float64)
 		if number < 100 || number > 500 {
@@ -389,7 +417,68 @@ func validateValue(item Setting) string {
 			return "Import 파일 한도는 1~2048MB여야 합니다."
 		}
 	}
+	if item.Key == "ai.timeout_seconds" {
+		number, _ := value.(float64)
+		if number < 1 || number > 120 {
+			return "AI 요청 제한 시간은 1~120초여야 합니다."
+		}
+	}
+	if item.Key == "ai.max_input_cells" {
+		number, _ := value.(float64)
+		if number < 1 || number > 1000 {
+			return "AI 입력 범위는 1~1000셀이어야 합니다."
+		}
+	}
+	if item.Key == "ai.max_changes" {
+		number, _ := value.(float64)
+		if number < 1 || number > 1000 {
+			return "AI 변경 한도는 1~1000셀이어야 합니다."
+		}
+	}
 	return ""
+}
+
+func testAIGateway(ctx context.Context, values map[string]any) error {
+	base, _ := values["ai.gateway_url"].(string)
+	parsed, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("AI Gateway URL이 올바르지 않습니다.")
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(path, "/chat/completions") {
+		path = strings.TrimSuffix(path, "/chat/completions")
+	}
+	if !strings.HasSuffix(path, "/v1") {
+		path += "/v1"
+	}
+	parsed.Path = path + "/models"
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if ca, _ := values["ai.ca_pem"].(string); strings.TrimSpace(ca) != "" {
+		roots, rootErr := x509.SystemCertPool()
+		if rootErr != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM([]byte(ca)) {
+			return errors.New("ai.ca_pem이 올바른 인증서가 아닙니다.")
+		}
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return err
+	}
+	if key, _ := values["ai.api_key"].(string); strings.TrimSpace(key) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(key))
+	}
+	response, err := (&http.Client{Transport: transport, Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 func redact(item Setting) Setting {

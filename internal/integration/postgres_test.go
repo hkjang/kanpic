@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"sync"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	kanpicai "kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
 	"kanpic/internal/database"
@@ -23,6 +28,12 @@ import (
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
 )
+
+type staticAISettings map[string]any
+
+func (values staticAISettings) Values(context.Context) (map[string]any, error) {
+	return values, nil
+}
 
 func TestPostgresDurabilityFlow(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
@@ -1800,5 +1811,130 @@ func TestSettingsAndAPIKeyLifecycle(t *testing.T) {
 	}
 	if _, err := keys.Authenticate(ctx, rotated.Secret); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("revoked key remained valid: %v", err)
+	}
+}
+
+func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("ai-user-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "AI lifecycle", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: "browser", BaseVersion: 1, IdempotencyKey: "ai-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`5`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gatewayCalls int
+	var gatewayExplain bool
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayCalls++
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer internal-key" {
+			t.Errorf("gateway request path/auth=%s/%s", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if gatewayExplain {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"선택 수식 설명\",\"explanation\":\"A1의 값을 두 배로 계산합니다.\",\"changes\":[]}"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"A1을 두 배로 계산\",\"explanation\":\"B1에 A1의 두 배 수식을 제안합니다.\",\"changes\":[{\"row\":1,\"column\":2,\"formula\":\"=A1*2\"}]}"}}]}`))
+	}))
+	defer gateway.Close()
+	config := staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "offline-test",
+		"ai.api_key": "internal-key", "ai.ca_pem": "", "ai.timeout_seconds": float64(5),
+		"ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}
+	service := kanpicai.NewService(pool, config, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	planInput := kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "B1에 A1의 두 배 수식을 넣어줘", Mode: kanpicai.ModeFormula, BaseVersion: seed.ServerVersion, IdempotencyKey: "ai-plan", ClientID: "browser", ActorID: actor}
+	planned, err := service.Plan(ctx, planInput)
+	if err != nil || planned.Status != kanpicai.StatusPlanned || planned.Revision != 1 || len(planned.Changes) != 1 || planned.Changes[0].After.Formula != "=A1*2" {
+		t.Fatalf("planned=%#v, %v", planned, err)
+	}
+	duplicatePlan, err := service.Plan(ctx, planInput)
+	if err != nil || !duplicatePlan.Duplicate || duplicatePlan.ID != planned.ID || gatewayCalls != 1 {
+		t.Fatalf("duplicate plan=%#v calls=%d err=%v", duplicatePlan, gatewayCalls, err)
+	}
+	changedRequest := planInput
+	changedRequest.Request = "같은 키로 다른 계획"
+	if _, err := service.Plan(ctx, changedRequest); !errors.Is(err, kanpicai.ErrInvalid) || gatewayCalls != 1 {
+		t.Fatalf("reused idempotency key error=%v calls=%d", err, gatewayCalls)
+	}
+	if _, err := service.Get(ctx, planned.ID, "another-user"); !errors.Is(err, kanpicai.ErrNotFound) {
+		t.Fatalf("cross-user get error=%v", err)
+	}
+	applied, err := service.Approve(ctx, planned.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "ai-approve", ExpectedRevision: 1})
+	if err != nil || applied.Action.Status != kanpicai.StatusApplied || applied.Action.Revision != 2 || applied.Operation.ServerVersion != seed.ServerVersion+1 || applied.Operation.AppliedCells != 1 {
+		t.Fatalf("applied=%#v, %v", applied, err)
+	}
+	duplicateApproval, err := service.Approve(ctx, planned.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "ai-approve", ExpectedRevision: 1})
+	if err != nil || !duplicateApproval.Operation.Duplicate || duplicateApproval.Operation.OperationID != applied.Operation.OperationID {
+		t.Fatalf("duplicate approval=%#v, %v", duplicateApproval, err)
+	}
+	selected, _ := cellrange.Parse("B1")
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || cells[0].Formula != "=A1*2" || string(cells[0].Value) != "10" {
+		t.Fatalf("AI formula cells=%#v, %v", cells, err)
+	}
+	undone, err := service.Undo(ctx, planned.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "ai-undo", ExpectedRevision: 2})
+	if err != nil || undone.Action.Status != kanpicai.StatusUndone || undone.Action.Revision != 3 || undone.Operation.ServerVersion != seed.ServerVersion+2 {
+		t.Fatalf("undone=%#v, %v", undone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 0 {
+		t.Fatalf("AI undo cells=%#v, %v", cells, err)
+	}
+	loaded, err := service.Get(ctx, planned.ID, actor)
+	if err != nil || len(loaded.Events) != 3 || loaded.Events[0].ToolName != "range.read" || loaded.Events[1].ToolName != "formula.set" || loaded.Events[2].ToolName != "operation.undo" {
+		t.Fatalf("AI events=%#v, %v", loaded.Events, err)
+	}
+	var auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_type='ai_action' AND resource_id=$1`, planned.ID).Scan(&auditCount); err != nil || auditCount != 3 {
+		t.Fatalf("AI audit count=%d, %v", auditCount, err)
+	}
+	gatewayExplain = true
+	explained, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "선택 수식을 설명해줘", Mode: kanpicai.ModeExplain, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-explain", ActorID: actor})
+	gatewayExplain = false
+	if err != nil || explained.Status != kanpicai.StatusCompleted || len(explained.Changes) != 0 || explained.Explanation == "" || len(explained.Events) != 1 || explained.Events[0].EventType != "completed" {
+		t.Fatalf("explain action=%#v, %v", explained, err)
+	}
+	if _, err := service.Approve(ctx, explained.ID, kanpicai.ApprovalInput{ActorID: actor, IdempotencyKey: "ai-explain-approve", ExpectedRevision: 1}); !errors.Is(err, kanpicai.ErrInvalid) {
+		t.Fatalf("explain approval error=%v", err)
+	}
+
+	stale, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "다시 수식을 제안해줘", Mode: kanpicai.ModeFormula, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-stale-plan", ActorID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "other", ClientID: "other", BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-unrelated-change", Cells: []workbook.CellInput{{Row: 2, Column: 1, Value: json.RawMessage(`9`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Approve(ctx, stale.ID, kanpicai.ApprovalInput{ActorID: actor, IdempotencyKey: "ai-stale-approve", ExpectedRevision: 1})
+	if !errors.Is(err, workbook.ErrVersionConflict) {
+		t.Fatalf("stale approval error=%v", err)
+	}
+	stale, err = service.Get(ctx, stale.ID, actor)
+	if err != nil || stale.Status != kanpicai.StatusPlanned || stale.Revision != 1 {
+		t.Fatalf("stale action changed=%#v, %v", stale, err)
 	}
 }

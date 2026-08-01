@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
 	"kanpic/internal/buildinfo"
@@ -38,6 +39,7 @@ type Server struct {
 	formula    *formula.Evaluator
 	files      *importexport.Service
 	collab     *collaboration.Hub
+	ai         ai.Orchestrator
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -45,10 +47,14 @@ func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
 }
 
 func NewPlatform(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, logger *slog.Logger) http.Handler {
+	return NewPlatformWithAI(repository, settingRepository, keys, authService, logs, nil, logger)
+}
+
+func NewPlatformWithAI(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger)}
+	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/version", s.versionInfo)
@@ -165,6 +171,13 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 		mux.HandleFunc("POST /auth/bootstrap/login", s.bootstrapLogin)
 		mux.HandleFunc("GET /api/v1/session", s.session)
 		mux.HandleFunc("POST /auth/logout", s.logout)
+	}
+	if aiService != nil {
+		mux.HandleFunc("GET /api/v1/ai/config", s.aiConfig)
+		mux.HandleFunc("POST /api/v1/ai/actions:plan", s.planAIAction)
+		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/ai/actions", s.listAIActions)
+		mux.HandleFunc("GET /api/v1/ai/actions/{actionId}", s.getAIAction)
+		mux.HandleFunc("POST /api/v1/ai/actions/{actionAction}", s.executeAIAction)
 	}
 	mux.HandleFunc("POST /mcp", s.mcp)
 	if directory := staticDirectory(); directory != "" {
@@ -676,7 +689,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Kanpic-Actor, X-Trace-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Kanpic-Actor, X-Trace-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -879,6 +892,9 @@ func requiredScope(r *http.Request) string {
 			return "range.read"
 		}
 		return "range.write"
+	}
+	if strings.Contains(path, "/ai/") || strings.Contains(path, "/ai:") {
+		return "ai.use"
 	}
 	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") || strings.Contains(path, "layout:apply") {
 		return "format.write"

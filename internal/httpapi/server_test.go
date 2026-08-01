@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -13,8 +14,35 @@ import (
 	"strconv"
 	"testing"
 
+	"kanpic/internal/ai"
 	"kanpic/internal/workbook"
 )
+
+type fakeAIOrchestrator struct{ action ai.Action }
+
+func (f *fakeAIOrchestrator) PublicConfig(context.Context) (ai.Config, error) {
+	return ai.Config{Enabled: true, Model: "offline-test", MaxInputCells: 200, MaxChanges: 100}, nil
+}
+func (f *fakeAIOrchestrator) Plan(_ context.Context, input ai.PlanInput) (ai.Action, error) {
+	f.action = ai.Action{ID: "ai-action", WorkbookID: input.WorkbookID, SheetID: input.SheetID, ActorID: input.ActorID, ClientID: input.ClientID, Mode: input.Mode, Range: input.Range, Request: input.Request, Status: ai.StatusPlanned, BaseVersion: input.BaseVersion, Model: "offline-test", Summary: "formula preview", Changes: []ai.ProposedChange{{Row: 1, Column: 2, Address: "B1", After: ai.CellSnapshot{Formula: "=A1*2"}}}, Revision: 1}
+	return f.action, nil
+}
+func (f *fakeAIOrchestrator) Get(_ context.Context, _, _ string) (ai.Action, error) {
+	return f.action, nil
+}
+func (f *fakeAIOrchestrator) List(_ context.Context, _, _ string, _ int) ([]ai.Action, error) {
+	return []ai.Action{f.action}, nil
+}
+func (f *fakeAIOrchestrator) Approve(_ context.Context, _ string, _ ai.ApprovalInput) (ai.ExecutionResult, error) {
+	f.action.Status, f.action.Revision, f.action.OperationID = ai.StatusApplied, 2, "ai-operation"
+	result := workbook.MutationResult{OperationID: "ai-operation", WorkbookID: f.action.WorkbookID, SheetID: f.action.SheetID, BaseVersion: f.action.BaseVersion, ServerVersion: f.action.BaseVersion + 1, AppliedCells: 1}
+	return ai.ExecutionResult{Action: f.action, Operation: result, Changes: []workbook.CellInput{{Row: 1, Column: 2, Formula: "=A1*2"}}}, nil
+}
+func (f *fakeAIOrchestrator) Undo(_ context.Context, _ string, _ ai.ApprovalInput) (ai.ExecutionResult, error) {
+	f.action.Status, f.action.Revision, f.action.UndoOperationID = ai.StatusUndone, 3, "ai-undo"
+	result := workbook.MutationResult{OperationID: "ai-undo", WorkbookID: f.action.WorkbookID, SheetID: f.action.SheetID, BaseVersion: f.action.BaseVersion + 1, ServerVersion: f.action.BaseVersion + 2, AppliedCells: 1}
+	return ai.ExecutionResult{Action: f.action, Operation: result}, nil
+}
 
 func TestWorkbookCellVersionFlow(t *testing.T) {
 	t.Parallel()
@@ -583,6 +611,61 @@ func TestCellConflictRESTAndMCPComparisonResolutionFlow(t *testing.T) {
 	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/conflicts?include_resolved=true", nil, http.StatusOK)
 	if len(history.Items) != 1 || history.Items[0].Resolution != workbook.ConflictKeepCurrent || history.Items[0].ResolutionOperationID == "" {
 		t.Fatalf("resolved conflict history=%#v", history.Items)
+	}
+}
+
+func TestAIActionRESTAndMCPShareSafeExecutionContract(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"spreadsheet.ai.config.get", "spreadsheet.ai.action.plan", "spreadsheet.ai.action.list", "spreadsheet.ai.action.get", "spreadsheet.ai.action.approve", "spreadsheet.ai.action.undo"} {
+		definition, found := findMCPTool(name)
+		if !found || definition.Meta["required_scope"] != "ai.use" {
+			t.Fatalf("AI MCP tool %s=%#v", name, definition)
+		}
+	}
+	planTool, _ := findMCPTool("spreadsheet.ai.action.plan")
+	required, ok := planTool.InputSchema["required"].([]string)
+	if !ok || len(required) != 7 {
+		t.Fatalf("AI plan schema=%#v", planTool.InputSchema)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/ai/actions:plan", nil)); scope != "ai.use" {
+		t.Fatalf("AI REST scope=%q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	orchestrator := &fakeAIOrchestrator{}
+	server := httptest.NewServer(NewPlatformWithAI(repository, nil, nil, nil, nil, orchestrator, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "AI API"}, http.StatusCreated)
+	mcpConfig := request[struct {
+		Result struct {
+			Structured ai.Config `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 70, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.ai.config.get", "arguments": map[string]any{}}}, http.StatusOK)
+	if !mcpConfig.Result.Structured.Enabled || mcpConfig.Result.Structured.Model != "offline-test" {
+		t.Fatalf("MCP AI config=%#v", mcpConfig)
+	}
+	plan := request[ai.Action](t, server, http.MethodPost, "/api/v1/ai/actions:plan", map[string]any{"workbook_id": book.ID, "sheet_id": book.Sheets[0].ID, "range": "A1:B1", "request": "B1에 수식", "mode": "formula", "base_version": 1, "idempotency_key": "plan"}, http.StatusCreated)
+	if plan.ID != "ai-action" || plan.Status != ai.StatusPlanned || len(plan.Changes) != 1 {
+		t.Fatalf("REST AI plan=%#v", plan)
+	}
+	mcpGet := request[struct {
+		Result struct {
+			Structured ai.Action `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 71, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.ai.action.get", "arguments": map[string]any{"action_id": plan.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.ID != plan.ID {
+		t.Fatalf("MCP AI get=%#v", mcpGet)
+	}
+	applied := request[ai.ExecutionResult](t, server, http.MethodPost, "/api/v1/ai/actions/"+plan.ID+":approve", map[string]any{"idempotency_key": "approve", "expected_revision": 1}, http.StatusOK)
+	if applied.Action.Status != ai.StatusApplied || applied.Operation.AppliedCells != 1 {
+		t.Fatalf("REST AI approve=%#v", applied)
+	}
+	mcpUndo := request[struct {
+		Result struct {
+			Structured ai.ExecutionResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 72, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.ai.action.undo", "arguments": map[string]any{"action_id": plan.ID, "idempotency_key": "undo", "expected_revision": 2}}}, http.StatusOK)
+	if mcpUndo.Result.Structured.Action.Status != ai.StatusUndone || mcpUndo.Result.Structured.Operation.OperationID != "ai-undo" {
+		t.Fatalf("MCP AI undo=%#v", mcpUndo)
 	}
 }
 

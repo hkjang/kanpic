@@ -1194,6 +1194,9 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		duplicate.Duplicate = true
 		return duplicate, tx.Commit(ctx)
 	}
+	if mutation.RequireExactVersion && mutation.BaseVersion != currentVersion {
+		return MutationResult{}, ErrVersionConflict
+	}
 
 	conflicts := make([]CellConflict, 0)
 	if mutation.Expected == nil {

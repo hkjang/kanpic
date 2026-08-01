@@ -102,17 +102,18 @@ type CellInput struct {
 }
 
 type CellMutation struct {
-	SheetID           string          `json:"sheet_id"`
-	ActorID           string          `json:"actor_id"`
-	ClientID          string          `json:"client_id"`
-	BaseVersion       int64           `json:"base_version"`
-	IdempotencyKey    string          `json:"idempotency_key"`
-	Cells             []CellInput     `json:"cells"`
-	StylePatch        json.RawMessage `json:"-"`
-	Border            *BorderCommand  `json:"-"`
-	Expected          map[string]Cell `json:"-"`
-	OperationType     string          `json:"-"`
-	UndoOfOperationID string          `json:"-"`
+	SheetID             string          `json:"sheet_id"`
+	ActorID             string          `json:"actor_id"`
+	ClientID            string          `json:"client_id"`
+	BaseVersion         int64           `json:"base_version"`
+	IdempotencyKey      string          `json:"idempotency_key"`
+	Cells               []CellInput     `json:"cells"`
+	StylePatch          json.RawMessage `json:"-"`
+	Border              *BorderCommand  `json:"-"`
+	Expected            map[string]Cell `json:"-"`
+	OperationType       string          `json:"-"`
+	UndoOfOperationID   string          `json:"-"`
+	RequireExactVersion bool            `json:"-"`
 }
 
 type UndoOperationInput struct {

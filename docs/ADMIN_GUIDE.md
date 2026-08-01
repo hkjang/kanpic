@@ -1,7 +1,7 @@
 # kanpic 관리자 가이드 (System Administrator Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.13.0
+- **시스템 버전**: v0.14.0
 - **문서 버전**: v1.0  
 - **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 시스템 관리자 및 DevOps 엔지니어용 통합 운영 매뉴얼 (System Administrator Manual)  
@@ -108,23 +108,45 @@ flowchart LR
 
 ---
 
-## 5. Model Context Protocol (MCP) 서버 연동
+## 5. 사내 AI Gateway 설정과 안전 정책
 
-kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하게 제어할 수 있도록 `/mcp` HTTP JSON-RPC 2.0 표준 엔드포인트를 제공합니다.
+관리자 콘솔의 **사내 AI Gateway 간편 연결** 카드에서 OpenAI 호환 `/v1` Gateway를 설정합니다. 설정값은 환경 변수가 아니라 PostgreSQL의 관리 설정으로 저장되며, 다른 설정과 동일하게 변경 revision, 검증, 연결 테스트와 이전 버전 복원을 지원합니다.
 
-### 5.1 MCP 스코프 및 인증
-- MCP 요청은 HTTP Header `Authorization: Bearer <API_KEY>`를 통과해야 합니다.
-- 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
-- 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
+| 설정 키 | 기본값 | 설명 |
+| :--- | :--- | :--- |
+| `ai.enabled` | `false` | 검증과 연결 테스트가 끝난 뒤 AI 도우미 활성화 |
+| `ai.gateway_url` | 빈 값 | 사내 vLLM 또는 OpenAI 호환 Gateway URL |
+| `ai.model` | `kanpic-default` | 요청에 사용할 배포 모델 이름 |
+| `ai.api_key` | 빈 값 | Gateway Bearer API Key 비밀 설정 |
+| `ai.ca_pem` | 빈 값 | 폐쇄망 사설 CA 인증서 PEM 비밀 설정 |
+| `ai.timeout_seconds` | `30` | Gateway 요청 제한 시간 |
+| `ai.max_input_cells` | `200` | 한 계획에 전달할 선택 범위 최대 셀 수 |
+| `ai.max_changes` | `100` | 한 계획에서 허용할 최대 변경 셀 수 |
+
+**전체 검증**은 URL·모델·타입·제한값과 CA PEM을 검사하고, **연결 테스트**는 Gateway의 `GET /v1/models`를 호출합니다. API Key와 CA 원문은 비밀 설정으로 저장되며 조회 응답에 다시 노출되지 않습니다. 완전 폐쇄망에서는 `ai.gateway_url`을 사내 vLLM 또는 사내 LLM Gateway 주소로 지정하면 외부 인터넷 연결 없이 동작합니다.
+
+서버는 셀 내용을 신뢰할 수 없는 데이터로 취급하고 사용자가 선택한 범위의 비어 있지 않은 셀만 Gateway에 전달합니다. 모델 응답은 JSON 수식 계획으로 제한되며 선택 범위 밖 변경, 수식이 아닌 쓰기, 최대 변경 수 초과를 거부합니다. 실제 쓰기는 사용자가 미리보기를 승인한 뒤에만 실행되며 계획 당시 워크북 버전과 각 셀의 이전 값을 다시 확인합니다. 모든 계획·승인·Undo는 멱등 키, revision, 모델명, 도구명과 결과를 `ai_actions`, `ai_action_events`, `audit_logs`에 보존합니다.
 
 ---
 
-## 6. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
+## 6. Model Context Protocol (MCP) 서버 연동
 
-### 6.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `010_conditional_formats.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다.
+kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하게 제어할 수 있도록 `/mcp` HTTP JSON-RPC 2.0 표준 엔드포인트를 제공합니다.
 
-### 6.2 백업 및 복구 명령어 (pg_dump)
+### 6.1 MCP 스코프 및 인증
+- MCP 요청은 HTTP Header `Authorization: Bearer <API_KEY>`를 통과해야 합니다.
+- 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
+- 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
+- 공개 AI 설정 조회는 `spreadsheet.ai.config.get`, 계획·조회·승인·Undo는 `spreadsheet.ai.action.plan|list|get|approve|undo`로 제공합니다. 모든 호출에 `ai.use`가 필요하고 계획은 `range.read`, 승인은 `formula.write`, Undo는 `range.write`를 추가로 검사합니다.
+
+---
+
+## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
+
+### 7.1 자동 DDL 마이그레이션 (`migrations/`)
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `013_ai_action_completed.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다.
+
+### 7.2 백업 및 복구 명령어 (pg_dump)
 
 ```bash
 # PostgreSQL 백업 수행 (폐쇄망 환경)
@@ -136,7 +158,7 @@ docker exec -i kanpic-postgres pg_restore -U kanpic_user -d kanpic_db -v /backup
 
 ---
 
-## 7. 보안 및 컴플라이언스 (Security Checklists)
+## 8. 보안 및 컴플라이언스 (Security Checklists)
 
 > [!IMPORTANT]
 > **운영 서버 보안 체크리스트**  

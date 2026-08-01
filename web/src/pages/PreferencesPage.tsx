@@ -22,6 +22,7 @@ import type { ApiKey, BuildInfo, CreatedApiKey, Session } from '../types'
 
 const agentScopes = [
   'mcp.use',
+  'ai.use',
   'workbook.*',
   'range.*',
   'format.*',

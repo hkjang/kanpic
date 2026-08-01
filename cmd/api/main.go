@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
 	"kanpic/internal/database"
@@ -57,9 +58,10 @@ func main() {
 	logStore := observability.NewStore(pool)
 	keyRepository := apikey.New(pool)
 	authService := auth.New(pool, settingRepository, bootstrap)
-	handler := httpapi.NewPlatform(repository, settingRepository, keyRepository, authService, logStore, logger)
+	aiService := ai.NewService(pool, settingRepository, repository, logger)
+	handler := httpapi.NewPlatformWithAI(repository, settingRepository, keyRepository, authService, logStore, aiService, logger)
 	address := ":8080"
-	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
 
 	go func() {
 		logger.Info("kanpic API started", "address", address, "storage", "postgres")

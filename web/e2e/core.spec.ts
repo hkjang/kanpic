@@ -1,4 +1,18 @@
 import { expect, test } from '@playwright/test'
+import { createServer } from 'node:http'
+
+let aiGatewayPort=0
+const aiGateway=createServer((request,response)=>{
+  if(request.method==='GET'&&request.url==='/v1/models'){
+    response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data:[{id:'e2e-offline-model'}]}));return
+  }
+  if(request.method==='POST'&&request.url==='/v1/chat/completions'){
+    response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify({summary:'A1을 두 배로 계산',explanation:'B1에 A1의 두 배 수식을 제안합니다.',changes:[{row:1,column:2,formula:'=A1*2'}]})}}]}));return
+  }
+  response.writeHead(404);response.end()
+})
+test.beforeAll(async()=>{await new Promise<void>((resolve,reject)=>{aiGateway.once('error',reject);aiGateway.listen(0,'0.0.0.0',()=>{const address=aiGateway.address();if(typeof address==='object'&&address){aiGatewayPort=address.port;resolve()}else reject(new Error('AI test gateway did not bind'))})})})
+test.afterAll(async()=>{await new Promise<void>(resolve=>aiGateway.close(()=>resolve()))})
 
 test('login and profile menus expose the same build version', async ({ page }) => {
   const build = await page.request.get('/api/v1/version').then(response => response.json())
@@ -29,6 +43,52 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await expect(page.locator('.formula-bar')).toBeVisible()
   await expect(page.getByText('AI 도우미')).toBeVisible()
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
+})
+
+test('plans, previews, approves, audits, and undoes an offline AI formula action', async ({ page }) => {
+  const versions=await page.request.get('/api/v1/admin/settings/versions').then(response=>response.json())
+  const restoreRevision=versions.items[0].revision as number
+  const gatewayHost=process.env.KANPIC_E2E_GATEWAY_HOST||'127.0.0.1'
+  const putSetting=(key:string,value:unknown,value_type:'string'|'number'|'boolean',secret=false)=>page.request.put(`/api/v1/admin/settings/${key}`,{data:{key,value,value_type,secret,description:`E2E ${key}`}})
+  let workbookId=''
+  try{
+    expect((await putSetting('ai.gateway_url',`http://${gatewayHost}:${aiGatewayPort}/v1`,'string')).ok()).toBe(true)
+    expect((await putSetting('ai.model','e2e-offline-model','string')).ok()).toBe(true)
+    expect((await putSetting('ai.max_input_cells',20,'number')).ok()).toBe(true)
+    expect((await putSetting('ai.enabled',true,'boolean')).ok()).toBe(true)
+    const tested=await page.request.post('/api/v1/admin/settings:test',{data:{}}).then(response=>response.json())
+    expect(tested.items.find((item:{name:string})=>item.name==='사내 LLM Gateway')).toMatchObject({success:true})
+
+    const created=await page.request.post('/api/v1/workbooks',{data:{title:`AI 안전 실행 ${Date.now()}`,workspace_id:'default'}}).then(response=>response.json())
+    workbookId=created.id as string
+    const sheetId=created.sheets[0].id as string
+    const seeded=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:1,idempotency_key:`ai-e2e-seed-${workbookId}`,cells:[{row:1,column:1,value:5}]}}).then(response=>response.json())
+    await page.goto(`/workbooks/${workbookId}`)
+    await page.getByRole('combobox',{name:'이름 상자'}).fill('A1:B1')
+    await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
+    const panel=page.getByRole('complementary',{name:'AI 도우미 패널'})
+    await expect(panel.getByText('A1:B1만 모델에 전달')).toBeVisible()
+    await panel.getByRole('textbox',{name:'AI 요청'}).fill('B1에 A1의 두 배 수식을 넣어줘')
+    await panel.getByRole('button',{name:'계획 미리보기'}).click()
+    await expect(panel.getByText('A1을 두 배로 계산')).toBeVisible()
+    await expect(panel.getByText('=A1*2')).toBeVisible()
+    let before=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json())
+    expect(before.items).toHaveLength(0)
+    await panel.getByRole('button',{name:/검토한 계획 승인/}).click()
+    await expect(panel.getByText('승인한 변경이 적용되었습니다.')).toBeVisible()
+    await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items[0]?.formula}).toBe('=A1*2')
+    const actions=await page.request.get(`/api/v1/workbooks/${workbookId}/ai/actions`).then(response=>response.json())
+    expect(actions.items).toHaveLength(1)
+    const audited=await page.request.get(`/api/v1/ai/actions/${actions.items[0].id}`).then(response=>response.json())
+    expect(audited.events.map((event:{tool_name:string})=>event.tool_name)).toEqual(['range.read','formula.set'])
+    await panel.getByRole('button',{name:'Undo'}).click()
+    await expect(panel.getByText('AI 변경을 새 서버 버전으로 되돌렸습니다.')).toBeVisible()
+    await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items.length}).toBe(0)
+    expect(seeded.server_version).toBe(2)
+  }finally{
+    if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)
+    await page.request.post(`/api/v1/admin/settings/versions/${restoreRevision}:restore`,{data:{}})
+  }
 })
 
 test('compares and resolves a persisted same-cell conflict', async ({ page }) => {
@@ -254,7 +314,7 @@ test('persists variable dimensions, hidden rows and columns, and frozen panes', 
   await page.getByLabel('고정 행 수').fill('1')
   await page.getByLabel('고정 열 수').fill('1')
   await page.getByRole('button',{name:'고정 적용'}).click()
-  await page.getByRole('button',{name:'닫기'}).click()
+  await page.getByRole('button',{name:'닫기',exact:true}).click()
 
   workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   let layout=workbook.sheets[0].layout
@@ -274,7 +334,7 @@ test('persists variable dimensions, hidden rows and columns, and frozen panes', 
   await page.getByRole('button',{name:'보기',exact:true}).click()
   await page.getByRole('button',{name:'선택 행 숨기기'}).click()
   await page.getByRole('button',{name:'선택 열 숨기기'}).click()
-  await page.getByRole('button',{name:'닫기'}).click()
+  await page.getByRole('button',{name:'닫기',exact:true}).click()
   await expect(page.locator('.name-box')).toHaveValue('C3')
   workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   layout=workbook.sheets[0].layout
@@ -285,7 +345,7 @@ test('persists variable dimensions, hidden rows and columns, and frozen panes', 
   await page.getByRole('button',{name:'모든 행 표시'}).click()
   await page.getByRole('button',{name:'모든 열 표시'}).click()
   await page.getByRole('button',{name:'고정 해제'}).click()
-  await page.getByRole('button',{name:'닫기'}).click()
+  await page.getByRole('button',{name:'닫기',exact:true}).click()
   workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   layout=workbook.sheets[0].layout
   expect(layout.hidden_rows??[]).toEqual([])

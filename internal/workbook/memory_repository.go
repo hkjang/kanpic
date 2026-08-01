@@ -821,6 +821,9 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if mutation.BaseVersion > state.workbook.Version {
 		return MutationResult{}, ErrVersionAhead
 	}
+	if mutation.RequireExactVersion && mutation.BaseVersion != state.workbook.Version {
+		return MutationResult{}, ErrVersionConflict
+	}
 	conflicts := make([]CellConflict, 0)
 	effective := make([]CellInput, 0, len(mutation.Cells))
 	for _, input := range mutation.Cells {
