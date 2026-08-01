@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.14.0
+VERSION=v0.15.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -58,7 +58,7 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 
 동일 셀을 두 사용자가 같은 기준 버전에서 수정하면 마지막 입력은 화면에 임시 반영하되 충돌을 별도 PostgreSQL 기록으로 남깁니다. 편집기 상단의 주황색 충돌 배지 또는 **편집 충돌** 도구를 열면 충돌 전 기준, 먼저 반영된 상대 변경, 당시 제출값과 현재 서버값을 값·수식·서식 단위로 비교할 수 있습니다. **현재 값 유지** 또는 **먼저 반영된 값 복원** 결정은 새로운 서버 작업과 워크북 버전으로 기록되며, 복원 전 같은 셀이 다시 바뀌었다면 안전하게 거부됩니다. REST `/api/v1/workbooks/{workbookId}/conflicts`, `/api/v1/conflicts/{conflictId}:resolve`와 MCP `spreadsheet.conflict.list|get|resolve`가 같은 `range.read`/`range.write` 계약을 제공합니다.
 
-편집기의 **AI 도우미**는 관리자가 등록한 사내 OpenAI 호환 LLM Gateway만 사용합니다. 사용자가 선택한 범위만 모델에 전달하고 수식 생성·설명·오류 수정 계획을 먼저 보여 주며, 명시적으로 승인하기 전에는 워크북을 변경하지 않습니다. 승인 시 계획 당시 워크북 버전과 셀 값을 다시 검사하여 하나의 원자적 서버 작업으로 반영하고 즉시 Undo할 수 있습니다. 계획·모델·도구·승인·Undo 이력은 PostgreSQL과 감사 로그에 보존됩니다. REST `/api/v1/ai/*`와 MCP `spreadsheet.ai.action.*`가 같은 `ai.use` 및 범위·수식 scope 계약을 사용합니다.
+편집기의 **AI 도우미**는 관리자가 등록한 사내 OpenAI 호환 LLM Gateway만 사용합니다. 사용자가 선택한 범위만 모델에 전달해 수식 생성·설명·오류 수정뿐 아니라 범위 요약, 이상치 탐지와 데이터 정제를 수행합니다. 설명·요약·이상치 탐지는 읽기 전용이고, 수식 또는 정제 변경은 셀별 미리보기와 명시적 승인 전에는 워크북을 바꾸지 않습니다. 승인 시 계획 당시 워크북 버전과 셀 값을 다시 검사하여 하나의 원자적 서버 작업으로 반영하고 즉시 Undo할 수 있습니다. 계획·모델·도구·승인·Undo 이력은 PostgreSQL과 감사 로그에 보존됩니다. REST `/api/v1/ai/*`와 MCP `spreadsheet.ai.action.*`가 같은 `ai.use` 및 작업별 최소 scope 계약을 사용합니다.
 
 툴바의 댓글 버튼에서는 현재 셀 또는 범위에 스레드를 만들고 답글·수정·삭제·해결·재열기를 수행할 수 있습니다. 본문에서 `@사용자ID` 또는 `@이메일`을 입력하면 상단 알림 메뉴에 멘션이 표시되고, 알림을 선택하면 원래 시트와 범위로 이동합니다. 댓글은 HTML로 렌더링하지 않으며 revision 기반 충돌 방지와 idempotency key를 사용합니다. REST의 `/api/v1/workbooks/{workbookId}/comments`, `/api/v1/comments/{commentId}`, `/api/v1/me/notifications` 계약은 `spreadsheet.comment.*`와 `spreadsheet.notification.*` MCP 도구로도 동일하게 제공됩니다.
 

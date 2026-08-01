@@ -1840,7 +1840,7 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 	}
 
 	var gatewayCalls int
-	var gatewayExplain bool
+	gatewayMode := kanpicai.ModeFormula
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gatewayCalls++
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer internal-key" {
@@ -1851,8 +1851,18 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 			t.Error(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if gatewayExplain {
+		switch gatewayMode {
+		case kanpicai.ModeExplain:
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"선택 수식 설명\",\"explanation\":\"A1의 값을 두 배로 계산합니다.\",\"changes\":[]}"}}]}`))
+			return
+		case kanpicai.ModeSummarize:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"선택 범위 요약\",\"explanation\":\"숫자 셀 하나가 있으며 값은 5입니다.\",\"findings\":[{\"row\":0,\"column\":0,\"severity\":\"info\",\"title\":\"데이터 구성\",\"description\":\"숫자 값 한 개가 있습니다.\"}],\"changes\":[]}"}}]}`))
+			return
+		case kanpicai.ModeAnomaly:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"이상치 탐지\",\"explanation\":\"A1을 확인해야 합니다.\",\"findings\":[{\"row\":1,\"column\":1,\"severity\":\"warning\",\"title\":\"검토 값\",\"description\":\"표본이 적어 수동 검토가 필요합니다.\"}],\"changes\":[]}"}}]}`))
+			return
+		case kanpicai.ModeClean:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"숫자 형식 정제\",\"explanation\":\"A1을 문자열 숫자로 표준화합니다.\",\"findings\":[],\"changes\":[{\"row\":1,\"column\":1,\"value\":\"5\"}]}"}}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"A1을 두 배로 계산\",\"explanation\":\"B1에 A1의 두 배 수식을 제안합니다.\",\"changes\":[{\"row\":1,\"column\":2,\"formula\":\"=A1*2\"}]}"}}]}`))
@@ -1911,21 +1921,60 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_type='ai_action' AND resource_id=$1`, planned.ID).Scan(&auditCount); err != nil || auditCount != 3 {
 		t.Fatalf("AI audit count=%d, %v", auditCount, err)
 	}
-	gatewayExplain = true
+	gatewayMode = kanpicai.ModeExplain
 	explained, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "선택 수식을 설명해줘", Mode: kanpicai.ModeExplain, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-explain", ActorID: actor})
-	gatewayExplain = false
+	gatewayMode = kanpicai.ModeFormula
 	if err != nil || explained.Status != kanpicai.StatusCompleted || len(explained.Changes) != 0 || explained.Explanation == "" || len(explained.Events) != 1 || explained.Events[0].EventType != "completed" {
 		t.Fatalf("explain action=%#v, %v", explained, err)
 	}
 	if _, err := service.Approve(ctx, explained.ID, kanpicai.ApprovalInput{ActorID: actor, IdempotencyKey: "ai-explain-approve", ExpectedRevision: 1}); !errors.Is(err, kanpicai.ErrInvalid) {
 		t.Fatalf("explain approval error=%v", err)
 	}
+	gatewayMode = kanpicai.ModeSummarize
+	summarized, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "선택 범위를 요약해줘", Mode: kanpicai.ModeSummarize, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-summary", ActorID: actor})
+	gatewayMode = kanpicai.ModeAnomaly
+	analyzed, anomalyErr := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "이상치를 찾아줘", Mode: kanpicai.ModeAnomaly, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-anomaly", ActorID: actor})
+	gatewayMode = kanpicai.ModeFormula
+	if err != nil || summarized.Status != kanpicai.StatusCompleted || len(summarized.Findings) != 1 || summarized.Findings[0].Address != "" {
+		t.Fatalf("summary action=%#v, %v", summarized, err)
+	}
+	if anomalyErr != nil || analyzed.Status != kanpicai.StatusCompleted || len(analyzed.Findings) != 1 || analyzed.Findings[0].Address != "A1" || string(analyzed.Findings[0].Cell.Value) != "5" {
+		t.Fatalf("anomaly action=%#v, %v", analyzed, anomalyErr)
+	}
 
-	stale, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "다시 수식을 제안해줘", Mode: kanpicai.ModeFormula, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-stale-plan", ActorID: actor})
+	gatewayMode = kanpicai.ModeClean
+	cleaned, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1", Request: "숫자 형식을 정제해줘", Mode: kanpicai.ModeClean, BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-clean", ActorID: actor})
+	gatewayMode = kanpicai.ModeFormula
+	if err != nil || cleaned.Status != kanpicai.StatusPlanned || len(cleaned.Changes) != 1 || string(cleaned.Changes[0].Before.Value) != "5" || string(cleaned.Changes[0].After.Value) != `"5"` {
+		t.Fatalf("clean plan=%#v, %v", cleaned, err)
+	}
+	cleanApplied, err := service.Approve(ctx, cleaned.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "ai-clean-approve", ExpectedRevision: 1})
+	if err != nil || cleanApplied.Action.Status != kanpicai.StatusApplied || cleanApplied.Operation.ServerVersion != undone.Operation.ServerVersion+1 {
+		t.Fatalf("clean applied=%#v, %v", cleanApplied, err)
+	}
+	selectedA1, _ := cellrange.Parse("A1")
+	cells, err = repository.ReadRange(ctx, sheetID, selectedA1)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"5"` || cells[0].Formula != "" {
+		t.Fatalf("cleaned cells=%#v, %v", cells, err)
+	}
+	cleanUndone, err := service.Undo(ctx, cleaned.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "ai-clean-undo", ExpectedRevision: 2})
+	if err != nil || cleanUndone.Action.Status != kanpicai.StatusUndone || cleanUndone.Operation.ServerVersion != undone.Operation.ServerVersion+2 {
+		t.Fatalf("clean undone=%#v, %v", cleanUndone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selectedA1)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "5" {
+		t.Fatalf("clean undo cells=%#v, %v", cells, err)
+	}
+	cleanHistory, err := service.Get(ctx, cleaned.ID, actor)
+	if err != nil || len(cleanHistory.Events) != 3 || cleanHistory.Events[1].ToolName != "data.clean" || cleanHistory.Events[2].ToolName != "operation.undo" {
+		t.Fatalf("clean events=%#v, %v", cleanHistory.Events, err)
+	}
+
+	stale, err := service.Plan(ctx, kanpicai.PlanInput{WorkbookID: book.ID, SheetID: sheetID, Range: "A1:B1", Request: "다시 수식을 제안해줘", Mode: kanpicai.ModeFormula, BaseVersion: cleanUndone.Operation.ServerVersion, IdempotencyKey: "ai-stale-plan", ActorID: actor})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "other", ClientID: "other", BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "ai-unrelated-change", Cells: []workbook.CellInput{{Row: 2, Column: 1, Value: json.RawMessage(`9`)}}})
+	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "other", ClientID: "other", BaseVersion: cleanUndone.Operation.ServerVersion, IdempotencyKey: "ai-unrelated-change", Cells: []workbook.CellInput{{Row: 2, Column: 1, Value: json.RawMessage(`9`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

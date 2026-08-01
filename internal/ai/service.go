@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,7 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const actionColumns = `id::text,workbook_id::text,sheet_id::text,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,input_cell_count,revision,approval_idempotency_key,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,approved_at,undone_at,created_at,updated_at`
+const actionColumns = `id::text,workbook_id::text,sheet_id::text,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,approval_idempotency_key,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,approved_at,undone_at,created_at,updated_at`
 
 type Service struct {
 	pool       *pgxpool.Pool
@@ -108,14 +109,14 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		s.logger.Warn("AI plan gateway failed", "actor_id", input.ActorID, "workbook_id", input.WorkbookID, "error", err)
 		return Action{}, err
 	}
-	changes, err := validateGatewayPlan(input.Mode, selected, cells, generated, config.MaxChanges)
+	changes, findings, err := validateGatewayPlan(input.Mode, selected, cells, generated, config.MaxChanges)
 	if err != nil {
 		return Action{}, err
 	}
 	now := s.now()
 	status := StatusPlanned
 	eventType := "planned"
-	if input.Mode == ModeExplain {
+	if IsReadOnlyMode(input.Mode) {
 		status = StatusCompleted
 		eventType = "completed"
 	}
@@ -124,16 +125,17 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		ActorID: input.ActorID, ClientID: input.ClientID, IdempotencyKey: input.IdempotencyKey,
 		Mode: input.Mode, Range: input.Range, Request: input.Request, Status: status,
 		BaseVersion: book.Version, Model: config.Model, Summary: trimLength(generated.Summary, 2000),
-		Explanation: trimLength(generated.Explanation, 12000), Changes: changes,
+		Explanation: trimLength(generated.Explanation, 12000), Changes: changes, Findings: findings,
 		InputCellCount: rows * columns, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	encodedChanges, _ := json.Marshal(action.Changes)
+	encodedFindings, _ := json.Marshal(action.Findings)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Action{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	command, err := tx.Exec(ctx, `INSERT INTO ai_actions(id,workbook_id,sheet_id,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,input_cell_count,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,$17,$17) ON CONFLICT(actor_id,idempotency_key) DO NOTHING`, action.ID, action.WorkbookID, action.SheetID, action.ActorID, action.ClientID, action.IdempotencyKey, action.Mode, action.Range, action.Request, action.Status, action.BaseVersion, action.Model, action.Summary, action.Explanation, encodedChanges, action.InputCellCount, now)
+	command, err := tx.Exec(ctx, `INSERT INTO ai_actions(id,workbook_id,sheet_id,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,$18,$18) ON CONFLICT(actor_id,idempotency_key) DO NOTHING`, action.ID, action.WorkbookID, action.SheetID, action.ActorID, action.ClientID, action.IdempotencyKey, action.Mode, action.Range, action.Request, action.Status, action.BaseVersion, action.Model, action.Summary, action.Explanation, encodedChanges, encodedFindings, action.InputCellCount, now)
 	if err != nil {
 		return Action{}, err
 	}
@@ -145,7 +147,7 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		duplicate.Duplicate = err == nil
 		return duplicate, err
 	}
-	payload, _ := json.Marshal(map[string]any{"mode": action.Mode, "range": action.Range, "request": action.Request, "changes": len(action.Changes), "input_cell_count": action.InputCellCount})
+	payload, _ := json.Marshal(map[string]any{"mode": action.Mode, "range": action.Range, "request": action.Request, "changes": len(action.Changes), "findings": len(action.Findings), "input_cell_count": action.InputCellCount})
 	if err := insertEvent(ctx, tx, action.ID, action.ActorID, eventType, action.Model, "range.read", payload, now); err != nil {
 		return Action{}, err
 	}
@@ -156,7 +158,7 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		return Action{}, err
 	}
 	action.Events = []Event{{ActorID: action.ActorID, EventType: eventType, Model: action.Model, ToolName: "range.read", Payload: payload, CreatedAt: now}}
-	s.logger.Info("AI action planned", "action_id", action.ID, "actor_id", action.ActorID, "workbook_id", action.WorkbookID, "model", action.Model, "changes", len(action.Changes))
+	s.logger.Info("AI action planned", "action_id", action.ID, "actor_id", action.ActorID, "workbook_id", action.WorkbookID, "model", action.Model, "changes", len(action.Changes), "findings", len(action.Findings))
 	return action, nil
 }
 
@@ -201,8 +203,8 @@ func (s *Service) Approve(ctx context.Context, actionID string, input ApprovalIn
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	if action.Mode == ModeExplain || len(action.Changes) == 0 {
-		return ExecutionResult{}, fmt.Errorf("%w: explain-only actions cannot be approved", ErrInvalid)
+	if IsReadOnlyMode(action.Mode) || len(action.Changes) == 0 {
+		return ExecutionResult{}, fmt.Errorf("%w: read-only AI actions cannot be approved", ErrInvalid)
 	}
 	if action.Status == StatusApplied && action.approvalIdempotencyKey == input.IdempotencyKey && action.Operation != nil {
 		action.Duplicate = true
@@ -243,7 +245,7 @@ func (s *Service) Approve(ctx context.Context, actionID string, input ApprovalIn
 		Cells: cells, Expected: expected, OperationType: "ai." + action.Mode, RequireExactVersion: true,
 	})
 	if err != nil {
-		s.markFailed(ctx, action, input.ActorID, "approval_failed", "formula.set", err)
+		s.markFailed(ctx, action, input.ActorID, "approval_failed", approvalToolName(action.Mode), err)
 		return ExecutionResult{}, err
 	}
 	if err := s.completeApproval(ctx, action, result); err != nil {
@@ -323,7 +325,7 @@ func (s *Service) completeApproval(ctx context.Context, action Action, result wo
 	if command.RowsAffected() != 1 {
 		return ErrRevision
 	}
-	if err := insertEvent(ctx, tx, action.ID, action.ActorID, "applied", action.Model, "formula.set", payload, now); err != nil {
+	if err := insertEvent(ctx, tx, action.ID, action.ActorID, "applied", action.Model, approvalToolName(action.Mode), payload, now); err != nil {
 		return err
 	}
 	if err := insertAudit(ctx, tx, action.ActorID, "ai.action.approve", action.ID, "success", payload, now); err != nil {
@@ -383,12 +385,15 @@ type actionScanner interface{ Scan(...any) error }
 
 func scanAction(row actionScanner) (Action, error) {
 	var action Action
-	var changes, operation, undo []byte
-	err := row.Scan(&action.ID, &action.WorkbookID, &action.SheetID, &action.ActorID, &action.ClientID, &action.IdempotencyKey, &action.Mode, &action.Range, &action.Request, &action.Status, &action.BaseVersion, &action.Model, &action.Summary, &action.Explanation, &changes, &action.InputCellCount, &action.Revision, &action.approvalIdempotencyKey, &action.OperationID, &operation, &action.undoIdempotencyKey, &action.UndoOperationID, &undo, &action.ErrorMessage, &action.ApprovedAt, &action.UndoneAt, &action.CreatedAt, &action.UpdatedAt)
+	var changes, findings, operation, undo []byte
+	err := row.Scan(&action.ID, &action.WorkbookID, &action.SheetID, &action.ActorID, &action.ClientID, &action.IdempotencyKey, &action.Mode, &action.Range, &action.Request, &action.Status, &action.BaseVersion, &action.Model, &action.Summary, &action.Explanation, &changes, &findings, &action.InputCellCount, &action.Revision, &action.approvalIdempotencyKey, &action.OperationID, &operation, &action.undoIdempotencyKey, &action.UndoOperationID, &undo, &action.ErrorMessage, &action.ApprovedAt, &action.UndoneAt, &action.CreatedAt, &action.UpdatedAt)
 	if err != nil {
 		return Action{}, err
 	}
 	if err := json.Unmarshal(changes, &action.Changes); err != nil {
+		return Action{}, err
+	}
+	if err := json.Unmarshal(findings, &action.Findings); err != nil {
 		return Action{}, err
 	}
 	if len(operation) > 0 && string(operation) != "null" {
@@ -439,8 +444,8 @@ func validatePlanInput(input PlanInput) error {
 	if input.ActorID == "" || input.WorkbookID == "" || input.SheetID == "" || input.Range == "" || input.IdempotencyKey == "" {
 		return fmt.Errorf("%w: workbook_id, sheet_id, range and idempotency_key are required", ErrInvalid)
 	}
-	if input.Mode != ModeFormula && input.Mode != ModeExplain && input.Mode != ModeFix {
-		return fmt.Errorf("%w: mode must be formula, explain or fix", ErrInvalid)
+	if !validMode(input.Mode) {
+		return fmt.Errorf("%w: mode must be formula, explain, fix, summarize, anomaly or clean", ErrInvalid)
 	}
 	if input.Request == "" || len(input.Request) > 4000 {
 		return fmt.Errorf("%w: request must contain 1 to 4000 characters", ErrInvalid)
@@ -461,46 +466,69 @@ func validateExecutionInput(input ApprovalInput) error {
 	return nil
 }
 
-func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook.Cell, plan gatewayPlan, maxChanges int) ([]ProposedChange, error) {
+func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook.Cell, plan gatewayPlan, maxChanges int) ([]ProposedChange, []Finding, error) {
 	plan.Summary = strings.TrimSpace(plan.Summary)
 	plan.Explanation = strings.TrimSpace(plan.Explanation)
 	if plan.Summary == "" {
-		return nil, fmt.Errorf("%w: model plan summary is required", ErrGateway)
-	}
-	if mode == ModeExplain {
-		if len(plan.Changes) != 0 {
-			return nil, fmt.Errorf("%w: explain mode cannot propose changes", ErrGateway)
-		}
-		if plan.Explanation == "" {
-			return nil, fmt.Errorf("%w: explain mode requires an explanation", ErrGateway)
-		}
-		return []ProposedChange{}, nil
-	}
-	if len(plan.Changes) < 1 || len(plan.Changes) > maxChanges {
-		return nil, fmt.Errorf("%w: model must propose 1 to %d formula changes", ErrGateway, maxChanges)
+		return nil, nil, fmt.Errorf("%w: model plan summary is required", ErrGateway)
 	}
 	current := make(map[string]workbook.Cell, len(cells))
 	for _, cell := range cells {
 		current[coordinateKey(cell.Row, cell.Column)] = cell
 	}
+	if IsReadOnlyMode(mode) {
+		if len(plan.Changes) != 0 {
+			return nil, nil, fmt.Errorf("%w: read-only AI modes cannot propose changes", ErrGateway)
+		}
+		if plan.Explanation == "" {
+			return nil, nil, fmt.Errorf("%w: read-only AI modes require an explanation", ErrGateway)
+		}
+		findings, err := validateFindings(mode, selected, current, plan.Findings, maxChanges)
+		return []ProposedChange{}, findings, err
+	}
+	if len(plan.Findings) != 0 {
+		return nil, nil, fmt.Errorf("%w: write AI modes cannot return findings", ErrGateway)
+	}
+	if len(plan.Changes) < 1 || len(plan.Changes) > maxChanges {
+		return nil, nil, fmt.Errorf("%w: model must propose 1 to %d changes", ErrGateway, maxChanges)
+	}
 	seen := make(map[string]struct{}, len(plan.Changes))
 	changes := make([]ProposedChange, 0, len(plan.Changes))
 	for _, candidate := range plan.Changes {
 		if candidate.Row < selected.Start.Row || candidate.Row > selected.End.Row || candidate.Column < selected.Start.Column || candidate.Column > selected.End.Column {
-			return nil, fmt.Errorf("%w: model proposed a cell outside selected range", ErrGateway)
-		}
-		formula := strings.TrimSpace(candidate.Formula)
-		if !strings.HasPrefix(formula, "=") || len(formula) > 8192 {
-			return nil, fmt.Errorf("%w: every proposed formula must begin with '=' and be at most 8192 characters", ErrGateway)
+			return nil, nil, fmt.Errorf("%w: model proposed a cell outside selected range", ErrGateway)
 		}
 		key := coordinateKey(candidate.Row, candidate.Column)
 		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("%w: model proposed the same cell more than once", ErrGateway)
+			return nil, nil, fmt.Errorf("%w: model proposed the same cell more than once", ErrGateway)
 		}
 		seen[key] = struct{}{}
 		before := snapshotFromCell(current[key])
-		after := CellSnapshot{Formula: formula, Style: cloneRaw(before.Style)}
+		after := CellSnapshot{Style: cloneRaw(before.Style)}
+		if mode == ModeClean {
+			if err := validateCleanChange(candidate); err != nil {
+				return nil, nil, err
+			}
+			if !candidate.Clear {
+				after.Value = cloneRaw(candidate.Value)
+			}
+		} else {
+			if len(bytes.TrimSpace(candidate.Value)) != 0 || candidate.Clear {
+				return nil, nil, fmt.Errorf("%w: formula modes cannot propose literal values or clear operations", ErrGateway)
+			}
+			formula := strings.TrimSpace(candidate.Formula)
+			if !strings.HasPrefix(formula, "=") || len(formula) > 8192 {
+				return nil, nil, fmt.Errorf("%w: every proposed formula must begin with '=' and be at most 8192 characters", ErrGateway)
+			}
+			after.Formula = formula
+		}
+		if snapshotsEqual(before, after) {
+			continue
+		}
 		changes = append(changes, ProposedChange{Row: candidate.Row, Column: candidate.Column, Address: cellrange.Address(candidate.Row, candidate.Column), Before: before, After: after})
+	}
+	if len(changes) == 0 {
+		return nil, nil, fmt.Errorf("%w: model proposed no effective changes", ErrGateway)
 	}
 	sort.Slice(changes, func(i, j int) bool {
 		if changes[i].Row == changes[j].Row {
@@ -508,17 +536,93 @@ func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook
 		}
 		return changes[i].Row < changes[j].Row
 	})
-	return changes, nil
+	return changes, []Finding{}, nil
 }
 
 func actionCellInputs(action Action) ([]workbook.CellInput, map[string]workbook.Cell) {
 	cells := make([]workbook.CellInput, 0, len(action.Changes))
 	expected := make(map[string]workbook.Cell, len(action.Changes))
 	for _, change := range action.Changes {
-		cells = append(cells, workbook.CellInput{Row: change.Row, Column: change.Column, Formula: change.After.Formula, Style: cloneRaw(change.Before.Style)})
+		cells = append(cells, workbook.CellInput{Row: change.Row, Column: change.Column, Value: cloneRaw(change.After.Value), Formula: change.After.Formula, Style: cloneRaw(change.Before.Style)})
 		expected[coordinateKey(change.Row, change.Column)] = workbook.Cell{SheetID: action.SheetID, Row: change.Row, Column: change.Column, Value: cloneRaw(change.Before.Value), Formula: change.Before.Formula, Style: cloneRaw(change.Before.Style), SpillSource: change.Before.SpillSource}
 	}
 	return cells, expected
+}
+
+func validMode(mode string) bool {
+	return mode == ModeFormula || mode == ModeExplain || mode == ModeFix || mode == ModeSummarize || mode == ModeAnomaly || mode == ModeClean
+}
+
+func validateCleanChange(change gatewayChange) error {
+	if strings.TrimSpace(change.Formula) != "" {
+		return fmt.Errorf("%w: clean mode cannot propose formulas", ErrGateway)
+	}
+	hasValue := len(bytes.TrimSpace(change.Value)) != 0
+	if hasValue == change.Clear {
+		return fmt.Errorf("%w: clean changes require exactly one scalar value or clear=true", ErrGateway)
+	}
+	if change.Clear {
+		return nil
+	}
+	if len(change.Value) > 65536 || !json.Valid(change.Value) {
+		return fmt.Errorf("%w: clean values must be valid scalar JSON up to 65536 bytes", ErrGateway)
+	}
+	var value any
+	if err := json.Unmarshal(change.Value, &value); err != nil {
+		return fmt.Errorf("%w: clean value is invalid", ErrGateway)
+	}
+	switch value.(type) {
+	case string, float64, bool:
+		return nil
+	default:
+		return fmt.Errorf("%w: clean values must be strings, numbers or booleans; use clear=true to clear a cell", ErrGateway)
+	}
+}
+
+func validateFindings(mode string, selected cellrange.Range, current map[string]workbook.Cell, candidates []gatewayFinding, limit int) ([]Finding, error) {
+	if mode == ModeExplain && len(candidates) != 0 {
+		return nil, fmt.Errorf("%w: explain mode cannot return findings", ErrGateway)
+	}
+	if len(candidates) > limit {
+		return nil, fmt.Errorf("%w: model returned more than %d findings", ErrGateway, limit)
+	}
+	findings := make([]Finding, 0, len(candidates))
+	for _, candidate := range candidates {
+		severity := strings.ToLower(strings.TrimSpace(candidate.Severity))
+		if severity != "info" && severity != "warning" && severity != "critical" {
+			return nil, fmt.Errorf("%w: finding severity must be info, warning or critical", ErrGateway)
+		}
+		title := trimLength(candidate.Title, 200)
+		description := trimLength(candidate.Description, 2000)
+		if title == "" || description == "" {
+			return nil, fmt.Errorf("%w: every finding requires a title and description", ErrGateway)
+		}
+		finding := Finding{Row: candidate.Row, Column: candidate.Column, Severity: severity, Title: title, Description: description}
+		if candidate.Row == 0 && candidate.Column == 0 {
+			if mode != ModeSummarize {
+				return nil, fmt.Errorf("%w: anomaly findings must identify a selected cell", ErrGateway)
+			}
+		} else {
+			if candidate.Row < selected.Start.Row || candidate.Row > selected.End.Row || candidate.Column < selected.Start.Column || candidate.Column > selected.End.Column {
+				return nil, fmt.Errorf("%w: model returned a finding outside selected range", ErrGateway)
+			}
+			finding.Address = cellrange.Address(candidate.Row, candidate.Column)
+			finding.Cell = snapshotFromCell(current[coordinateKey(candidate.Row, candidate.Column)])
+		}
+		findings = append(findings, finding)
+	}
+	return findings, nil
+}
+
+func snapshotsEqual(left, right CellSnapshot) bool {
+	return bytes.Equal(bytes.TrimSpace(left.Value), bytes.TrimSpace(right.Value)) && left.Formula == right.Formula && bytes.Equal(bytes.TrimSpace(left.Style), bytes.TrimSpace(right.Style)) && left.SpillSource == right.SpillSource
+}
+
+func approvalToolName(mode string) string {
+	if mode == ModeClean {
+		return "data.clean"
+	}
+	return "formula.set"
 }
 
 func snapshotFromCell(cell workbook.Cell) CellSnapshot {

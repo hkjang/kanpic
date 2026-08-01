@@ -7,7 +7,19 @@ const aiGateway=createServer((request,response)=>{
     response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data:[{id:'e2e-offline-model'}]}));return
   }
   if(request.method==='POST'&&request.url==='/v1/chat/completions'){
-    response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify({summary:'A1을 두 배로 계산',explanation:'B1에 A1의 두 배 수식을 제안합니다.',changes:[{row:1,column:2,formula:'=A1*2'}]})}}]}));return
+    let body=''
+    request.on('data',chunk=>{body+=String(chunk)})
+    request.on('end',()=>{
+      const completion=JSON.parse(body) as {messages:Array<{role:string;content:string}>}
+      const context=JSON.parse(completion.messages.at(-1)?.content||'{}') as {mode?:string}
+      const plan=context.mode==='anomaly'
+        ?{summary:'이상치 한 건',explanation:'A1은 표본이 적어 검토가 필요합니다.',findings:[{row:1,column:1,severity:'warning',title:'검토 값',description:'비교 표본이 적어 수동 검토가 필요합니다.'}],changes:[]}
+        :context.mode==='clean'
+          ?{summary:'숫자 형식 정제',explanation:'A1을 문자열 숫자로 표준화합니다.',findings:[],changes:[{row:1,column:1,value:'5'}]}
+          :{summary:'A1을 두 배로 계산',explanation:'B1에 A1의 두 배 수식을 제안합니다.',findings:[],changes:[{row:1,column:2,formula:'=A1*2'}]}
+      response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify(plan)}}]}))
+    })
+    return
   }
   response.writeHead(404);response.end()
 })
@@ -45,7 +57,7 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
 })
 
-test('plans, previews, approves, audits, and undoes an offline AI formula action', async ({ page }) => {
+test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ page }) => {
   const versions=await page.request.get('/api/v1/admin/settings/versions').then(response=>response.json())
   const restoreRevision=versions.items[0].revision as number
   const gatewayHost=process.env.KANPIC_E2E_GATEWAY_HOST||'127.0.0.1'
@@ -84,6 +96,31 @@ test('plans, previews, approves, audits, and undoes an offline AI formula action
     await panel.getByRole('button',{name:'Undo'}).click()
     await expect(panel.getByText('AI 변경을 새 서버 버전으로 되돌렸습니다.')).toBeVisible()
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items.length}).toBe(0)
+
+    await panel.getByRole('button',{name:'새 요청 작성'}).click()
+    await panel.getByLabel('AI 작업 유형').selectOption('anomaly')
+    await panel.getByRole('textbox',{name:'AI 요청'}).fill('선택 범위의 이상치를 찾아줘')
+    await panel.getByRole('button',{name:'분석 및 계획 미리보기'}).click()
+    await expect(panel.getByText('탐지 완료')).toBeVisible()
+    await expect(panel.getByText('검토 값')).toBeVisible()
+    await expect(panel.getByText('현재: 5')).toBeVisible()
+    await expect(panel.getByRole('button',{name:/검토한 계획 승인/})).toHaveCount(0)
+
+    await panel.getByRole('button',{name:'새 요청 작성'}).click()
+    await panel.getByLabel('AI 작업 유형').selectOption('clean')
+    await panel.getByRole('textbox',{name:'AI 요청'}).fill('A1의 숫자 형식을 정제해줘')
+    await panel.getByRole('button',{name:'분석 및 계획 미리보기'}).click()
+    await expect(panel.getByText('숫자 형식 정제')).toBeVisible()
+    expect((await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1`).then(response=>response.json())).items[0].value).toBe(5)
+    await panel.getByRole('button',{name:/검토한 계획 승인/}).click()
+    await expect(panel.getByText('승인한 변경이 적용되었습니다.')).toBeVisible()
+    await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1`).then(response=>response.json());return range.items[0]?.value}).toBe('5')
+    const latestActions=await page.request.get(`/api/v1/workbooks/${workbookId}/ai/actions`).then(response=>response.json())
+    const cleanAction=latestActions.items.find((item:{mode:string})=>item.mode==='clean')
+    const cleanAudit=await page.request.get(`/api/v1/ai/actions/${cleanAction.id}`).then(response=>response.json())
+    expect(cleanAudit.events.map((event:{tool_name:string})=>event.tool_name)).toEqual(['range.read','data.clean'])
+    await panel.getByRole('button',{name:'Undo'}).click()
+    await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1`).then(response=>response.json());return range.items[0]?.value}).toBe(5)
     expect(seeded.server_version).toBe(2)
   }finally{
     if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)

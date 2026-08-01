@@ -65,9 +65,6 @@ func (s *Server) executeAIAction(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(action, ":approve"):
 		phase = "approve"
 		action = strings.TrimSuffix(action, ":approve")
-		if !requireAPIScopes(w, r, "ai.use", "formula.write") {
-			return
-		}
 	case strings.HasSuffix(action, ":undo"):
 		phase = "undo"
 		action = strings.TrimSuffix(action, ":undo")
@@ -89,6 +86,14 @@ func (s *Server) executeAIAction(w http.ResponseWriter, r *http.Request) {
 	var result ai.ExecutionResult
 	var err error
 	if phase == "approve" {
+		planned, loadErr := s.ai.Get(r.Context(), action, input.ActorID)
+		if loadErr != nil {
+			s.writeAIError(w, r, loadErr)
+			return
+		}
+		if !requireAPIScopes(w, r, "ai.use", ai.RequiredApprovalScope(planned.Mode)) {
+			return
+		}
 		result, err = s.ai.Approve(r.Context(), action, input)
 	} else {
 		result, err = s.ai.Undo(r.Context(), action, input)

@@ -627,6 +627,15 @@ func TestAIActionRESTAndMCPShareSafeExecutionContract(t *testing.T) {
 	if !ok || len(required) != 7 {
 		t.Fatalf("AI plan schema=%#v", planTool.InputSchema)
 	}
+	properties, _ := planTool.InputSchema["properties"].(map[string]any)
+	modeSchema, _ := properties["mode"].(map[string]any)
+	modes, _ := modeSchema["enum"].([]string)
+	if len(modes) != 6 || modes[3] != ai.ModeSummarize || modes[4] != ai.ModeAnomaly || modes[5] != ai.ModeClean {
+		t.Fatalf("AI plan modes=%#v", modes)
+	}
+	if ai.RequiredApprovalScope(ai.ModeFormula) != "formula.write" || ai.RequiredApprovalScope(ai.ModeClean) != "range.write" || !ai.IsReadOnlyMode(ai.ModeAnomaly) {
+		t.Fatal("AI mode scope/read-only contract is inconsistent")
+	}
 	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/ai/actions:plan", nil)); scope != "ai.use" {
 		t.Fatalf("AI REST scope=%q", scope)
 	}

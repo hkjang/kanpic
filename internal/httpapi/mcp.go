@@ -112,10 +112,10 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.conflict.get", "충돌 전 값, 상대 사용자 값, 제출 값과 현재 서버 값을 비교 조회합니다.", "range.read", requiredProps("conflict_id", "string")),
 	tool("spreadsheet.conflict.resolve", "동일 셀 충돌을 현재 값 유지 또는 상대 사용자 값 복원으로 멱등 해소하고 버전 이력에 남깁니다.", "range.write", conflictResolutionSchema()),
 	tool("spreadsheet.ai.config.get", "활성화 여부, 모델과 셀·변경 한도를 비밀정보 없이 조회합니다.", "ai.use", nil),
-	tool("spreadsheet.ai.action.plan", "선택 범위만 사내 LLM Gateway에 전달하여 수식 생성·설명·수정 계획과 비파괴 미리보기를 만듭니다.", "ai.use", aiPlanSchema()),
+	tool("spreadsheet.ai.action.plan", "선택 범위만 사내 LLM Gateway에 전달하여 수식·요약·이상치·정제 계획과 비파괴 미리보기를 만듭니다.", "ai.use", aiPlanSchema()),
 	tool("spreadsheet.ai.action.list", "현재 사용자가 생성한 워크북 AI 작업 이력을 조회합니다.", "ai.use", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.ai.action.get", "AI 계획, 변경 미리보기, 모델·도구 감사 이력과 적용 상태를 조회합니다.", "ai.use", requiredProps("action_id", "string")),
-	tool("spreadsheet.ai.action.approve", "미리 본 AI 수식 계획을 revision과 워크북 버전을 확인한 뒤 원자적으로 적용합니다.", "ai.use", aiExecutionSchema()),
+	tool("spreadsheet.ai.action.approve", "미리 본 AI 수식 또는 데이터 정제 계획을 revision과 워크북 버전을 확인한 뒤 원자적으로 적용합니다.", "ai.use", aiExecutionSchema()),
 	tool("spreadsheet.ai.action.undo", "승인된 AI 작업을 사용자별 작업 이력으로 안전하게 되돌립니다.", "ai.use", aiExecutionSchema()),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
@@ -772,18 +772,22 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		if s.ai == nil {
 			return nil, ai.ErrDisabled
 		}
-		required := "formula.write"
-		if name == "spreadsheet.ai.action.undo" {
-			required = "range.write"
-		}
-		if err := requireMCPScopes(r, required); err != nil {
-			return nil, err
-		}
 		var input ai.ApprovalInput
 		if err := decodeMCP(args, &input); err != nil {
 			return nil, err
 		}
 		input.ActorID = actor
+		required := "range.write"
+		if name == "spreadsheet.ai.action.approve" {
+			action, err := s.ai.Get(ctx, stringArg(args, "action_id"), actor)
+			if err != nil {
+				return nil, err
+			}
+			required = ai.RequiredApprovalScope(action.Mode)
+		}
+		if err := requireMCPScopes(r, required); err != nil {
+			return nil, err
+		}
 		var result ai.ExecutionResult
 		var err error
 		if name == "spreadsheet.ai.action.approve" {
@@ -1170,7 +1174,7 @@ func aiPlanSchema() map[string]any {
 			"sheet_id":        map[string]any{"type": "string"},
 			"range":           map[string]any{"type": "string"},
 			"request":         map[string]any{"type": "string", "maxLength": 4000},
-			"mode":            map[string]any{"type": "string", "enum": []string{"formula", "explain", "fix"}},
+			"mode":            map[string]any{"type": "string", "enum": []string{"formula", "explain", "fix", "summarize", "anomaly", "clean"}},
 			"base_version":    map[string]any{"type": "number", "minimum": 1},
 			"idempotency_key": map[string]any{"type": "string"},
 			"client_id":       map[string]any{"type": "string"},

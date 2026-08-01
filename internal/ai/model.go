@@ -19,9 +19,12 @@ var (
 )
 
 const (
-	ModeFormula = "formula"
-	ModeExplain = "explain"
-	ModeFix     = "fix"
+	ModeFormula   = "formula"
+	ModeExplain   = "explain"
+	ModeFix       = "fix"
+	ModeSummarize = "summarize"
+	ModeAnomaly   = "anomaly"
+	ModeClean     = "clean"
 
 	StatusPlanned   = "planned"
 	StatusCompleted = "completed"
@@ -45,6 +48,16 @@ type ProposedChange struct {
 	Address string       `json:"address"`
 	Before  CellSnapshot `json:"before"`
 	After   CellSnapshot `json:"after"`
+}
+
+type Finding struct {
+	Row         int          `json:"row,omitempty"`
+	Column      int          `json:"column,omitempty"`
+	Address     string       `json:"address,omitempty"`
+	Severity    string       `json:"severity"`
+	Title       string       `json:"title"`
+	Description string       `json:"description"`
+	Cell        CellSnapshot `json:"cell,omitempty"`
 }
 
 type Event struct {
@@ -73,6 +86,7 @@ type Action struct {
 	Summary                string                   `json:"summary"`
 	Explanation            string                   `json:"explanation,omitempty"`
 	Changes                []ProposedChange         `json:"changes"`
+	Findings               []Finding                `json:"findings"`
 	InputCellCount         int                      `json:"input_cell_count"`
 	Revision               int64                    `json:"revision"`
 	OperationID            string                   `json:"operation_id,omitempty"`
@@ -133,4 +147,15 @@ type Orchestrator interface {
 	List(context.Context, string, string, int) ([]Action, error)
 	Approve(context.Context, string, ApprovalInput) (ExecutionResult, error)
 	Undo(context.Context, string, ApprovalInput) (ExecutionResult, error)
+}
+
+func IsReadOnlyMode(mode string) bool {
+	return mode == ModeExplain || mode == ModeSummarize || mode == ModeAnomaly
+}
+
+func RequiredApprovalScope(mode string) string {
+	if mode == ModeClean {
+		return "range.write"
+	}
+	return "formula.write"
 }
