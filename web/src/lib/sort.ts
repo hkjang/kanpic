@@ -16,7 +16,7 @@ export function materializeSort(cells:Map<string,Cell>,range:MergeRange,options:
   const used=new Set<number>()
   for(const key of options.keys){if(key.column<range.startColumn||key.column>range.endColumn||used.has(key.column))throw new Error('정렬 기준 열은 선택 범위 안에서 중복 없이 지정해야 합니다.');used.add(key.column)}
   const dataStart=range.startRow+options.headerRows
-  for(let row=dataStart;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1)if(cellMerge(cells.get(cellKey(row,column))))throw new Error('병합된 셀은 병합 해제 후 정렬할 수 있습니다.')
+  for(let row=dataStart;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){const cell=cells.get(cellKey(row,column));if(cell?.spill_source)throw new Error(`${cell.spill_source} 배열 수식의 결과 셀은 정렬할 수 없습니다.`);if(cellMerge(cell))throw new Error('병합된 셀은 병합 해제 후 정렬할 수 있습니다.')}
   const records=Array.from({length:dataRows},(_,offset)=>{const originalRow=dataStart+offset;return{originalRow,values:options.keys.map(key=>scalar(cells.get(cellKey(originalRow,key.column))?.value,options.caseSensitive))}})
   records.sort((left,right)=>{for(let index=0;index<options.keys.length;index+=1){const comparison=compare(left.values[index],right.values[index]);if(comparison!==0){if(left.values[index].blank||right.values[index].blank)return comparison;return comparison*(options.keys[index].direction==='asc'?1:-1)}}return left.originalRow-right.originalRow})
   const updatedAt=new Date().toISOString(),result:Cell[]=[]

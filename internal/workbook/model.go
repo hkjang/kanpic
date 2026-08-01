@@ -28,21 +28,23 @@ type Sheet struct {
 }
 
 type Cell struct {
-	SheetID   string          `json:"sheet_id"`
-	Row       int             `json:"row"`
-	Column    int             `json:"column"`
-	Value     json.RawMessage `json:"value,omitempty"`
-	Formula   string          `json:"formula,omitempty"`
-	Style     json.RawMessage `json:"style,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	SheetID     string          `json:"sheet_id"`
+	Row         int             `json:"row"`
+	Column      int             `json:"column"`
+	Value       json.RawMessage `json:"value,omitempty"`
+	Formula     string          `json:"formula,omitempty"`
+	Style       json.RawMessage `json:"style,omitempty"`
+	SpillSource string          `json:"spill_source,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type CellInput struct {
-	Row     int             `json:"row"`
-	Column  int             `json:"column"`
-	Value   json.RawMessage `json:"value,omitempty"`
-	Formula string          `json:"formula,omitempty"`
-	Style   json.RawMessage `json:"style,omitempty"`
+	Row         int             `json:"row"`
+	Column      int             `json:"column"`
+	Value       json.RawMessage `json:"value,omitempty"`
+	Formula     string          `json:"formula,omitempty"`
+	Style       json.RawMessage `json:"style,omitempty"`
+	SpillSource string          `json:"-"`
 }
 
 type CellMutation struct {

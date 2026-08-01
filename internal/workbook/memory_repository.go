@@ -536,7 +536,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		coord := cellKey{input.Row, input.Column}
 		current := state.cells[mutation.SheetID][coord]
 		before[coord] = cloneCell(current)
-		cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), UpdatedAt: now}
+		cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
 		if isEmptyCell(cell) {
 			delete(state.cells[mutation.SheetID], coord)
 		} else {
@@ -780,7 +780,7 @@ func latestChange(operations []operation, sheetID string, key cellKey, afterVers
 }
 
 func isEmptyCell(cell Cell) bool {
-	return len(bytes.TrimSpace(cell.Value)) == 0 && cell.Formula == "" && len(bytes.TrimSpace(cell.Style)) == 0
+	return len(bytes.TrimSpace(cell.Value)) == 0 && cell.Formula == "" && len(bytes.TrimSpace(cell.Style)) == 0 && cell.SpillSource == ""
 }
 
 func cloneJSON(value json.RawMessage) json.RawMessage {

@@ -12,8 +12,9 @@ const (
 )
 
 type CellState struct {
-	Value   any
-	Formula string
+	Value       any
+	Formula     string
+	ForcedError *Error
 }
 
 type RecalculatedCell struct {
@@ -46,6 +47,9 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 			if code, ok := cell.Value.(string); ok && isFormulaErrorCode(code) {
 				values[address] = formulaError(code, "stored formula error")
 			}
+		}
+		if cell.ForcedError != nil {
+			values[address] = cell.ForcedError
 		}
 	}
 
@@ -177,6 +181,9 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 			if parseErr := parseErrors[address]; parseErr != nil {
 				values[address] = parseErr
 				results[address] = RecalculatedCell{Address: address, Dependencies: dependencies[address], Error: parseErr}
+			} else if forced := normalized[address].ForcedError; forced != nil {
+				values[address] = forced
+				results[address] = RecalculatedCell{Address: address, Dependencies: dependencies[address], Error: forced}
 			} else if root := nodes[address]; root != nil {
 				value, err := root.eval(values)
 				if err != nil {
@@ -187,6 +194,7 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 					values[address] = formulaErr
 					results[address] = RecalculatedCell{Address: address, Dependencies: dependencies[address], Error: formulaErr}
 				} else {
+					value = publicValue(value)
 					values[address] = value
 					results[address] = RecalculatedCell{Address: address, Value: value, Dependencies: dependencies[address]}
 				}

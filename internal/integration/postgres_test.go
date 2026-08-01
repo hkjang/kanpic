@@ -514,6 +514,72 @@ func TestPostgresDataValidationPersistsAndEnforcesEveryWritePath(t *testing.T) {
 	}
 }
 
+func TestPostgresArrayFormulaSpillPersistsRestoresAndUndoes(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres arrays", OwnerID: "array-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed := []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"a"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`30`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"b"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`10`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"c"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`20`)},
+	}
+	if _, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "array-user", BaseVersion: 1, IdempotencyKey: "postgres-array-seed", Cells: seed}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "array-user", BaseVersion: 2, IdempotencyKey: "postgres-array-formula", Cells: []workbook.CellInput{{Row: 1, Column: 4, Formula: `=FILTER(A1:B3,B1:B3>=20)`}}})
+	if err != nil || len(created.FormulaErrors) != 0 || len(created.RecalculatedCells) != 4 {
+		t.Fatalf("created spill = %#v, %v", created, err)
+	}
+	selected, _ := cellrange.Parse("D1:E2")
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 4 || cells[1].SpillSource != "D1" || cells[2].SpillSource != "D1" || cells[3].SpillSource != "D1" {
+		t.Fatalf("persisted spill = %#v, %v", cells, err)
+	}
+	version, err := repository.CreateVersion(ctx, book.ID, "array baseline", "array-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "array-user", BaseVersion: 3, IdempotencyKey: "postgres-array-shrink", Cells: []workbook.CellInput{{Row: 1, Column: 2, Value: json.RawMessage(`5`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 2 || string(cells[0].Value) != `"c"` {
+		t.Fatalf("shrunk spill = %#v, %v", cells, err)
+	}
+	if _, err = repository.RestoreVersion(ctx, version.ID, "array-user"); err != nil {
+		t.Fatal(err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 4 || cells[3].SpillSource != "D1" || string(cells[0].Value) != `"a"` {
+		t.Fatalf("restored spill = %#v, %v", cells, err)
+	}
+	if _, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "array-user", BaseVersion: 5, IdempotencyKey: "postgres-array-child-edit", Cells: []workbook.CellInput{{Row: 2, Column: 4, Value: json.RawMessage(`"invalid"`)}}}); !errors.Is(err, workbook.ErrInvalid) {
+		t.Fatalf("spill child edit error = %v", err)
+	}
+	if _, err = repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: created.OperationID, ActorID: "array-user", IdempotencyKey: "postgres-array-undo"}); err != nil {
+		t.Fatal(err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 0 {
+		t.Fatalf("spill after undo = %#v, %v", cells, err)
+	}
+}
+
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

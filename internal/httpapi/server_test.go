@@ -686,6 +686,83 @@ func TestFormulaEvaluationAndStoredResult(t *testing.T) {
 	}
 }
 
+func TestExpandedFormulaFunctionsRESTAndMCPSpill(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	evaluated := request[struct {
+		Value        [][]any  `json:"value"`
+		Dependencies []string `json:"dependencies"`
+	}](t, server, http.MethodPost, "/api/v1/formulas:evaluate", map[string]any{
+		"formula": `=SORT(FILTER(A1:B3,B1:B3>=20),2,-1)`,
+		"cells":   map[string]any{"A1": "a", "B1": 30, "A2": "b", "B2": 10, "A3": "c", "B3": 20},
+	}, http.StatusOK)
+	if !reflect.DeepEqual(evaluated.Value, [][]any{{"a", float64(30)}, {"c", float64(20)}}) || len(evaluated.Dependencies) != 6 {
+		t.Fatalf("expanded REST formula = %#v", evaluated)
+	}
+	mcpEvaluated := request[struct {
+		Result struct {
+			Structured struct {
+				Value any `json:"value"`
+			} `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 51, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.formula.evaluate", "arguments": map[string]any{
+			"formula": `=SUMIFS(B1:B3,A1:A3,"<>b")`,
+			"cells":   map[string]any{"A1": "a", "B1": 30, "A2": "b", "B2": 10, "A3": "c", "B3": 20},
+		},
+	}}, http.StatusOK)
+	if mcpEvaluated.Result.Structured.Value != float64(50) {
+		t.Fatalf("expanded MCP formula = %#v", mcpEvaluated)
+	}
+
+	wb := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "array formula"}, http.StatusCreated)
+	sheetID := wb.Sheets[0].ID
+	path := "/api/v1/sheets/" + sheetID + "/cells:batch"
+	request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{
+		"base_version": 1, "idempotency_key": "spill-seed", "cells": []map[string]any{
+			{"row": 1, "column": 1, "value": "a"}, {"row": 1, "column": 2, "value": 30},
+			{"row": 2, "column": 1, "value": "b"}, {"row": 2, "column": 2, "value": 10},
+			{"row": 3, "column": 1, "value": "c"}, {"row": 3, "column": 2, "value": 20},
+		},
+	}, http.StatusOK)
+	mcpSet := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 52, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.formula.set", "arguments": map[string]any{
+			"sheet_id": sheetID, "row": 1, "column": 4, "formula": `=FILTER(A1:B3,B1:B3>=20)`, "base_version": 2, "idempotency_key": "mcp-spill",
+		},
+	}}, http.StatusOK)
+	if len(mcpSet.Result.Structured.FormulaErrors) != 0 || len(mcpSet.Result.Structured.RecalculatedCells) != 4 {
+		t.Fatalf("MCP spill mutation = %#v", mcpSet.Result.Structured)
+	}
+	spilled := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/D1:E2", nil, http.StatusOK)
+	if len(spilled.Items) != 4 || spilled.Items[0].Formula == "" || spilled.Items[1].SpillSource != "D1" || spilled.Items[2].SpillSource != "D1" || spilled.Items[3].SpillSource != "D1" {
+		t.Fatalf("stored spill cells = %#v", spilled.Items)
+	}
+	request[map[string]any](t, server, http.MethodPatch, path, map[string]any{
+		"base_version": 3, "idempotency_key": "reject-spill-child", "cells": []map[string]any{{"row": 2, "column": 4, "value": "invalid"}},
+	}, http.StatusBadRequest)
+	shrunk := request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{
+		"base_version": 3, "idempotency_key": "shrink-spill", "cells": []map[string]any{{"row": 1, "column": 2, "value": 5}},
+	}, http.StatusOK)
+	if len(shrunk.FormulaErrors) != 0 {
+		t.Fatalf("shrunk spill = %#v", shrunk)
+	}
+	spilled = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/D1:E2", nil, http.StatusOK)
+	if len(spilled.Items) != 2 || string(spilled.Items[0].Value) != `"c"` || string(spilled.Items[1].Value) != "20" {
+		t.Fatalf("shrunk stored spill = %#v", spilled.Items)
+	}
+}
+
 func TestCircularFormulaIsStoredAsExplicitError(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

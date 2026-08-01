@@ -399,6 +399,55 @@ test('creates colored dropdown validation and rejects invalid writes', async ({ 
   await expect.poll(async()=>(await rules()).items).toEqual([])
 })
 
+test('spills FILTER results and protects generated cells in the editor', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const range=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/D1:E2`).then(response=>response.json())
+
+  await edit({x:70,y:42},'a')
+  await edit({x:170,y:42},'30')
+  await edit({x:70,y:69},'b')
+  await edit({x:170,y:69},'10')
+  await edit({x:70,y:96},'c')
+  await edit({x:170,y:96},'20')
+  await edit({x:390,y:42},'=FILTER(A1:B3,B1:B3>=20)')
+  await expect.poll(async()=>{
+    const result=await range()
+    return result.items.map((cell:{value:unknown})=>cell.value)
+  }).toEqual(['a',30,'c',20])
+  let result=await range()
+  expect(result.items.slice(1).every((cell:{spill_source?:string})=>cell.spill_source==='D1')).toBe(true)
+
+  await canvas.click({position:{x:390,y:69}})
+  await page.keyboard.press('F2')
+  await expect(page.locator('.name-box')).toHaveText('D1')
+  await expect(page.locator('input.cell-editor')).toHaveValue('=FILTER(A1:B3,B1:B3>=20)')
+  await page.locator('input.cell-editor').press('Escape')
+
+  await canvas.click({position:{x:390,y:69}})
+  const dialogPromise=page.waitForEvent('dialog')
+  const pastePromise=page.locator('.grid-viewport').evaluate(element=>{const data=new DataTransfer();data.setData('text/plain','invalid');element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})
+  const dialog=await dialogPromise
+  expect(dialog.message()).toContain('D1 배열 수식의 결과')
+  await dialog.accept()
+  await pastePromise
+  expect((await range()).items.map((cell:{value:unknown})=>cell.value)).toEqual(['a',30,'c',20])
+
+  await edit({x:170,y:42},'5')
+  await expect.poll(async()=>{
+    const shrunk=await range()
+    return shrunk.items.map((cell:{value:unknown})=>cell.value)
+  }).toEqual(['c',20])
+  result=await range()
+  expect(result.items[1].spill_source).toBe('D1')
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

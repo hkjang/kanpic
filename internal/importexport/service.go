@@ -365,6 +365,12 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		}
 		mergedRanges := make(map[string]workbook.MergeMetadata)
 		for _, cell := range cells {
+			// Dynamic-array child cells are cached server results. Writing them as
+			// ordinary XLSX values would block the anchor formula from spilling
+			// when Excel or another compatible engine recalculates the workbook.
+			if cell.SpillSource != "" {
+				continue
+			}
 			coordinate := cellrange.Address(cell.Row, cell.Column)
 			var value any
 			if len(cell.Value) > 0 {

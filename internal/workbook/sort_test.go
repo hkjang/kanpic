@@ -57,6 +57,9 @@ func TestBuildSortCellsRejectsInvalidKeysMergedCellsAndOversizedRange(t *testing
 	if _, err := BuildSortCells(inputsAsCells(merged), selected, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err == nil {
 		t.Fatal("expected merged range rejection")
 	}
+	if _, err := BuildSortCells([]Cell{{Row: 2, Column: 1, Value: json.RawMessage(`2`), SpillSource: "A1"}}, selected, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err == nil {
+		t.Fatal("expected array result sort rejection")
+	}
 	large, _ := cellrange.Parse("A1:B5001")
 	if _, err := BuildSortCells(nil, large, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err == nil {
 		t.Fatal("expected operation limit rejection")

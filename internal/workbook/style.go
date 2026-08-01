@@ -103,6 +103,7 @@ func applyStylePatch(current Cell, input CellInput, patch json.RawMessage) (Cell
 	input.Value = cloneJSON(current.Value)
 	input.Formula = current.Formula
 	input.Style = style
+	input.SpillSource = current.SpillSource
 	return input, nil
 }
 

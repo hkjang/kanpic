@@ -78,7 +78,7 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 		}
 		return Result{Dependencies: dependencies, Error: formulaError("#ERROR!", evalErr.Error())}
 	}
-	return Result{Value: value, Dependencies: dependencies}
+	return Result{Value: publicValue(value), Dependencies: dependencies}
 }
 
 type tokenKind int
@@ -232,7 +232,11 @@ func (n rangeNode) eval(cells map[string]any) (any, error) {
 			values = append(values, value)
 		}
 	}
-	return values, nil
+	return arrayValue{
+		rows:    n.selected.End.Row - n.selected.Start.Row + 1,
+		columns: n.selected.End.Column - n.selected.Start.Column + 1,
+		values:  values,
+	}, nil
 }
 
 type unaryNode struct {
@@ -245,14 +249,7 @@ func (n unaryNode) eval(cells map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	number, ok := toNumber(value)
-	if !ok {
-		return nil, formulaError("#VALUE!", "unary operator requires a number")
-	}
-	if n.operator == "-" {
-		return -number, nil
-	}
-	return number, nil
+	return evaluateUnary(n.operator, value)
 }
 
 type binaryNode struct {
@@ -269,47 +266,7 @@ func (n binaryNode) eval(cells map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch n.operator {
-	case "&":
-		return display(left) + display(right), nil
-	case "=", "<>", "<", ">", "<=", ">=":
-		comparison := compare(left, right)
-		switch n.operator {
-		case "=":
-			return comparison == 0, nil
-		case "<>":
-			return comparison != 0, nil
-		case "<":
-			return comparison < 0, nil
-		case ">":
-			return comparison > 0, nil
-		case "<=":
-			return comparison <= 0, nil
-		default:
-			return comparison >= 0, nil
-		}
-	}
-	a, aok := toNumber(left)
-	b, bok := toNumber(right)
-	if !aok || !bok {
-		return nil, formulaError("#VALUE!", "arithmetic requires numbers")
-	}
-	switch n.operator {
-	case "+":
-		return a + b, nil
-	case "-":
-		return a - b, nil
-	case "*":
-		return a * b, nil
-	case "/":
-		if b == 0 {
-			return nil, formulaError("#DIV/0!", "division by zero")
-		}
-		return a / b, nil
-	case "^":
-		return math.Pow(a, b), nil
-	}
-	return nil, formulaError("#ERROR!", "unknown operator")
+	return evaluateBinary(n.operator, left, right)
 }
 
 type functionNode struct {
@@ -357,12 +314,26 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		return expected, nil
 	}
-	values := make([]any, 0)
+	evaluated := make([]any, 0, len(n.arguments))
 	for _, argument := range n.arguments {
 		value, err := argument.eval(cells)
 		if err != nil {
 			return nil, err
 		}
+		evaluated = append(evaluated, value)
+	}
+	switch name {
+	case "SUMIF", "SUMIFS", "COUNTIF", "COUNTIFS":
+		return evaluateConditionalAggregate(name, evaluated)
+	case "VLOOKUP", "HLOOKUP", "INDEX", "MATCH":
+		return evaluateLookup(name, evaluated)
+	case "FILTER":
+		return evaluateFilter(evaluated)
+	case "SORT":
+		return evaluateSort(evaluated)
+	}
+	values := make([]any, 0)
+	for _, value := range evaluated {
 		values = append(values, flatten(value)...)
 	}
 	switch name {
@@ -666,10 +637,38 @@ func numericValues(values []any) []float64 {
 	return result
 }
 func flatten(value any) []any {
-	if values, ok := value.([]any); ok {
-		return values
+	switch typed := value.(type) {
+	case arrayValue:
+		return append([]any(nil), typed.values...)
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, flatten(item)...)
+		}
+		return result
+	case [][]any:
+		result := make([]any, 0)
+		for _, row := range typed {
+			result = append(result, row...)
+		}
+		return result
 	}
 	return []any{value}
+}
+
+func publicValue(value any) any {
+	switch typed := value.(type) {
+	case arrayValue:
+		return typed.matrix()
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = publicValue(item)
+		}
+		return result
+	default:
+		return value
+	}
 }
 func truthy(value any) bool {
 	if value == nil {

@@ -57,10 +57,17 @@ func TestBuildMergeCellsRejectsSingletonAndOverlap(t *testing.T) {
 	}
 }
 
+func TestBuildMergeCellsRejectsArrayResultCells(t *testing.T) {
+	selected, _ := cellrange.Parse("A1:B1")
+	if _, err := BuildMergeCells([]Cell{{Row: 1, Column: 2, Value: json.RawMessage(`2`), SpillSource: "A1"}}, selected, true); err == nil {
+		t.Fatal("expected array result merge rejection")
+	}
+}
+
 func inputsAsCells(inputs []CellInput) []Cell {
 	result := make([]Cell, len(inputs))
 	for index, input := range inputs {
-		result[index] = Cell{Row: input.Row, Column: input.Column, Value: input.Value, Formula: input.Formula, Style: input.Style}
+		result[index] = Cell{Row: input.Row, Column: input.Column, Value: input.Value, Formula: input.Formula, Style: input.Style, SpillSource: input.SpillSource}
 	}
 	return result
 }

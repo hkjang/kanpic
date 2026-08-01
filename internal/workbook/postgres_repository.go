@@ -930,7 +930,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		for _, input := range inputs {
 			coordinate := coordinateKey(input.Row, input.Column)
 			before[coordinate] = payload[coordinate]
-			cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), UpdatedAt: now}
+			cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				delete(payload, coordinate)
 			} else {

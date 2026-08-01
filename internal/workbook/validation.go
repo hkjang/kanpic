@@ -225,7 +225,7 @@ func ValidateCellInputs(rules []DataValidation, existing map[cellKey]Cell, expan
 	}
 	for _, input := range expanded {
 		key := cellKey{input.Row, input.Column}
-		cell := Cell{Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style)}
+		cell := Cell{Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource}
 		if isEmptyCell(cell) {
 			delete(prospective, key)
 		} else {

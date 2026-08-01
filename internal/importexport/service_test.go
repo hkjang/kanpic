@@ -122,6 +122,45 @@ func TestCSVExportEscapesFormulaInjection(t *testing.T) {
 	}
 }
 
+func TestXLSXExportOmitsDynamicArrayChildValues(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "arrays", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "spill-export", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("a")}, {Row: 1, Column: 2, Value: value(30)},
+		{Row: 2, Column: 1, Value: value("b")}, {Row: 2, Column: 2, Value: value(10)},
+		{Row: 3, Column: 1, Value: value("c")}, {Row: 3, Column: 2, Value: value(20)},
+		{Row: 1, Column: 4, Formula: "=FILTER(A1:B3,B1:B3>=20)"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	sheet := file.GetSheetName(0)
+	if formula, _ := file.GetCellFormula(sheet, "D1"); formula != "=FILTER(A1:B3,B1:B3>=20)" {
+		t.Fatalf("anchor formula = %q", formula)
+	}
+	for _, coordinate := range []string{"E1", "D2", "E2"} {
+		if cellValue, _ := file.GetCellValue(sheet, coordinate); cellValue != "" {
+			t.Fatalf("spill child %s was exported as a blocking value %q", coordinate, cellValue)
+		}
+	}
+}
+
 func assertRawJSON(t *testing.T, raw json.RawMessage, want any) {
 	t.Helper()
 	var got any

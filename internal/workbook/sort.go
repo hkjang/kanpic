@@ -73,6 +73,9 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 	for _, cell := range existing {
 		byCoordinate[coordinateKey(cell.Row, cell.Column)] = cell
 		if cell.Row >= dataStart && cell.Row <= selected.End.Row && cell.Column >= selected.Start.Column && cell.Column <= selected.End.Column {
+			if cell.SpillSource != "" {
+				return nil, fmt.Errorf("%w: array result cell %s from %s cannot be sorted", ErrInvalid, cellrange.Address(cell.Row, cell.Column), cell.SpillSource)
+			}
 			if _, merged, err := CellMerge(cell); err != nil {
 				return nil, err
 			} else if merged {
@@ -113,7 +116,7 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 			if formulaText != "" {
 				formulaText = formula.ShiftReferences(formulaText, destinationRow-record.originalRow, 0)
 			}
-			inputs = append(inputs, CellInput{Row: destinationRow, Column: column, Value: cloneJSON(source.Value), Formula: formulaText, Style: cloneJSON(source.Style)})
+			inputs = append(inputs, CellInput{Row: destinationRow, Column: column, Value: cloneJSON(source.Value), Formula: formulaText, Style: cloneJSON(source.Style), SpillSource: source.SpillSource})
 		}
 	}
 	return inputs, nil

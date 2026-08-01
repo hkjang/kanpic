@@ -17,6 +17,8 @@ const TOTAL_COLUMNS=MAX_GRID_COLUMNS
 
 function columnName(column:number){let value=column,result='';while(value){value--;result=String.fromCharCode(65+value%26)+result;value=Math.floor(value/26)}return result}
 function parsedValue(raw:string):unknown{if(raw==='')return undefined;if(raw.toLowerCase()==='true')return true;if(raw.toLowerCase()==='false')return false;if(Number.isFinite(Number(raw))&&raw.trim()!=='')return Number(raw);return raw}
+function parsedAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
+function formulaPreview(value:unknown){if(!Array.isArray(value))return value;const first=value[0];return Array.isArray(first)?first[0]:first}
 
 export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=[]}:{sheetId:string;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[]}) {
   const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined)
@@ -79,6 +81,7 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
       context.restore()
       if(validation?.rule_type==='list'&&validation.show_dropdown&&validation.display_style!=='plain'){context.fillStyle='#52606d';context.beginPath();context.moveTo(x+width-13,y+height/2-2);context.lineTo(x+width-7,y+height/2-2);context.lineTo(x+width-10,y+height/2+2);context.closePath();context.fill()}
       if(validation){const checked=validateClientValue(validation,cell.value);if(!checked.valid&&!checked.deferred){context.fillStyle='#dc2626';context.beginPath();context.moveTo(x+width-9,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+9);context.closePath();context.fill()}}
+      if(cell.spill_source){context.save();context.setLineDash([2,2]);context.strokeStyle='#38a3a5';context.lineWidth=1;context.strokeRect(Math.round(x)+2,Math.round(y)+2,Math.round(width)-4,Math.round(height)-4);context.restore()}
     }
     cells.forEach(cell=>{
       if(rowVisibility.isHidden(cell.row)||cell.row<visibleRange.startRow||cell.row>visibleRange.endRow||cell.column<visibleRange.startColumn||cell.column>visibleRange.endColumn)return
@@ -122,6 +125,8 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
   const queueCells=useCallback(async(inputs:PastedCell[],endpoint:'batch'|'paste'|'fill')=>{
     if(inputs.length===0)return
     if(inputs.length>(endpoint==='batch'?1000:MAX_PASTE_CELLS)){setSaveState('error');alert(endpoint==='batch'?'한 번에 최대 1,000셀까지 변경할 수 있습니다.':`${endpoint==='fill'?'자동 채우기':'붙여넣기'}는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}
+    const spillChild=inputs.find(input=>cells.get(cellKey(input.row,input.column))?.spill_source)
+    if(spillChild){const source=cells.get(cellKey(spillChild.row,spillChild.column))?.spill_source;setSaveState('error');alert(`${address(spillChild.row,spillChild.column)}은(는) ${source} 배열 수식의 결과입니다. 원본 수식 셀을 편집하세요.`);return}
     const checked=validateClientInputs(validations,inputs)
     if(checked.rejected.length){const first=checked.rejected[0];setSaveState('error');alert(`${address(first.row,first.column)}: ${first.message}`);return}
     if(checked.warnings.length&&!confirm(`${checked.warnings.length.toLocaleString()}개 셀이 데이터 검증 조건을 만족하지 않습니다. 그래도 입력할까요?`))return
@@ -131,10 +136,12 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
     const id=newIdempotencyKey()
     await enqueue({id,sheetId,endpoint,attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:collaborationClientId(),cells:inputs}})
     await flushOutbox(handleApplied)
-  },[handleApplied,putCells,setSaveState,sheetId,version,validations])
+  },[cells,handleApplied,putCells,setSaveState,sheetId,version,validations])
 
   const saveCell=useCallback(async(value:unknown,formula:string,row:number,column:number)=>{
-    const style=cells.get(cellKey(row,column))?.style,input={row,column,value,formula,style}
+    const current=cells.get(cellKey(row,column))
+    if(current?.spill_source){setSaveState('error');alert(`${address(row,column)}은(는) ${current.spill_source} 배열 수식의 결과입니다. 원본 수식 셀을 편집하세요.`);return false}
+    const style=current?.style,input={row,column,value,formula,style}
     const checked=validateClientInputs(validations,[input])
     if(checked.rejected.length){setSaveState('error');alert(`${address(row,column)}: ${checked.rejected[0].message}`);return false}
     if(checked.warnings.length&&!confirm(`${address(row,column)} 값이 데이터 검증 조건을 만족하지 않습니다. 그래도 입력할까요?`))return false
@@ -151,7 +158,7 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
     if(formula&&navigator.onLine){
       const formulaCells:Record<string,unknown>={}
       cells.forEach(candidate=>{formulaCells[address(candidate.row,candidate.column)]=candidate.value})
-      try{const evaluated=await api<{value?:unknown;error?:{code:string}}>(`/api/v1/formulas:evaluate`,{method:'POST',body:JSON.stringify({formula,cells:formulaCells})});value=evaluated.error?.code??evaluated.value}catch{value='#ERROR!'}
+      try{const evaluated=await api<{value?:unknown;error?:{code:string}}>(`/api/v1/formulas:evaluate`,{method:'POST',body:JSON.stringify({formula,cells:formulaCells})});value=evaluated.error?.code??formulaPreview(evaluated.value)}catch{value='#ERROR!'}
     }
     await saveCell(value,formula,row,column)
   },[activeRow,activeColumn,cells,saveCell])
@@ -186,7 +193,8 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
   const pointerMove=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(filling.current){const cell=pointCell(event);if(!cell)return;const next={startRow:Math.min(selection.startRow,cell.row),startColumn:Math.min(selection.startColumn,cell.column),endRow:Math.max(selection.endRow,cell.row),endColumn:Math.max(selection.endColumn,cell.column)};fillPreviewRef.current=next;setFillPreview(next);return}if(!dragging.current){event.currentTarget.style.cursor=onFillHandle(event)?'crosshair':'default';return}const cell=pointCell(event);if(cell)selectCell(cell.row,cell.column,true)}
   const pointerUp=(event:React.PointerEvent<HTMLCanvasElement>)=>{dragging.current=false;const target=fillPreviewRef.current,shouldFill=filling.current;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined);event.currentTarget.style.cursor='default';if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);if(shouldFill&&target)void fillSelection(target)}
   const pointerCancel=(event:React.PointerEvent<HTMLCanvasElement>)=>{dragging.current=false;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined);event.currentTarget.style.cursor='default';if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)}
-  const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;if(event.key==='Enter'||event.key==='F2'){setEditing(true);event.preventDefault()}else if(event.key==='ArrowDown'){selectCell(rowVisibility.nextVisible(activeRow,1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowUp'){selectCell(rowVisibility.nextVisible(activeRow,-1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowRight'||event.key==='Tab'){selectCell(activeRow,activeColumn+1,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowLeft'){selectCell(activeRow,activeColumn-1,event.shiftKey);event.preventDefault()}else if(event.key==='Backspace'||event.key==='Delete'){const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)commit('');else void clearSelection();event.preventDefault()}else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey){setDraft(event.key);setEditing(true);event.preventDefault()}}
+  const editActiveCell=useCallback(()=>{if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing])
+  const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;if(event.key==='Enter'||event.key==='F2'){editActiveCell();event.preventDefault()}else if(event.key==='ArrowDown'){selectCell(rowVisibility.nextVisible(activeRow,1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowUp'){selectCell(rowVisibility.nextVisible(activeRow,-1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowRight'||event.key==='Tab'){selectCell(activeRow,activeColumn+1,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowLeft'){selectCell(activeRow,activeColumn-1,event.shiftKey);event.preventDefault()}else if(event.key==='Backspace'||event.key==='Delete'){const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)commit('');else void clearSelection();event.preventDefault()}else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey){if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
   const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
   const copy=(event:React.ClipboardEvent)=>{writeClipboard(event)}
   const clearSelection=useCallback(async()=>{
@@ -206,12 +214,12 @@ export function CanvasGrid({sheetId,version,onVersion,hiddenRows=[],validations=
   }
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
   const inputVisibleStart=rowVisibility.firstVisibleAtOrAfter(inputStartRow),inputLeft=HEADER_WIDTH+(inputStartColumn-1)*columnWidth-scroll.left,inputTop=HEADER_HEIGHT+(rowVisibility.actualToDisplay(inputVisibleStart)-1)*rowHeight-scroll.top,inputWidth=(inputEndColumn-inputStartColumn+1)*columnWidth,inputHeight=rowVisibility.countVisible(inputStartRow,inputEndRow)*rowHeight
-  const dropdown=activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
+  const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
-    <div className="grid-spacer" style={{width:HEADER_WIDTH+TOTAL_COLUMNS*columnWidth,height:HEADER_HEIGHT+rowVisibility.visibleCount*rowHeight}}><canvas ref={canvas} className="grid-canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={()=>setEditing(true)}/></div>
+    <div className="grid-spacer" style={{width:HEADER_WIDTH+TOTAL_COLUMNS*columnWidth,height:HEADER_HEIGHT+rowVisibility.visibleCount*rowHeight}}><canvas ref={canvas} className="grid-canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={editActiveCell}/></div>
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
     {editing&&dropdown?<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>void saveCell(option.value,'',activeRow,activeColumn)}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>setEditing(false)}>취소</button></div>:editing&&<input autoFocus className="cell-editor" style={{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}} value={draft} onChange={(event)=>setDraft(event.target.value)} onBlur={()=>commit(draft)} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();commit(draft)}else if(event.key==='Escape'){setEditing(false);setDraft(activeText)}}}/>}
-    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
+    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

@@ -78,6 +78,9 @@ func BuildMergeCells(existing []Cell, selected cellrange.Range, merge bool) ([]C
 	for row := selected.Start.Row; row <= selected.End.Row; row++ {
 		for column := selected.Start.Column; column <= selected.End.Column; column++ {
 			current := byCoordinate[coordinateKey(row, column)]
+			if current.SpillSource != "" {
+				return nil, fmt.Errorf("%w: array result cell %s from %s cannot be merged or unmerged", ErrInvalid, cellrange.Address(row, column), current.SpillSource)
+			}
 			stored, exists, err := CellMerge(current)
 			if err != nil {
 				return nil, err
@@ -89,7 +92,7 @@ func BuildMergeCells(existing []Cell, selected cellrange.Range, merge bool) ([]C
 			if err != nil {
 				return nil, err
 			}
-			inputs = append(inputs, CellInput{Row: row, Column: column, Value: cloneJSON(current.Value), Formula: current.Formula, Style: style})
+			inputs = append(inputs, CellInput{Row: row, Column: column, Value: cloneJSON(current.Value), Formula: current.Formula, Style: style, SpillSource: current.SpillSource})
 		}
 	}
 	return inputs, nil
