@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.9.0
+VERSION=v0.10.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -49,6 +49,8 @@ cd web && npm ci && npm test && npm run build
 ```
 
 CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 시트 간 참조와 이름 범위를 포함한 수식을 사용할 수 있고, 행·열 삽입/삭제 시 수식·병합·이름 범위·검증·필터·댓글 참조가 함께 이동하며 변경 직전 복구 버전이 자동 생성됩니다. 행 높이·열 너비·행/열 숨김·고정 영역도 PostgreSQL에 버전 관리되며 공동 편집자에게 동기화됩니다. 표시 형식, 가로·세로 정렬, 텍스트 넘침·자르기·자동 줄바꿈, 회전 및 범위 테두리는 값과 수식을 보존하는 원자적 서식 작업으로 저장되며 실행 취소할 수 있습니다. XLSX Import/Export는 이 공통 서식 모델을 사용해 글꼴·색상·채우기·정렬·줄바꿈·표시 형식·테두리를 왕복 변환합니다. `Ctrl/⌘+F` 또는 `Ctrl/⌘+K`로 서버에 저장된 워크북 전체의 값·수식을 검색하고 다른 시트의 결과 셀로 바로 이동할 수 있으며, 같은 기능은 REST `GET /api/v1/workbooks/{workbookId}/search`와 MCP `spreadsheet.workbook.search`로 제공됩니다.
+
+편집기 오른쪽 아래 **차트** 버튼에서는 선택 범위로 막대·선·영역·원형·분산·히스토그램 차트를 만들 수 있습니다. 차트는 서버에 버전 관리되는 독립 엔터티이며 최신 셀 값과 수식 결과를 사용해 자동 갱신됩니다. 시트 위에서 이동·크기 조절하고 SVG 또는 PNG로 내보낼 수 있으며, REST `/api/v1/workbooks/{workbookId}/charts`, `/api/v1/charts/{chartId}`와 `spreadsheet.chart.*` MCP 도구가 같은 계약을 제공합니다.
 
 툴바의 댓글 버튼에서는 현재 셀 또는 범위에 스레드를 만들고 답글·수정·삭제·해결·재열기를 수행할 수 있습니다. 본문에서 `@사용자ID` 또는 `@이메일`을 입력하면 상단 알림 메뉴에 멘션이 표시되고, 알림을 선택하면 원래 시트와 범위로 이동합니다. 댓글은 HTML로 렌더링하지 않으며 revision 기반 충돌 방지와 idempotency key를 사용합니다. REST의 `/api/v1/workbooks/{workbookId}/comments`, `/api/v1/comments/{commentId}`, `/api/v1/me/notifications` 계약은 `spreadsheet.comment.*`와 `spreadsheet.notification.*` MCP 도구로도 동일하게 제공됩니다.
 

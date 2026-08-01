@@ -83,6 +83,12 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.comment.message.delete", "자신의 댓글 메시지를 revision 기반으로 삭제합니다.", "comment.write", commentMessageDeleteSchema()),
 	tool("spreadsheet.notification.list", "현재 사용자에게 온 @멘션 알림을 조회합니다.", "comment.read", notificationListSchema()),
 	tool("spreadsheet.notification.mark_read", "현재 사용자의 @멘션 알림을 읽음 처리합니다.", "comment.write", requiredProps("notification_id", "string")),
+	tool("spreadsheet.chart.list", "워크북 또는 시트의 차트 정의를 조회합니다.", "chart.read", chartListSchema()),
+	tool("spreadsheet.chart.get", "차트 정의와 revision을 조회합니다.", "chart.read", requiredProps("chart_id", "string")),
+	tool("spreadsheet.chart.data", "최신 셀 값으로 계산된 차트 계열과 점을 조회합니다.", "chart.read", requiredProps("chart_id", "string")),
+	tool("spreadsheet.chart.create", "셀 범위를 데이터 원본으로 사용하는 차트를 멱등 생성합니다.", "chart.write", chartSchema(true)),
+	tool("spreadsheet.chart.update", "차트 유형, 원본, 제목, 범례 및 배치를 revision 기반으로 변경합니다.", "chart.write", chartSchema(false)),
+	tool("spreadsheet.chart.delete", "차트 정의를 삭제합니다.", "chart.write", chartDeleteSchema()),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -511,6 +517,50 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return s.repository.ListMentionNotifications(ctx, actorAliases(r), input.UnreadOnly, input.Limit)
 	case "spreadsheet.notification.mark_read":
 		return s.repository.MarkMentionNotificationRead(ctx, stringArg(args, "notification_id"), actorAliases(r))
+	case "spreadsheet.chart.list":
+		return s.repository.ListCharts(ctx, stringArg(args, "workbook_id"), stringArg(args, "sheet_id"))
+	case "spreadsheet.chart.get":
+		return s.repository.GetChart(ctx, stringArg(args, "chart_id"))
+	case "spreadsheet.chart.data":
+		return s.repository.GetChartData(ctx, stringArg(args, "chart_id"))
+	case "spreadsheet.chart.create":
+		var input workbook.CreateChartInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.CreateChart(ctx, stringArg(args, "workbook_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.chart.update":
+		var input workbook.UpdateChartInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.UpdateChart(ctx, stringArg(args, "chart_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.chart.delete":
+		item, err := s.repository.GetChart(ctx, stringArg(args, "chart_id"))
+		if err != nil {
+			return nil, err
+		}
+		var expected *int64
+		if value, found := args["expected_revision"]; found && value != nil {
+			revision, revisionErr := numberArg(args, "expected_revision")
+			if revisionErr != nil || revision < 1 {
+				return nil, fmt.Errorf("expected_revision must be a positive integer")
+			}
+			expected = &revision
+		}
+		if err := s.repository.DeleteChart(ctx, item.ID, actor, expected); err != nil {
+			return nil, err
+		}
+		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		return map[string]any{"ok": true}, nil
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -753,6 +803,42 @@ func notificationListSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"unread_only": map[string]any{"type": "boolean"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 200},
 	}}
+}
+
+func chartListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id": map[string]any{"type": "string", "minLength": 1}, "sheet_id": map[string]any{"type": "string"},
+	}, "required": []string{"workbook_id"}}
+}
+
+func chartSchema(create bool) map[string]any {
+	position := map[string]any{"type": "object", "properties": map[string]any{
+		"x": map[string]any{"type": "integer", "minimum": 0}, "y": map[string]any{"type": "integer", "minimum": 0},
+		"width": map[string]any{"type": "integer", "minimum": 240, "maximum": 1600}, "height": map[string]any{"type": "integer", "minimum": 160, "maximum": 1200},
+	}, "required": []string{"x", "y", "width", "height"}}
+	properties := map[string]any{
+		"chart_id": map[string]any{"type": "string"}, "workbook_id": map[string]any{"type": "string"}, "sheet_id": map[string]any{"type": "string"}, "source_sheet_id": map[string]any{"type": "string"},
+		"idempotency_key": map[string]any{"type": "string", "minLength": 1}, "type": map[string]any{"type": "string", "enum": []string{"bar", "line", "area", "pie", "scatter", "histogram"}},
+		"title": map[string]any{"type": "string", "maxLength": 200}, "source_range": map[string]any{"type": "string"},
+		"first_row_headers": map[string]any{"type": "boolean"}, "first_column_labels": map[string]any{"type": "boolean"},
+		"legend_position": map[string]any{"type": "string", "enum": []string{"none", "top", "right", "bottom", "left"}},
+		"x_axis_title":    map[string]any{"type": "string", "maxLength": 100}, "y_axis_title": map[string]any{"type": "string", "maxLength": 100},
+		"position": position, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}
+	required := []string{"chart_id"}
+	if create {
+		delete(properties, "chart_id")
+		delete(properties, "expected_revision")
+		required = []string{"workbook_id", "sheet_id", "source_sheet_id", "idempotency_key", "type", "source_range"}
+	} else {
+		delete(properties, "workbook_id")
+		delete(properties, "idempotency_key")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func chartDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"chart_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"chart_id"}}
 }
 
 func rangeFormatSchema() map[string]any {

@@ -164,6 +164,80 @@ func TestPostgresWorkbookSearchUsesCellBlocks(t *testing.T) {
 	}
 }
 
+func TestPostgresChartsPersistRefreshAndRestore(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres charts", WorkspaceID: "integration", OwnerID: "chart-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: "chart-user", BaseVersion: book.Version, IdempotencyKey: "pg-chart-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"1월"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`10`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"2월"`)}, {Row: 3, Column: 2, Formula: `=B2*2`},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, err := repository.CreateChart(ctx, book.ID, "chart-user", workbook.CreateChartInput{IdempotencyKey: "pg-chart", SheetID: sheet.ID, SourceSheetID: sheet.ID, Type: "line", Title: "실적", SourceRange: "A1:B3"})
+	if err != nil || chart.WorkbookVersion != seed.ServerVersion+1 {
+		t.Fatalf("PostgreSQL chart create = %#v, %v", chart, err)
+	}
+	duplicate, err := repository.CreateChart(ctx, book.ID, "chart-user", workbook.CreateChartInput{IdempotencyKey: "pg-chart", SheetID: sheet.ID, SourceSheetID: sheet.ID, Type: "pie", SourceRange: "A1:B2"})
+	if err != nil || duplicate.ID != chart.ID || duplicate.Type != "line" {
+		t.Fatalf("PostgreSQL chart idempotency = %#v, %v", duplicate, err)
+	}
+	data, err := repository.GetChartData(ctx, chart.ID)
+	if err != nil || len(data.Series) != 1 || len(data.Series[0].Points) != 2 || data.Series[0].Points[1].Value == nil || *data.Series[0].Points[1].Value != 20 {
+		t.Fatalf("PostgreSQL chart data = %#v, %v", data, err)
+	}
+	inserted, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: sheet.ID, ActorID: "chart-user", BaseVersion: chart.WorkbookVersion, IdempotencyKey: "pg-chart-insert", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetChart(ctx, chart.ID)
+	if err != nil || moved.SourceRange != "A1:B4" || moved.Revision != 2 {
+		t.Fatalf("PostgreSQL moved chart = %#v, %v", moved, err)
+	}
+	version, err := repository.CreateVersion(ctx, book.ID, "chart snapshot", "chart-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "changed"
+	changed, err := repository.UpdateChart(ctx, chart.ID, "chart-user", workbook.UpdateChartInput{Title: &title, ExpectedRevision: &moved.Revision})
+	if err != nil || changed.WorkbookVersion != inserted.ServerVersion+1 {
+		t.Fatalf("PostgreSQL chart update = %#v, %v", changed, err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, "chart-user"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.GetChart(ctx, chart.ID)
+	if err != nil || restored.Title != "실적" || restored.SourceRange != "A1:B4" || restored.Revision != 2 {
+		t.Fatalf("PostgreSQL restored chart = %#v, %v", restored, err)
+	}
+	copiedBook, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{OwnerID: "copy-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID)
+	copiedCharts, err := repository.ListCharts(ctx, copiedBook.ID, "")
+	if err != nil || len(copiedCharts) != 1 || copiedCharts[0].SheetID != copiedCharts[0].SourceSheetID || copiedCharts[0].SheetID == sheet.ID {
+		t.Fatalf("PostgreSQL copied charts = %#v, %v", copiedCharts, err)
+	}
+}
+
 func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
@@ -1420,6 +1494,19 @@ func TestSettingsAndAPIKeyLifecycle(t *testing.T) {
 	principal, err := keys.Authenticate(ctx, created.Secret)
 	if err != nil || !principal.Allows("workbook.read") || principal.Allows("admin.*") {
 		t.Fatalf("principal: %#v %v", principal, err)
+	}
+	updatedName := "agent-updated"
+	updatedScopes := []string{"mcp.use", "workbook.*", "chart.*"}
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	expiresPointer := &expiresAt
+	updated, err := keys.Update(ctx, created.ID, userID, apikey.UpdateInput{Name: &updatedName, Scopes: &updatedScopes, ExpiresAt: &expiresPointer}, false)
+	if err != nil || updated.Name != updatedName || updated.ExpiresAt == nil || !updated.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("update key: %#v %v", updated, err)
+	}
+	var clearExpiration *time.Time
+	updated, err = keys.Update(ctx, created.ID, userID, apikey.UpdateInput{ExpiresAt: &clearExpiration}, false)
+	if err != nil || updated.ExpiresAt != nil {
+		t.Fatalf("clear key expiration: %#v %v", updated, err)
 	}
 	rotated, err := keys.Rotate(ctx, created.ID, userID, false)
 	if err != nil || rotated.Secret == created.Secret {

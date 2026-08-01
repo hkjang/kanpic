@@ -127,6 +127,30 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 		return MutationResult{}, err
 	}
 	commentRows.Close()
+	chartRows, err := tx.Query(ctx, `SELECT `+chartColumns+` FROM charts c JOIN workbooks w ON w.id=c.workbook_id WHERE c.source_sheet_id=$1 FOR UPDATE OF c`, target.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	transformedCharts := make([]Chart, 0)
+	for chartRows.Next() {
+		chart, scanErr := scanChart(chartRows)
+		if scanErr != nil {
+			chartRows.Close()
+			return MutationResult{}, scanErr
+		}
+		chart, scanErr = transformChartForStructure(chart, target.ID, input, input.ActorID, now)
+		if scanErr != nil {
+			chartRows.Close()
+			return MutationResult{}, scanErr
+		}
+		chart.WorkbookVersion = currentVersion + 1
+		transformedCharts = append(transformedCharts, chart)
+	}
+	if err := chartRows.Err(); err != nil {
+		chartRows.Close()
+		return MutationResult{}, err
+	}
+	chartRows.Close()
 	nextCells, err := transformStructureCells(sheets, existing, target.ID, input)
 	if err != nil {
 		return MutationResult{}, err
@@ -168,6 +192,11 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			return MutationResult{}, err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE mention_notifications SET cell_range=$2 WHERE thread_id=$1`, thread.ID, thread.Range); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	for _, chart := range transformedCharts {
+		if _, err := tx.Exec(ctx, `UPDATE charts SET source_range=$2,revision=$3,updated_by=$4,updated_at=$5 WHERE id=$1`, chart.ID, chart.SourceRange, chart.Revision, chart.UpdatedBy, chart.UpdatedAt); err != nil {
 			return MutationResult{}, err
 		}
 	}

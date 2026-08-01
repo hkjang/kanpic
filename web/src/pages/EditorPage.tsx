@@ -1,8 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlignCenter, AlignLeft, AlignRight, ArrowUpDown, BadgeCheck, Bold, Bot, ChevronLeft, Download, Filter, History, Italic, Link2, MessageSquare, MoreHorizontal, Redo2, Search, Share2, Underline, Undo2, ZoomIn, ZoomOut } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, ArrowUpDown, BadgeCheck, BarChart3, Bold, Bot, ChevronLeft, Download, Filter, History, Italic, Link2, MessageSquare, MoreHorizontal, Redo2, Search, Share2, Underline, Undo2, ZoomIn, ZoomOut } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { CanvasGrid } from '../components/CanvasGrid'
+import { ChartDialog } from '../components/ChartDialog'
+import { ChartOverlay } from '../components/ChartOverlay'
+import { ChartPanel } from '../components/ChartPanel'
+import '../components/ChartLauncher.css'
 import { CommentPanel } from '../components/CommentPanel'
 import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
@@ -23,7 +27,7 @@ import { materializeSort,type SortOptions } from '../lib/sort'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { BuildInfo, Cell, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { BuildInfo, Cell, Chart, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -32,14 +36,14 @@ function spillInRange(cells:Map<string,Cell>,range:{startRow:number;startColumn:
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`)})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'history'|'comments'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false)
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'history'|'comments'|'charts'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const routeNavigation=useRef((()=>{const parameters=new URLSearchParams(window.location.search);return{sheetId:parameters.get('sheet_id')??'',range:parameters.get('range')??'',commentId:parameters.get('comment_id')??''}})()).current,routeNavigationApplied=useRef(false)
   const editor=useEditorStore();const editorSelection=selectedMergedBounds(editor.cells,selectedBounds(editor));const activeCell=editor.cells.get(cellKey(editor.activeRow,editor.activeColumn));const formula=activeCell?.formula||(activeCell?.value==null?'':String(activeCell.value))
   const connect=useCollaborationStore(state=>state.connect),disconnect=useCollaborationStore(state=>state.disconnect),sendCursor=useCollaborationStore(state=>state.sendCursor),sendSelection=useCollaborationStore(state=>state.sendSelection)
   const collaborationStatus=useCollaborationStore(state=>state.status),collaborators=useCollaborationStore(state=>state.users)
   const updateVersion=useCallback((value:number)=>setServerVersion(current=>Math.max(current,value)),[])
-  const handleCollaborationVersion=useCallback((value:number,event:ServerEvent)=>{updateVersion(value);const data=event.data as {structural?:boolean}|undefined;if(data?.structural&&event.client_id!==collaborationClientId())useEditorStore.getState().reset();client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['data-validations']});client.invalidateQueries({queryKey:['named-ranges',workbookId]});client.invalidateQueries({queryKey:['filter-views']});client.invalidateQueries({queryKey:['filter-result']})},[client,updateVersion,workbookId])
+  const handleCollaborationVersion=useCallback((value:number,event:ServerEvent)=>{updateVersion(value);const data=event.data as {structural?:boolean}|undefined;if(data?.structural&&event.client_id!==collaborationClientId())useEditorStore.getState().reset();client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['data-validations']});client.invalidateQueries({queryKey:['named-ranges',workbookId]});client.invalidateQueries({queryKey:['charts',workbookId]});client.invalidateQueries({queryKey:['filter-views']});client.invalidateQueries({queryKey:['filter-result']})},[client,updateVersion,workbookId])
   const handleCollaborationEvent=useCallback((event:ServerEvent)=>{if(event.type==='comment.changed'){client.invalidateQueries({queryKey:['comments',workbookId]});client.invalidateQueries({queryKey:['mention-notifications']})}},[client,workbookId])
   useEffect(()=>{if(workbook.data){setServerVersion(workbook.data.version);setActiveSheet(current=>workbook.data.sheets.find(sheet=>sheet.id===current?.id)??workbook.data.sheets[0])}},[workbook.data])
   useEffect(()=>{if(routeNavigationApplied.current||!workbook.data)return;routeNavigationApplied.current=true;const sheet=workbook.data.sheets.find(candidate=>candidate.id===routeNavigation.sheetId);if(!sheet)return;const target=parseNavigationRange(routeNavigation.range);if(target)setPendingNavigation({sheetId:sheet.id,range:target});setActiveSheet(sheet)},[routeNavigation,workbook.data])
@@ -64,10 +68,15 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const deleteValidation=async(rule:DataValidation)=>{await api(`/api/v1/data-validations/${rule.id}?expected_revision=${rule.revision}`,{method:'DELETE'});await refreshValidations();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
   const evaluateValidation=(id:string)=>api<ValidationEvaluation>(`/api/v1/data-validations/${id}:evaluate`,{method:'POST',body:'{}'})
   const namedRanges=useQuery({queryKey:['named-ranges',workbookId],queryFn:()=>api<{items:NamedRange[]}>(`/api/v1/workbooks/${workbookId}/named-ranges`)})
+	const charts=useQuery({queryKey:['charts',workbookId,activeSheet?.id],queryFn:()=>api<{items:Chart[]}>(`/api/v1/workbooks/${workbookId}/charts?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
   const refreshNamedRanges=async()=>{await client.invalidateQueries({queryKey:['named-ranges',workbookId]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const createNamedRange=async(input:Record<string,unknown>)=>{const item=await api<NamedRange>(`/api/v1/workbooks/${workbookId}/named-ranges`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});updateVersion(item.workbook_version);await refreshNamedRanges();return item}
   const updateNamedRange=async(id:string,input:Record<string,unknown>)=>{const item=await api<NamedRange>(`/api/v1/named-ranges/${id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(item.workbook_version);await refreshNamedRanges();return item}
   const deleteNamedRange=async(item:NamedRange)=>{await api(`/api/v1/named-ranges/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshNamedRanges();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
+	const refreshCharts=async()=>{await client.invalidateQueries({queryKey:['charts',workbookId]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
+	const createChart=async(input:Record<string,unknown>)=>{const idempotencyKey=newIdempotencyKey();const item=await api<Chart>(`/api/v1/workbooks/${workbookId}/charts`,{method:'POST',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...input,idempotency_key:idempotencyKey})});updateVersion(item.workbook_version);await refreshCharts();return item}
+	const updateChart=async(item:Chart,input:Record<string,unknown>)=>{const updated=await api<Chart>(`/api/v1/charts/${item.id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(updated.workbook_version);await refreshCharts();return updated}
+	const deleteChart=async(item:Chart)=>{await api(`/api/v1/charts/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshCharts();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
   const navigateToRange=(sheetId:string,value:string)=>{const target=parseNavigationRange(value),sheet=workbook.data?.sheets.find(candidate=>candidate.id===sheetId);if(!target||!sheet)return false;if(activeSheet?.id===sheetId){editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true)}else{setPendingNavigation({sheetId,range:target});setActiveSheet(sheet)}return true}
   const submitNameBox=()=>{const value=nameBoxValue.trim(),named=(namedRanges.data?.items??[]).find(item=>item.name.toLowerCase()===value.toLowerCase());if(named){navigateToRange(named.sheet_id,named.range);return}if(!activeSheet||!navigateToRange(activeSheet.id,value))setNameBoxValue(selectionAddress)}
   const refreshWorkbook=async()=>client.invalidateQueries({queryKey:['workbook',workbookId]})
@@ -96,6 +105,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
       {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
     </div>
+    <ChartOverlay charts={charts.data?.items??[]} version={serverVersion} onEdit={item=>setChartDialog(item)} onUpdate={updateChart}/>
+    {rightPanel==='charts'&&<ChartPanel charts={charts.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setChartDialog(null)} onEdit={item=>setChartDialog(item)} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
+    <button className={`chart-launcher ${rightPanel==='charts'?'active':''}`} aria-label="차트 패널" onClick={()=>setRightPanel(current=>current==='charts'?null:'charts')}><BarChart3/> 차트</button>
+    {chartDialog!==undefined&&<ChartDialog chart={chartDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setChartDialog(undefined)} onCreate={createChart} onUpdate={updateChart} onDelete={deleteChart}/>}
     {sortOpen&&<SortDialog range={editorSelection} onClose={()=>setSortOpen(false)} onSort={sortSelection}/>}
     {structureOpen&&<StructureDialog range={editorSelection} onClose={()=>setStructureOpen(false)} onApply={applyStructure}/>}
     {layoutOpen&&<LayoutDialog range={editorSelection} layout={activeSheet.layout} onClose={()=>setLayoutOpen(false)} onApply={applyLayout}/>}

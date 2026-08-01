@@ -313,6 +313,81 @@ test('formats a selected range without changing values or formulas and resends o
   await expect.poll(async () => (await range()).items.map((cell:{style?:Record<string,unknown>}) => cell.style?.italic), { timeout:15_000 }).toEqual([true, true])
 })
 
+test('creates a live native chart and exposes the same definition through REST', async ({ page }) => {
+  const created = await page.request.post('/api/v1/workbooks', { data: { title: `차트 ${Date.now()}`, workspace_id: 'default' } }).then(response => response.json())
+  const sheetId = created.sheets[0].id as string
+  const seeded = await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`, { data: {
+    base_version: created.version,
+    idempotency_key: `chart-e2e-seed-${created.id}`,
+    cells: [
+      { row: 1, column: 1, value: '월' }, { row: 1, column: 2, value: '매출' },
+      { row: 2, column: 1, value: '1월' }, { row: 2, column: 2, value: 100 },
+      { row: 3, column: 1, value: '2월' }, { row: 3, column: 2, formula: '=B2*2' },
+    ],
+  } })
+  expect(seeded.ok()).toBe(true)
+
+  await page.goto(`/workbooks/${created.id}`)
+  await page.getByRole('combobox', { name: '이름 상자' }).fill('A1:B3')
+  await page.getByRole('combobox', { name: '이름 상자' }).press('Enter')
+  await page.getByRole('button', { name: '차트 패널' }).click()
+  await page.getByRole('button', { name: '새 차트' }).click()
+  const dialog = page.getByRole('dialog', { name: '차트 만들기' })
+  await dialog.getByLabel('차트 제목').fill('월별 매출')
+  await dialog.getByLabel('차트 유형').selectOption('line')
+  await dialog.getByRole('button', { name: '차트 저장' }).click()
+
+  const card = page.locator('[data-chart-id]')
+  await expect(card).toBeVisible()
+  await expect(card.getByRole('img', { name: '월별 매출' })).toBeVisible()
+  const chartId = await card.getAttribute('data-chart-id')
+  const list = await page.request.get(`/api/v1/workbooks/${created.id}/charts?sheet_id=${sheetId}`).then(response => response.json())
+  expect(list.items).toHaveLength(1)
+  expect(list.items[0]).toMatchObject({ id: chartId, type: 'line', source_range: 'A1:B3', title: '월별 매출' })
+  let data = await page.request.get(`/api/v1/charts/${chartId}/data`).then(response => response.json())
+  expect(data.series[0].points.map((point: { value: number }) => point.value)).toEqual([100, 200])
+
+  const current = await page.request.get(`/api/v1/workbooks/${created.id}`).then(response => response.json())
+  await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`, { data: { base_version: current.version, idempotency_key: `chart-e2e-refresh-${created.id}`, cells: [{ row: 2, column: 2, value: 150 }] } })
+  await expect.poll(async () => {
+    data = await page.request.get(`/api/v1/charts/${chartId}/data`).then(response => response.json())
+    return data.series[0].points.map((point: { value: number }) => point.value)
+  }).toEqual([150, 300])
+  await page.request.delete(`/api/v1/workbooks/${created.id}`)
+})
+
+test('creates, edits, rotates, and revokes a scoped personal API key', async ({ page }) => {
+  const initialName = `E2E 에이전트 ${Date.now()}`
+  const renamed = `${initialName} 수정`
+  await page.goto('/preferences')
+  await page.getByRole('button', { name: 'API 키' }).click()
+  await page.getByRole('button', { name: '새 키' }).click()
+  let dialog = page.getByRole('dialog', { name: '새 API 키' })
+  await dialog.getByLabel('키 이름').fill(initialName)
+  await expect(dialog.getByText('chart.*')).toBeVisible()
+  await dialog.getByRole('button', { name: '키 생성' }).click()
+  await expect(page.getByText('새 키를 지금 복사하세요')).toBeVisible()
+
+  let activeCard = page.locator('.key-card:not(.revoked)').filter({ hasText: initialName })
+  await expect(activeCard).toBeVisible()
+  await activeCard.getByRole('button', { name: '수정' }).click()
+  dialog = page.getByRole('dialog', { name: 'API 키 수정' })
+  await dialog.getByLabel('키 이름').fill(renamed)
+  await dialog.getByLabel('만료 시점 (선택)').fill('2030-01-02T03:04')
+  await dialog.getByRole('button', { name: '변경 저장' }).click()
+  activeCard = page.locator('.key-card:not(.revoked)').filter({ hasText: renamed })
+  await expect(activeCard).toContainText('2030')
+
+  page.once('dialog', prompt => prompt.accept())
+  await activeCard.getByRole('button', { name: '회전' }).click()
+  await expect(page.locator('.key-card.revoked').filter({ hasText: renamed })).toBeVisible()
+  activeCard = page.locator('.key-card:not(.revoked)').filter({ hasText: renamed })
+  await expect(activeCard).toBeVisible()
+  page.once('dialog', prompt => prompt.accept())
+  await activeCard.getByRole('button', { name: '폐기' }).click()
+  await expect(page.locator('.key-card:not(.revoked)').filter({ hasText: renamed })).toHaveCount(0)
+})
+
 test('merges cells without data loss and supports undo redo and offline unmerge', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name:'새 워크북' }).click()

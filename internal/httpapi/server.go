@@ -68,6 +68,12 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("POST /api/v1/comments/{commentId}/replies", s.createCommentReply)
 	mux.HandleFunc("PATCH /api/v1/comment-messages/{messageId}", s.updateCommentMessage)
 	mux.HandleFunc("DELETE /api/v1/comment-messages/{messageId}", s.deleteCommentMessage)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/charts", s.listCharts)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/charts", s.createChart)
+	mux.HandleFunc("GET /api/v1/charts/{chartId}", s.getChart)
+	mux.HandleFunc("GET /api/v1/charts/{chartId}/data", s.getChartData)
+	mux.HandleFunc("PATCH /api/v1/charts/{chartId}", s.updateChart)
+	mux.HandleFunc("DELETE /api/v1/charts/{chartId}", s.deleteChart)
 	mux.HandleFunc("GET /api/v1/me/notifications", s.listMentionNotifications)
 	mux.HandleFunc("PATCH /api/v1/me/notifications/{notificationId}", s.markMentionNotificationRead)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/named-ranges", s.listNamedRanges)
@@ -814,6 +820,12 @@ func requiredScope(r *http.Request) string {
 			return "comment.read"
 		}
 		return "comment.write"
+	}
+	if strings.Contains(path, "/charts") {
+		if r.Method == http.MethodGet {
+			return "chart.read"
+		}
+		return "chart.write"
 	}
 	if strings.Contains(path, "/filter-views/") && strings.HasSuffix(path, ":evaluate") {
 		return "range.read"

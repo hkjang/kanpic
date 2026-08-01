@@ -78,6 +78,7 @@ type snapshotDocument struct {
 	Filters       []FilterView     `json:"filters,omitempty"`
 	Validations   []DataValidation `json:"validations,omitempty"`
 	NamedRanges   []NamedRange     `json:"named_ranges,omitempty"`
+	Charts        []Chart          `json:"charts,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -475,6 +476,36 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 			return Workbook{}, err
 		}
 	}
+	copiedCharts, err := listChartsTx(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, sourceChart := range copiedCharts {
+		destinationSheetID, found := sheetIDs[sourceChart.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: chart references an unknown sheet", ErrInvalid)
+		}
+		destinationSourceSheetID := ""
+		if sourceChart.SourceRange != "#REF!" {
+			var found bool
+			destinationSourceSheetID, found = sheetIDs[sourceChart.SourceSheetID]
+			if !found {
+				return Workbook{}, fmt.Errorf("%w: chart source references an unknown sheet", ErrInvalid)
+			}
+		}
+		sourceChart.ID = identity.New()
+		sourceChart.WorkbookID = duplicated.ID
+		sourceChart.WorkbookVersion = 1
+		sourceChart.SheetID = destinationSheetID
+		sourceChart.SourceSheetID = destinationSourceSheetID
+		sourceChart.CreateKey = "copy:" + sourceChart.ID
+		sourceChart.Revision = 1
+		sourceChart.CreatedBy, sourceChart.UpdatedBy = ownerID, ownerID
+		sourceChart.CreatedAt, sourceChart.UpdatedAt = now, now
+		if err := insertChartTx(ctx, tx, sourceChart); err != nil {
+			return Workbook{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Workbook{}, err
 	}
@@ -704,6 +735,37 @@ func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string,
 			return Sheet{}, err
 		}
 	}
+	chartRows, err := tx.Query(ctx, `SELECT `+chartColumns+` FROM charts c JOIN workbooks w ON w.id=c.workbook_id WHERE c.sheet_id=$1 ORDER BY c.created_at,c.id`, source.ID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	charts := make([]Chart, 0)
+	for chartRows.Next() {
+		chart, scanErr := scanChart(chartRows)
+		if scanErr != nil {
+			chartRows.Close()
+			return Sheet{}, scanErr
+		}
+		charts = append(charts, chart)
+	}
+	if err := chartRows.Err(); err != nil {
+		chartRows.Close()
+		return Sheet{}, err
+	}
+	chartRows.Close()
+	for _, chart := range charts {
+		chart.ID = identity.New()
+		chart.SheetID = duplicated.ID
+		if chart.SourceSheetID == source.ID {
+			chart.SourceSheetID = duplicated.ID
+		}
+		chart.CreateKey = "copy:" + chart.ID
+		chart.Revision = 1
+		chart.CreatedAt, chart.UpdatedAt = now, now
+		if err := insertChartTx(ctx, tx, chart); err != nil {
+			return Sheet{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
 		return Sheet{}, err
 	}
@@ -876,6 +938,9 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	}
 	if count <= 1 {
 		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE charts SET source_sheet_id=NULL,source_range='#REF!',revision=revision+1,updated_at=$2 WHERE source_sheet_id=$1 AND sheet_id<>$1`, sheetID, r.now()); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM sheets WHERE id=$1`, sheetID); err != nil {
 		return err
@@ -1305,7 +1370,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 5, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0)}
+	document := snapshotDocument{SchemaVersion: 6, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1379,6 +1444,10 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 		return snapshotDocument{}, err
 	}
 	document.NamedRanges, err = listNamedRangesTx(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	document.Charts, err = listChartsTx(ctx, tx, workbookID)
 	if err != nil {
 		return snapshotDocument{}, err
 	}
@@ -1464,6 +1533,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 		return MutationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM named_ranges WHERE workbook_id=$1`, workbookID); err != nil {
+		return MutationResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM charts WHERE workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
 	if snapshot.SchemaVersion >= 5 {
@@ -1616,6 +1688,39 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			}
 			normalized.UpdatedAt = now
 			if err := insertNamedRangeTx(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
+	if snapshot.SchemaVersion >= 6 {
+		for _, item := range snapshot.Charts {
+			if _, found := desiredSheetIDs[item.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a chart on an unknown sheet", ErrInvalid)
+			}
+			if item.SourceRange != "#REF!" {
+				if _, found := desiredSheetIDs[item.SourceSheetID]; !found {
+					return MutationResult{}, fmt.Errorf("%w: version snapshot contains a chart source on an unknown sheet", ErrInvalid)
+				}
+			}
+			normalized, err := normalizeChart(item, true)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.WorkbookID = workbookID
+			normalized.WorkbookVersion = base + 1
+			normalized.CreateKey = "restore:" + normalized.ID
+			if normalized.Revision < 1 {
+				normalized.Revision = 1
+			}
+			if normalized.CreatedBy == "" {
+				normalized.CreatedBy = actorID
+			}
+			normalized.UpdatedBy = actorID
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			normalized.UpdatedAt = now
+			if err := insertChartTx(ctx, tx, normalized); err != nil {
 				return MutationResult{}, err
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -45,6 +46,36 @@ type UpdateInput struct {
 	Name      *string     `json:"name,omitempty"`
 	Scopes    *[]string   `json:"scopes,omitempty"`
 	ExpiresAt **time.Time `json:"expires_at,omitempty"`
+}
+
+// UnmarshalJSON preserves the distinction between an omitted expires_at and
+// an explicit null, which clears an existing expiration during PATCH.
+func (input *UpdateInput) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name      *string         `json:"name"`
+		Scopes    *[]string       `json:"scopes"`
+		ExpiresAt json.RawMessage `json:"expires_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	input.Name, input.Scopes = raw.Name, raw.Scopes
+	if raw.ExpiresAt == nil {
+		input.ExpiresAt = nil
+		return nil
+	}
+	if string(raw.ExpiresAt) == "null" {
+		var expiresAt *time.Time
+		input.ExpiresAt = &expiresAt
+		return nil
+	}
+	var expiresAt time.Time
+	if err := json.Unmarshal(raw.ExpiresAt, &expiresAt); err != nil {
+		return fmt.Errorf("invalid expires_at: %w", err)
+	}
+	pointer := &expiresAt
+	input.ExpiresAt = &pointer
+	return nil
 }
 
 type Principal struct {

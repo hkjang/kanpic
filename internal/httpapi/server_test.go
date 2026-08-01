@@ -200,6 +200,83 @@ func TestCommentsAndMentionNotificationsShareRESTAndMCPContracts(t *testing.T) {
 	}
 }
 
+func TestChartsShareRESTAndMCPContracts(t *testing.T) {
+	t.Parallel()
+	for _, expectation := range []struct {
+		name  string
+		scope string
+	}{
+		{"spreadsheet.chart.list", "chart.read"},
+		{"spreadsheet.chart.get", "chart.read"},
+		{"spreadsheet.chart.data", "chart.read"},
+		{"spreadsheet.chart.create", "chart.write"},
+		{"spreadsheet.chart.update", "chart.write"},
+		{"spreadsheet.chart.delete", "chart.write"},
+	} {
+		definition, found := findMCPTool(expectation.name)
+		if !found || definition.Meta["required_scope"] != expectation.scope {
+			t.Fatalf("MCP tool %s = %#v", expectation.name, definition)
+		}
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/workbooks/book/charts", nil)); scope != "chart.read" {
+		t.Fatalf("chart list scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/charts/chart", nil)); scope != "chart.write" {
+		t.Fatalf("chart update scope = %q", scope)
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "차트 API"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "chart-api-seed", "cells": []map[string]any{
+			{"row": 1, "column": 1, "value": "월"}, {"row": 1, "column": 2, "value": "매출"},
+			{"row": 2, "column": 1, "value": "1월"}, {"row": 2, "column": 2, "value": 42},
+		},
+	}, http.StatusOK)
+	created := requestAs[workbook.Chart](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/charts", map[string]any{
+		"idempotency_key": "chart-api", "sheet_id": sheetID, "source_sheet_id": sheetID, "type": "bar", "title": "월별 매출", "source_range": "A1:B2",
+	}, http.StatusCreated)
+	if created.WorkbookVersion != 3 || created.Revision != 1 || created.Type != "bar" {
+		t.Fatalf("REST chart create = %#v", created)
+	}
+	data := request[workbook.ChartData](t, server, http.MethodGet, "/api/v1/charts/"+created.ID+"/data", nil, http.StatusOK)
+	if data.WorkbookVersion != 3 || len(data.Series) != 1 || data.Series[0].Points[0].Value == nil || *data.Series[0].Points[0].Value != 42 {
+		t.Fatalf("REST chart data = %#v", data)
+	}
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.Chart `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 91, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.chart.update", "arguments": map[string]any{"chart_id": created.ID, "type": "line", "expected_revision": 1},
+	}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.Type != "line" || mcpUpdated.Result.Structured.Revision != 2 || mcpUpdated.Result.Structured.WorkbookVersion != 4 {
+		t.Fatalf("MCP chart update = %#v", mcpUpdated)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.Chart `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 92, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.chart.list", "arguments": map[string]any{"workbook_id": book.ID, "sheet_id": sheetID},
+	}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].Type != "line" {
+		t.Fatalf("MCP chart list = %#v", mcpList)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 93, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.chart.delete", "arguments": map[string]any{"chart_id": created.ID, "expected_revision": 2},
+	}}, http.StatusOK)
+	listed := request[struct {
+		Items []workbook.Chart `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/charts", nil, http.StatusOK)
+	if len(listed.Items) != 0 {
+		t.Fatalf("deleted chart list = %#v", listed)
+	}
+}
+
 func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
 	t.Parallel()
 	definition, found := findMCPTool("spreadsheet.structure.apply")

@@ -54,6 +54,12 @@ type Repository interface {
 	DeleteCommentThread(context.Context, string, string) error
 	ListMentionNotifications(context.Context, []string, bool, int) ([]MentionNotification, error)
 	MarkMentionNotificationRead(context.Context, string, []string) (MentionNotification, error)
+	CreateChart(context.Context, string, string, CreateChartInput) (Chart, error)
+	ListCharts(context.Context, string, string) ([]Chart, error)
+	GetChart(context.Context, string) (Chart, error)
+	GetChartData(context.Context, string) (ChartData, error)
+	UpdateChart(context.Context, string, string, UpdateChartInput) (Chart, error)
+	DeleteChart(context.Context, string, string, *int64) error
 	CreateNamedRange(context.Context, string, string, CreateNamedRangeInput) (NamedRange, error)
 	ListNamedRanges(context.Context, string) ([]NamedRange, error)
 	GetNamedRange(context.Context, string) (NamedRange, error)

@@ -13,18 +13,11 @@ artifact_name="kanpic-$release_version.tar.gz"
 
 echo "# kanpic $release_version"
 echo
-if [[ -f "$curated_notes" ]]; then
-  cat "$curated_notes"
-else
-  previous_tag="$(git -C "$project_root" tag --sort=-version:refname | grep -Fxv "$release_version" | head -n 1 || true)"
-  range="$release_version"
-  if [[ -n "$previous_tag" ]]; then
-    range="$previous_tag..$release_version"
-  fi
-  echo "## 변경 사항"
-  echo
-  git -C "$project_root" log --no-merges --pretty='- %s (`%h`)' "$range"
+if [[ ! -s "$curated_notes" ]]; then
+  echo "release notes are required: $curated_notes" >&2
+  exit 1
 fi
+cat "$curated_notes"
 
 cat <<EOF
 
