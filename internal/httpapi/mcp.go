@@ -58,6 +58,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
+	tool("spreadsheet.structure.apply", "행 또는 열을 원자적으로 삽입·삭제하고 수식, 병합, 이름 범위, 검증 및 필터 참조를 갱신합니다.", "range.write", structureSchema()),
 	tool("spreadsheet.filter_view.list", "현재 사용자가 저장한 시트 필터 보기를 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.filter_view.get", "현재 사용자의 필터 보기 정의를 조회합니다.", "range.read", requiredProps("filter_view_id", "string")),
 	tool("spreadsheet.filter_view.create", "값·조건·색상 기준의 사용자별 필터 보기를 멱등 생성합니다.", "range.write", filterViewSchema(true)),
@@ -322,6 +323,17 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}
 		return result, err
+	case "spreadsheet.structure.apply":
+		var input workbook.StructuralMutation
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := s.repository.ApplyStructure(ctx, input)
+		if err == nil && !result.Duplicate {
+			s.collab.PublishStructure(result, actor, input.ClientID)
+		}
+		return result, err
 	case "spreadsheet.filter_view.list":
 		return s.repository.ListFilterViews(ctx, stringArg(args, "sheet_id"), actor)
 	case "spreadsheet.filter_view.get":
@@ -573,6 +585,22 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+func structureSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id":        map[string]any{"type": "string", "minLength": 1},
+			"base_version":    map[string]any{"type": "integer", "minimum": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"client_id":       map[string]any{"type": "string"},
+			"axis":            map[string]any{"type": "string", "enum": []string{"row", "column"}},
+			"action":          map[string]any{"type": "string", "enum": []string{"insert", "delete"}},
+			"index":           map[string]any{"type": "integer", "minimum": 1},
+			"count":           map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxStructuralCount},
+		},
+		"required": []string{"sheet_id", "base_version", "idempotency_key", "axis", "action", "index", "count"},
+	}
 }
 func filterViewSchema(create bool) map[string]any {
 	operators := []string{"values", "equals", "not_equals", "contains", "not_contains", "starts_with", "ends_with", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "is_blank", "is_not_blank", "background_color", "text_color"}

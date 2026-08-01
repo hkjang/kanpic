@@ -38,7 +38,7 @@ func TestTextAndDateFunctions(t *testing.T) {
 func TestFormulaErrors(t *testing.T) {
 	t.Parallel()
 	evaluator := New()
-	for formula, code := range map[string]string{"=1/0": "#DIV/0!", "=UNKNOWN(1)": "#NAME?", "=SUM(": "#ERROR!"} {
+	for formula, code := range map[string]string{"=1/0": "#DIV/0!", "=UNKNOWN(1)": "#NAME?", "=SUM(": "#ERROR!", "=SUM(1,#REF!)": "#REF!"} {
 		result := evaluator.Evaluate(formula, nil)
 		if result.Error == nil || result.Error.Code != code {
 			t.Errorf("%s error = %#v; want %s", formula, result.Error, code)

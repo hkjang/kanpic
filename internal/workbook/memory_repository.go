@@ -26,6 +26,7 @@ type operation struct {
 	clientID      string
 	operationType string
 	undoOf        string
+	structural    bool
 }
 
 type snapshot struct {
@@ -33,6 +34,7 @@ type snapshot struct {
 	workbook    Workbook
 	sheets      map[string]Sheet
 	cells       map[string]map[cellKey]Cell
+	filters     map[string]FilterView
 	validations map[string]DataValidation
 	namedRanges map[string]NamedRange
 }
@@ -728,7 +730,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID)})
 	return version, nil
 }
 
@@ -756,14 +758,22 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			base := state.workbook.Version
 			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
-			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID)})
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID)})
 			for sheetID := range state.sheets {
 				delete(r.sheetToWB, sheetID)
+			}
+			for filterID, view := range r.filters {
+				if _, found := state.sheets[view.SheetID]; found {
+					delete(r.filters, filterID)
+				}
 			}
 			state.workbook.Title = snap.workbook.Title
 			state.workbook.Favorite = snap.workbook.Favorite
 			state.sheets = cloneSheets(snap.sheets)
 			state.cells = cloneAllCells(snap.cells)
+			for filterID, view := range snap.filters {
+				r.filters[filterID] = cloneFilterView(view)
+			}
 			for validationID, rule := range r.validations {
 				if rule.WorkbookID == state.workbook.ID {
 					delete(r.validations, validationID)
@@ -805,6 +815,16 @@ func cloneValidationsForSheets(source map[string]DataValidation, sheets map[stri
 	for id, rule := range source {
 		if _, found := sheets[rule.SheetID]; found {
 			result[id] = cloneDataValidation(rule)
+		}
+	}
+	return result
+}
+
+func cloneFiltersForSheets(source map[string]FilterView, sheets map[string]Sheet) map[string]FilterView {
+	result := make(map[string]FilterView)
+	for id, view := range source {
+		if _, found := sheets[view.SheetID]; found {
+			result[id] = cloneFilterView(view)
 		}
 	}
 	return result
@@ -872,6 +892,10 @@ func latestChange(operations []operation, sheetID string, key cellKey, afterVers
 			continue
 		}
 		if clientID != "" && op.actorID == actorID && op.clientID == clientID {
+			continue
+		}
+		if op.structural {
+			version = op.result.ServerVersion
 			continue
 		}
 		if _, ok := op.after[scopedCellKey{sheetID: sheetID, cellKey: key}]; ok {

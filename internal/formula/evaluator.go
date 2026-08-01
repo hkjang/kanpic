@@ -109,6 +109,7 @@ const (
 	tokenColon
 	tokenBang
 	tokenQuotedIdentifier
+	tokenError
 )
 
 type token struct {
@@ -129,6 +130,20 @@ func lex(input string) ([]token, error) {
 		}
 		if unicode.IsSpace(character) {
 			index += characterSize
+			continue
+		}
+		if character == '#' {
+			matched := ""
+			for _, code := range []string{"#CIRC!", "#DIV/0!", "#ERROR!", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#SPILL!", "#VALUE!", "#N/A"} {
+				if strings.HasPrefix(strings.ToUpper(input[index:]), code) && len(code) > len(matched) {
+					matched = code
+				}
+			}
+			if matched == "" {
+				return nil, fmt.Errorf("unknown formula error literal")
+			}
+			tokens = append(tokens, token{tokenError, matched})
+			index += len(matched)
 			continue
 		}
 		if (character >= '0' && character <= '9') || character == '.' {
@@ -247,6 +262,10 @@ type node interface {
 type literalNode struct{ value any }
 
 func (n literalNode) eval(_ map[string]any) (any, error) { return n.value, nil }
+
+type errorNode struct{ value *Error }
+
+func (n errorNode) eval(_ map[string]any) (any, error) { return nil, n.value }
 
 type referenceNode struct{ address string }
 
@@ -550,6 +569,8 @@ func (p *parser) primary() (node, error) {
 		return literalNode{value}, err
 	case tokenString:
 		return literalNode{current.text}, nil
+	case tokenError:
+		return errorNode{formulaError(current.text, "formula contains "+current.text)}, nil
 	case tokenLeft:
 		value, err := p.expression(0)
 		if err != nil {

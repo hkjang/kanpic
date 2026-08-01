@@ -104,6 +104,42 @@ test('undoes and redoes an acknowledged cell operation', async ({ page }) => {
   await expect.poll(valueAtA1).toBe(3)
 })
 
+test('inserts and deletes rows with formula references and automatic backup versions', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name:'새 워크북' }).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const seed=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:1,idempotency_key:`structure-seed-${workbookId}`,cells:[{row:1,column:1,value:10},{row:2,column:1,value:20},{row:2,column:2,formula:'=A2*2'}]}})
+  expect(seed.ok()).toBe(true)
+  await page.reload()
+  const canvas=page.locator('canvas.grid-canvas')
+  await expect(canvas).toBeVisible()
+  const cells=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B3`).then(response=>response.json())
+
+  await canvas.click({position:{x:70,y:69}})
+  await page.getByRole('button',{name:'삽입',exact:true}).click()
+  await expect(page.getByRole('dialog',{name:'행과 열 관리'})).toBeVisible()
+  await page.getByRole('button',{name:'위에 1개 삽입'}).click()
+  await expect(page.getByRole('dialog',{name:'행과 열 관리'})).toHaveCount(0)
+  await expect.poll(async()=>{const result=await cells();return result.items.find((cell:{row:number;column:number})=>cell.row===3&&cell.column===2)?.formula}).toBe('=A3*2')
+  let result=await cells()
+  expect(result.items.find((cell:{row:number;column:number})=>cell.row===3&&cell.column===1)?.value).toBe(20)
+  expect(result.items.find((cell:{row:number;column:number})=>cell.row===3&&cell.column===2)?.value).toBe(40)
+
+  await canvas.click({position:{x:70,y:69}})
+  await page.getByRole('button',{name:'삽입',exact:true}).click()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('button',{name:'선택 행 삭제'}).click()
+  await expect.poll(async()=>{const current=await cells();return current.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2)?.formula}).toBe('=A2*2')
+  result=await cells()
+  expect(result.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===1)?.value).toBe(20)
+  const versions=await page.request.get(`/api/v1/workbooks/${workbookId}/versions`).then(response=>response.json())
+  expect(versions.items).toHaveLength(2)
+  expect(versions.items.every((version:{name:string})=>version.name.includes('자동 백업'))).toBe(true)
+})
+
 test('formats a selected range without changing values or formulas and resends offline changes', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

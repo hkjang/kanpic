@@ -102,7 +102,24 @@ type MutationResult struct {
 	ValidationWarnings []ValidationViolation `json:"validation_warnings"`
 	Duplicate          bool                  `json:"duplicate"`
 	Conflicts          []CellConflict        `json:"conflicts"`
+	BackupVersionID    string                `json:"backup_version_id,omitempty"`
+	StructuralAxis     string                `json:"structural_axis,omitempty"`
+	StructuralAction   string                `json:"structural_action,omitempty"`
+	StructuralIndex    int                   `json:"structural_index,omitempty"`
+	StructuralCount    int                   `json:"structural_count,omitempty"`
 	CreatedAt          time.Time             `json:"created_at"`
+}
+
+type StructuralMutation struct {
+	SheetID        string `json:"sheet_id"`
+	ActorID        string `json:"actor_id"`
+	ClientID       string `json:"client_id"`
+	BaseVersion    int64  `json:"base_version"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Axis           string `json:"axis"`
+	Action         string `json:"action"`
+	Index          int    `json:"index"`
+	Count          int    `json:"count"`
 }
 
 // NamedRange is a workbook-level reusable name whose target belongs to one of

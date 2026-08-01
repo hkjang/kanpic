@@ -70,6 +70,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:batch", s.applyCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:fill", s.fillCells)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/structure:apply", s.applyStructure)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:merge", s.mergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
@@ -281,6 +282,27 @@ func (s *Server) pasteCells(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) fillCells(w http.ResponseWriter, r *http.Request) {
 	s.applyCellsWithLimit(w, r, workbook.MaxPasteCells, "cells.fill")
+}
+
+func (s *Server) applyStructure(w http.ResponseWriter, r *http.Request) {
+	var input workbook.StructuralMutation
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.SheetID = r.PathValue("sheetId")
+	input.ActorID = actorID(r)
+	if headerKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); headerKey != "" {
+		input.IdempotencyKey = headerKey
+	}
+	result, err := s.repository.ApplyStructure(r.Context(), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate {
+		s.collab.PublishStructure(result, input.ActorID, input.ClientID)
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 type rangeFormatRequest struct {
@@ -653,6 +675,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code, message = http.StatusConflict, "duplicate_name", "같은 이름이 이미 존재합니다."
 	case errors.Is(err, workbook.ErrVersionAhead):
 		status, code, message = http.StatusConflict, "invalid_base_version", "클라이언트 버전이 서버보다 최신입니다. 다시 동기화하세요."
+	case errors.Is(err, workbook.ErrVersionConflict):
+		status, code, message = http.StatusConflict, "version_conflict", "워크북 구조가 변경되었습니다. 최신 버전으로 다시 동기화하세요."
 	case errors.Is(err, workbook.ErrRevision):
 		status, code, message = http.StatusConflict, "revision_conflict", "다른 사용자가 규칙을 변경했습니다. 다시 불러오세요."
 	default:
@@ -759,6 +783,9 @@ func requiredScope(r *http.Request) string {
 		return "format.write"
 	}
 	if strings.Contains(path, "ranges:sort") {
+		return "range.write"
+	}
+	if strings.Contains(path, "structure:apply") {
 		return "range.write"
 	}
 	if strings.Contains(path, "/ranges/") {

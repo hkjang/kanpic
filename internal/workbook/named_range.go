@@ -90,6 +90,20 @@ func normalizeNamedRange(input NamedRange) (NamedRange, error) {
 	return input, nil
 }
 
+func normalizeStoredNamedRange(input NamedRange) (NamedRange, error) {
+	if strings.TrimSpace(input.Range) != "#REF!" {
+		return normalizeNamedRange(input)
+	}
+	originalRange := input.Range
+	input.Range = "A1"
+	normalized, err := normalizeNamedRange(input)
+	if err != nil {
+		return NamedRange{}, err
+	}
+	normalized.Range = originalRange
+	return normalized, nil
+}
+
 func cloneNamedRange(value NamedRange) NamedRange { return value }
 
 func (r *MemoryRepository) CreateNamedRange(_ context.Context, workbookID, actor string, input CreateNamedRangeInput) (NamedRange, error) {

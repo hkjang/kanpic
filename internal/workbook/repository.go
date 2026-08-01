@@ -13,12 +13,13 @@ const (
 )
 
 var (
-	ErrNotFound      = errors.New("resource not found")
-	ErrInvalid       = errors.New("invalid input")
-	ErrVersionAhead  = errors.New("base version is newer than the server version")
-	ErrDuplicateName = errors.New("name already exists")
-	ErrValidation    = errors.New("data validation failed")
-	ErrRevision      = errors.New("revision conflict")
+	ErrNotFound        = errors.New("resource not found")
+	ErrInvalid         = errors.New("invalid input")
+	ErrVersionAhead    = errors.New("base version is newer than the server version")
+	ErrVersionConflict = errors.New("base version does not match the server version")
+	ErrDuplicateName   = errors.New("name already exists")
+	ErrValidation      = errors.New("data validation failed")
+	ErrRevision        = errors.New("revision conflict")
 )
 
 type Repository interface {
@@ -48,6 +49,7 @@ type Repository interface {
 	GetNamedRange(context.Context, string) (NamedRange, error)
 	UpdateNamedRange(context.Context, string, string, UpdateNamedRangeInput) (NamedRange, error)
 	DeleteNamedRange(context.Context, string, string, *int64) error
+	ApplyStructure(context.Context, StructuralMutation) (MutationResult, error)
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)

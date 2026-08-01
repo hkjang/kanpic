@@ -6,12 +6,12 @@ export type Cursor = Coordinate & { sheet_id:string }
 export type Selection = { sheet_id:string; start:Coordinate; end:Coordinate }
 export type Presence = { actor_id:string; client_id:string; cursor?:Cursor; selection?:Selection }
 type ConnectionState = 'connecting'|'connected'|'reconnecting'|'offline'
-type ServerEvent = { type:string; workbook_id:string; actor_id?:string; client_id?:string; server_version?:number; data?:unknown }
+export type ServerEvent = { type:string; workbook_id:string; actor_id?:string; client_id?:string; server_version?:number; data?:unknown }
 
 type CollaborationState = {
   status:ConnectionState
   users:Record<string,Presence>
-  connect:(workbookId:string,onVersion:(version:number)=>void)=>void
+  connect:(workbookId:string,onVersion:(version:number,event:ServerEvent)=>void)=>void
   disconnect:()=>void
   sendCursor:(cursor:Cursor)=>void
   sendSelection:(selection:Selection)=>void
@@ -46,7 +46,7 @@ export const useCollaborationStore=create<CollaborationState>((set,get)=>({
         let event:ServerEvent
         try{event=JSON.parse(String(message.data)) as ServerEvent}catch{return}
         if(event.workbook_id!==workbookId)return
-        if(event.server_version)onVersion(event.server_version)
+        if(event.server_version)onVersion(event.server_version,event)
         if(event.type==='presence.snapshot'){
           const users=eventData<{users:Presence[]}>(event)?.users??[]
           set({users:Object.fromEntries(users.map(user=>[user.client_id,user]))})

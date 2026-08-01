@@ -733,6 +733,114 @@ func assertPostgresNamedFormula(t *testing.T, ctx context.Context, repository wo
 	}
 }
 
+func TestPostgresStructureMutationMovesDefinitionsAndRestoresBrokenNames(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres structure", OwnerID: "structure-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	inputSheet := book.Sheets[0]
+	reportSheet, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, _ = repository.GetWorkbook(ctx, book.ID)
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: inputSheet.ID, ActorID: "structure-user", ClientID: "one", BaseVersion: book.Version, IdempotencyKey: "postgres-structure-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`10`)}, {Row: 2, Column: 1, Value: json.RawMessage(`20`)}, {Row: 2, Column: 2, Formula: "=A2*2"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: reportSheet.ID, ActorID: "structure-user", ClientID: "one", BaseVersion: seed.ServerVersion, IdempotencyKey: "postgres-structure-report", Cells: []workbook.CellInput{{Row: 1, Column: 1, Formula: "=Sheet1!A2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	name, err := repository.CreateNamedRange(ctx, book.ID, "structure-user", workbook.CreateNamedRangeInput{IdempotencyKey: "postgres-structure-name", Name: "Sales", SheetID: inputSheet.ID, Range: "A1:A2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateDataValidation(ctx, inputSheet.ID, "structure-user", workbook.CreateDataValidationInput{IdempotencyKey: "postgres-structure-validation", Range: "B1:B3", RuleType: "number", Operator: "greater_than", Value: json.RawMessage(`0`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateFilterView(ctx, inputSheet.ID, "structure-user", workbook.CreateFilterViewInput{IdempotencyKey: "postgres-structure-filter", Name: "Rows", Range: "A1:B4", HeaderRows: 1, Criteria: []workbook.FilterCriterion{{Column: 1, Operator: "is_not_blank"}}, Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	book, _ = repository.GetWorkbook(ctx, book.ID)
+	inserted, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: inputSheet.ID, ActorID: "structure-user", ClientID: "one", BaseVersion: book.Version, IdempotencyKey: "postgres-insert-row", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil || inserted.BackupVersionID == "" || inserted.ServerVersion != book.Version+1 {
+		t.Fatalf("PostgreSQL structure insert = %#v, error=%v", inserted, err)
+	}
+	duplicate, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: inputSheet.ID, ActorID: "structure-user", BaseVersion: book.Version, IdempotencyKey: "postgres-insert-row", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil || !duplicate.Duplicate || duplicate.OperationID != inserted.OperationID || duplicate.BackupVersionID != inserted.BackupVersionID {
+		t.Fatalf("PostgreSQL structure duplicate = %#v, error=%v", duplicate, err)
+	}
+	assertPostgresStructureCell(t, ctx, repository, inputSheet.ID, "A3", "", "20")
+	assertPostgresStructureCell(t, ctx, repository, inputSheet.ID, "B3", "=A3*2", "40")
+	assertPostgresStructureCell(t, ctx, repository, reportSheet.ID, "A1", "=Sheet1!A3", "20")
+	ranges, _ := repository.ListNamedRanges(ctx, book.ID)
+	if len(ranges) != 1 || ranges[0].Range != "A1:A3" || ranges[0].Revision != name.Revision+1 {
+		t.Fatalf("PostgreSQL structure names = %#v", ranges)
+	}
+	rules, _ := repository.ListDataValidations(ctx, inputSheet.ID)
+	if len(rules) != 1 || rules[0].Range != "B1:B4" || rules[0].Revision != 2 {
+		t.Fatalf("PostgreSQL structure validations = %#v", rules)
+	}
+	views, _ := repository.ListFilterViews(ctx, inputSheet.ID, "structure-user")
+	if len(views) != 1 || views[0].Range != "A1:B5" || views[0].HeaderRows != 1 {
+		t.Fatalf("PostgreSQL structure filters = %#v", views)
+	}
+	deleted, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: inputSheet.ID, ActorID: "structure-user", ClientID: "one", BaseVersion: inserted.ServerVersion, IdempotencyKey: "postgres-delete-row", Axis: "row", Action: "delete", Index: 1, Count: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPostgresStructureCell(t, ctx, repository, reportSheet.ID, "A1", "=#REF!", `"#REF!"`)
+	ranges, _ = repository.ListNamedRanges(ctx, book.ID)
+	if len(ranges) != 1 || ranges[0].Range != "#REF!" {
+		t.Fatalf("PostgreSQL broken named range = %#v", ranges)
+	}
+	brokenVersion, err := repository.CreateVersion(ctx, book.ID, "broken named range", "structure-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairedRange, expectedRevision := "A1", ranges[0].Revision
+	if _, err := repository.UpdateNamedRange(ctx, ranges[0].ID, "structure-user", workbook.UpdateNamedRangeInput{Range: &repairedRange, ExpectedRevision: &expectedRevision}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, brokenVersion.ID, "structure-user"); err != nil {
+		t.Fatalf("restore #REF named range: %v", err)
+	}
+	ranges, _ = repository.ListNamedRanges(ctx, book.ID)
+	if len(ranges) != 1 || ranges[0].Range != "#REF!" {
+		t.Fatalf("PostgreSQL restored broken named range = %#v", ranges)
+	}
+	if _, err := repository.RestoreVersion(ctx, deleted.BackupVersionID, "structure-user"); err != nil {
+		t.Fatal(err)
+	}
+	assertPostgresStructureCell(t, ctx, repository, inputSheet.ID, "A3", "", "20")
+	views, _ = repository.ListFilterViews(ctx, inputSheet.ID, "structure-user")
+	if len(views) != 1 || views[0].Range != "A1:B5" || views[0].HeaderRows != 1 {
+		t.Fatalf("PostgreSQL restored structure filters = %#v", views)
+	}
+}
+
+func assertPostgresStructureCell(t *testing.T, ctx context.Context, repository workbook.Repository, sheetID, address, formulaText, value string) {
+	t.Helper()
+	selected, _ := cellrange.Parse(address)
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || cells[0].Formula != formulaText || string(cells[0].Value) != value {
+		t.Fatalf("PostgreSQL structure cell %s = %#v, error=%v; want formula=%s value=%s", address, cells, err, formulaText, value)
+	}
+}
+
 func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

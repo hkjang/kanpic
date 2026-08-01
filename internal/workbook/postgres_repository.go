@@ -41,6 +41,11 @@ type operationDocument struct {
 	FormulaErrors      []CellFormulaError    `json:"formula_errors,omitempty"`
 	ValidationWarnings []ValidationViolation `json:"validation_warnings,omitempty"`
 	UndoOfOperationID  string                `json:"undo_of_operation_id,omitempty"`
+	BackupVersionID    string                `json:"backup_version_id,omitempty"`
+	StructuralAxis     string                `json:"structural_axis,omitempty"`
+	StructuralAction   string                `json:"structural_action,omitempty"`
+	StructuralIndex    int                   `json:"structural_index,omitempty"`
+	StructuralCount    int                   `json:"structural_count,omitempty"`
 }
 
 type snapshotBlock struct {
@@ -68,6 +73,7 @@ type snapshotDocument struct {
 	Workbook      snapshotWorkbook `json:"workbook,omitempty"`
 	Sheets        []snapshotSheet  `json:"sheets,omitempty"`
 	Blocks        []snapshotBlock  `json:"blocks"`
+	Filters       []FilterView     `json:"filters,omitempty"`
 	Validations   []DataValidation `json:"validations,omitempty"`
 	NamedRanges   []NamedRange     `json:"named_ranges,omitempty"`
 }
@@ -1284,7 +1290,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 4, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0)}
+	document := snapshotDocument{SchemaVersion: 5, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1320,6 +1326,22 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 			return snapshotDocument{}, err
 		}
 		document.Blocks = append(document.Blocks, block)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return snapshotDocument{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT f.id::text,f.sheet_id::text,f.actor_id,f.idempotency_key,f.name,f.cell_range,f.header_rows,f.criteria,f.active,f.created_at,f.updated_at FROM filter_views f JOIN sheets s ON s.id=f.sheet_id WHERE s.workbook_id=$1 ORDER BY f.created_at,f.id`, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	for rows.Next() {
+		view, scanErr := scanFilterView(rows)
+		if scanErr != nil {
+			rows.Close()
+			return snapshotDocument{}, scanErr
+		}
+		document.Filters = append(document.Filters, view)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -1429,6 +1451,11 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 	if _, err := tx.Exec(ctx, `DELETE FROM named_ranges WHERE workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
+	if snapshot.SchemaVersion >= 5 {
+		if _, err := tx.Exec(ctx, `DELETE FROM filter_views USING sheets WHERE filter_views.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	now := r.now()
 	desiredSheetIDs := make(map[string]struct{})
 	if snapshot.SchemaVersion >= 2 {
@@ -1531,12 +1558,31 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			}
 		}
 	}
+	if snapshot.SchemaVersion >= 5 {
+		for _, view := range snapshot.Filters {
+			if _, found := desiredSheetIDs[view.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a filter view for an unknown sheet", ErrInvalid)
+			}
+			normalized, _, err := NormalizeFilterView(view)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.CreateKey = "restore:" + normalized.ID
+			normalized.UpdatedAt = now
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			if err := insertFilterViewForStructure(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
 	if snapshot.SchemaVersion >= 4 {
 		for _, item := range snapshot.NamedRanges {
 			if _, found := desiredSheetIDs[item.SheetID]; !found {
 				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a named range for an unknown sheet", ErrInvalid)
 			}
-			normalized, err := normalizeNamedRange(item)
+			normalized, err := normalizeStoredNamedRange(item)
 			if err != nil {
 				return MutationResult{}, err
 			}
@@ -1615,6 +1661,11 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 	result.FormulaErrors = document.FormulaErrors
 	result.ValidationWarnings = document.ValidationWarnings
 	result.Conflicts = document.Conflicts
+	result.BackupVersionID = document.BackupVersionID
+	result.StructuralAxis = document.StructuralAxis
+	result.StructuralAction = document.StructuralAction
+	result.StructuralIndex = document.StructuralIndex
+	result.StructuralCount = document.StructuralCount
 	return result, true, nil
 }
 
@@ -1622,7 +1673,7 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 	if baseVersion < 1 {
 		baseVersion = 0
 	}
-	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,payload FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
+	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,operation_type,payload FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -1635,9 +1686,16 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 	for rows.Next() {
 		var operationSheetID string
 		var version int64
+		var operationType string
 		var data []byte
-		if err := rows.Scan(&operationSheetID, &version, &data); err != nil {
+		if err := rows.Scan(&operationSheetID, &version, &operationType, &data); err != nil {
 			return nil, err
+		}
+		if structuralOperationType(operationType) {
+			for coordinate, input := range targets {
+				byCoordinate[coordinate] = CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: version, SubmittedValue: cloneJSON(input.Value)}
+			}
+			continue
 		}
 		var document operationDocument
 		if err := json.Unmarshal(data, &document); err != nil {

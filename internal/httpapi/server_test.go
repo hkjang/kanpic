@@ -62,6 +62,60 @@ func TestWorkbookCellVersionFlow(t *testing.T) {
 	}
 }
 
+func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
+	t.Parallel()
+	definition, found := findMCPTool("spreadsheet.structure.apply")
+	required, requiredOK := definition.InputSchema["required"].([]string)
+	if !found || definition.Meta["required_scope"] != "range.write" || !requiredOK || len(required) != 7 {
+		t.Fatalf("structure MCP contract: %#v", definition)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/structure:apply", nil)); scope != "range.write" {
+		t.Fatalf("structure REST scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "구조 변경"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "structure-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": "제목"}, {"row": 2, "column": 1, "value": 7}, {"row": 3, "column": 1, "formula": "=A2*2"}},
+	}, http.StatusOK)
+
+	body := map[string]any{"base_version": 2, "idempotency_key": "insert-row", "client_id": "rest", "axis": "row", "action": "insert", "index": 2, "count": 1}
+	inserted := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/structure:apply", body, http.StatusOK)
+	if inserted.ServerVersion != 3 || inserted.StructuralAxis != "row" || inserted.StructuralAction != "insert" || inserted.BackupVersionID == "" {
+		t.Fatalf("REST structure result: %#v", inserted)
+	}
+	duplicate := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/structure:apply", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.ServerVersion != 3 || duplicate.BackupVersionID != inserted.BackupVersionID {
+		t.Fatalf("REST structure idempotency: %#v", duplicate)
+	}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/structure:apply", map[string]any{
+		"base_version": 2, "idempotency_key": "stale-row", "axis": "row", "action": "delete", "index": 1, "count": 1,
+	}, http.StatusConflict)
+
+	mcp := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.structure.apply", "arguments": map[string]any{"sheet_id": sheetID, "base_version": 3, "idempotency_key": "mcp-delete-row", "client_id": "agent", "axis": "row", "action": "delete", "index": 2, "count": 1},
+		},
+	}, http.StatusOK)
+	if mcp.Result.Structured.ServerVersion != 4 || mcp.Result.Structured.StructuralAction != "delete" || mcp.Result.Structured.BackupVersionID == "" {
+		t.Fatalf("MCP structure result: %#v", mcp.Result.Structured)
+	}
+
+	cells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:A3", nil, http.StatusOK)
+	if len(cells.Items) != 3 || string(cells.Items[1].Value) != "7" || cells.Items[2].Formula != "=A2*2" || string(cells.Items[2].Value) != "14" {
+		t.Fatalf("structure did not preserve cells and formula: %#v", cells.Items)
+	}
+}
+
 func TestWorkbookDuplicateRESTAndMCPPreserveStructure(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

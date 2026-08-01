@@ -155,6 +155,18 @@ func (h *Hub) PublishVersion(workbookID, actorID, clientID, operationID string, 
 	h.broadcast(workbookID, Event{ID: identity.New(), Type: "workbook.version", WorkbookID: workbookID, ActorID: actorID, ClientID: clientID, ServerVersion: serverVersion, Data: map[string]any{"operation_id": operationID}}, "")
 }
 
+func (h *Hub) PublishStructure(result workbook.MutationResult, actorID, clientID string) {
+	h.broadcast(result.WorkbookID, Event{ID: identity.New(), Type: "workbook.version", WorkbookID: result.WorkbookID, ActorID: actorID, ClientID: clientID, ServerVersion: result.ServerVersion, Data: map[string]any{
+		"operation_id": result.OperationID,
+		"structural":   true,
+		"sheet_id":     result.SheetID,
+		"axis":         result.StructuralAxis,
+		"action":       result.StructuralAction,
+		"index":        result.StructuralIndex,
+		"count":        result.StructuralCount,
+	}}, "")
+}
+
 func (h *Hub) handle(ctx context.Context, peer *client, incoming inboundEvent) {
 	switch incoming.Type {
 	case "cursor.update":
