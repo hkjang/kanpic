@@ -277,6 +277,101 @@ func TestChartsShareRESTAndMCPContracts(t *testing.T) {
 	}
 }
 
+func TestPivotsShareRESTAndMCPContracts(t *testing.T) {
+	t.Parallel()
+	for _, expectation := range []struct {
+		name  string
+		scope string
+	}{
+		{"spreadsheet.pivot.list", "pivot.read"},
+		{"spreadsheet.pivot.get", "pivot.read"},
+		{"spreadsheet.pivot.data", "pivot.read"},
+		{"spreadsheet.pivot.drilldown", "pivot.read"},
+		{"spreadsheet.pivot.create", "pivot.write"},
+		{"spreadsheet.pivot.update", "pivot.write"},
+		{"spreadsheet.pivot.refresh", "pivot.write"},
+		{"spreadsheet.pivot.delete", "pivot.write"},
+	} {
+		definition, found := findMCPTool(expectation.name)
+		if !found || definition.Meta["required_scope"] != expectation.scope {
+			t.Fatalf("MCP tool %s = %#v", expectation.name, definition)
+		}
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/workbooks/book/pivots", nil)); scope != "pivot.read" {
+		t.Fatalf("pivot list scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/pivots/pivot/refresh", nil)); scope != "pivot.write" {
+		t.Fatalf("pivot refresh scope = %q", scope)
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "피벗 API"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "pivot-api-seed", "cells": []map[string]any{
+			{"row": 1, "column": 1, "value": "지역"}, {"row": 1, "column": 2, "value": "매출"},
+			{"row": 2, "column": 1, "value": "동부"}, {"row": 2, "column": 2, "value": 42},
+			{"row": 3, "column": 1, "value": "서부"}, {"row": 3, "column": 2, "value": 55},
+		},
+	}, http.StatusOK)
+	created := requestAs[workbook.Pivot](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/pivots", map[string]any{
+		"idempotency_key": "pivot-api", "sheet_id": sheetID, "source_sheet_id": sheetID, "name": "지역별 매출", "source_range": "A1:B3", "refresh_mode": "manual",
+		"rows": []map[string]any{{"column": 1, "name": "지역"}}, "values": []map[string]any{{"column": 2, "name": "매출", "aggregation": "sum"}},
+	}, http.StatusCreated)
+	if created.WorkbookVersion != 3 || created.Revision != 1 || created.RefreshMode != "manual" {
+		t.Fatalf("REST pivot create = %#v", created)
+	}
+	data := request[workbook.PivotData](t, server, http.MethodGet, "/api/v1/pivots/"+created.ID+"/data", nil, http.StatusOK)
+	if !data.Cached || data.SourceRowCount != 2 || len(data.Rows) != 2 || len(data.Columns) != 1 {
+		t.Fatalf("REST pivot data = %#v", data)
+	}
+	drill := request[workbook.PivotDrilldownResult](t, server, http.MethodGet, "/api/v1/pivots/"+created.ID+"/drilldown?row_key="+data.Rows[0].Key+"&column_key="+data.Columns[0].Key+"&limit=10", nil, http.StatusOK)
+	if drill.Total != 1 || len(drill.Rows) != 1 || drill.Rows[0].SourceRow != 2 {
+		t.Fatalf("REST pivot drilldown = %#v", drill)
+	}
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.Pivot `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 101, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.pivot.update", "arguments": map[string]any{"pivot_id": created.ID, "name": "갱신된 피벗", "expected_revision": 1},
+	}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.Name != "갱신된 피벗" || mcpUpdated.Result.Structured.Revision != 2 || mcpUpdated.Result.Structured.WorkbookVersion != 4 {
+		t.Fatalf("MCP pivot update = %#v", mcpUpdated)
+	}
+	mcpRefresh := request[struct {
+		Result struct {
+			Structured workbook.PivotData `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 102, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.pivot.refresh", "arguments": map[string]any{"pivot_id": created.ID},
+	}}, http.StatusOK)
+	if !mcpRefresh.Result.Structured.Cached || mcpRefresh.Result.Structured.SourceRowCount != 2 {
+		t.Fatalf("MCP pivot refresh = %#v", mcpRefresh)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.Pivot `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 103, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.pivot.list", "arguments": map[string]any{"workbook_id": book.ID, "sheet_id": sheetID},
+	}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].Name != "갱신된 피벗" {
+		t.Fatalf("MCP pivot list = %#v", mcpList)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 104, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.pivot.delete", "arguments": map[string]any{"pivot_id": created.ID, "expected_revision": 2},
+	}}, http.StatusOK)
+	listed := request[struct {
+		Items []workbook.Pivot `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/pivots", nil, http.StatusOK)
+	if len(listed.Items) != 0 {
+		t.Fatalf("deleted pivot list = %#v", listed)
+	}
+}
+
 func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
 	t.Parallel()
 	definition, found := findMCPTool("spreadsheet.structure.apply")

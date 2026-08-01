@@ -27,6 +27,7 @@ const agentScopes = [
   'format.*',
   'formula.*',
   'chart.*',
+  'pivot.*',
   'version.*',
   'comment.*',
   'profile.read',

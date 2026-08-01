@@ -89,6 +89,14 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.chart.create", "셀 범위를 데이터 원본으로 사용하는 차트를 멱등 생성합니다.", "chart.write", chartSchema(true)),
 	tool("spreadsheet.chart.update", "차트 유형, 원본, 제목, 범례 및 배치를 revision 기반으로 변경합니다.", "chart.write", chartSchema(false)),
 	tool("spreadsheet.chart.delete", "차트 정의를 삭제합니다.", "chart.write", chartDeleteSchema()),
+	tool("spreadsheet.pivot.list", "워크북 또는 시트의 관리형 피벗 정의를 조회합니다.", "pivot.read", pivotListSchema()),
+	tool("spreadsheet.pivot.get", "피벗 정의, 갱신 방식과 revision을 조회합니다.", "pivot.read", requiredProps("pivot_id", "string")),
+	tool("spreadsheet.pivot.data", "피벗의 집계 결과, 행·열 그룹과 총계를 조회합니다.", "pivot.read", requiredProps("pivot_id", "string")),
+	tool("spreadsheet.pivot.drilldown", "피벗 집계 셀에 기여한 원본 행을 페이지 단위로 조회합니다.", "pivot.read", pivotDrilldownSchema()),
+	tool("spreadsheet.pivot.create", "행·열·값·필터·계산 필드를 가진 관리형 피벗을 멱등 생성합니다.", "pivot.write", pivotSchema(true)),
+	tool("spreadsheet.pivot.update", "피벗 정의와 자동·수동 갱신 방식을 revision 기반으로 변경합니다.", "pivot.write", pivotSchema(false)),
+	tool("spreadsheet.pivot.refresh", "최신 원본 셀로 피벗을 즉시 다시 계산하고 수동 캐시를 갱신합니다.", "pivot.write", requiredProps("pivot_id", "string")),
+	tool("spreadsheet.pivot.delete", "피벗 정의와 계산 캐시를 삭제합니다.", "pivot.write", pivotDeleteSchema()),
 	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
@@ -561,6 +569,58 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
 		return map[string]any{"ok": true}, nil
+	case "spreadsheet.pivot.list":
+		return s.repository.ListPivots(ctx, stringArg(args, "workbook_id"), stringArg(args, "sheet_id"))
+	case "spreadsheet.pivot.get":
+		return s.repository.GetPivot(ctx, stringArg(args, "pivot_id"))
+	case "spreadsheet.pivot.data":
+		return s.repository.GetPivotData(ctx, stringArg(args, "pivot_id"))
+	case "spreadsheet.pivot.drilldown":
+		var input workbook.PivotDrilldownInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.PivotDrilldown(ctx, stringArg(args, "pivot_id"), input)
+	case "spreadsheet.pivot.create":
+		var input workbook.CreatePivotInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.CreatePivot(ctx, stringArg(args, "workbook_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.pivot.update":
+		var input workbook.UpdatePivotInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.UpdatePivot(ctx, stringArg(args, "pivot_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.pivot.refresh":
+		return s.repository.RefreshPivot(ctx, stringArg(args, "pivot_id"), actor)
+	case "spreadsheet.pivot.delete":
+		item, err := s.repository.GetPivot(ctx, stringArg(args, "pivot_id"))
+		if err != nil {
+			return nil, err
+		}
+		var expected *int64
+		if value, found := args["expected_revision"]; found && value != nil {
+			revision, revisionErr := numberArg(args, "expected_revision")
+			if revisionErr != nil || revision < 1 {
+				return nil, fmt.Errorf("expected_revision must be a positive integer")
+			}
+			expected = &revision
+		}
+		if err := s.repository.DeletePivot(ctx, item.ID, actor, expected); err != nil {
+			return nil, err
+		}
+		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		return map[string]any{"ok": true}, nil
 	case "spreadsheet.formula.set":
 		var input struct {
 			SheetID        string `json:"sheet_id"`
@@ -839,6 +899,64 @@ func chartSchema(create bool) map[string]any {
 
 func chartDeleteSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"chart_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"chart_id"}}
+}
+
+func pivotListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id": map[string]any{"type": "string", "minLength": 1}, "sheet_id": map[string]any{"type": "string"},
+	}, "required": []string{"workbook_id"}}
+}
+
+func pivotSchema(create bool) map[string]any {
+	customGroup := map[string]any{"type": "object", "properties": map[string]any{
+		"name": map[string]any{"type": "string", "minLength": 1}, "values": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string"}},
+	}, "required": []string{"name", "values"}}
+	dimension := map[string]any{"type": "object", "properties": map[string]any{
+		"column": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"},
+		"group":    map[string]any{"type": "string", "enum": []string{"none", "year", "quarter", "month", "day", "number", "custom"}},
+		"interval": map[string]any{"type": "number", "exclusiveMinimum": 0}, "custom_groups": map[string]any{"type": "array", "items": customGroup},
+	}, "required": []string{"column"}}
+	value := map[string]any{"type": "object", "properties": map[string]any{
+		"column": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"},
+		"aggregation": map[string]any{"type": "string", "enum": []string{"sum", "average", "count", "min", "max"}},
+	}, "required": []string{"column", "aggregation"}}
+	filter := map[string]any{"type": "object", "properties": map[string]any{
+		"column":   map[string]any{"type": "integer", "minimum": 1},
+		"operator": map[string]any{"type": "string", "enum": []string{"equals", "not_equals", "contains", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "in", "is_blank", "not_blank"}},
+		"value":    map[string]any{"type": "string"}, "values": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}, "required": []string{"column", "operator"}}
+	calculated := map[string]any{"type": "object", "properties": map[string]any{
+		"name": map[string]any{"type": "string", "minLength": 1}, "formula": map[string]any{"type": "string", "pattern": "^="},
+	}, "required": []string{"name", "formula"}}
+	properties := map[string]any{
+		"pivot_id": map[string]any{"type": "string"}, "workbook_id": map[string]any{"type": "string"}, "sheet_id": map[string]any{"type": "string"}, "source_sheet_id": map[string]any{"type": "string"},
+		"idempotency_key": map[string]any{"type": "string", "minLength": 1}, "name": map[string]any{"type": "string", "minLength": 1, "maxLength": 200}, "source_range": map[string]any{"type": "string"},
+		"first_row_headers": map[string]any{"type": "boolean"}, "rows": map[string]any{"type": "array", "maxItems": 6, "items": dimension}, "columns": map[string]any{"type": "array", "maxItems": 6, "items": dimension},
+		"values": map[string]any{"type": "array", "minItems": 1, "maxItems": 10, "items": value}, "filters": map[string]any{"type": "array", "maxItems": 10, "items": filter},
+		"calculated_fields": map[string]any{"type": "array", "maxItems": 5, "items": calculated}, "refresh_mode": map[string]any{"type": "string", "enum": []string{"auto", "manual"}},
+		"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+	}
+	required := []string{"pivot_id"}
+	if create {
+		delete(properties, "pivot_id")
+		delete(properties, "expected_revision")
+		required = []string{"workbook_id", "sheet_id", "source_sheet_id", "idempotency_key", "name", "source_range", "values"}
+	} else {
+		delete(properties, "workbook_id")
+		delete(properties, "idempotency_key")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func pivotDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"pivot_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"pivot_id"}}
+}
+
+func pivotDrilldownSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"pivot_id": map[string]any{"type": "string"}, "row_key": map[string]any{"type": "string"}, "column_key": map[string]any{"type": "string"},
+		"offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 500},
+	}, "required": []string{"pivot_id"}}
 }
 
 func rangeFormatSchema() map[string]any {

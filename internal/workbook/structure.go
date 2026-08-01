@@ -402,6 +402,17 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		}
 		nextCharts[id] = updated
 	}
+	nextPivots := clonePivotMap(r.pivots)
+	for id, pivot := range nextPivots {
+		if pivot.WorkbookID != state.workbook.ID {
+			continue
+		}
+		updated, transformErr := transformPivotForStructure(pivot, target.ID, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		nextPivots[id] = updated
+	}
 	nextCells, err := transformStructureCells(state.sheets, state.cells, target.ID, input)
 	if err != nil {
 		return MutationResult{}, err
@@ -412,7 +423,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	}
 	applyRecalculatedInputs(nextCells, expanded, now)
 	backup := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: state.workbook.Version, Name: structureBackupName(input), ActorID: input.ActorID, CreatedAt: now}
-	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	appliedCells := changedCellCount(state.cells, nextCells)
 	target.Layout = transformLayoutForStructure(target.Layout, input)
 	state.sheets[target.ID] = target
@@ -424,7 +435,12 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		}
 		nextNotifications[id] = copy
 	}
-	state.cells, r.namedRanges, r.validations, r.filters, r.comments, r.notifications, r.charts = nextCells, nextNames, nextValidations, nextFilters, nextComments, nextNotifications, nextCharts
+	state.cells, r.namedRanges, r.validations, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
+	for pivotID, pivot := range nextPivots {
+		if pivot.WorkbookID == state.workbook.ID {
+			delete(r.pivotCache, pivotID)
+		}
+	}
 	r.bump(state)
 	for id, item := range r.namedRanges {
 		if item.WorkbookID == state.workbook.ID {

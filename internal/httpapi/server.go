@@ -74,6 +74,14 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("GET /api/v1/charts/{chartId}/data", s.getChartData)
 	mux.HandleFunc("PATCH /api/v1/charts/{chartId}", s.updateChart)
 	mux.HandleFunc("DELETE /api/v1/charts/{chartId}", s.deleteChart)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/pivots", s.listPivots)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/pivots", s.createPivot)
+	mux.HandleFunc("GET /api/v1/pivots/{pivotId}", s.getPivot)
+	mux.HandleFunc("GET /api/v1/pivots/{pivotId}/data", s.getPivotData)
+	mux.HandleFunc("GET /api/v1/pivots/{pivotId}/drilldown", s.drilldownPivot)
+	mux.HandleFunc("POST /api/v1/pivots/{pivotId}/refresh", s.refreshPivot)
+	mux.HandleFunc("PATCH /api/v1/pivots/{pivotId}", s.updatePivot)
+	mux.HandleFunc("DELETE /api/v1/pivots/{pivotId}", s.deletePivot)
 	mux.HandleFunc("GET /api/v1/me/notifications", s.listMentionNotifications)
 	mux.HandleFunc("PATCH /api/v1/me/notifications/{notificationId}", s.markMentionNotificationRead)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/named-ranges", s.listNamedRanges)
@@ -826,6 +834,12 @@ func requiredScope(r *http.Request) string {
 			return "chart.read"
 		}
 		return "chart.write"
+	}
+	if strings.Contains(path, "/pivots") {
+		if r.Method == http.MethodGet {
+			return "pivot.read"
+		}
+		return "pivot.write"
 	}
 	if strings.Contains(path, "/filter-views/") && strings.HasSuffix(path, ":evaluate") {
 		return "range.read"

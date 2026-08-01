@@ -60,6 +60,14 @@ type Repository interface {
 	GetChartData(context.Context, string) (ChartData, error)
 	UpdateChart(context.Context, string, string, UpdateChartInput) (Chart, error)
 	DeleteChart(context.Context, string, string, *int64) error
+	CreatePivot(context.Context, string, string, CreatePivotInput) (Pivot, error)
+	ListPivots(context.Context, string, string) ([]Pivot, error)
+	GetPivot(context.Context, string) (Pivot, error)
+	GetPivotData(context.Context, string) (PivotData, error)
+	RefreshPivot(context.Context, string, string) (PivotData, error)
+	PivotDrilldown(context.Context, string, PivotDrilldownInput) (PivotDrilldownResult, error)
+	UpdatePivot(context.Context, string, string, UpdatePivotInput) (Pivot, error)
+	DeletePivot(context.Context, string, string, *int64) error
 	CreateNamedRange(context.Context, string, string, CreateNamedRangeInput) (NamedRange, error)
 	ListNamedRanges(context.Context, string) ([]NamedRange, error)
 	GetNamedRange(context.Context, string) (NamedRange, error)

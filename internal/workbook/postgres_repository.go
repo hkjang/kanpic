@@ -79,6 +79,7 @@ type snapshotDocument struct {
 	Validations   []DataValidation `json:"validations,omitempty"`
 	NamedRanges   []NamedRange     `json:"named_ranges,omitempty"`
 	Charts        []Chart          `json:"charts,omitempty"`
+	Pivots        []Pivot          `json:"pivots,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -506,6 +507,38 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 			return Workbook{}, err
 		}
 	}
+	copiedPivots, err := listPivotsTx(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, sourcePivot := range copiedPivots {
+		destinationSheetID, found := sheetIDs[sourcePivot.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: pivot references an unknown sheet", ErrInvalid)
+		}
+		destinationSourceSheetID := ""
+		if sourcePivot.SourceRange != "#REF!" {
+			var found bool
+			destinationSourceSheetID, found = sheetIDs[sourcePivot.SourceSheetID]
+			if !found {
+				return Workbook{}, fmt.Errorf("%w: pivot source references an unknown sheet", ErrInvalid)
+			}
+		}
+		sourcePivot.ID = identity.New()
+		sourcePivot.WorkbookID = duplicated.ID
+		sourcePivot.WorkbookVersion = 1
+		sourcePivot.SheetID = destinationSheetID
+		sourcePivot.SourceSheetID = destinationSourceSheetID
+		sourcePivot.CreateKey = "copy:" + sourcePivot.ID
+		sourcePivot.SourceVersion = 0
+		sourcePivot.LastRefreshedAt = nil
+		sourcePivot.Revision = 1
+		sourcePivot.CreatedBy, sourcePivot.UpdatedBy = ownerID, ownerID
+		sourcePivot.CreatedAt, sourcePivot.UpdatedAt = now, now
+		if err := insertPivotTx(ctx, tx, sourcePivot); err != nil {
+			return Workbook{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Workbook{}, err
 	}
@@ -766,6 +799,39 @@ func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string,
 			return Sheet{}, err
 		}
 	}
+	pivotRows, err := tx.Query(ctx, `SELECT `+pivotColumns+` FROM pivots p JOIN workbooks w ON w.id=p.workbook_id WHERE p.sheet_id=$1 ORDER BY p.created_at,p.id`, source.ID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	pivots := make([]Pivot, 0)
+	for pivotRows.Next() {
+		pivot, scanErr := scanPivot(pivotRows)
+		if scanErr != nil {
+			pivotRows.Close()
+			return Sheet{}, scanErr
+		}
+		pivots = append(pivots, pivot)
+	}
+	if err := pivotRows.Err(); err != nil {
+		pivotRows.Close()
+		return Sheet{}, err
+	}
+	pivotRows.Close()
+	for _, pivot := range pivots {
+		pivot.ID = identity.New()
+		pivot.SheetID = duplicated.ID
+		if pivot.SourceSheetID == source.ID {
+			pivot.SourceSheetID = duplicated.ID
+		}
+		pivot.CreateKey = "copy:" + pivot.ID
+		pivot.SourceVersion = 0
+		pivot.LastRefreshedAt = nil
+		pivot.Revision = 1
+		pivot.CreatedAt, pivot.UpdatedAt = now, now
+		if err := insertPivotTx(ctx, tx, pivot); err != nil {
+			return Sheet{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
 		return Sheet{}, err
 	}
@@ -940,6 +1006,9 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE charts SET source_sheet_id=NULL,source_range='#REF!',revision=revision+1,updated_at=$2 WHERE source_sheet_id=$1 AND sheet_id<>$1`, sheetID, r.now()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE pivots SET source_sheet_id=NULL,source_range='#REF!',source_version=0,cached_result=NULL,refreshed_at=NULL,revision=revision+1,updated_at=$2 WHERE source_sheet_id=$1 AND sheet_id<>$1`, sheetID, r.now()); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM sheets WHERE id=$1`, sheetID); err != nil {
@@ -1370,7 +1439,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 6, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0)}
+	document := snapshotDocument{SchemaVersion: 7, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0), Pivots: make([]Pivot, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1448,6 +1517,10 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 		return snapshotDocument{}, err
 	}
 	document.Charts, err = listChartsTx(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	document.Pivots, err = listPivotsTx(ctx, tx, workbookID)
 	if err != nil {
 		return snapshotDocument{}, err
 	}
@@ -1536,6 +1609,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 		return MutationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM charts WHERE workbook_id=$1`, workbookID); err != nil {
+		return MutationResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM pivots WHERE workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
 	if snapshot.SchemaVersion >= 5 {
@@ -1721,6 +1797,41 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			}
 			normalized.UpdatedAt = now
 			if err := insertChartTx(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
+	if snapshot.SchemaVersion >= 7 {
+		for _, item := range snapshot.Pivots {
+			if _, found := desiredSheetIDs[item.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a pivot on an unknown sheet", ErrInvalid)
+			}
+			if item.SourceRange != "#REF!" {
+				if _, found := desiredSheetIDs[item.SourceSheetID]; !found {
+					return MutationResult{}, fmt.Errorf("%w: version snapshot contains a pivot source on an unknown sheet", ErrInvalid)
+				}
+			}
+			normalized, err := normalizePivot(item, true)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.WorkbookID = workbookID
+			normalized.WorkbookVersion = base + 1
+			normalized.CreateKey = "restore:" + normalized.ID
+			normalized.SourceVersion = 0
+			normalized.LastRefreshedAt = nil
+			if normalized.Revision < 1 {
+				normalized.Revision = 1
+			}
+			if normalized.CreatedBy == "" {
+				normalized.CreatedBy = actorID
+			}
+			normalized.UpdatedBy = actorID
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			normalized.UpdatedAt = now
+			if err := insertPivotTx(ctx, tx, normalized); err != nil {
 				return MutationResult{}, err
 			}
 		}

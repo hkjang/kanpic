@@ -39,6 +39,7 @@ type snapshot struct {
 	validations map[string]DataValidation
 	namedRanges map[string]NamedRange
 	charts      map[string]Chart
+	pivots      map[string]Pivot
 }
 
 type workbookState struct {
@@ -61,6 +62,8 @@ type MemoryRepository struct {
 	validations   map[string]DataValidation
 	namedRanges   map[string]NamedRange
 	charts        map[string]Chart
+	pivots        map[string]Pivot
+	pivotCache    map[string]PivotData
 	comments      map[string]CommentThread
 	notifications map[string]MentionNotification
 }
@@ -75,6 +78,8 @@ func NewMemoryRepository() *MemoryRepository {
 		validations:   make(map[string]DataValidation),
 		namedRanges:   make(map[string]NamedRange),
 		charts:        make(map[string]Chart),
+		pivots:        make(map[string]Pivot),
+		pivotCache:    make(map[string]PivotData),
 		comments:      make(map[string]CommentThread),
 		notifications: make(map[string]MentionNotification),
 	}
@@ -357,6 +362,26 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 		copyChart.CreatedAt, copyChart.UpdatedAt = now, now
 		r.charts[copyChart.ID] = copyChart
 	}
+	for _, sourcePivot := range r.pivots {
+		if sourcePivot.WorkbookID != source.workbook.ID {
+			continue
+		}
+		copyPivot := clonePivot(sourcePivot)
+		copyPivot.ID = identity.New()
+		copyPivot.WorkbookID = copyWorkbook.ID
+		copyPivot.WorkbookVersion = 1
+		copyPivot.SheetID = sheetIDs[sourcePivot.SheetID]
+		if sourcePivot.SourceRange == "#REF!" {
+			copyPivot.SourceSheetID = ""
+		} else {
+			copyPivot.SourceSheetID = sheetIDs[sourcePivot.SourceSheetID]
+		}
+		copyPivot.CreateKey = "copy:" + copyPivot.ID
+		copyPivot.Revision, copyPivot.SourceVersion, copyPivot.LastRefreshedAt = 1, 0, nil
+		copyPivot.CreatedBy, copyPivot.UpdatedBy = ownerID, ownerID
+		copyPivot.CreatedAt, copyPivot.UpdatedAt = now, now
+		r.pivots[copyPivot.ID] = copyPivot
+	}
 	r.workbooks[copyWorkbook.ID] = copyState
 	return r.workbookWithSheets(copyState), nil
 }
@@ -417,6 +442,12 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 	for chartID, item := range r.charts {
 		if item.WorkbookID == id {
 			delete(r.charts, chartID)
+		}
+	}
+	for pivotID, item := range r.pivots {
+		if item.WorkbookID == id {
+			delete(r.pivots, pivotID)
+			delete(r.pivotCache, pivotID)
 		}
 	}
 	for threadID, thread := range r.comments {
@@ -512,6 +543,21 @@ func (r *MemoryRepository) DuplicateSheet(_ context.Context, sheetID string, inp
 		copyChart.Revision = 1
 		copyChart.CreatedAt, copyChart.UpdatedAt = now, now
 		r.charts[copyChart.ID] = copyChart
+	}
+	for _, sourcePivot := range r.pivots {
+		if sourcePivot.SheetID != source.ID {
+			continue
+		}
+		copyPivot := clonePivot(sourcePivot)
+		copyPivot.ID = identity.New()
+		copyPivot.SheetID = duplicated.ID
+		if copyPivot.SourceSheetID == source.ID {
+			copyPivot.SourceSheetID = duplicated.ID
+		}
+		copyPivot.CreateKey = "copy:" + copyPivot.ID
+		copyPivot.Revision, copyPivot.SourceVersion, copyPivot.LastRefreshedAt = 1, 0, nil
+		copyPivot.CreatedAt, copyPivot.UpdatedAt = now, now
+		r.pivots[copyPivot.ID] = copyPivot
 	}
 	r.sheetToWB[duplicated.ID] = source.WorkbookID
 	r.bump(state)
@@ -660,6 +706,21 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 			chart.Revision++
 			chart.UpdatedAt = now
 			r.charts[chartID] = chart
+		}
+	}
+	for pivotID, pivot := range r.pivots {
+		if pivot.SheetID == sheetID {
+			delete(r.pivots, pivotID)
+			delete(r.pivotCache, pivotID)
+			continue
+		}
+		if pivot.SourceSheetID == sheetID {
+			pivot.SourceSheetID, pivot.SourceRange = "", "#REF!"
+			pivot.Revision++
+			pivot.SourceVersion, pivot.LastRefreshedAt = 0, nil
+			pivot.UpdatedAt = now
+			r.pivots[pivotID] = pivot
+			delete(r.pivotCache, pivotID)
 		}
 	}
 	delete(r.sheetToWB, sheetID)
@@ -877,7 +938,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	return version, nil
 }
 
@@ -905,7 +966,7 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			base := state.workbook.Version
 			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
-			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID)})
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 			for sheetID := range state.sheets {
 				delete(r.sheetToWB, sheetID)
 			}
@@ -944,6 +1005,17 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			for chartID, item := range snap.charts {
 				r.charts[chartID] = cloneChart(item)
+			}
+			for pivotID, item := range r.pivots {
+				if item.WorkbookID == state.workbook.ID {
+					delete(r.pivots, pivotID)
+					delete(r.pivotCache, pivotID)
+				}
+			}
+			for pivotID, item := range snap.pivots {
+				copyPivot := clonePivot(item)
+				copyPivot.SourceVersion, copyPivot.LastRefreshedAt = 0, nil
+				r.pivots[pivotID] = copyPivot
 			}
 			for sheetID := range state.sheets {
 				r.sheetToWB[sheetID] = state.workbook.ID

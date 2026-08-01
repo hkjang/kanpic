@@ -356,6 +356,50 @@ test('creates a live native chart and exposes the same definition through REST',
   await page.request.delete(`/api/v1/workbooks/${created.id}`)
 })
 
+test('creates a managed pivot, opens results, and drills into source rows', async ({ page }) => {
+  const created = await page.request.post('/api/v1/workbooks', { data: { title: `피벗 ${Date.now()}`, workspace_id: 'default' } }).then(response => response.json())
+  const sheetId = created.sheets[0].id as string
+  const seeded = await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`, { data: {
+    base_version: created.version,
+    idempotency_key: `pivot-e2e-seed-${created.id}`,
+    cells: [
+      { row: 1, column: 1, value: '지역' }, { row: 1, column: 2, value: '매출' },
+      { row: 2, column: 1, value: '동부' }, { row: 2, column: 2, value: 100 },
+      { row: 3, column: 1, value: '동부' }, { row: 3, column: 2, value: 50 },
+      { row: 4, column: 1, value: '서부' }, { row: 4, column: 2, value: 200 },
+    ],
+  } })
+  expect(seeded.ok()).toBe(true)
+
+  await page.goto(`/workbooks/${created.id}`)
+  await page.getByRole('combobox', { name: '이름 상자' }).fill('A1:B4')
+  await page.getByRole('combobox', { name: '이름 상자' }).press('Enter')
+  await page.getByRole('button', { name: '피벗 패널' }).click()
+  await page.getByRole('button', { name: '새 피벗' }).click()
+  const dialog = page.getByRole('dialog', { name: '피벗 만들기' })
+  await dialog.getByLabel('피벗 이름').fill('지역별 매출')
+  await dialog.getByRole('button', { name: '행 그룹 추가' }).click()
+  await dialog.getByLabel('값 필드 1').selectOption('2')
+  await dialog.getByRole('button', { name: '피벗 저장' }).click()
+
+  const panelItem = page.locator('.pivot-panel-list article').filter({ hasText: '지역별 매출' })
+  await expect(panelItem).toBeVisible()
+  await panelItem.getByTitle('결과 열기').click()
+  const result = page.getByRole('dialog', { name: '피벗 결과' })
+  await expect(result.getByText('150', { exact: true })).toBeVisible()
+  await expect(result.getByText('200', { exact: true })).toBeVisible()
+  await result.getByRole('button', { name: '150' }).click()
+  const drilldown = result.getByRole('dialog', { name: '피벗 원본 행' })
+  await expect(drilldown.getByText('2개 행')).toBeVisible()
+
+  const list = await page.request.get(`/api/v1/workbooks/${created.id}/pivots?sheet_id=${sheetId}`).then(response => response.json())
+  expect(list.items).toHaveLength(1)
+  expect(list.items[0]).toMatchObject({ name: '지역별 매출', source_range: 'A1:B4', refresh_mode: 'auto' })
+  const data = await page.request.get(`/api/v1/pivots/${list.items[0].id}/data`).then(response => response.json())
+  expect(data.rows.map((row: { values: number[] }) => row.values[0])).toEqual([150, 200])
+  await page.request.delete(`/api/v1/workbooks/${created.id}`)
+})
+
 test('creates, edits, rotates, and revokes a scoped personal API key', async ({ page }) => {
   const initialName = `E2E 에이전트 ${Date.now()}`
   const renamed = `${initialName} 수정`
@@ -365,6 +409,7 @@ test('creates, edits, rotates, and revokes a scoped personal API key', async ({ 
   let dialog = page.getByRole('dialog', { name: '새 API 키' })
   await dialog.getByLabel('키 이름').fill(initialName)
   await expect(dialog.getByText('chart.*')).toBeVisible()
+  await expect(dialog.getByText('pivot.*')).toBeVisible()
   await dialog.getByRole('button', { name: '키 생성' }).click()
   await expect(page.getByText('새 키를 지금 복사하세요')).toBeVisible()
 

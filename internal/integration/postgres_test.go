@@ -238,6 +238,104 @@ func TestPostgresChartsPersistRefreshAndRestore(t *testing.T) {
 	}
 }
 
+func TestPostgresPivotsPersistRefreshDrilldownAndRestore(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres pivots", WorkspaceID: "integration", OwnerID: "pivot-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	placement := book.Sheets[0]
+	source, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: source.ID, ActorID: "pivot-user", BaseVersion: 2, IdempotencyKey: "pg-pivot-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"지역"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 3, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"동부"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`"2026-01-01"`)}, {Row: 2, Column: 3, Value: json.RawMessage(`100`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"동부"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`"2026-02-01"`)}, {Row: 3, Column: 3, Value: json.RawMessage(`200`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`"서부"`)}, {Row: 4, Column: 2, Value: json.RawMessage(`"2026-01-01"`)}, {Row: 4, Column: 3, Value: json.RawMessage(`300`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivot, err := repository.CreatePivot(ctx, book.ID, "pivot-user", workbook.CreatePivotInput{
+		IdempotencyKey: "pg-pivot", SheetID: placement.ID, SourceSheetID: source.ID, Name: "지역별 월 매출", SourceRange: "A1:C4", RefreshMode: "manual",
+		Rows: []workbook.PivotDimension{{Column: 1, Name: "지역"}}, Columns: []workbook.PivotDimension{{Column: 2, Name: "월", Group: "month"}}, Values: []workbook.PivotValueField{{Column: 3, Name: "매출", Aggregation: "sum"}},
+	})
+	if err != nil || pivot.WorkbookVersion != seed.ServerVersion+1 {
+		t.Fatalf("PostgreSQL pivot create = %#v, %v", pivot, err)
+	}
+	duplicate, err := repository.CreatePivot(ctx, book.ID, "pivot-user", workbook.CreatePivotInput{IdempotencyKey: "pg-pivot", SheetID: placement.ID, SourceSheetID: source.ID, Name: "duplicate", SourceRange: "A1:C2", Values: []workbook.PivotValueField{{Column: 3, Aggregation: "count"}}})
+	if err != nil || duplicate.ID != pivot.ID || duplicate.Name != pivot.Name {
+		t.Fatalf("PostgreSQL pivot idempotency = %#v, %v", duplicate, err)
+	}
+	data, err := repository.GetPivotData(ctx, pivot.ID)
+	if err != nil || !data.Cached || data.SourceRowCount != 3 || len(data.Rows) != 2 || len(data.Columns) != 2 {
+		t.Fatalf("PostgreSQL pivot data = %#v, %v", data, err)
+	}
+	drill, err := repository.PivotDrilldown(ctx, pivot.ID, workbook.PivotDrilldownInput{RowKey: data.Rows[0].Key, ColumnKey: data.Columns[0].Key, Limit: 10})
+	if err != nil || drill.Total != 1 || len(drill.Rows) != 1 || drill.Rows[0].SourceRow != 2 {
+		t.Fatalf("PostgreSQL pivot drilldown = %#v, %v", drill, err)
+	}
+	latest, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: source.ID, ActorID: "pivot-user", BaseVersion: latest.Version, IdempotencyKey: "pg-pivot-change", Cells: []workbook.CellInput{{Row: 2, Column: 3, Value: json.RawMessage(`150`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := repository.GetPivotData(ctx, pivot.ID)
+	if err != nil || stale.Rows[0].Values[0] != float64(100) {
+		t.Fatalf("PostgreSQL manual pivot cache = %#v, %v", stale, err)
+	}
+	refreshed, err := repository.RefreshPivot(ctx, pivot.ID, "pivot-user")
+	if err != nil || refreshed.Rows[0].Values[0] != float64(150) {
+		t.Fatalf("PostgreSQL pivot refresh = %#v, %v", refreshed, err)
+	}
+	inserted, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: source.ID, ActorID: "pivot-user", BaseVersion: refreshed.WorkbookVersion, IdempotencyKey: "pg-pivot-insert", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetPivot(ctx, pivot.ID)
+	if err != nil || moved.SourceRange != "A1:C5" || moved.Revision != 2 || moved.LastRefreshedAt != nil {
+		t.Fatalf("PostgreSQL moved pivot = %#v, %v", moved, err)
+	}
+	version, err := repository.CreateVersion(ctx, book.ID, "pivot snapshot", "pivot-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "changed"
+	if _, err := repository.UpdatePivot(ctx, pivot.ID, "pivot-user", workbook.UpdatePivotInput{Name: &name, ExpectedRevision: &moved.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, "pivot-user"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.GetPivot(ctx, pivot.ID)
+	if err != nil || restored.Name != "지역별 월 매출" || restored.SourceRange != "A1:C5" || restored.Revision != moved.Revision {
+		t.Fatalf("PostgreSQL restored pivot = %#v, %v", restored, err)
+	}
+	copiedBook, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{OwnerID: "copy-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID)
+	copiedPivots, err := repository.ListPivots(ctx, copiedBook.ID, "")
+	if err != nil || len(copiedPivots) != 1 || copiedPivots[0].WorkbookID != copiedBook.ID || copiedPivots[0].SheetID == placement.ID || copiedPivots[0].SourceSheetID == source.ID {
+		t.Fatalf("PostgreSQL copied pivots = %#v, %v", copiedPivots, err)
+	}
+	_ = inserted
+}
+
 func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
