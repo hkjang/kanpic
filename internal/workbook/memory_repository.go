@@ -170,6 +170,63 @@ func (r *MemoryRepository) ReadAllCells(_ context.Context, sheetID string) ([]Ce
 	return result, nil
 }
 
+func (r *MemoryRepository) SearchWorkbook(_ context.Context, workbookID string, input SearchWorkbookInput) (WorkbookSearchResult, error) {
+	normalized, err := normalizeSearchInput(input)
+	if err != nil {
+		return WorkbookSearchResult{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	state, ok := r.workbooks[workbookID]
+	if !ok {
+		return WorkbookSearchResult{}, ErrNotFound
+	}
+	sheets := make([]Sheet, 0, len(state.sheets))
+	for _, sheet := range state.sheets {
+		sheets = append(sheets, sheet)
+	}
+	sort.Slice(sheets, func(i, j int) bool { return sheets[i].Position < sheets[j].Position })
+	matches := make([]WorkbookSearchMatch, 0, normalized.Limit+1)
+	query := strings.ToLower(normalized.Query)
+	skipped := 0
+	for _, sheet := range sheets {
+		cells := make([]Cell, 0, len(state.cells[sheet.ID]))
+		for _, cell := range state.cells[sheet.ID] {
+			cells = append(cells, cell)
+		}
+		sort.Slice(cells, func(i, j int) bool {
+			if cells[i].Row == cells[j].Row {
+				return cells[i].Column < cells[j].Column
+			}
+			return cells[i].Row < cells[j].Row
+		})
+		for _, cell := range cells {
+			fields := matchSearchCell(cell, query)
+			if len(fields) == 0 {
+				continue
+			}
+			if skipped < normalized.Offset {
+				skipped++
+				continue
+			}
+			matches = append(matches, newSearchMatch(sheet, cell, fields))
+			if len(matches) > normalized.Limit {
+				break
+			}
+		}
+		if len(matches) > normalized.Limit {
+			break
+		}
+	}
+	result := WorkbookSearchResult{WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Query: normalized.Query, Items: matches}
+	if len(result.Items) > normalized.Limit {
+		result.Items = result.Items[:normalized.Limit]
+		next := normalized.Offset + normalized.Limit
+		result.NextOffset = &next
+	}
+	return result, nil
+}
+
 func (r *MemoryRepository) CreateWorkbook(_ context.Context, input CreateWorkbookInput) (Workbook, error) {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {

@@ -36,6 +36,7 @@ var mcpTools = []mcpTool{
 	tool("platform.auth.config", "OIDC 로그인 활성화 상태를 조회합니다.", "", nil),
 	tool("spreadsheet.workbook.list", "접근 가능한 워크북을 조회합니다.", "workbook.read", props("workspace_id", "string")),
 	tool("spreadsheet.workbook.get", "워크북 메타데이터와 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.workbook.search", "워크북 전체의 셀 값과 수식을 검색하고 시트·A1 주소를 반환합니다.", "workbook.read", workbookSearchSchema()),
 	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다.", "workbook.write", requiredProps("title", "string")),
 	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
@@ -163,6 +164,12 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return s.repository.ListWorkbooks(ctx, stringArg(args, "workspace_id"))
 	case "spreadsheet.workbook.get":
 		return s.repository.GetWorkbook(ctx, stringArg(args, "workbook_id"))
+	case "spreadsheet.workbook.search":
+		var input workbook.SearchWorkbookInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.SearchWorkbook(ctx, stringArg(args, "workbook_id"), input)
 	case "spreadsheet.workbook.create":
 		var input workbook.CreateWorkbookInput
 		decodeMCP(args, &input)
@@ -597,6 +604,19 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+
+func workbookSearchSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"workbook_id": map[string]any{"type": "string", "minLength": 1},
+			"query":       map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxSearchQueryRunes},
+			"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxSearchLimit},
+			"offset":      map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxSearchOffset},
+		},
+		"required": []string{"workbook_id", "query"},
+	}
 }
 
 func rangeFormatSchema() map[string]any {

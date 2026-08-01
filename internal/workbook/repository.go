@@ -55,6 +55,7 @@ type Repository interface {
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)
 	ReadRange(context.Context, string, cellrange.Range) ([]Cell, error)
+	SearchWorkbook(context.Context, string, SearchWorkbookInput) (WorkbookSearchResult, error)
 
 	CreateVersion(context.Context, string, string, string) (Version, error)
 	ListVersions(context.Context, string) ([]Version, error)

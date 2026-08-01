@@ -55,6 +55,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("GET /api/v1/workbooks", s.listWorkbooks)
 	mux.HandleFunc("POST /api/v1/workbooks", s.createWorkbook)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}", s.getWorkbook)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/search", s.searchWorkbook)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/duplicate", s.duplicateWorkbook)

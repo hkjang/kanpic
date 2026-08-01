@@ -31,6 +31,29 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
 })
 
+test('searches workbook values and formulas and scrolls to a result on another sheet', async ({ page }) => {
+  const title=`통합 검색 ${Date.now()}`
+  const created=await page.request.post('/api/v1/workbooks',{data:{title,workspace_id:'default'}}).then(response=>response.json())
+  const second=await page.request.post(`/api/v1/workbooks/${created.id}/sheets`,{data:{name:'보관 데이터'}}).then(response=>response.json())
+  const current=await page.request.get(`/api/v1/workbooks/${created.id}`).then(response=>response.json())
+  const seeded=await page.request.patch(`/api/v1/sheets/${second.id}/cells:batch`,{data:{base_version:current.version,idempotency_key:`search-seed-${created.id}`,cells:[{row:120,column:3,value:'원거리 매출 검색 대상'},{row:121,column:3,formula:'=CONCAT("매출", " 수식")'}]}})
+  expect(seeded.ok()).toBe(true)
+
+  await page.goto(`/workbooks/${created.id}`)
+  await expect(page.locator('canvas.grid-canvas')).toBeVisible()
+  await page.keyboard.press('Control+f')
+  const dialog=page.getByRole('dialog',{name:'워크북 통합 검색'})
+  await expect(dialog).toBeVisible()
+  await page.getByRole('textbox',{name:'검색어'}).fill('원거리 매출')
+  await page.getByRole('option',{name:/보관 데이터.*C120/}).click()
+  await expect(page.locator('.sheet-tabs button.active')).toContainText('보관 데이터')
+  await expect(page.locator('.name-box')).toHaveValue('C120')
+  await expect.poll(()=>page.locator('.grid-viewport').evaluate(element=>element.scrollTop)).toBeGreaterThan(2000)
+  const apiResult=await page.request.get(`/api/v1/workbooks/${created.id}/search?q=${encodeURIComponent('매출')}`).then(response=>response.json())
+  expect(apiResult.items.map((item:{address:string})=>item.address)).toEqual(['C120','C121'])
+  await page.request.delete(`/api/v1/workbooks/${created.id}`)
+})
+
 test('manages workbook favorite, rename, duplicate, and delete from home', async ({ page }) => {
   await page.goto('/')
   const title=`홈 수명주기 ${Date.now()}`,renamed=`${title} 변경`,copyTitle=`${renamed} 복사본`

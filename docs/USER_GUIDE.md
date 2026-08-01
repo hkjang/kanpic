@@ -126,7 +126,14 @@ sequenceDiagram
 - `Esc`: 셀 편집 취소 및 이전 값 복원
 - `Ctrl + C` / `Ctrl + V`: 셀 범위 복사 및 붙여넣기
 - `Ctrl + Z` / `Ctrl + Y`: 실행 취소 (Undo) / 다시 실행 (Redo)
+- `Ctrl/⌘ + F` 또는 `Ctrl/⌘ + K`: 현재 워크북의 모든 시트에서 값과 수식 검색
 - `Shift + 방향키`: 연속된 셀 범위 선택
+
+#### 워크북 통합 검색
+
+도구 모음의 검색 버튼이나 위 단축키로 검색 창을 엽니다. 검색은 브라우저에 보이는 셀만이 아니라 PostgreSQL에 저장된 워크북 전체 셀 블록을 대상으로 하며 대소문자를 구분하지 않습니다. 결과에는 시트 이름, A1 주소, 일치한 값 또는 수식이 표시됩니다. 결과를 선택하면 해당 시트로 전환하고 원거리 셀도 화면 안으로 자동 스크롤합니다.
+
+에이전트는 `workbook.read` scope의 MCP 도구 `spreadsheet.workbook.search`를 사용합니다. REST 클라이언트는 `GET /api/v1/workbooks/{workbookId}/search?q=검색어&limit=50&offset=0`을 호출할 수 있습니다. 한 페이지는 최대 200건이며 응답의 `next_offset`이 있을 때 다음 페이지를 조회합니다.
 
 ---
 

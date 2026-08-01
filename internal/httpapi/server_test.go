@@ -62,6 +62,43 @@ func TestWorkbookCellVersionFlow(t *testing.T) {
 	}
 }
 
+func TestWorkbookSearchRESTAndMCPShareContract(t *testing.T) {
+	t.Parallel()
+	definition, found := findMCPTool("spreadsheet.workbook.search")
+	required, requiredOK := definition.InputSchema["required"].([]string)
+	if !found || definition.Meta["required_scope"] != "workbook.read" || !requiredOK || len(required) != 2 {
+		t.Fatalf("search MCP contract: %#v", definition)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/workbooks/book-id/search?q=needle", nil)); scope != "workbook.read" {
+		t.Fatalf("search REST scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "통합 검색"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "search-seed", "cells": []map[string]any{{"row": 7, "column": 3, "value": "Needle 값"}, {"row": 8, "column": 3, "formula": `=CONCAT("needle", " formula")`}},
+	}, http.StatusOK)
+	rest := request[workbook.WorkbookSearchResult](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID+"/search?q=NEEDLE&limit=1", nil, http.StatusOK)
+	if len(rest.Items) != 1 || rest.Items[0].Address != "C7" || rest.NextOffset == nil || rest.WorkbookVersion != 2 {
+		t.Fatalf("REST search = %#v", rest)
+	}
+	mcp := request[struct {
+		Result struct {
+			Structured workbook.WorkbookSearchResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.workbook.search", "arguments": map[string]any{"workbook_id": created.ID, "query": "needle", "limit": 1, "offset": 1},
+		},
+	}, http.StatusOK)
+	if len(mcp.Result.Structured.Items) != 1 || mcp.Result.Structured.Items[0].Address != "C8" || len(mcp.Result.Structured.Items[0].MatchedFields) != 2 || mcp.Result.Structured.Items[0].MatchedFields[1] != "formula" || mcp.Result.Structured.NextOffset != nil {
+		t.Fatalf("MCP search = %#v", mcp.Result.Structured)
+	}
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID+"/search?q=needle&limit=invalid", nil, http.StatusBadRequest)
+}
+
 func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
 	t.Parallel()
 	definition, found := findMCPTool("spreadsheet.structure.apply")

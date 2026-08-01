@@ -122,6 +122,48 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	}
 }
 
+func TestPostgresWorkbookSearchUsesCellBlocks(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres search", WorkspaceID: "integration", OwnerID: "search-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	second, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "검색 결과"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: book.Sheets[0].ID, ActorID: "search-user", BaseVersion: 2, IdempotencyKey: "pg-search-one", Cells: []workbook.CellInput{{Row: 10, Column: 2, Value: json.RawMessage(`"Alpha 매출"`)}, {Row: 11, Column: 2, Value: json.RawMessage(`42`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: second.ID, ActorID: "search-user", BaseVersion: 3, IdempotencyKey: "pg-search-two", Cells: []workbook.CellInput{{Row: 4, Column: 1, Formula: `=CONCAT("ALPHA", " 합계")`}}}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repository.SearchWorkbook(ctx, book.ID, workbook.SearchWorkbookInput{Query: "alpha", Limit: 1})
+	if err != nil || len(first.Items) != 1 || first.Items[0].Address != "B10" || first.NextOffset == nil {
+		t.Fatalf("PostgreSQL first search = %#v, %v", first, err)
+	}
+	secondPage, err := repository.SearchWorkbook(ctx, book.ID, workbook.SearchWorkbookInput{Query: "alpha", Limit: 1, Offset: *first.NextOffset})
+	if err != nil || len(secondPage.Items) != 1 || secondPage.Items[0].SheetID != second.ID || secondPage.Items[0].Address != "A4" || len(secondPage.Items[0].MatchedFields) != 2 || secondPage.Items[0].MatchedFields[1] != "formula" || secondPage.NextOffset != nil {
+		t.Fatalf("PostgreSQL second search = %#v, %v", secondPage, err)
+	}
+	number, err := repository.SearchWorkbook(ctx, book.ID, workbook.SearchWorkbookInput{Query: "42"})
+	if err != nil || len(number.Items) != 1 || number.Items[0].Address != "B11" {
+		t.Fatalf("PostgreSQL numeric search = %#v, %v", number, err)
+	}
+}
+
 func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
