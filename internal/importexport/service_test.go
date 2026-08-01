@@ -42,7 +42,8 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	_ = file.SetCellValue("매출", "A2", 10)
 	_ = file.SetCellValue("매출", "A3", 20)
 	_ = file.SetCellFormula("매출", "A4", "=SUM(A2:A3)")
-	styleID, err := file.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Color: "FFFFFF"}, Fill: excelize.Fill{Type: "pattern", Color: []string{"0F766E"}, Pattern: 1}})
+	numberFormat := "#,##0.00"
+	styleID, err := file.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Color: "FFFFFF"}, Fill: excelize.Fill{Type: "pattern", Color: []string{"0F766E"}, Pattern: 1}, Alignment: &excelize.Alignment{Horizontal: "center", WrapText: true}, Border: []excelize.Border{{Type: "bottom", Color: "2563EB", Style: 2}}, CustomNumFmt: &numberFormat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +64,10 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	if formula.Formula != "=SUM(A2:A3)" {
 		t.Fatalf("formula not preserved: %#v", formula)
 	}
-	if len(parsed.Sheets[0].Cells[0].Style) == 0 {
-		t.Fatal("style not preserved")
+	header := findInput(parsed.Sheets[0].Cells, 1, 1)
+	var headerStyle map[string]any
+	if json.Unmarshal(header.Style, &headerStyle) != nil || headerStyle["bold"] != true || headerStyle["color"] != "#FFFFFF" || headerStyle["background"] != "#0F766E" || headerStyle["horizontal_align"] != "center" || headerStyle["text_mode"] != "wrap" || headerStyle["number_format"] != "#,##0.00" {
+		t.Fatalf("canonical imported style: %s", header.Style)
 	}
 	for column := 2; column <= 3; column++ {
 		input := findInput(parsed.Sheets[0].Cells, 1, column)
@@ -98,6 +101,29 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	}
 	if _, exists, mergeErr := workbook.CellMerge(workbook.Cell{Row: 1, Column: 3, Style: findInput(roundTrip.Sheets[0].Cells, 1, 3).Style}); mergeErr != nil || !exists {
 		t.Fatalf("merge was not preserved by XLSX round trip: exists=%v err=%v", exists, mergeErr)
+	}
+	roundTripHeader := findInput(roundTrip.Sheets[0].Cells, 1, 1)
+	var roundTripStyle map[string]any
+	if json.Unmarshal(roundTripHeader.Style, &roundTripStyle) != nil || roundTripStyle["bold"] != true || roundTripStyle["background"] != "#0F766E" || roundTripStyle["text_mode"] != "wrap" || roundTripStyle["number_format"] != "#,##0.00" {
+		t.Fatalf("canonical round-trip style: %s", roundTripHeader.Style)
+	}
+}
+
+func TestCanonicalStyleXLSXRoundTrip(t *testing.T) {
+	t.Parallel()
+	raw := json.RawMessage(`{"bold":true,"italic":true,"underline":true,"strike":true,"font_family":"Arial","font_size":14,"color":"#FFFFFF","background":"#0F766E","horizontal_align":"center","vertical_align":"bottom","text_mode":"wrap","text_rotation":30,"number_format":"₩#,##0.00","borders":{"top":{"style":"thin","color":"#2563EB"},"right":{"style":"double","color":"#DC2626"}}}`)
+	xlsx := xlsxStyle(raw)
+	if xlsx == nil || xlsx.Font == nil || !xlsx.Font.Bold || xlsx.Font.Underline != "single" || xlsx.Fill.Pattern != 1 || xlsx.Alignment == nil || !xlsx.Alignment.WrapText || xlsx.CustomNumFmt == nil || len(xlsx.Border) != 2 {
+		t.Fatalf("xlsx style: %#v", xlsx)
+	}
+	canonical := canonicalStyleFromXLSX(xlsx)
+	var style map[string]any
+	if err := json.Unmarshal(canonical, &style); err != nil {
+		t.Fatal(err)
+	}
+	borders, _ := style["borders"].(map[string]any)
+	if style["bold"] != true || style["background"] != "#0F766E" || style["vertical_align"] != "bottom" || style["text_mode"] != "wrap" || style["number_format"] != "₩#,##0.00" || len(borders) != 2 {
+		t.Fatalf("canonical style: %s", canonical)
 	}
 }
 

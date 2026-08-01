@@ -171,6 +171,24 @@ func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	if err != nil || len(cells) != 2 || len(cells[0].Style) != 0 || len(cells[1].Style) != 0 || string(cells[0].Value) != "5" || cells[1].Formula != "=A1*2" {
 		t.Fatalf("content after format undo: %#v, %v", cells, err)
 	}
+	border := &workbook.BorderCommand{Preset: "outer", Style: "double", Color: "#0f766e", StartRow: 1, StartColumn: 2, EndRow: 2, EndColumn: 3}
+	bordered, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "format-user", BaseVersion: 4, IdempotencyKey: "postgres-border-range", OperationType: "range.format", Border: border, Cells: []workbook.CellInput{{Row: 1, Column: 2}, {Row: 1, Column: 3}, {Row: 2, Column: 2}, {Row: 2, Column: 3}}})
+	if err != nil || bordered.ServerVersion != 5 || bordered.AppliedCells != 4 {
+		t.Fatalf("border result: %#v, %v", bordered, err)
+	}
+	borderRange, _ := cellrange.Parse("B1:C2")
+	borderCells, err := repository.ReadRange(ctx, sheetID, borderRange)
+	if err != nil || len(borderCells) != 4 {
+		t.Fatalf("border cells: %#v, %v", borderCells, err)
+	}
+	for _, cell := range borderCells {
+		var style struct {
+			Borders map[string]workbook.BorderSide `json:"borders"`
+		}
+		if json.Unmarshal(cell.Style, &style) != nil || len(style.Borders) != 2 {
+			t.Fatalf("border style %d:%d: %s", cell.Row, cell.Column, cell.Style)
+		}
+	}
 }
 
 func TestPostgresMergedRangePersistsAndUndoRestoresContent(t *testing.T) {

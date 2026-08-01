@@ -301,7 +301,7 @@ func TestRangeFormatRESTAndMCPPreserveContent(t *testing.T) {
 	t.Parallel()
 	formatTool, found := findMCPTool("spreadsheet.range.format")
 	required, requiredOK := formatTool.InputSchema["required"].([]string)
-	if !found || formatTool.Meta["required_scope"] != "format.write" || !requiredOK || len(required) != 4 {
+	if !found || formatTool.Meta["required_scope"] != "format.write" || !requiredOK || len(required) != 3 || formatTool.InputSchema["anyOf"] == nil {
 		t.Fatalf("MCP format tool schema: %#v", formatTool)
 	}
 	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/ranges:format", nil)); scope != "format.write" {
@@ -355,8 +355,30 @@ func TestRangeFormatRESTAndMCPPreserveContent(t *testing.T) {
 		t.Fatalf("MCP format did not merge style: cells=%#v style=%#v", formattedCells.Items, mergedStyle)
 	}
 
-	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 4, "idempotency_key": "format-invalid", "range": "A1", "style": map[string]any{"color": "red"}}, http.StatusBadRequest)
-	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 4, "idempotency_key": "format-large", "range": "A1:A10001", "style": map[string]any{"bold": true}}, http.StatusBadRequest)
+	bordered := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{
+		"base_version": 4, "idempotency_key": "format-border", "range": "A1:B2",
+		"border": map[string]any{"preset": "outer", "style": "double", "color": "#0f766e"},
+	}, http.StatusOK)
+	if bordered.ServerVersion != 5 || bordered.AppliedCells != 4 {
+		t.Fatalf("border format result: %#v", bordered)
+	}
+	borderCells := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/ranges/A1:B2", nil, http.StatusOK)
+	if len(borderCells.Items) != 4 {
+		t.Fatalf("border cells: %#v", borderCells.Items)
+	}
+	for _, cell := range borderCells.Items {
+		var style struct {
+			Borders map[string]workbook.BorderSide `json:"borders"`
+		}
+		if json.Unmarshal(cell.Style, &style) != nil || len(style.Borders) != 2 {
+			t.Fatalf("outer border cell %d:%d: %s", cell.Row, cell.Column, cell.Style)
+		}
+	}
+
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 5, "idempotency_key": "format-invalid", "range": "A1", "style": map[string]any{"color": "red"}}, http.StatusBadRequest)
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/ranges:format", map[string]any{"base_version": 5, "idempotency_key": "format-large", "range": "A1:A10001", "style": map[string]any{"bold": true}}, http.StatusBadRequest)
 }
 
 func TestRangeMergeRESTMCPAndUndoPreserveEveryCell(t *testing.T) {

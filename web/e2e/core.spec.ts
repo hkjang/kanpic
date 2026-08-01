@@ -764,6 +764,43 @@ test('pastes more than 1000 cells without truncation in one version', async ({ p
   expect(updated.version).toBe(2)
 })
 
+test('applies display, wrapping, alignment and atomic outer borders from the format dialog', async ({page})=>{
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  await canvas.dblclick({position:{x:70,y:42}})
+  await page.locator('input.cell-editor').fill('0.125')
+  await page.locator('input.cell-editor').press('Enter')
+  const nameBox=page.getByLabel('이름 상자')
+  await nameBox.fill('A1:B2')
+  await nameBox.press('Enter')
+  await page.getByRole('button',{name:'서식',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'셀 서식'})
+  await expect(dialog).toBeVisible()
+  await page.getByLabel('표시 형식').selectOption('0.00%')
+  await page.getByLabel('세로 정렬').selectOption('bottom')
+  await page.getByLabel('텍스트 배치').selectOption('wrap')
+  await page.getByLabel('테두리도 적용').check()
+  await dialog.locator('.format-border select').nth(0).selectOption('outer')
+  await dialog.locator('.format-border select').nth(1).selectOption('double')
+  await page.getByRole('button',{name:'적용',exact:true}).click()
+
+  const cells=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B2`).then(response=>response.json())
+  await expect.poll(async()=>(await cells()).items.length).toBe(4)
+  const result=await cells()
+  expect(result.items.find((cell:{row:number;column:number})=>cell.row===1&&cell.column===1)?.value).toBe(.125)
+  for(const cell of result.items as Array<{style:Record<string,unknown>}>){
+    expect(cell.style.number_format).toBe('0.00%')
+    expect(cell.style.vertical_align).toBe('bottom')
+    expect(cell.style.text_mode).toBe('wrap')
+    expect(Object.keys(cell.style.borders as Record<string,unknown>)).toHaveLength(2)
+  }
+})
+
 test('manages the complete sheet lifecycle without losing copied cells', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

@@ -328,11 +328,12 @@ func (s *Server) applySheetLayout(w http.ResponseWriter, r *http.Request) {
 }
 
 type rangeFormatRequest struct {
-	BaseVersion    int64           `json:"base_version"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	ClientID       string          `json:"client_id"`
-	Range          string          `json:"range"`
-	Style          json.RawMessage `json:"style"`
+	BaseVersion    int64                   `json:"base_version"`
+	IdempotencyKey string                  `json:"idempotency_key"`
+	ClientID       string                  `json:"client_id"`
+	Range          string                  `json:"range"`
+	Style          json.RawMessage         `json:"style,omitempty"`
+	Border         *workbook.BorderCommand `json:"border,omitempty"`
 }
 
 type rangeMergeRequest struct {
@@ -377,8 +378,22 @@ func (s *Server) applyRangeFormat(ctx context.Context, sheetID, actor string, in
 	if rows < 1 || columns < 1 || rows > workbook.MaxPasteCells || columns > workbook.MaxPasteCells || rows > workbook.MaxPasteCells/columns {
 		return workbook.MutationResult{}, nil, fmt.Errorf("%w: formatted range must contain 1 to %d cells", workbook.ErrInvalid, workbook.MaxPasteCells)
 	}
-	if err := workbook.ValidateStylePatch(input.Style); err != nil {
-		return workbook.MutationResult{}, nil, err
+	if len(input.Style) == 0 && input.Border == nil {
+		return workbook.MutationResult{}, nil, fmt.Errorf("%w: style or border is required", workbook.ErrInvalid)
+	}
+	if len(input.Style) > 0 {
+		if err := workbook.ValidateStylePatch(input.Style); err != nil {
+			return workbook.MutationResult{}, nil, err
+		}
+	}
+	if input.Border != nil {
+		input.Border.StartRow = selected.Start.Row
+		input.Border.StartColumn = selected.Start.Column
+		input.Border.EndRow = selected.End.Row
+		input.Border.EndColumn = selected.End.Column
+		if err := workbook.ValidateBorderCommand(*input.Border); err != nil {
+			return workbook.MutationResult{}, nil, err
+		}
 	}
 	cells := make([]workbook.CellInput, 0, rows*columns)
 	for row := selected.Start.Row; row <= selected.End.Row; row++ {
@@ -386,7 +401,7 @@ func (s *Server) applyRangeFormat(ctx context.Context, sheetID, actor string, in
 			cells = append(cells, workbook.CellInput{Row: row, Column: column})
 		}
 	}
-	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, StylePatch: input.Style, OperationType: "range.format"})
+	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, StylePatch: input.Style, Border: input.Border, OperationType: "range.format"})
 	return result, cells, err
 }
 

@@ -179,7 +179,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 			return ParsedWorkbook{}, fmt.Errorf("XLSX expands beyond the %d byte safety limit", maxExpanded)
 		}
 	}
-	file, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: false})
+	file, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: true})
 	if err != nil {
 		return ParsedWorkbook{}, fmt.Errorf("open XLSX: %w", err)
 	}
@@ -223,7 +223,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 					if !ok {
 						definition, styleErr := file.GetStyle(styleID)
 						if styleErr == nil && definition != nil {
-							style, _ = json.Marshal(definition)
+							style = canonicalStyleFromXLSX(definition)
 							styleCache[styleID] = style
 						}
 					}
@@ -389,16 +389,14 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 			} else if merged {
 				mergedRanges[fmt.Sprintf("%d:%d:%d:%d", metadata.StartRow, metadata.StartColumn, metadata.EndRow, metadata.EndColumn)] = metadata
 			}
-			if styleData := xlsxStyle(cell.Style); len(styleData) > 0 {
+			if styleDefinition := xlsxStyle(cell.Style); styleDefinition != nil {
+				styleData, _ := json.Marshal(styleDefinition)
 				key := string(styleData)
 				styleID, exists := styleCache[key]
 				if !exists {
-					var style excelize.Style
-					if json.Unmarshal(styleData, &style) == nil {
-						styleID, err = file.NewStyle(&style)
-						if err == nil {
-							styleCache[key] = styleID
-						}
+					styleID, err = file.NewStyle(styleDefinition)
+					if err == nil {
+						styleCache[key] = styleID
 					}
 				}
 				if styleID > 0 {
@@ -472,22 +470,6 @@ func applyImportedMerges(imported *workbook.ImportSheet, merges []excelize.Merge
 		return imported.Cells[i].Row < imported.Cells[j].Row
 	})
 	return nil
-}
-
-func xlsxStyle(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return nil
-	}
-	var style map[string]json.RawMessage
-	if json.Unmarshal(raw, &style) != nil || style == nil {
-		return raw
-	}
-	delete(style, "merge")
-	if len(style) == 0 {
-		return nil
-	}
-	data, _ := json.Marshal(style)
-	return data
 }
 
 func detectDelimiter(data []byte) rune {

@@ -547,6 +547,19 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 			return MutationResult{}, err
 		}
 	}
+	if mutation.Border != nil {
+		if err := ValidateBorderCommand(*mutation.Border); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	formatMutation := len(mutation.StylePatch) > 0 || mutation.Border != nil
+	if !formatMutation {
+		for _, input := range mutation.Cells {
+			if err := ValidateCellStyle(input); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, _, err := r.sheetState(mutation.SheetID)
@@ -587,8 +600,8 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 			}
 		}
-		if len(mutation.StylePatch) > 0 {
-			input, err = applyStylePatch(current, input, mutation.StylePatch)
+		if formatMutation {
+			input, err = applyCellFormatting(current, input, mutation.StylePatch, mutation.Border)
 			if err != nil {
 				return MutationResult{}, err
 			}
@@ -599,7 +612,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
-	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
+	if len(effective) == 0 && formatMutation {
 		result := MutationResult{WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: state.workbook.Version, Conflicts: conflicts, CreatedAt: r.now()}
 		state.idempotent[key] = result
 		return result, nil
@@ -608,7 +621,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
 	var validationWarnings []ValidationViolation
-	if len(mutation.StylePatch) > 0 {
+	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
 		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)))

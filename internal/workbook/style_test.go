@@ -15,17 +15,70 @@ func TestValidateStylePatch(t *testing.T) {
 		`{"bold":true,"italic":false,"underline":true}`,
 		`{"color":"#123aBC","background":null,"font_size":14}`,
 		`{"font_family":"Arial","horizontal_align":"center","vertical_align":"middle","number_format":"#,##0.00"}`,
+		`{"text_mode":"wrap","borders":{"top":{"style":"thin","color":"#123abc"},"bottom":null}}`,
 	}
 	for _, patch := range valid {
 		if err := ValidateStylePatch(json.RawMessage(patch)); err != nil {
 			t.Errorf("valid patch %s: %v", patch, err)
 		}
 	}
-	invalid := []string{`{}`, `null`, `{"bold":"yes"}`, `{"color":"red"}`, `{"font_size":100}`, `{"horizontal_align":"justify"}`, `{"unknown":true}`}
+	invalid := []string{`{}`, `null`, `{"bold":"yes"}`, `{"color":"red"}`, `{"font_size":100}`, `{"horizontal_align":"justify"}`, `{"text_mode":"truncate"}`, `{"borders":{}}`, `{"borders":{"diagonal":{"style":"thin","color":"#000000"}}}`, `{"borders":{"top":{"style":"hair","color":"#000000"}}}`, `{"unknown":true}`}
 	for _, patch := range invalid {
 		if err := ValidateStylePatch(json.RawMessage(patch)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("invalid patch %s: %v", patch, err)
 		}
+	}
+}
+
+func TestValidateCompleteCellStyleIncludingMergeMetadata(t *testing.T) {
+	t.Parallel()
+	valid := CellInput{Row: 2, Column: 2, Style: json.RawMessage(`{"bold":true,"borders":{"right":{"style":"double","color":"#123456"}},"merge":{"start_row":1,"start_column":1,"end_row":2,"end_column":2}}`)}
+	if err := ValidateCellStyle(valid); err != nil {
+		t.Fatalf("valid complete style: %v", err)
+	}
+	invalid := []CellInput{
+		{Row: 1, Column: 1, Style: json.RawMessage(`{"unknown":true}`)},
+		{Row: 3, Column: 3, Style: json.RawMessage(`{"merge":{"start_row":1,"start_column":1,"end_row":2,"end_column":2}}`)},
+	}
+	for _, input := range invalid {
+		if err := ValidateCellStyle(input); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid complete style %s: %v", input.Style, err)
+		}
+	}
+}
+
+func TestBorderCommandMaterializesOuterAndInnerBorders(t *testing.T) {
+	t.Parallel()
+	outer := BorderCommand{Preset: "outer", Style: "medium", Color: "#2563eb", StartRow: 2, StartColumn: 2, EndRow: 3, EndColumn: 3}
+	corner, err := applyBorderCommand(json.RawMessage(`{"borders":{"left":{"style":"thin","color":"#111111"}}}`), outer, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var style struct {
+		Borders map[string]BorderSide `json:"borders"`
+	}
+	if err := json.Unmarshal(corner, &style); err != nil {
+		t.Fatal(err)
+	}
+	if style.Borders["top"].Style != "medium" || style.Borders["left"].Color != "#2563eb" {
+		t.Fatalf("outer corner: %#v", style.Borders)
+	}
+	center, err := applyBorderCommand(nil, outer, 3, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	style.Borders = nil
+	if err := json.Unmarshal(center, &style); err != nil || style.Borders["left"].Style != "medium" || style.Borders["bottom"].Style != "medium" || len(style.Borders) != 2 {
+		t.Fatalf("outer lower-left: %s %#v %v", center, style.Borders, err)
+	}
+	inner := BorderCommand{Preset: "inner", Style: "dotted", Color: "#dc2626", StartRow: 2, StartColumn: 2, EndRow: 3, EndColumn: 3}
+	inside, err := applyBorderCommand(nil, inner, 3, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	style.Borders = nil
+	if err := json.Unmarshal(inside, &style); err != nil || style.Borders["top"].Style != "dotted" || style.Borders["left"].Style != "dotted" || len(style.Borders) != 2 {
+		t.Fatalf("inner: %s %#v %v", inside, style.Borders, err)
 	}
 }
 

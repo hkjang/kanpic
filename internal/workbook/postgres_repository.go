@@ -985,9 +985,20 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 			return MutationResult{}, err
 		}
 	}
+	if mutation.Border != nil {
+		if err := ValidateBorderCommand(*mutation.Border); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	formatMutation := len(mutation.StylePatch) > 0 || mutation.Border != nil
 	for _, cell := range mutation.Cells {
 		if cell.Row < 1 || cell.Column < 1 {
 			return MutationResult{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
+		}
+		if !formatMutation {
+			if err := ValidateCellStyle(cell); err != nil {
+				return MutationResult{}, err
+			}
 		}
 	}
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -1077,8 +1088,8 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 				continue
 			}
 		}
-		if len(mutation.StylePatch) > 0 {
-			input, err = applyStylePatch(current, input, mutation.StylePatch)
+		if formatMutation {
+			input, err = applyCellFormatting(current, input, mutation.StylePatch, mutation.Border)
 			if err != nil {
 				return MutationResult{}, err
 			}
@@ -1089,7 +1100,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
-	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
+	if len(effective) == 0 && formatMutation {
 		result := MutationResult{WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion, Conflicts: conflicts, CreatedAt: r.now()}
 		return result, tx.Commit(ctx)
 	}
@@ -1097,7 +1108,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
 	var validationWarnings []ValidationViolation
-	if len(mutation.StylePatch) > 0 {
+	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
 		namedRanges, rangeErr := listNamedRangesTx(ctx, tx, workbookID)

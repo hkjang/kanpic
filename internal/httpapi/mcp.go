@@ -54,7 +54,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.fill", "계산된 자동 채우기 셀 최대 1만 개를 하나의 원자적·실행 취소 가능한 작업으로 적용합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
-	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식을 원자적으로 병합합니다.", "format.write", requiredProps4("sheet_id", "string", "range", "string", "style", "object", "idempotency_key", "string")),
+	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식과 범위 테두리를 원자적으로 병합합니다.", "format.write", rangeFormatSchema()),
 	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
@@ -597,6 +597,28 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+
+func rangeFormatSchema() map[string]any {
+	border := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"preset": map[string]any{"type": "string", "enum": []string{"all", "outer", "inner", "horizontal", "vertical", "top", "right", "bottom", "left", "none"}},
+			"style":  map[string]any{"type": "string", "enum": []string{"none", "thin", "medium", "thick", "dashed", "dotted", "double"}},
+			"color":  map[string]any{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+		},
+		"required": []string{"preset"},
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id": map[string]any{"type": "string"}, "range": map[string]any{"type": "string"},
+			"style": map[string]any{"type": "object"}, "border": border,
+			"base_version": map[string]any{"type": "integer"}, "idempotency_key": map[string]any{"type": "string"}, "client_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"sheet_id", "range", "idempotency_key"},
+		"anyOf":    []any{map[string]any{"required": []string{"style"}}, map[string]any{"required": []string{"border"}}},
+	}
 }
 func structureSchema() map[string]any {
 	return map[string]any{
