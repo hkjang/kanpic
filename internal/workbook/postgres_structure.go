@@ -94,6 +94,21 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			transformedValidations = append(transformedValidations, updated)
 		}
 	}
+	conditionalFormats, err := listConditionalFormatsTx(ctx, tx, target.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	transformedConditionalFormats := make([]ConditionalFormat, 0, len(conditionalFormats))
+	for _, rule := range conditionalFormats {
+		updated, remains, transformErr := transformConditionalFormatForStructure(rule, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if remains {
+			updated.WorkbookVersion = currentVersion + 1
+			transformedConditionalFormats = append(transformedConditionalFormats, updated)
+		}
+	}
 	filters, err := listAllFilterViewsForStructure(ctx, tx, target.ID)
 	if err != nil {
 		return MutationResult{}, err
@@ -200,6 +215,14 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 	}
 	for _, rule := range transformedValidations {
 		if err := insertDataValidationTx(ctx, tx, rule); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM conditional_formats WHERE sheet_id=$1`, target.ID); err != nil {
+		return MutationResult{}, err
+	}
+	for _, rule := range transformedConditionalFormats {
+		if err := insertConditionalFormatTx(ctx, tx, rule); err != nil {
 			return MutationResult{}, err
 		}
 	}

@@ -305,6 +305,10 @@ func cloneValidationMap(source map[string]DataValidation) map[string]DataValidat
 	return result
 }
 
+func cloneConditionalMap(source map[string]ConditionalFormat) map[string]ConditionalFormat {
+	return cloneConditionalFormatMap(source)
+}
+
 func cloneNamedRangeMap(source map[string]NamedRange) map[string]NamedRange {
 	result := make(map[string]NamedRange, len(source))
 	for id, item := range source {
@@ -367,6 +371,21 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			delete(nextValidations, id)
 		}
 	}
+	nextConditionalFormats := cloneConditionalMap(r.conditionalFormats)
+	for id, rule := range nextConditionalFormats {
+		if rule.SheetID != target.ID {
+			continue
+		}
+		updated, remains, transformErr := transformConditionalFormatForStructure(rule, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if remains {
+			nextConditionalFormats[id] = updated
+		} else {
+			delete(nextConditionalFormats, id)
+		}
+	}
 	nextFilters := cloneFilterMap(r.filters)
 	for id, view := range nextFilters {
 		if view.SheetID != target.ID {
@@ -423,7 +442,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	}
 	applyRecalculatedInputs(nextCells, expanded, now)
 	backup := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: state.workbook.Version, Name: structureBackupName(input), ActorID: input.ActorID, CreatedAt: now}
-	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	appliedCells := changedCellCount(state.cells, nextCells)
 	target.Layout = transformLayoutForStructure(target.Layout, input)
 	state.sheets[target.ID] = target
@@ -435,7 +454,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		}
 		nextNotifications[id] = copy
 	}
-	state.cells, r.namedRanges, r.validations, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
+	state.cells, r.namedRanges, r.validations, r.conditionalFormats, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextConditionalFormats, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
 	for pivotID, pivot := range nextPivots {
 		if pivot.WorkbookID == state.workbook.ID {
 			delete(r.pivotCache, pivotID)
@@ -452,6 +471,12 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		if rule.WorkbookID == state.workbook.ID {
 			rule.WorkbookVersion = state.workbook.Version
 			r.validations[id] = rule
+		}
+	}
+	for id, rule := range r.conditionalFormats {
+		if rule.WorkbookID == state.workbook.ID {
+			rule.WorkbookVersion = state.workbook.Version
+			r.conditionalFormats[id] = rule
 		}
 	}
 	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: target.ID, BaseVersion: input.BaseVersion, ServerVersion: state.workbook.Version, AppliedCells: appliedCells, RecalculatedCells: recalculated, FormulaErrors: formulaErrors, BackupVersionID: backup.ID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, CreatedAt: now}

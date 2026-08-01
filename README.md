@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.10.0
+VERSION=v0.12.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -53,6 +53,8 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 편집기 오른쪽 아래 **차트** 버튼에서는 선택 범위로 막대·선·영역·원형·분산·히스토그램 차트를 만들 수 있습니다. 차트는 서버에 버전 관리되는 독립 엔터티이며 최신 셀 값과 수식 결과를 사용해 자동 갱신됩니다. 시트 위에서 이동·크기 조절하고 SVG 또는 PNG로 내보낼 수 있으며, REST `/api/v1/workbooks/{workbookId}/charts`, `/api/v1/charts/{chartId}`와 `spreadsheet.chart.*` MCP 도구가 같은 계약을 제공합니다.
 
 **피벗** 버튼에서는 선택 범위를 행·열로 그룹화하고 합계·평균·개수·최소·최대 집계, 필터, 날짜·숫자·사용자 그룹과 계산 필드를 구성할 수 있습니다. 피벗 정의와 수동 갱신 캐시는 PostgreSQL에 저장되며 자동/수동 새로 고침, 전체 합계, 집계 셀의 원본 행 드릴다운, 구조 변경·복제·버전 복원을 지원합니다. REST `/api/v1/workbooks/{workbookId}/pivots`, `/api/v1/pivots/{pivotId}`와 `spreadsheet.pivot.*` MCP 도구는 동일한 권한·검증 계약을 사용합니다.
+
+툴바의 **조건부 서식**에서는 값 비교, 텍스트 포함, 빈 값, 중복·고유 값, 2색·3색 범위와 데이터 막대를 설정할 수 있습니다. 규칙은 우선순위와 `조건이 참이면 중지` 정책에 따라 서버에서 평가되고 Canvas의 보이는 셀에만 합성되므로 원본 값·수식·기본 서식을 변경하지 않습니다. 정의는 PostgreSQL 및 워크북 버전에 보존되며 행·열 구조 변경, 시트·워크북 복제와 복원에도 포함됩니다. REST `/api/v1/sheets/{sheetId}/conditional-formats`와 `spreadsheet.conditional_format.*` MCP 도구는 `format.read`/`format.write` scope를 공유합니다.
 
 툴바의 댓글 버튼에서는 현재 셀 또는 범위에 스레드를 만들고 답글·수정·삭제·해결·재열기를 수행할 수 있습니다. 본문에서 `@사용자ID` 또는 `@이메일`을 입력하면 상단 알림 메뉴에 멘션이 표시되고, 알림을 선택하면 원래 시트와 범위로 이동합니다. 댓글은 HTML로 렌더링하지 않으며 revision 기반 충돌 방지와 idempotency key를 사용합니다. REST의 `/api/v1/workbooks/{workbookId}/comments`, `/api/v1/comments/{commentId}`, `/api/v1/me/notifications` 계약은 `spreadsheet.comment.*`와 `spreadsheet.notification.*` MCP 도구로도 동일하게 제공됩니다.
 

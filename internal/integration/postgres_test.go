@@ -834,6 +834,103 @@ func TestPostgresDataValidationPersistsAndEnforcesEveryWritePath(t *testing.T) {
 	}
 }
 
+func TestPostgresConditionalFormatsPersistEvaluateTransformCopyAndRestore(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres conditional formats", WorkspaceID: "integration", OwnerID: "format-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheet := book.Sheets[0]
+	seeded, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: "format-user", BaseVersion: book.Version, IdempotencyKey: "conditional-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`10`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`20`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`20`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", workbook.CreateConditionalFormatInput{IdempotencyKey: "conditional-create", Name: "duplicates", Range: "A1:A3", RuleType: "duplicate", Operator: "duplicate", Style: json.RawMessage(`{"background":"#fef3c7","bold":true}`), Priority: 1})
+	if err != nil || created.Revision != 1 || created.WorkbookVersion != seeded.ServerVersion+1 {
+		t.Fatalf("create conditional format=%#v err=%v", created, err)
+	}
+	duplicate, err := repository.CreateConditionalFormat(ctx, sheet.ID, "bob", workbook.CreateConditionalFormatInput{IdempotencyKey: "conditional-create", Range: "invalid", RuleType: "invalid"})
+	if err != nil || duplicate.ID != created.ID || duplicate.WorkbookVersion != created.WorkbookVersion {
+		t.Fatalf("idempotent conditional format=%#v err=%v", duplicate, err)
+	}
+	selected, _ := cellrange.Parse("A1:A3")
+	evaluated, err := repository.EvaluateConditionalFormats(ctx, sheet.ID, selected)
+	if err != nil || len(evaluated.Items) != 2 || evaluated.Items[0].Row != 2 || evaluated.Items[1].Row != 3 {
+		t.Fatalf("conditional evaluation=%#v err=%v", evaluated, err)
+	}
+	name := "repeated values"
+	expected := created.Revision
+	updated, err := repository.UpdateConditionalFormat(ctx, created.ID, "bob", workbook.UpdateConditionalFormatInput{Name: &name, ExpectedRevision: &expected})
+	if err != nil || updated.Revision != 2 || updated.Name != name || updated.UpdatedBy != "bob" {
+		t.Fatalf("conditional update=%#v err=%v", updated, err)
+	}
+	if _, err := repository.UpdateConditionalFormat(ctx, created.ID, "bob", workbook.UpdateConditionalFormatInput{Name: &name, ExpectedRevision: &expected}); !errors.Is(err, workbook.ErrRevision) {
+		t.Fatalf("stale conditional update=%v", err)
+	}
+	saved, err := repository.CreateVersion(ctx, book.ID, "conditional snapshot", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: updated.WorkbookVersion, IdempotencyKey: "conditional-insert", Axis: "row", Action: "insert", Index: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transformed, err := repository.GetConditionalFormat(ctx, created.ID)
+	if err != nil || transformed.Range != "A1:A4" || transformed.Revision != 3 || transformed.WorkbookVersion != structured.ServerVersion {
+		t.Fatalf("transformed conditional format=%#v err=%v", transformed, err)
+	}
+	sheetCopy, err := repository.DuplicateSheet(ctx, sheet.ID, workbook.DuplicateSheetInput{Name: "formatted copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copiedRules, err := repository.ListConditionalFormats(ctx, sheetCopy.ID)
+	if err != nil || len(copiedRules) != 1 || copiedRules[0].Range != "A1:A4" || copiedRules[0].ID == created.ID {
+		t.Fatalf("copied sheet conditional formats=%#v err=%v", copiedRules, err)
+	}
+	workbookCopy, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{OwnerID: "copy-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), workbookCopy.ID)
+	workbookCopyRules, err := repository.ListConditionalFormats(ctx, workbookCopy.Sheets[0].ID)
+	if err != nil || len(workbookCopyRules) != 1 || workbookCopyRules[0].Range != "A1:A4" || workbookCopyRules[0].WorkbookID != workbookCopy.ID {
+		t.Fatalf("copied workbook conditional formats=%#v err=%v", workbookCopyRules, err)
+	}
+	current, err := repository.GetConditionalFormat(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteConditionalFormat(ctx, created.ID, "alice", &current.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetConditionalFormat(ctx, created.ID); !errors.Is(err, workbook.ErrNotFound) {
+		t.Fatalf("deleted conditional format error=%v", err)
+	}
+	if _, err := repository.RestoreVersion(ctx, saved.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.GetConditionalFormat(ctx, created.ID)
+	if err != nil || restored.Range != "A1:A3" || restored.Revision != updated.Revision || restored.Name != name {
+		t.Fatalf("restored conditional format=%#v err=%v", restored, err)
+	}
+}
+
 func TestPostgresArrayFormulaSpillPersistsRestoresAndUndoes(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

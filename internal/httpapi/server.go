@@ -114,6 +114,12 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/data-validations/{validationId}", s.updateDataValidation)
 	mux.HandleFunc("DELETE /api/v1/data-validations/{validationId}", s.deleteDataValidation)
 	mux.HandleFunc("POST /api/v1/data-validations/{validationAction}", s.evaluateDataValidation)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats", s.listConditionalFormats)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/conditional-formats", s.createConditionalFormat)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats:evaluate", s.evaluateConditionalFormats)
+	mux.HandleFunc("GET /api/v1/conditional-formats/{conditionalFormatId}", s.getConditionalFormat)
+	mux.HandleFunc("PATCH /api/v1/conditional-formats/{conditionalFormatId}", s.updateConditionalFormat)
+	mux.HandleFunc("DELETE /api/v1/conditional-formats/{conditionalFormatId}", s.deleteConditionalFormat)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/versions", s.createVersion)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/versions", s.listVersions)
 	// net/http wildcards cannot contain a literal suffix. The action-form API
@@ -858,6 +864,12 @@ func requiredScope(r *http.Request) string {
 			return "range.read"
 		}
 		return "range.write"
+	}
+	if strings.Contains(path, "/conditional-formats") {
+		if r.Method == http.MethodGet {
+			return "format.read"
+		}
+		return "format.write"
 	}
 	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") || strings.Contains(path, "layout:apply") {
 		return "format.write"

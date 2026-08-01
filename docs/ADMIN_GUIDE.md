@@ -1,9 +1,9 @@
 # kanpic 관리자 가이드 (System Administrator Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.3.0  
+- **시스템 버전**: v0.12.0
 - **문서 버전**: v1.0  
-- **최종 수정일**: 2026년 7월 31일  
+- **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 시스템 관리자 및 DevOps 엔지니어용 통합 운영 매뉴얼 (System Administrator Manual)  
 
 ---
@@ -85,20 +85,26 @@ kanpic은 기업용 SSO 구축을 위해 Keycloak과의 OIDC PKCE 인증을 지�
 
 ```mermaid
 flowchart LR
-    A[Keycloak Realm 설정] --> B[Client ClientSecret & RedirectURI 등록]
-    B --> C[env 환경변수 KANPIC_OIDC_* 설정]
-    C --> D[kanpic 서버 재시작 및 SSO 검증]
+    A[Keycloak Realm 설정] --> B[Client와 Redirect URI 등록]
+    B --> C[관리자 화면에서 OIDC 값 저장]
+    C --> D[설정 검증과 연결 테스트]
+    D --> E[OIDC 활성화]
 ```
 
-### 4.1 환경 변수 설정 명세
+### 4.1 관리자 화면 설정 명세
 
-| 환경 변수 (Env Var) | 기본값 (Default) | 설명 (Description) |
+| 설정 키 | 기본값 | 설명 |
 | :--- | :--- | :--- |
-| `KANPIC_OIDC_ENABLED` | `true` | Keycloak SSO 연동 활성화 여부 |
-| `KANPIC_OIDC_ISSUER` | `http://keycloak:8080/realms/kanpic` | Keycloak Realm Issuer URL |
-| `KANPIC_OIDC_CLIENT_ID` | `kanpic-web` | OIDC Client ID |
-| `KANPIC_OIDC_CLIENT_SECRET` | *(Confidential)* | OIDC Client Secret (보안 유지 필수) |
-| `KANPIC_OIDC_REDIRECT_URI` | `http://localhost:8080/auth/callback` | OAuth2 Redirect URI |
+| `auth.oidc.enabled` | `false` | 검증과 연결 시험을 마친 뒤 SSO 로그인 활성화 |
+| `auth.oidc.issuer_url` | 빈 값 | Keycloak Realm Issuer URL |
+| `auth.oidc.client_id` | `kanpic` | OIDC Client ID |
+| `auth.oidc.client_secret` | 빈 값 | Public Client는 비우고 Confidential Client만 입력하는 비밀 설정 |
+| `auth.oidc.scopes` | `openid, profile, email` | 요청할 OIDC scope 목록 |
+| `auth.oidc.admin_roles` | `kanpic-admin` | 관리자 권한으로 인정할 Keycloak role 목록 |
+| `auth.oidc.ca_pem` | 빈 값 | 폐쇄망 사설 CA 인증서 PEM 비밀 설정 |
+| `server.public_url` | 빈 값 | 리버스 프록시 외부 주소. 비우면 요청 Host 사용 |
+
+각 저장·수정·삭제는 설정 스냅샷 revision을 생성합니다. **전체 검증**으로 필수값과 타입을 확인한 뒤 **연결 테스트**로 Issuer discovery와 PostgreSQL 상태를 시험합니다. 문제가 생기면 설정 버전 목록에서 이전 revision을 복원할 수 있습니다. 서버 시작에 필요한 환경 변수는 `POSTGRES_DSN` 하나이며, bootstrap 로그인 보호가 필요할 때만 `BOOTSTRAP_ADMIN_ID`와 `BOOTSTRAP_ADMIN_PASSWORD`를 함께 추가합니다.
 
 ---
 
@@ -109,13 +115,14 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 ### 5.1 MCP 스코프 및 인증
 - MCP 요청은 HTTP Header `Authorization: Bearer <API_KEY>`를 통과해야 합니다.
 - 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
+- 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
 
 ---
 
 ## 6. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 6.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `005_data_validations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `010_conditional_formats.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다.
 
 ### 6.2 백업 및 복구 명령어 (pg_dump)
 
@@ -134,5 +141,5 @@ docker exec -i kanpic-postgres pg_restore -U kanpic_user -d kanpic_db -v /backup
 > [!IMPORTANT]
 > **운영 서버 보안 체크리스트**  
 > 1. 기본 관리자 계정의 초기 비밀번호 변경 필수  
-> 2. `KANPIC_OIDC_CLIENT_SECRET` 및 `KANPIC_DB_PASSWORD` 환경 변수의 암호화 보관  
+> 2. 관리자 설정의 OIDC Client Secret은 화면에 재노출하지 말고 설정 변경·복원 권한을 관리자에게만 부여
 > 3. PostgreSQL TLS 1.3 통신 적용 및 8080 포트 리버스 프록시(Nginx/HAProxy) SSL 오프로딩 적용

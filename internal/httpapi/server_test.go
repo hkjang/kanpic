@@ -1035,6 +1035,108 @@ func TestDataValidationRESTAndMCPCRUDEnforceWrites(t *testing.T) {
 	request[map[string]any](t, server, http.MethodDelete, "/api/v1/data-validations/"+rule.ID+"?expected_revision="+strconv.FormatInt(rule.Revision, 10), nil, http.StatusNoContent)
 }
 
+func TestConditionalFormatRESTAndMCPCRUD(t *testing.T) {
+	t.Parallel()
+	for name, scope := range map[string]string{
+		"spreadsheet.conditional_format.list": "format.read", "spreadsheet.conditional_format.get": "format.read", "spreadsheet.conditional_format.evaluate": "format.read",
+		"spreadsheet.conditional_format.create": "format.write", "spreadsheet.conditional_format.update": "format.write", "spreadsheet.conditional_format.delete": "format.write",
+	} {
+		tool, found := findMCPTool(name)
+		if !found || tool.Meta["required_scope"] != scope {
+			t.Fatalf("conditional format tool %s: %#v", name, tool)
+		}
+	}
+	createTool, _ := findMCPTool("spreadsheet.conditional_format.create")
+	properties := createTool.InputSchema["properties"].(map[string]any)
+	if properties["rule_type"] == nil || properties["operator"] == nil || properties["style"] == nil || properties["bar_color"] == nil || properties["stop_if_true"] == nil {
+		t.Fatalf("conditional format MCP schema incomplete: %#v", createTool.InputSchema)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/sheets/s/conditional-formats", nil)); scope != "format.read" {
+		t.Fatalf("conditional format list scope=%q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/sheets/s/conditional-formats:evaluate?range=A1", nil)); scope != "format.read" {
+		t.Fatalf("conditional format evaluation scope=%q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/conditional-formats/id", nil)); scope != "format.write" {
+		t.Fatalf("conditional format update scope=%q", scope)
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "conditional format api"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "conditional-values", "cells": []map[string]any{{"row": 1, "column": 1, "value": 10}, {"row": 2, "column": 1, "value": 20}, {"row": 3, "column": 1, "value": 20}},
+	}, http.StatusOK)
+	createBody := map[string]any{"idempotency_key": "rest-conditional", "name": "중복 강조", "range": "A1:A3", "rule_type": "duplicate", "operator": "duplicate", "style": map[string]any{"background": "#fef3c7", "bold": true}, "priority": 1, "stop_if_true": true}
+	rule := request[workbook.ConditionalFormat](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/conditional-formats", createBody, http.StatusCreated)
+	duplicate := request[workbook.ConditionalFormat](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/conditional-formats", map[string]any{"idempotency_key": "rest-conditional", "range": "invalid", "rule_type": "invalid"}, http.StatusCreated)
+	if rule.ID == "" || duplicate.ID != rule.ID || rule.WorkbookVersion != 3 || rule.Revision != 1 {
+		t.Fatalf("REST conditional create=%#v duplicate=%#v", rule, duplicate)
+	}
+	listed := request[struct {
+		Items []workbook.ConditionalFormat `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/conditional-formats", nil, http.StatusOK)
+	if len(listed.Items) != 1 || listed.Items[0].ID != rule.ID {
+		t.Fatalf("REST conditional list=%#v", listed.Items)
+	}
+	request[workbook.ConditionalFormat](t, server, http.MethodGet, "/api/v1/conditional-formats/"+rule.ID, nil, http.StatusOK)
+	evaluated := request[workbook.ConditionalFormatEvaluation](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/conditional-formats:evaluate?range=A1:A3", nil, http.StatusOK)
+	if evaluated.WorkbookVersion != 3 || len(evaluated.Items) != 2 || evaluated.Items[0].Row != 2 || evaluated.Items[1].Row != 3 {
+		t.Fatalf("REST conditional evaluation=%#v", evaluated)
+	}
+	rule = request[workbook.ConditionalFormat](t, server, http.MethodPatch, "/api/v1/conditional-formats/"+rule.ID, map[string]any{"name": "반복 값", "expected_revision": rule.Revision}, http.StatusOK)
+	if rule.Name != "반복 값" || rule.Revision != 2 || rule.WorkbookVersion != 4 {
+		t.Fatalf("REST conditional update=%#v", rule)
+	}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/conditional-formats/"+rule.ID, map[string]any{"name": "stale", "expected_revision": 1}, http.StatusConflict)
+
+	mcpCreated := request[struct {
+		Result struct {
+			Structured workbook.ConditionalFormat `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 31, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.create", "arguments": map[string]any{"sheet_id": sheetID, "idempotency_key": "mcp-conditional", "name": "막대", "range": "A1:A3", "rule_type": "data_bar", "bar_color": "#2563eb", "priority": 2}}}, http.StatusOK)
+	if mcpCreated.Result.Structured.ID == "" || mcpCreated.Result.Structured.BarColor != "#2563eb" {
+		t.Fatalf("MCP conditional create=%#v", mcpCreated)
+	}
+	mcpGet := request[struct {
+		Result struct {
+			Structured workbook.ConditionalFormat `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 32, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.get", "arguments": map[string]any{"conditional_format_id": mcpCreated.Result.Structured.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.RuleType != "data_bar" {
+		t.Fatalf("MCP conditional get=%#v", mcpGet)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.ConditionalFormat `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 33, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 2 {
+		t.Fatalf("MCP conditional list=%#v", mcpList)
+	}
+	mcpEvaluation := request[struct {
+		Result struct {
+			Structured workbook.ConditionalFormatEvaluation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 34, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.evaluate", "arguments": map[string]any{"sheet_id": sheetID, "range": "A1:A3"}}}, http.StatusOK)
+	if len(mcpEvaluation.Result.Structured.Items) != 3 || mcpEvaluation.Result.Structured.Items[0].DataBar == nil {
+		t.Fatalf("MCP conditional evaluate=%#v", mcpEvaluation)
+	}
+	mcpUpdated := request[struct {
+		Result struct {
+			Structured workbook.ConditionalFormat `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 35, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.update", "arguments": map[string]any{"conditional_format_id": mcpCreated.Result.Structured.ID, "bar_color": "#16a34a", "expected_revision": mcpCreated.Result.Structured.Revision}}}, http.StatusOK)
+	if mcpUpdated.Result.Structured.BarColor != "#16a34a" || mcpUpdated.Result.Structured.Revision != 2 {
+		t.Fatalf("MCP conditional update=%#v", mcpUpdated)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 36, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.delete", "arguments": map[string]any{"conditional_format_id": mcpUpdated.Result.Structured.ID, "expected_revision": mcpUpdated.Result.Structured.Revision}}}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/conditional-formats/"+mcpUpdated.Result.Structured.ID, nil, http.StatusNotFound)
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/conditional-formats/"+rule.ID+"?expected_revision="+strconv.FormatInt(rule.Revision, 10), nil, http.StatusNoContent)
+}
+
 func TestSheetDuplicateRESTAndMCPPreserveData(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

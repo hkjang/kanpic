@@ -681,6 +681,59 @@ test('creates colored dropdown validation and rejects invalid writes', async ({ 
   await expect.poll(async()=>(await rules()).items).toEqual([])
 })
 
+test('manages conditional formats and renders evaluated cells on canvas', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  let workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{data:{base_version:workbook.version,idempotency_key:`conditional-seed-${workbookId}`,cells:[{row:1,column:1,value:10},{row:2,column:1,value:20},{row:3,column:1,value:20}]}})
+  await page.reload()
+  const canvas=page.locator('canvas.grid-canvas')
+  await expect(canvas).toBeVisible()
+  await canvas.click({position:{x:70,y:42}})
+  await page.keyboard.press('Shift+ArrowDown');await page.keyboard.press('Shift+ArrowDown')
+  await expect(page.locator('.name-box')).toHaveValue('A1:A3')
+
+  await page.getByRole('button',{name:'조건부 서식'}).click()
+  await expect(page.getByRole('dialog',{name:'조건부 서식'})).toBeVisible()
+  await page.getByLabel('조건부 서식 이름').fill('중복 강조')
+  await page.getByLabel('조건부 서식 유형').selectOption('duplicate')
+  await page.getByLabel('조건부 배경색').fill('#fef3c7')
+  await page.getByLabel('조건부 굵게').check()
+  await page.getByRole('button',{name:'규칙 저장'}).click()
+  const rules=async()=>page.request.get(`/api/v1/sheets/${sheetId}/conditional-formats`).then(response=>response.json())
+  await expect.poll(async()=>(await rules()).items[0]?.name).toBe('중복 강조')
+  const created=(await rules()).items[0]
+  expect(created.range).toBe('A1:A3');expect(created.rule_type).toBe('duplicate');expect(created.style.bold).toBe(true)
+  const evaluated=await page.request.get(`/api/v1/sheets/${sheetId}/conditional-formats:evaluate?range=A1%3AA3`).then(response=>response.json())
+  expect(evaluated.items.map((item:{row:number})=>item.row)).toEqual([2,3])
+  await page.getByRole('button',{name:'조건부 서식 닫기'}).click()
+  await expect.poll(async()=>Number(await canvas.getAttribute('data-conditional-cells'))).toBe(2)
+  await expect(page.getByRole('button',{name:'조건부 서식'})).toHaveClass(/active/)
+
+  await page.getByRole('button',{name:'조건부 서식'}).click()
+  await page.getByRole('button',{name:/중복 강조/}).click()
+  await page.getByLabel('조건부 서식 이름').fill('반복 값')
+  await page.getByLabel('조건부 서식 우선순위').fill('4')
+  await page.getByRole('button',{name:'규칙 저장'}).click()
+  await expect.poll(async()=>{const item=(await rules()).items[0];return `${item.name}:${item.priority}:${item.revision}`}).toBe('반복 값:4:2')
+  await page.getByRole('button',{name:'조건부 서식 닫기'}).click()
+
+  await page.reload();await expect(canvas).toBeVisible()
+  await expect.poll(async()=>Number(await canvas.getAttribute('data-conditional-cells'))).toBe(2)
+  await page.getByRole('button',{name:'조건부 서식'}).click()
+  await page.getByRole('button',{name:/반복 값/}).click()
+  const deleteDialogPromise=page.waitForEvent('dialog')
+  const deletePromise=page.getByRole('button',{name:'삭제',exact:true}).click()
+  const deleteDialog=await deleteDialogPromise
+  await deleteDialog.accept();await deletePromise
+  await expect.poll(async()=>(await rules()).items).toEqual([])
+  await page.getByRole('button',{name:'조건부 서식 닫기'}).click()
+  await expect.poll(async()=>Number(await canvas.getAttribute('data-conditional-cells'))).toBe(0)
+})
+
 test('spills FILTER results and protects generated cells in the editor', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button',{name:'새 워크북'}).click()

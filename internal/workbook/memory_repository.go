@@ -31,15 +31,16 @@ type operation struct {
 }
 
 type snapshot struct {
-	version     Version
-	workbook    Workbook
-	sheets      map[string]Sheet
-	cells       map[string]map[cellKey]Cell
-	filters     map[string]FilterView
-	validations map[string]DataValidation
-	namedRanges map[string]NamedRange
-	charts      map[string]Chart
-	pivots      map[string]Pivot
+	version            Version
+	workbook           Workbook
+	sheets             map[string]Sheet
+	cells              map[string]map[cellKey]Cell
+	filters            map[string]FilterView
+	validations        map[string]DataValidation
+	conditionalFormats map[string]ConditionalFormat
+	namedRanges        map[string]NamedRange
+	charts             map[string]Chart
+	pivots             map[string]Pivot
 }
 
 type workbookState struct {
@@ -53,35 +54,37 @@ type workbookState struct {
 }
 
 type MemoryRepository struct {
-	mu            sync.RWMutex
-	workbooks     map[string]*workbookState
-	sheetToWB     map[string]string
-	now           func() time.Time
-	imports       map[string]string
-	filters       map[string]FilterView
-	validations   map[string]DataValidation
-	namedRanges   map[string]NamedRange
-	charts        map[string]Chart
-	pivots        map[string]Pivot
-	pivotCache    map[string]PivotData
-	comments      map[string]CommentThread
-	notifications map[string]MentionNotification
+	mu                 sync.RWMutex
+	workbooks          map[string]*workbookState
+	sheetToWB          map[string]string
+	now                func() time.Time
+	imports            map[string]string
+	filters            map[string]FilterView
+	validations        map[string]DataValidation
+	conditionalFormats map[string]ConditionalFormat
+	namedRanges        map[string]NamedRange
+	charts             map[string]Chart
+	pivots             map[string]Pivot
+	pivotCache         map[string]PivotData
+	comments           map[string]CommentThread
+	notifications      map[string]MentionNotification
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		workbooks:     make(map[string]*workbookState),
-		sheetToWB:     make(map[string]string),
-		now:           func() time.Time { return time.Now().UTC() },
-		imports:       make(map[string]string),
-		filters:       make(map[string]FilterView),
-		validations:   make(map[string]DataValidation),
-		namedRanges:   make(map[string]NamedRange),
-		charts:        make(map[string]Chart),
-		pivots:        make(map[string]Pivot),
-		pivotCache:    make(map[string]PivotData),
-		comments:      make(map[string]CommentThread),
-		notifications: make(map[string]MentionNotification),
+		workbooks:          make(map[string]*workbookState),
+		sheetToWB:          make(map[string]string),
+		now:                func() time.Time { return time.Now().UTC() },
+		imports:            make(map[string]string),
+		filters:            make(map[string]FilterView),
+		validations:        make(map[string]DataValidation),
+		conditionalFormats: make(map[string]ConditionalFormat),
+		namedRanges:        make(map[string]NamedRange),
+		charts:             make(map[string]Chart),
+		pivots:             make(map[string]Pivot),
+		pivotCache:         make(map[string]PivotData),
+		comments:           make(map[string]CommentThread),
+		notifications:      make(map[string]MentionNotification),
 	}
 }
 
@@ -331,6 +334,22 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 		copyRule.UpdatedAt = now
 		r.validations[copyRule.ID] = copyRule
 	}
+	for _, sourceRule := range r.conditionalFormats {
+		copySheetID, found := sheetIDs[sourceRule.SheetID]
+		if !found {
+			continue
+		}
+		copyRule := cloneConditionalFormat(sourceRule)
+		copyRule.ID = identity.New()
+		copyRule.WorkbookID = copyWorkbook.ID
+		copyRule.WorkbookVersion = 1
+		copyRule.SheetID = copySheetID
+		copyRule.CreateKey = "copy:" + copyRule.ID
+		copyRule.Revision = 1
+		copyRule.CreatedBy, copyRule.UpdatedBy = ownerID, ownerID
+		copyRule.CreatedAt, copyRule.UpdatedAt = now, now
+		r.conditionalFormats[copyRule.ID] = copyRule
+	}
 	for _, sourceRange := range r.namedRanges {
 		if sourceRange.WorkbookID != source.workbook.ID {
 			continue
@@ -432,6 +451,11 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 				delete(r.validations, validationID)
 			}
 		}
+		for formatID, rule := range r.conditionalFormats {
+			if rule.SheetID == sheetID {
+				delete(r.conditionalFormats, formatID)
+			}
+		}
 		delete(r.sheetToWB, sheetID)
 	}
 	for rangeID, item := range r.namedRanges {
@@ -528,6 +552,18 @@ func (r *MemoryRepository) DuplicateSheet(_ context.Context, sheetID string, inp
 		copyRule.CreatedAt = now
 		copyRule.UpdatedAt = now
 		r.validations[copyRule.ID] = copyRule
+	}
+	for _, sourceRule := range r.conditionalFormats {
+		if sourceRule.SheetID != source.ID {
+			continue
+		}
+		copyRule := cloneConditionalFormat(sourceRule)
+		copyRule.ID = identity.New()
+		copyRule.SheetID = duplicated.ID
+		copyRule.CreateKey = "copy:" + copyRule.ID
+		copyRule.Revision = 1
+		copyRule.CreatedAt, copyRule.UpdatedAt = now, now
+		r.conditionalFormats[copyRule.ID] = copyRule
 	}
 	for _, sourceChart := range r.charts {
 		if sourceChart.SheetID != source.ID {
@@ -684,6 +720,11 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	for validationID, rule := range r.validations {
 		if rule.SheetID == sheetID {
 			delete(r.validations, validationID)
+		}
+	}
+	for formatID, rule := range r.conditionalFormats {
+		if rule.SheetID == sheetID {
+			delete(r.conditionalFormats, formatID)
 		}
 	}
 	for threadID, thread := range r.comments {
@@ -938,7 +979,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	return version, nil
 }
 
@@ -966,7 +1007,7 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			base := state.workbook.Version
 			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
-			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 			for sheetID := range state.sheets {
 				delete(r.sheetToWB, sheetID)
 			}
@@ -989,6 +1030,17 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			for validationID, rule := range snap.validations {
 				r.validations[validationID] = cloneDataValidation(rule)
+			}
+			for formatID, rule := range r.conditionalFormats {
+				if rule.WorkbookID == state.workbook.ID {
+					delete(r.conditionalFormats, formatID)
+				}
+			}
+			for formatID, rule := range snap.conditionalFormats {
+				copyRule := cloneConditionalFormat(rule)
+				copyRule.WorkbookVersion = base + 1
+				copyRule.UpdatedBy, copyRule.UpdatedAt = actorID, r.now()
+				r.conditionalFormats[formatID] = copyRule
 			}
 			for rangeID, item := range r.namedRanges {
 				if item.WorkbookID == state.workbook.ID {

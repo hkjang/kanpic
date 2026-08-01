@@ -59,7 +59,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
-	tool("spreadsheet.structure.apply", "행 또는 열을 원자적으로 삽입·삭제하고 수식, 병합, 이름 범위, 검증 및 필터 참조를 갱신합니다.", "range.write", structureSchema()),
+	tool("spreadsheet.structure.apply", "행 또는 열을 원자적으로 삽입·삭제하고 수식, 병합, 이름 범위, 검증, 조건부 서식 및 필터 참조를 갱신합니다.", "range.write", structureSchema()),
 	tool("spreadsheet.layout.apply", "행 높이·열 너비·숨김·고정 영역을 revision 기반으로 멱등 변경합니다.", "format.write", sheetLayoutSchema()),
 	tool("spreadsheet.filter_view.list", "현재 사용자가 저장한 시트 필터 보기를 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.filter_view.get", "현재 사용자의 필터 보기 정의를 조회합니다.", "range.read", requiredProps("filter_view_id", "string")),
@@ -73,6 +73,12 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.data_validation.update", "expected_revision으로 데이터 검증 규칙을 안전하게 변경합니다.", "range.write", dataValidationSchema(false)),
 	tool("spreadsheet.data_validation.delete", "데이터 검증 규칙을 삭제합니다.", "range.write", dataValidationDeleteSchema()),
 	tool("spreadsheet.data_validation.evaluate", "기존 범위 값을 데이터 검증 규칙으로 검사합니다.", "range.read", requiredProps("validation_id", "string")),
+	tool("spreadsheet.conditional_format.list", "시트의 조건부 서식 규칙을 우선순위 순서로 조회합니다.", "format.read", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.conditional_format.get", "조건부 서식 정의와 revision을 조회합니다.", "format.read", requiredProps("conditional_format_id", "string")),
+	tool("spreadsheet.conditional_format.evaluate", "범위의 값 비교·중복·색상 범위·데이터 막대 렌더링 결과를 계산합니다.", "format.read", conditionalFormatEvaluationSchema()),
+	tool("spreadsheet.conditional_format.create", "시트 범위에 조건부 서식 규칙을 멱등 생성합니다.", "format.write", conditionalFormatSchema(true)),
+	tool("spreadsheet.conditional_format.update", "조건부 서식 규칙을 revision 기반으로 변경합니다.", "format.write", conditionalFormatSchema(false)),
+	tool("spreadsheet.conditional_format.delete", "조건부 서식 규칙을 삭제합니다.", "format.write", conditionalFormatDeleteSchema()),
 	tool("spreadsheet.comment.list", "워크북 또는 시트의 댓글 스레드와 답글을 조회합니다.", "comment.read", commentListSchema()),
 	tool("spreadsheet.comment.get", "댓글 스레드와 전체 답글을 조회합니다.", "comment.read", requiredProps("comment_id", "string")),
 	tool("spreadsheet.comment.create", "셀 또는 범위에 멱등 댓글 스레드를 생성하고 @멘션 알림을 만듭니다.", "comment.write", commentCreateSchema()),
@@ -442,6 +448,55 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return map[string]any{"ok": true}, nil
 	case "spreadsheet.data_validation.evaluate":
 		return s.applyDataValidation(ctx, stringArg(args, "validation_id"))
+	case "spreadsheet.conditional_format.list":
+		return s.repository.ListConditionalFormats(ctx, stringArg(args, "sheet_id"))
+	case "spreadsheet.conditional_format.get":
+		return s.repository.GetConditionalFormat(ctx, stringArg(args, "conditional_format_id"))
+	case "spreadsheet.conditional_format.evaluate":
+		selected, err := cellrange.Parse(stringArg(args, "range"))
+		if err != nil {
+			return nil, err
+		}
+		return s.repository.EvaluateConditionalFormats(ctx, stringArg(args, "sheet_id"), selected)
+	case "spreadsheet.conditional_format.create":
+		var input workbook.CreateConditionalFormatInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.CreateConditionalFormat(ctx, stringArg(args, "sheet_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.conditional_format.update":
+		var input workbook.UpdateConditionalFormatInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		item, err := s.repository.UpdateConditionalFormat(ctx, stringArg(args, "conditional_format_id"), actor, input)
+		if err == nil {
+			s.collab.PublishVersion(item.WorkbookID, actor, "", "", item.WorkbookVersion)
+		}
+		return item, err
+	case "spreadsheet.conditional_format.delete":
+		id := stringArg(args, "conditional_format_id")
+		item, err := s.repository.GetConditionalFormat(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		var expected *int64
+		if value, found := args["expected_revision"]; found && value != nil {
+			revision, revisionErr := numberArg(args, "expected_revision")
+			if revisionErr != nil || revision < 1 {
+				return nil, fmt.Errorf("expected_revision must be a positive integer")
+			}
+			expected = &revision
+		}
+		if err := s.repository.DeleteConditionalFormat(ctx, id, actor, expected); err != nil {
+			return nil, err
+		}
+		s.publishCurrentVersion(ctx, item.WorkbookID, actor, "")
+		return map[string]any{"ok": true}, nil
 	case "spreadsheet.comment.list":
 		var input struct {
 			WorkbookID      string `json:"workbook_id"`
@@ -1063,6 +1118,47 @@ func dataValidationSchema(create bool) map[string]any {
 
 func dataValidationDeleteSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"validation_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"validation_id"}}
+}
+
+func conditionalFormatSchema(create bool) map[string]any {
+	color := map[string]any{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+	properties := map[string]any{
+		"conditional_format_id": map[string]any{"type": "string"},
+		"sheet_id":              map[string]any{"type": "string"},
+		"idempotency_key":       map[string]any{"type": "string", "minLength": 1},
+		"name":                  map[string]any{"type": "string", "maxLength": 200},
+		"range":                 map[string]any{"type": "string"},
+		"rule_type":             map[string]any{"type": "string", "enum": []string{"value", "duplicate", "color_scale", "data_bar"}},
+		"operator":              map[string]any{"type": "string", "enum": []string{"equals", "not_equals", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "between", "not_between", "contains", "not_contains", "is_blank", "not_blank", "duplicate", "unique"}},
+		"value":                 map[string]any{},
+		"value2":                map[string]any{},
+		"style":                 map[string]any{"type": "object"},
+		"min_color":             color,
+		"mid_color":             color,
+		"max_color":             color,
+		"bar_color":             color,
+		"priority":              map[string]any{"type": "integer", "minimum": 1, "maximum": 1000},
+		"stop_if_true":          map[string]any{"type": "boolean"},
+		"expected_revision":     map[string]any{"type": "integer", "minimum": 1},
+	}
+	required := []string{"conditional_format_id"}
+	if create {
+		delete(properties, "conditional_format_id")
+		delete(properties, "expected_revision")
+		required = []string{"sheet_id", "idempotency_key", "range", "rule_type"}
+	} else {
+		delete(properties, "sheet_id")
+		delete(properties, "idempotency_key")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required}
+}
+
+func conditionalFormatEvaluationSchema() map[string]any {
+	return requiredProps2("sheet_id", "string", "range", "string")
+}
+
+func conditionalFormatDeleteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"conditional_format_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"conditional_format_id"}}
 }
 
 func namedRangeSchema(create bool) map[string]any {

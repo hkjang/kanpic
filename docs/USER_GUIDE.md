@@ -1,9 +1,9 @@
 # kanpic 사용자 가이드 (Enterprise User Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.10.0
+- **시스템 버전**: v0.12.0
 - **문서 버전**: v1.0  
-- **최종 수정일**: 2026년 8월 1일
+- **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 엔드유저용 최종 사용 설명서 (End-User Manual)  
 
 ---
@@ -258,12 +258,28 @@ kanpic의 필터 뷰는 원본 데이터를 수정하지 않고 나만의 시각
 
 ---
 
-## 10. 개인화 설정 및 개인 API 키 (`/preferences`)
+## 10. 조건부 서식
 
-### 10.1 테마 및 개인화
+1. 값을 시각적으로 구분할 범위를 선택하고 툴바의 **조건부 서식** 버튼을 누릅니다.
+2. **값 조건**에서는 숫자·텍스트 비교, 포함 여부와 빈 값을 선택하고 배경색·글자색·굵게·기울임을 지정합니다.
+3. **중복·고유 값**은 규칙 전체 범위의 값을 비교해 반복 값이나 한 번만 나타나는 값을 강조합니다.
+4. **색상 범위**는 숫자의 최솟값과 최댓값 사이를 2색 또는 중간 색상을 포함한 3색으로 보간합니다.
+5. **데이터 막대**는 같은 범위의 최솟값과 최댓값을 기준으로 셀 안에 비율 막대를 표시합니다.
+
+규칙의 숫자가 작을수록 먼저 평가됩니다. 값 조건과 중복 규칙에서 **조건이 참이면 낮은 우선순위 규칙 중지**를 선택하면 같은 셀에 뒤따르는 규칙은 적용되지 않습니다. 여러 규칙의 서식 속성은 우선순위 순서로 합성되며 데이터 막대는 셀 값 위의 반투명 배경으로 표시됩니다.
+
+조건부 서식은 원본 셀 값·수식·기본 서식을 바꾸지 않는 서버 권위 엔터티입니다. 정의에는 revision과 작업자, 워크북 버전이 기록되며 행·열 삽입·삭제 시 범위가 이동합니다. 시트·워크북 복제와 버전 스냅샷·복원에도 규칙이 포함됩니다. 시트당 최대 100개, 규칙 원본 범위는 최대 100,000셀, 화면 평가 요청은 최대 10,000셀입니다.
+
+에이전트는 `format.read`/`format.write` scope로 `spreadsheet.conditional_format.list`, `spreadsheet.conditional_format.get`, `spreadsheet.conditional_format.evaluate`, `spreadsheet.conditional_format.create`, `spreadsheet.conditional_format.update`, `spreadsheet.conditional_format.delete`를 사용할 수 있습니다. REST 클라이언트는 `/api/v1/sheets/{sheetId}/conditional-formats`, `/api/v1/sheets/{sheetId}/conditional-formats:evaluate`, `/api/v1/conditional-formats/{conditionalFormatId}`를 사용합니다.
+
+---
+
+## 11. 개인화 설정 및 개인 API 키 (`/preferences`)
+
+### 11.1 테마 및 개인화
 - `/preferences` 페이지에서 화면 테마(Light/Dark/System)를 설정할 수 있습니다.
 
-### 10.2 개인 API 키 (Personal API Keys) 발급
+### 11.2 개인 API 키 (Personal API Keys) 발급
 파이썬 스크립트나 커스텀 애플리케이션에서 kanpic 데이터에 프로그램 방식으로 접근할 수 있습니다.
 
 ```python
@@ -282,11 +298,11 @@ print(response.json())
 > **API 키 보안 유의사항**  
 > API 키 원문은 생성 시 단 한 번만 화면에 표시되며, 데이터베이스에는 SHA-256 해시로 저장되므로 분실 시 키를 회전(Rotate)하여 새로 발급받아야 합니다.
 
-키 카드의 **수정**에서 이름, 만료 시점과 scope를 변경하거나 만료를 해제할 수 있습니다. `mcp.use`와 사용할 기능의 최소 scope를 함께 선택합니다. 차트 에이전트에는 `chart.read` 또는 `chart.write`, 피벗 에이전트에는 `pivot.read` 또는 `pivot.write`가 필요합니다. **회전**하면 기존 키는 즉시 폐기되고 같은 이름·scope·만료 정책을 가진 새 키가 한 번만 표시됩니다. 더 이상 사용하지 않는 키는 **폐기**합니다.
+키 카드의 **수정**에서 이름, 만료 시점과 scope를 변경하거나 만료를 해제할 수 있습니다. `mcp.use`와 사용할 기능의 최소 scope를 함께 선택합니다. 조건부 서식 에이전트에는 `format.read` 또는 `format.write`, 차트 에이전트에는 `chart.read` 또는 `chart.write`, 피벗 에이전트에는 `pivot.read` 또는 `pivot.write`가 필요합니다. **회전**하면 기존 키는 즉시 폐기되고 같은 이름·scope·만료 정책을 가진 새 키가 한 번만 표시됩니다. 더 이상 사용하지 않는 키는 **폐기**합니다.
 
 ---
 
-## 11. 자주 묻는 질문 및 문제 해결 (FAQ)
+## 12. 자주 묻는 질문 및 문제 해결 (FAQ)
 
 > [!NOTE]
 > **Q1. 네트워크가 갑자기 연결 끊기면 작성 중이던 내용이 날아가나요?**  

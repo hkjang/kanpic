@@ -71,15 +71,16 @@ type snapshotSheet struct {
 }
 
 type snapshotDocument struct {
-	SchemaVersion int              `json:"schema_version,omitempty"`
-	Workbook      snapshotWorkbook `json:"workbook,omitempty"`
-	Sheets        []snapshotSheet  `json:"sheets,omitempty"`
-	Blocks        []snapshotBlock  `json:"blocks"`
-	Filters       []FilterView     `json:"filters,omitempty"`
-	Validations   []DataValidation `json:"validations,omitempty"`
-	NamedRanges   []NamedRange     `json:"named_ranges,omitempty"`
-	Charts        []Chart          `json:"charts,omitempty"`
-	Pivots        []Pivot          `json:"pivots,omitempty"`
+	SchemaVersion      int                 `json:"schema_version,omitempty"`
+	Workbook           snapshotWorkbook    `json:"workbook,omitempty"`
+	Sheets             []snapshotSheet     `json:"sheets,omitempty"`
+	Blocks             []snapshotBlock     `json:"blocks"`
+	Filters            []FilterView        `json:"filters,omitempty"`
+	Validations        []DataValidation    `json:"validations,omitempty"`
+	ConditionalFormats []ConditionalFormat `json:"conditional_formats,omitempty"`
+	NamedRanges        []NamedRange        `json:"named_ranges,omitempty"`
+	Charts             []Chart             `json:"charts,omitempty"`
+	Pivots             []Pivot             `json:"pivots,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -456,6 +457,27 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 			return Workbook{}, err
 		}
 	}
+	copiedConditionalFormats, err := listWorkbookConditionalFormatsTx(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, sourceRule := range copiedConditionalFormats {
+		destinationSheetID, found := sheetIDs[sourceRule.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: conditional format references an unknown sheet", ErrInvalid)
+		}
+		sourceRule.ID = identity.New()
+		sourceRule.WorkbookID = duplicated.ID
+		sourceRule.WorkbookVersion = 1
+		sourceRule.SheetID = destinationSheetID
+		sourceRule.CreateKey = "copy:" + sourceRule.ID
+		sourceRule.Revision = 1
+		sourceRule.CreatedBy, sourceRule.UpdatedBy = ownerID, ownerID
+		sourceRule.CreatedAt, sourceRule.UpdatedAt = now, now
+		if err := insertConditionalFormatTx(ctx, tx, sourceRule); err != nil {
+			return Workbook{}, err
+		}
+	}
 	copiedRanges, err := listNamedRangesTx(ctx, tx, source.ID)
 	if err != nil {
 		return Workbook{}, err
@@ -765,6 +787,20 @@ func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string,
 		rule.CreatedAt = now
 		rule.UpdatedAt = now
 		if err := insertDataValidationTx(ctx, tx, rule); err != nil {
+			return Sheet{}, err
+		}
+	}
+	conditionalFormats, err := listConditionalFormatsTx(ctx, tx, source.ID)
+	if err != nil {
+		return Sheet{}, err
+	}
+	for _, rule := range conditionalFormats {
+		rule.ID = identity.New()
+		rule.SheetID = duplicated.ID
+		rule.CreateKey = "copy:" + rule.ID
+		rule.Revision = 1
+		rule.CreatedAt, rule.UpdatedAt = now, now
+		if err := insertConditionalFormatTx(ctx, tx, rule); err != nil {
 			return Sheet{}, err
 		}
 	}
@@ -1439,7 +1475,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 7, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0), Pivots: make([]Pivot, 0)}
+	document := snapshotDocument{SchemaVersion: 8, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), ConditionalFormats: make([]ConditionalFormat, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0), Pivots: make([]Pivot, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1510,6 +1546,10 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
+		return snapshotDocument{}, err
+	}
+	document.ConditionalFormats, err = listWorkbookConditionalFormatsTx(ctx, tx, workbookID)
+	if err != nil {
 		return snapshotDocument{}, err
 	}
 	document.NamedRanges, err = listNamedRangesTx(ctx, tx, workbookID)
@@ -1603,6 +1643,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 		return MutationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM data_validations USING sheets WHERE data_validations.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
+		return MutationResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM conditional_formats USING sheets WHERE conditional_formats.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM named_ranges WHERE workbook_id=$1`, workbookID); err != nil {
@@ -1717,6 +1760,34 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			}
 			normalized.UpdatedAt = now
 			if err := insertDataValidationTx(ctx, tx, normalized); err != nil {
+				return MutationResult{}, err
+			}
+		}
+	}
+	if snapshot.SchemaVersion >= 8 {
+		for _, rule := range snapshot.ConditionalFormats {
+			if _, found := desiredSheetIDs[rule.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a conditional format for an unknown sheet", ErrInvalid)
+			}
+			normalized, _, err := NormalizeConditionalFormat(rule)
+			if err != nil {
+				return MutationResult{}, err
+			}
+			normalized.CreateKey = "restore:" + normalized.ID
+			normalized.WorkbookID = workbookID
+			normalized.WorkbookVersion = base + 1
+			if normalized.Revision < 1 {
+				normalized.Revision = 1
+			}
+			if normalized.CreatedBy == "" {
+				normalized.CreatedBy = actorID
+			}
+			normalized.UpdatedBy = actorID
+			if normalized.CreatedAt.IsZero() {
+				normalized.CreatedAt = now
+			}
+			normalized.UpdatedAt = now
+			if err := insertConditionalFormatTx(ctx, tx, normalized); err != nil {
 				return MutationResult{}, err
 			}
 		}

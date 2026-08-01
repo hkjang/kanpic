@@ -9,7 +9,7 @@ import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../li
 import { optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { Cell, DataValidation, MutationResult, SheetLayout } from '../types'
+import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, MutationResult, SheetLayout } from '../types'
 
 const HEADER_WIDTH=46
 const HEADER_HEIGHT=27
@@ -27,15 +27,15 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[]}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[]}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[]}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[]}) {
   const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined)
-  const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0)
+  const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const editor=useEditorStore()
   const {activeRow,activeColumn,anchorRow,anchorColumn,editing,zoom,cells,select,setEditing,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
   const selection=selectedMergedBounds(cells,selectedBounds(editor))
   const collaborators=useCollaborationStore(state=>state.users)
   const sendCursor=useCollaborationStore(state=>state.sendCursor),sendSelection=useCollaborationStore(state=>state.sendSelection)
-  const hiddenRowsKey=hiddenRows.join(','),layoutKey=JSON.stringify(layout)
+  const hiddenRowsKey=hiddenRows.join(','),layoutKey=JSON.stringify(layout),conditionalRulesKey=conditionalFormats.map(rule=>`${rule.id}:${rule.revision}`).join(',')
   const rowAxis=useMemo(()=>createDimensionAxis({total:TOTAL_ROWS,defaultSize:27,sizes:layout.row_heights,hiddenRanges:layout.hidden_rows,hiddenIndexes:hiddenRows,zoom}),[hiddenRowsKey,layoutKey,zoom])
   const columnAxis=useMemo(()=>createDimensionAxis({total:TOTAL_COLUMNS,defaultSize:108,sizes:layout.column_widths,hiddenRanges:layout.hidden_columns,zoom}),[layoutKey,zoom])
   const frozenRows=Math.min(layout.frozen_rows??0,TOTAL_ROWS),frozenColumns=Math.min(layout.frozen_columns??0,TOTAL_COLUMNS)
@@ -52,6 +52,16 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
 
   const visibleRange=useMemo(()=>{const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1),startRow=rowAxis.firstVisibleAtOrAfter(Math.max(frozenRows+1,rowAxis.indexAtOffset(scroll.top+frozenHeight))),startColumn=columnAxis.firstVisibleAtOrAfter(Math.max(frozenColumns+1,columnAxis.indexAtOffset(scroll.left+frozenWidth))),endRow=rowAxis.lastVisibleAtOrBefore(rowAxis.indexAtOffset(scroll.top+Math.max(frozenHeight,size.height-HEADER_HEIGHT)+100*zoom)),endColumn=columnAxis.lastVisibleAtOrBefore(columnAxis.indexAtOffset(scroll.left+Math.max(frozenWidth,size.width-HEADER_WIDTH)+250*zoom));return{startRow,startColumn,endRow:Math.max(startRow,endRow),endColumn:Math.max(startColumn,endColumn)}},[scroll,size,rowAxis,columnAxis,frozenRows,frozenColumns,zoom])
   useEffect(()=>{const controller=new AbortController(),ranges=[visibleRange];if(frozenRows>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:visibleRange.startColumn,endColumn:visibleRange.endColumn});if(frozenColumns>0)ranges.push({startRow:visibleRange.startRow,endRow:visibleRange.endRow,startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)});if(frozenRows>0&&frozenColumns>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)});for(const selected of ranges){if(selected.endRow<selected.startRow||selected.endColumn<selected.startColumn)continue;const range=`${address(selected.startRow,selected.startColumn)}:${address(selected.endRow,selected.endColumn)}`;api<{items:Cell[]}>(`/api/v1/sheets/${sheetId}/ranges/${range}`,{signal:controller.signal}).then(result=>replaceRange(result.items,selected.startRow,selected.startColumn,selected.endRow,selected.endColumn)).catch(()=>{})}return()=>controller.abort()},[sheetId,version,refreshToken,visibleRange.startRow,visibleRange.startColumn,visibleRange.endRow,visibleRange.endColumn,frozenRows,frozenColumns,rowAxis,columnAxis,replaceRange])
+  useEffect(()=>{
+    if(conditionalFormats.length===0){setConditionalCells(new Map());return}
+    const controller=new AbortController(),ranges=[visibleRange]
+    if(frozenRows>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:visibleRange.startColumn,endColumn:visibleRange.endColumn})
+    if(frozenColumns>0)ranges.push({startRow:visibleRange.startRow,endRow:visibleRange.endRow,startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)})
+    if(frozenRows>0&&frozenColumns>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)})
+    const requests=ranges.filter(selected=>selected.endRow>=selected.startRow&&selected.endColumn>=selected.startColumn).map(selected=>{const range=`${address(selected.startRow,selected.startColumn)}:${address(selected.endRow,selected.endColumn)}`;return api<ConditionalFormatEvaluation>(`/api/v1/sheets/${sheetId}/conditional-formats:evaluate?range=${encodeURIComponent(range)}`,{signal:controller.signal})})
+    Promise.all(requests).then(results=>{const next=new Map<string,ConditionalFormatCell>();for(const result of results)for(const item of result.items)next.set(cellKey(item.row,item.column),item);setConditionalCells(next)}).catch(()=>{})
+    return()=>controller.abort()
+  },[sheetId,version,refreshToken,conditionalRulesKey,visibleRange.startRow,visibleRange.startColumn,visibleRange.endRow,visibleRange.endColumn,frozenRows,frozenColumns,rowAxis,columnAxis])
 
   useEffect(()=>{
     const element=canvas.current
@@ -72,8 +82,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     context.save();context.beginPath();context.rect(HEADER_WIDTH,HEADER_HEIGHT,size.width-HEADER_WIDTH,size.height-HEADER_HEIGHT);context.clip()
     const mergedRanges=new Map<string,{range:MergeRange;representative:Cell}>()
     const drawCell=(cell:Cell,x:number,y:number,width:number,height:number)=>{
-      const style=cell.style??{},validation=validationForCell(validations,cell.row,cell.column),validationOption=validation?.rule_type==='list'?optionForValue(validation,cell.value):undefined
+      const conditional=conditionalCells.get(cellKey(cell.row,cell.column)),style={...(cell.style??{}),...(conditional?.style??{})},validation=validationForCell(validations,cell.row,cell.column),validationOption=validation?.rule_type==='list'?optionForValue(validation,cell.value):undefined
       context.fillStyle=typeof style.background==='string'?style.background:'#fff';context.fillRect(x+1,y+1,width-2,height-2)
+      if(conditional?.data_bar){context.save();context.globalAlpha=.3;context.fillStyle=conditional.data_bar.color;context.fillRect(x+3,y+4,Math.max(0,(width-6)*conditional.data_bar.ratio),Math.max(0,height-8));context.restore()}
       if(validation?.display_style==='chip'&&validationOption?.color){context.fillStyle=validationOption.color;context.beginPath();context.roundRect(x+4,y+4,width-8,height-8,6);context.fill()}
       const formulaError=typeof cell.value==='string'&&cell.value.startsWith('#')
       const fontSize=typeof style.font_size==='number'?style.font_size:12,fontFamily=typeof style.font_family==='string'?JSON.stringify(style.font_family):'Inter, Pretendard, sans-serif'
@@ -91,7 +102,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(validation){const checked=validateClientValue(validation,cell.value);if(!checked.valid&&!checked.deferred){context.fillStyle='#dc2626';context.beginPath();context.moveTo(x+width-9,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+9);context.closePath();context.fill()}}
       if(cell.spill_source){context.save();context.setLineDash([2,2]);context.strokeStyle='#38a3a5';context.lineWidth=1;context.strokeRect(Math.round(x)+2,Math.round(y)+2,Math.round(width)-4,Math.round(height)-4);context.restore()}
     }
-    const visibleCells=Array.from(cells.values()).filter(cell=>rowVisible(cell.row)&&columnVisible(cell.column)).sort((a,b)=>Number(a.row<=frozenRows)+Number(a.column<=frozenColumns)-Number(b.row<=frozenRows)-Number(b.column<=frozenColumns))
+    const renderCells=new Map(cells);conditionalCells.forEach(item=>{const key=cellKey(item.row,item.column);if(!renderCells.has(key))renderCells.set(key,{sheet_id:sheetId,row:item.row,column:item.column,updated_at:''})})
+    const visibleCells=Array.from(renderCells.values()).filter(cell=>rowVisible(cell.row)&&columnVisible(cell.column)).sort((a,b)=>Number(a.row<=frozenRows)+Number(a.column<=frozenColumns)-Number(b.row<=frozenRows)-Number(b.column<=frozenColumns))
     visibleCells.forEach(cell=>{
       const merged=cellMerge(cell)
       if(merged){const key=`${merged.startRow}:${merged.startColumn}:${merged.endRow}:${merged.endColumn}`,current=mergedRanges.get(key);if(!current||cell.row===merged.startRow&&cell.column===merged.startColumn)mergedRanges.set(key,{range:merged,representative:cell});return}
@@ -125,7 +137,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(activeBox){context.strokeStyle='#0f766e';context.lineWidth=2;context.strokeRect(Math.round(activeBox.x)+1,Math.round(activeBox.y)+1,Math.round(activeBox.width)-2,Math.round(activeBox.height)-2)}if(selectionBox){context.fillStyle='#0f766e';context.fillRect(selectionBox.x+selectionBox.width-4,selectionBox.y+selectionBox.height-4,6,6)}context.restore()
     const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1);context.strokeStyle='#98a9ad';context.lineWidth=2;if(frozenRows>0){context.beginPath();context.moveTo(0,HEADER_HEIGHT+frozenHeight+.5);context.lineTo(size.width,HEADER_HEIGHT+frozenHeight+.5);context.stroke()}if(frozenColumns>0){context.beginPath();context.moveTo(HEADER_WIDTH+frozenWidth+.5,0);context.lineTo(HEADER_WIDTH+frozenWidth+.5,size.height);context.stroke()}
     context.fillStyle='#edf7f5';context.fillRect(0,0,HEADER_WIDTH,HEADER_HEIGHT);context.strokeStyle='#d9dfe5';context.strokeRect(.5,.5,HEADER_WIDTH-.5,HEADER_HEIGHT-.5)
-  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations])
+  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations])
 
   const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
 
@@ -224,7 +236,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
-    <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={editActiveCell}/></div>
+    <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={editActiveCell}/></div>
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
     {editing&&dropdown?<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>void saveCell(option.value,'',activeRow,activeColumn)}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>setEditing(false)}>취소</button></div>:editing&&<input autoFocus className="cell-editor" style={{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}} value={draft} onChange={(event)=>setDraft(event.target.value)} onBlur={()=>commit(draft)} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();commit(draft)}else if(event.key==='Escape'){setEditing(false);setDraft(activeText)}}}/>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
