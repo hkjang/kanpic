@@ -798,6 +798,88 @@
   color: #ffffff;
 }
 </style>
+<script id="auto-lang-detector">
+(function() {
+  var SAVED_KEY = 'user_lang_pref';
+  var userPref = localStorage.getItem(SAVED_KEY);
+  if (!userPref) {
+    var navLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '').toLowerCase();
+    var isKoBrowser = navLang.indexOf('ko') === 0;
+    var isEnPage = window.location.pathname.indexOf('index_en.html') !== -1;
+    if (!isKoBrowser && !isEnPage) {
+      var target = window.location.href.replace(/index\.html$/, 'index_en.html');
+      if (target === window.location.href) target = 'index_en.html';
+      window.location.replace(target);
+    } else if (isKoBrowser && isEnPage) {
+      var target = window.location.href.replace(/index_en\.html$/, 'index.html');
+      if (target === window.location.href) target = 'index.html';
+      window.location.replace(target);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var langBtns = document.querySelectorAll('.lang-btn, [data-lang], #btn-ko, #btn-en, #localeToggle, #btn-lang-toggle');
+    langBtns.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var lang = btn.getAttribute('data-lang') || (btn.textContent || '').trim().toLowerCase();
+        if (lang.indexOf('en') !== -1) {
+          localStorage.setItem(SAVED_KEY, 'en');
+        } else if (lang.indexOf('ko') !== -1 || lang.indexOf('한') !== -1) {
+          localStorage.setItem(SAVED_KEY, 'ko');
+        }
+      });
+    });
+  });
+})();
+</script>
+<link rel="canonical" href="https://hkjang.github.io/kanpic/">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="kanpic">
+  <meta name="twitter:description" content="kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration.">
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BusinessApplication",
+  "name": "kanpic",
+  "url": "https://hkjang.github.io/kanpic/",
+  "description": "kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration.",
+  "applicationCategory": "BusinessApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is kanpic?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is kanpic open source?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes, kanpic is available under open source license on GitHub."
+      }
+    }
+  ]
+}
+</script>
+
 </head>
 <body>
 
