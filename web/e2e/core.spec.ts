@@ -378,8 +378,12 @@ test('creates colored dropdown validation and rejects invalid writes', async ({ 
   expect(await valueAt(3)).toBeUndefined()
 
   await canvas.click({position:{x:70,y:96}})
-  page.once('dialog',dialog=>{expect(dialog.message()).toContain('상태 목록에서 선택하세요.');dialog.accept()})
-  await page.locator('.grid-viewport').evaluate(element=>{const data=new DataTransfer();data.setData('text/plain','invalid');element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})
+  const dialogPromise=page.waitForEvent('dialog')
+  const pastePromise=page.locator('.grid-viewport').evaluate(element=>{const data=new DataTransfer();data.setData('text/plain','invalid');element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))})
+  const dialog=await dialogPromise
+  expect(dialog.message()).toContain('상태 목록에서 선택하세요.')
+  await dialog.accept()
+  await pastePromise
   await expect.poll(()=>valueAt(3)).toBeUndefined()
 
   await page.reload();await expect(canvas).toBeVisible()
@@ -387,8 +391,11 @@ test('creates colored dropdown validation and rejects invalid writes', async ({ 
   await expect(page.locator('.cell-dropdown-trigger')).toBeVisible()
   await page.getByRole('button',{name:'데이터 검증'}).click()
   await page.locator('.validation-layout>aside button').nth(1).click()
-  page.once('dialog',dialog=>dialog.accept())
-  await page.getByRole('button',{name:'삭제'}).click()
+  const deleteDialogPromise=page.waitForEvent('dialog')
+  const deletePromise=page.getByRole('button',{name:'삭제',exact:true}).click()
+  const deleteDialog=await deleteDialogPromise
+  await deleteDialog.accept()
+  await deletePromise
   await expect.poll(async()=>(await rules()).items).toEqual([])
 })
 
