@@ -1,1324 +1,453 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>kanpic | #1 On-Premises & Air-Gapped AI Data Collaboration Platform</title>
-
-  <!-- Primary Meta Tags -->
-  <meta name="title" content="kanpic - #1 On-Premises & Air-Gapped AI Data Collaboration Platform">
-  <meta name="description" content="Redis-Free single infrastructure, Canvas 2D Ultra-Fast Grid Engine, Keycloak OIDC SSO, and MCP-based AI agent integration — a next-generation enterprise spreadsheet protecting complete data sovereignty. Contact: gagagiga@naver.com">
-  <meta name="keywords" content="kanpic, spreadsheet, on-premise, air-gapped, Canvas 2D, Keycloak, OIDC, MCP, AI agent, data validation">
-  <meta name="author" content="kanpic Core Architecture Team">
-
-  <!-- Open Graph / Facebook -->
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://hkjang.github.io/kanpic/">
-  <meta property="og:title" content="kanpic | #1 On-Premises & Air-Gapped AI Data Collaboration Platform">
-  <meta property="og:description" content="Enterprise data collaboration platform powered by Canvas 2D Ultra-Fast Grid Engine and MCP AI agent integration. Contact: gagagiga@naver.com">
-  <meta property="og:image" content="images/logo.svg">
-
-  <!-- Favicon -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kanpic — Private, Self-Hosted Data Collaboration</title>
+  <meta name="description" content="kanpic is a self-hosted web spreadsheet and data collaboration platform for on-premises and air-gapped environments, built with Go, React Canvas, PostgreSQL, and MCP.">
+  <meta name="author" content="kanpic Project">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://hkjang.github.io/kanpic/index_en.html">
+  <link rel="alternate" hreflang="ko" href="https://hkjang.github.io/kanpic/">
+  <link rel="alternate" hreflang="en" href="https://hkjang.github.io/kanpic/index_en.html">
   <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
 
-  <!-- Fonts & Icons -->
-  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="kanpic">
+  <meta property="og:url" content="https://hkjang.github.io/kanpic/index_en.html">
+  <meta property="og:title" content="kanpic — Private, Self-Hosted Data Collaboration">
+  <meta property="og:description" content="A web spreadsheet for teams that need on-premises control, air-gapped operation, and secure AI integration.">
+  <meta property="og:image" content="https://hkjang.github.io/kanpic/images/logo.svg">
+  <meta name="twitter:card" content="summary">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "kanpic",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Linux, Docker",
+    "url": "https://hkjang.github.io/kanpic/index_en.html",
+    "downloadUrl": "https://github.com/hkjang/kanpic",
+    "description": "A self-hosted web spreadsheet and data collaboration platform designed for on-premises and air-gapped environments."
+  }
+  </script>
 
   <style>
     :root {
-      --primary: #0f766e;
-      --primary-light: #14b8a6;
-      --primary-dark: #0d5c56;
-      --accent: #2dd4bf;
-      --bg-dark: #090d16;
-      --bg-card: #111827;
-      --bg-card-hover: #1f2937;
-      --border-color: rgba(255, 255, 255, 0.1);
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --gradient-teal: linear-gradient(135deg, #14b8a6 0%, #0f766e 100%);
-      --gradient-glow: radial-gradient(circle at 50% -20%, rgba(20, 184, 166, 0.25), transparent 70%);
-      --radius-sm: 8px;
-      --radius-md: 14px;
-      --radius-lg: 24px;
+      color-scheme: light;
+      --paper: #f7f4ec;
+      --paper-2: #eeeadf;
+      --card: #fffdf8;
+      --ink: #17251f;
+      --muted: #596961;
+      --quiet: #849087;
+      --line: rgba(23, 37, 31, .14);
+      --line-strong: rgba(15, 112, 83, .33);
+      --green: #0f7053;
+      --green-dark: #094c39;
+      --mint: #c8f0df;
+      --orange: #e66a3d;
+      --yellow: #f2c94c;
+      --blue: #4c7fd9;
+      --shadow: 0 28px 80px rgba(39, 52, 45, .13);
+      --radius: 20px;
+      --max: 1180px;
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    html {
-      scroll-behavior: smooth;
-      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
-      background-color: var(--bg-dark);
-      color: var(--text-main);
-      line-height: 1.6;
-    }
-
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
-      overflow-x: hidden;
-      background: var(--bg-dark);
-      background-image: var(--gradient-glow);
-    }
-
-    /* Container */
-    .container {
-      max-width: 1240px;
-      margin: 0 auto;
-      padding: 0 24px;
-    }
-
-    /* Header & Navigation */
-    header.navbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      z-index: 1000;
-      background: rgba(9, 13, 22, 0.85);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border-color);
-      transition: all 0.3s ease;
-    }
-
-    .nav-container {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      height: 76px;
-    }
-
-    .brand-logo {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      text-decoration: none;
-      color: var(--text-main);
-    }
-
-    .brand-logo img {
-      height: 36px;
-      width: auto;
-    }
-
-    .brand-text {
-      font-family: 'Outfit', sans-serif;
-      font-weight: 800;
-      font-size: 26px;
-      letter-spacing: -0.03em;
-      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .nav-menu {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      list-style: none;
-    }
-
-    .nav-link {
-      white-space: nowrap;
-      font-size: 0.92rem;
-      color: var(--text-muted);
-      text-decoration: none;
-      font-size: 15px;
-      font-weight: 500;
-      transition: color 0.2s;
-    }
-
-    .nav-link:hover {
-      color: var(--accent);
-    }
-
-    .nav-actions {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 10px 20px;
-      border-radius: var(--radius-sm);
-      font-size: 14px;
-      font-weight: 600;
-      text-decoration: none;
-      transition: all 0.25s ease;
-      cursor: pointer;
-      border: none;
-    }
-
-    .btn-primary {
-      background: var(--gradient-teal);
-      color: #ffffff;
-      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.4);
-    }
-
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(20, 184, 166, 0.5);
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text-main);
-      border: 1px solid var(--border-color);
-    }
-
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.12);
-      color: #ffffff;
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-
-    /* Hero Section */
-    section.hero {
-      padding: 160px 0 100px;
-      text-align: center;
-      position: relative;
-    }
-
-    .badge-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 16px;
-      background: rgba(20, 184, 166, 0.12);
-      border: 1px solid rgba(20, 184, 166, 0.3);
-      border-radius: 50px;
-      color: var(--accent);
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 24px;
-    }
-
-    .hero-title {
-      font-size: 54px;
-      font-weight: 800;
-      line-height: 1.18;
-      letter-spacing: -0.03em;
-      margin-bottom: 24px;
-      background: linear-gradient(180deg, #ffffff 40%, #cbd5e1 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .hero-title span {
-      background: linear-gradient(135deg, #2dd4bf 0%, #14b8a6 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .hero-subtitle {
-      max-width: 800px;
-      margin: 0 auto 40px;
-      font-size: 19px;
-      color: var(--text-muted);
-      font-weight: 400;
-      word-break: keep-all;
-    }
-
-    .hero-btns {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      margin-bottom: 60px;
-      flex-wrap: wrap;
-    }
-
-    .hero-btns .btn {
-      padding: 14px 28px;
-      font-size: 16px;
-      border-radius: var(--radius-md);
-    }
-
-    /* Hero Demo Canvas Simulator */
-    .hero-demo-wrapper {
-      position: relative;
-      max-width: 1060px;
-      margin: 0 auto;
-      border-radius: var(--radius-lg);
-      padding: 8px;
-      background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), rgba(20, 184, 166, 0.2));
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
-    }
-
-    .demo-window {
-      background: var(--bg-card);
-      border-radius: calc(var(--radius-lg) - 4px);
-      overflow: hidden;
-      border: 1px solid var(--border-color);
-    }
-
-    .demo-window-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 20px;
-      background: rgba(15, 23, 42, 0.9);
-      border-bottom: 1px solid var(--border-color);
-    }
-
-    .window-dots {
-      display: flex;
-      gap: 8px;
-    }
-
-    .dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-    }
-
-    .dot-red { background: #ef4444; }
-    .dot-yellow { background: #f59e0b; }
-    .dot-green { background: #10b981; }
-
-    .window-title {
-      font-size: 13px;
-      color: var(--text-muted);
-      font-family: 'Outfit', sans-serif;
-    }
-
-    /* Live Interactive Canvas Mock */
-    .grid-mockup {
-      padding: 16px;
-      background: #0b1120;
-      font-family: monospace;
-      font-size: 13px;
-      overflow-x: auto;
-    }
-
-    .toolbar-mock {
-      display: flex;
-      gap: 12px;
-      padding: 10px;
-      background: #1e293b;
-      border-radius: 6px;
-      margin-bottom: 12px;
-      align-items: center;
-    }
-
-    .formula-bar-mock {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: #0f172a;
-      padding: 6px 12px;
-      border-radius: 4px;
-      border: 1px solid var(--border-color);
-      color: var(--accent);
-      flex-grow: 1;
-    }
-
-    .grid-table {
-      width: 100%;
-      border-collapse: collapse;
-      text-align: left;
-    }
-
-    .grid-table th, .grid-table td {
-      border: 1px solid #1e293b;
-      padding: 8px 12px;
-    }
-
-    .grid-table th {
-      background: #1e293b;
-      color: var(--text-muted);
-      font-weight: 600;
-    }
-
-    .grid-table td {
-      background: #0f172a;
-      color: var(--text-main);
-    }
-
-    .grid-table td.selected {
-      outline: 2px solid var(--primary-light);
-      background: rgba(20, 184, 166, 0.15);
-    }
-
-    .chip-tag {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .chip-approved { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }
-    .chip-pending { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #d97706; }
-
-    /* Features Grid Section */
-    section.features {
-      padding: 100px 0;
-      position: relative;
-    }
-
-    .section-header {
-      text-align: center;
-      margin-bottom: 64px;
-    }
-
-    .section-title {
-      font-size: 38px;
-      font-weight: 800;
-      margin-bottom: 16px;
-      letter-spacing: -0.02em;
-    }
-
-    .section-subtitle {
-      font-size: 17px;
-      color: var(--text-muted);
-      max-width: 680px;
-      margin: 0 auto;
-    }
-
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
-    }
-
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      padding: 32px;
-      transition: all 0.3s ease;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .feature-card:hover {
-      transform: translateY(-6px);
-      border-color: rgba(20, 184, 166, 0.4);
-      background: var(--bg-card-hover);
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-    }
-
-    .feature-icon {
-      width: 52px;
-      height: 52px;
-      border-radius: 12px;
-      background: rgba(20, 184, 166, 0.12);
-      color: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 20px;
-    }
-
-    .feature-card h3 {
-      font-size: 20px;
-      font-weight: 700;
-      margin-bottom: 12px;
-      color: var(--text-main);
-    }
-
-    .feature-card p {
-      color: var(--text-muted);
-      font-size: 14.5px;
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 95% 4%, rgba(15,112,83,.1), transparent 30rem),
+        linear-gradient(rgba(23,37,31,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23,37,31,.025) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, 32px 32px, 32px 32px, auto;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* Interactive Showcase Section */
-    section.showcase {
-      padding: 100px 0;
-      background: rgba(15, 23, 42, 0.6);
-      border-top: 1px solid var(--border-color);
-      border-bottom: 1px solid var(--border-color);
+    a { color: inherit; }
+    button, input { font: inherit; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    section { scroll-margin-top: 86px; }
+    .container { width: min(calc(100% - 40px), var(--max)); margin-inline: auto; }
+    .skip-link { position: fixed; left: 12px; top: -70px; z-index: 1000; padding: 10px 14px; border-radius: 10px; background: var(--ink); color: white; }
+    .skip-link:focus { top: 12px; }
+
+    .site-header { position: sticky; top: 0; z-index: 100; border-bottom: 1px solid var(--line); background: rgba(247,244,236,.84); backdrop-filter: blur(18px); }
+    .nav { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-size: 1.18rem; font-weight: 850; letter-spacing: -.035em; }
+    .brand img { width: 37px; height: 37px; object-fit: contain; filter: drop-shadow(0 8px 14px rgba(15,112,83,.18)); }
+    .nav-links { display: flex; align-items: center; gap: 27px; margin: 0; padding: 0; list-style: none; }
+    .nav-links a { color: var(--muted); font-size: .9rem; font-weight: 680; text-decoration: none; }
+    .nav-links a:hover, .nav-links a:focus-visible { color: var(--green); }
+    .nav-actions { display: flex; align-items: center; gap: 9px; }
+    .language { display: inline-flex; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.4); }
+    .language a { min-width: 34px; padding: 4px 8px; border-radius: 999px; color: var(--quiet); font-size: .72rem; font-weight: 820; text-align: center; text-decoration: none; }
+    .language a[aria-current="page"] { background: var(--mint); color: var(--green-dark); }
+    .mobile-toggle { display: none; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--ink); cursor: pointer; }
+
+    .button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; border: 1px solid transparent; border-radius: 12px; font-size: .91rem; font-weight: 800; text-decoration: none; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+    .button:hover { transform: translateY(-2px); }
+    .button-primary { background: var(--green); color: white; box-shadow: 0 13px 28px rgba(15,112,83,.19); }
+    .button-primary:hover { background: var(--green-dark); }
+    .button-secondary { border-color: var(--line); background: rgba(255,255,255,.54); color: var(--ink); }
+    .button-secondary:hover { border-color: var(--line-strong); }
+
+    .hero { padding: 96px 0 80px; }
+    .hero-grid { display: grid; grid-template-columns: 1.02fr .98fr; align-items: center; gap: 66px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 10px; margin: 0 0 21px; color: var(--green); font-size: .76rem; font-weight: 880; letter-spacing: .11em; text-transform: uppercase; }
+    .eyebrow::before { content: ""; width: 27px; height: 2px; background: currentColor; }
+    h1 { margin: 0; max-width: 760px; font-size: clamp(2.8rem, 5.7vw, 5.1rem); line-height: .99; letter-spacing: -.065em; }
+    h1 em { color: var(--green); font-style: normal; }
+    .hero-copy { max-width: 660px; margin: 26px 0 0; color: var(--muted); font-size: clamp(1.03rem, 2vw, 1.18rem); }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+    .trust-row { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 29px; color: var(--muted); font-size: .81rem; font-weight: 680; }
+    .trust-row span { display: inline-flex; align-items: center; gap: 7px; }
+    .trust-row span::before { content: "✓"; color: var(--green); }
+
+    .sheet-window { position: relative; border: 1px solid rgba(23,37,31,.19); border-radius: 21px; overflow: hidden; background: var(--card); box-shadow: var(--shadow); transform: rotate(1deg); }
+    .sheet-window::after { content: ""; position: absolute; inset: auto 8% -14% 25%; height: 34%; border-radius: 50%; background: rgba(15,112,83,.13); filter: blur(36px); pointer-events: none; }
+    .window-bar { height: 49px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); background: #f2efe7; color: var(--quiet); font-size: .67rem; }
+    .window-title { color: var(--ink); font-weight: 760; }
+    .window-actions { display: flex; gap: 5px; }
+    .window-actions i { width: 7px; height: 7px; border-radius: 50%; background: #bcc3bb; }
+    .formula { height: 44px; display: grid; grid-template-columns: 42px 1fr auto; align-items: center; border-bottom: 1px solid var(--line); color: var(--muted); font-family: monospace; font-size: .7rem; }
+    .fx { height: 100%; display: grid; place-items: center; border-right: 1px solid var(--line); color: var(--green); font-weight: 800; }
+    .formula code { padding-left: 12px; }
+    .formula span:last-child { margin-right: 10px; padding: 3px 7px; border-radius: 999px; background: var(--mint); color: var(--green-dark); font-family: sans-serif; font-size: .56rem; font-weight: 800; }
+    .grid-wrap { overflow: hidden; }
+    .sheet-grid { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .64rem; }
+    .sheet-grid th, .sheet-grid td { height: 43px; padding: 7px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sheet-grid th { background: #f2efe7; color: var(--muted); font-weight: 700; }
+    .sheet-grid th:first-child, .sheet-grid td:first-child { width: 34px; padding-inline: 4px; color: var(--quiet); text-align: center; }
+    .sheet-grid td:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; }
+    .sheet-grid .selected { position: relative; background: rgba(200,240,223,.45); outline: 2px solid var(--green); outline-offset: -2px; color: var(--green-dark); font-weight: 780; }
+    .sheet-grid .valid { color: var(--green); font-weight: 800; }
+    .sheet-tabs { position: relative; z-index: 2; display: flex; gap: 6px; padding: 11px 13px; background: #f2efe7; }
+    .sheet-tabs span { padding: 5px 10px; border-radius: 7px; color: var(--quiet); font-size: .61rem; }
+    .sheet-tabs .active { background: var(--card); color: var(--green); box-shadow: 0 2px 8px rgba(23,37,31,.08); }
+
+    .proof { padding-bottom: 88px; }
+    .proof-grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 17px; overflow: hidden; background: rgba(255,253,248,.72); }
+    .proof-item { padding: 25px; border-left: 1px solid var(--line); }
+    .proof-item:first-child { border-left: 0; }
+    .proof-item strong { display: block; margin-bottom: 4px; font-size: 1.06rem; letter-spacing: -.025em; }
+    .proof-item span { color: var(--muted); font-size: .78rem; }
+
+    .section { padding: 95px 0; }
+    .section-soft { border-block: 1px solid var(--line); background: rgba(238,234,223,.68); }
+    .section-head { max-width: 750px; margin-bottom: 44px; }
+    .kicker { margin: 0 0 10px; color: var(--green); font-size: .74rem; font-weight: 880; letter-spacing: .12em; text-transform: uppercase; }
+    h2 { margin: 0; font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.08; letter-spacing: -.046em; }
+    .section-lead { margin: 17px 0 0; color: var(--muted); }
+    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card { min-height: 252px; padding: 25px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(255,253,248,.82); box-shadow: 0 9px 30px rgba(39,52,45,.035); }
+    .card-mark { width: 39px; height: 39px; display: grid; place-items: center; margin-bottom: 29px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--mint); color: var(--green-dark); font-family: monospace; font-size: .7rem; font-weight: 850; }
+    .card h3 { margin: 0 0 10px; font-size: 1.07rem; letter-spacing: -.02em; }
+    .card p { margin: 0; color: var(--muted); font-size: .88rem; }
+
+    .deploy-grid { display: grid; grid-template-columns: .79fr 1.21fr; gap: 58px; align-items: center; }
+    .deploy-copy p { color: var(--muted); }
+    .deploy-list { display: grid; gap: 11px; margin: 28px 0 0; }
+    .deploy-item { display: grid; grid-template-columns: 35px 1fr; gap: 12px; align-items: start; }
+    .deploy-item b:first-child { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--mint); color: var(--green-dark); font-family: monospace; font-size: .66rem; }
+    .deploy-item strong { display: block; font-size: .88rem; }
+    .deploy-item span { color: var(--muted); font-size: .76rem; }
+
+    .architecture { padding: 27px; border: 1px solid var(--line); border-radius: 21px; background: var(--card); box-shadow: var(--shadow); }
+    .architecture-row { display: grid; grid-template-columns: 115px 1fr; align-items: center; gap: 18px; padding: 17px 0; border-top: 1px solid var(--line); }
+    .architecture-row:first-child { border-top: 0; }
+    .architecture-row > span { color: var(--green); font-family: monospace; font-size: .65rem; font-weight: 850; }
+    .architecture-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+    .architecture-chips span { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #faf8f2; color: var(--muted); font-size: .68rem; }
+
+    .workflow-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; counter-reset: workflow; }
+    .workflow-card { min-height: 225px; padding: 23px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); counter-increment: workflow; }
+    .workflow-card::before { content: "0" counter(workflow); display: block; margin-bottom: 35px; color: var(--orange); font-family: monospace; font-size: .68rem; font-weight: 850; }
+    .workflow-card h3 { margin: 0 0 8px; font-size: .98rem; }
+    .workflow-card p { margin: 0; color: var(--muted); font-size: .8rem; }
+
+    .code-shell { border: 1px solid rgba(23,37,31,.2); border-radius: 18px; overflow: hidden; background: #14251f; box-shadow: var(--shadow); color: #ecf5f0; }
+    .code-head { min-height: 47px; display: flex; align-items: center; justify-content: space-between; padding: 0 15px; border-bottom: 1px solid rgba(255,255,255,.1); color: #87a69b; font-size: .74rem; }
+    .copy-button { border: 1px solid rgba(255,255,255,.13); border-radius: 8px; background: rgba(255,255,255,.04); color: #adc6bd; padding: 5px 10px; cursor: pointer; }
+    .copy-button:hover { border-color: rgba(200,240,223,.45); color: white; }
+    pre { margin: 0; padding: 21px; overflow-x: auto; color: #d5e5df; font-size: .73rem; line-height: 1.72; }
+    pre .comment { color: #6f9185; }
+    pre .cmd { color: #87e7c4; }
+
+    .docs-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+    .doc { display: flex; flex-direction: column; min-height: 220px; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); text-decoration: none; transition: transform .2s ease, border-color .2s ease; }
+    .doc:hover { transform: translateY(-3px); border-color: var(--line-strong); }
+    .doc small { color: var(--green); font-family: monospace; font-size: .66rem; text-transform: uppercase; }
+    .doc h3 { margin: 25px 0 8px; font-size: 1.05rem; }
+    .doc p { margin: 0; color: var(--muted); font-size: .83rem; }
+    .doc span { margin-top: auto; padding-top: 20px; color: var(--green); font-size: .8rem; font-weight: 780; }
+
+    .faq { display: grid; grid-template-columns: .72fr 1.28fr; gap: 60px; align-items: start; }
+    .faq-list { border-top: 1px solid var(--line); }
+    details { border-bottom: 1px solid var(--line); }
+    summary { display: flex; justify-content: space-between; gap: 20px; padding: 21px 0; cursor: pointer; font-weight: 750; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; color: var(--green); font-family: monospace; font-size: 1.15rem; }
+    details[open] summary::after { content: "−"; }
+    details p { margin: -6px 0 22px; color: var(--muted); font-size: .89rem; }
+
+    .final-cta { padding: 88px 0; }
+    .cta-panel { position: relative; overflow: hidden; padding: 56px; border-radius: 25px; background: var(--green-dark); color: white; box-shadow: var(--shadow); }
+    .cta-panel::after { content: "K"; position: absolute; right: 30px; bottom: -66px; color: rgba(255,255,255,.045); font-size: 14rem; font-weight: 900; line-height: 1; pointer-events: none; }
+    .cta-panel h2 { max-width: 760px; }
+    .cta-panel p { max-width: 660px; margin: 17px 0 28px; color: #bdd8ce; }
+    .cta-panel .button-primary { background: var(--mint); color: var(--green-dark); }
+    .cta-panel .button-secondary { border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: white; }
+    .site-footer { padding: 30px 0 42px; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; }
+    .footer-row { display: flex; justify-content: space-between; gap: 20px; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+    .footer-links a { text-decoration: none; }
+    .footer-links a:hover { color: var(--green); }
+    :focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+
+    @media (max-width: 970px) {
+      .hero-grid, .deploy-grid, .faq { grid-template-columns: 1fr; }
+      .hero-grid { gap: 52px; }
+      .feature-grid, .docs-grid { grid-template-columns: repeat(2, 1fr); }
+      .workflow-grid { grid-template-columns: repeat(2, 1fr); }
     }
 
-    .tab-navigation {
-      display: flex;
-      justify-content: center;
-      gap: 12px;
-      margin-bottom: 40px;
-      flex-wrap: wrap;
+    @media (max-width: 760px) {
+      .container { width: min(calc(100% - 28px), var(--max)); }
+      .mobile-toggle { display: grid; place-items: center; }
+      .nav-actions .button { display: none; }
+      .nav-links { display: none; position: absolute; top: 64px; left: 14px; right: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fbf8f0; box-shadow: var(--shadow); }
+      .nav-links.open { display: grid; gap: 4px; }
+      .nav-links a { display: block; padding: 11px; }
+      .hero { padding-top: 68px; }
+      h1 { font-size: clamp(2.65rem, 14vw, 4rem); }
+      .feature-grid, .docs-grid, .workflow-grid { grid-template-columns: 1fr; }
+      .card { min-height: auto; }
+      .proof-grid { grid-template-columns: 1fr; }
+      .proof-item { border-left: 0; border-top: 1px solid var(--line); }
+      .proof-item:first-child { border-top: 0; }
+      .sheet-window { transform: none; }
+      .sheet-grid { font-size: .58rem; }
+      .sheet-grid th, .sheet-grid td { padding-inline: 6px; }
+      .architecture-row { grid-template-columns: 1fr; gap: 8px; }
+      .section { padding: 72px 0; }
+      .cta-panel { padding: 35px 25px; }
+      .footer-row { flex-direction: column; }
     }
 
-    .tab-btn {
-      padding: 12px 24px;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border-color);
-      color: var(--text-muted);
-      font-weight: 600;
-      font-size: 15px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .tab-btn.active {
-      background: var(--gradient-teal);
-      color: #ffffff;
-      border-color: transparent;
-      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.4);
-    }
-
-    .tab-content {
-      display: none;
-      background: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-lg);
-      padding: 40px;
-    }
-
-    .tab-content.active {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 40px;
-      align-items: center;
-    }
-
-    .showcase-text h3 {
-      font-size: 28px;
-      font-weight: 800;
-      margin-bottom: 16px;
-      color: var(--accent);
-    }
-
-    .showcase-text p {
-      color: var(--text-muted);
-      font-size: 16px;
-      margin-bottom: 24px;
-    }
-
-    .showcase-list {
-      list-style: none;
-      margin-bottom: 24px;
-    }
-
-    .showcase-list li {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 10px;
-      color: var(--text-main);
-      font-size: 15px;
-    }
-
-    .showcase-list li i {
-      color: var(--accent);
-    }
-
-    /* ROI Calculator Section */
-    section.roi-calculator {
-      padding: 100px 0;
-    }
-
-    .calculator-box {
-      background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(17, 24, 39, 0.95));
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-lg);
-      padding: 48px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 48px;
-      align-items: center;
-    }
-
-    .calc-inputs label {
-      display: block;
-      font-size: 14px;
-      color: var(--text-muted);
-      margin-bottom: 8px;
-    }
-
-    .calc-inputs input[type="range"] {
-      width: 100%;
-      accent-color: var(--primary-light);
-      margin-bottom: 24px;
-    }
-
-    .calc-result {
-      background: rgba(20, 184, 166, 0.08);
-      border: 1px solid rgba(20, 184, 166, 0.25);
-      border-radius: var(--radius-md);
-      padding: 36px;
-      text-align: center;
-    }
-
-    .savings-amount {
-      font-size: 44px;
-      font-weight: 800;
-      color: var(--accent);
-      font-family: 'Outfit', sans-serif;
-      margin: 12px 0;
-    }
-
-    /* Contact Banner Section */
-    section.contact-section {
-      padding: 80px 0;
-      background: linear-gradient(135deg, rgba(15, 118, 110, 0.15) 0%, rgba(20, 184, 166, 0.05) 100%);
-      border-top: 1px solid var(--border-color);
-      border-bottom: 1px solid var(--border-color);
-    }
-
-    .contact-card {
-      background: var(--bg-card);
-      border: 1px solid rgba(20, 184, 166, 0.3);
-      border-radius: var(--radius-lg);
-      padding: 48px;
-      text-align: center;
-      max-width: 860px;
-      margin: 0 auto;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-    }
-
-    .contact-card h2 {
-      font-size: 32px;
-      font-weight: 800;
-      margin-bottom: 16px;
-      color: var(--text-main);
-    }
-
-    .contact-card p {
-      color: var(--text-muted);
-      font-size: 17px;
-      margin-bottom: 32px;
-      word-break: keep-all;
-    }
-
-    .contact-email-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 12px;
-      padding: 16px 32px;
-      background: var(--gradient-teal);
-      color: #ffffff;
-      font-size: 20px;
-      font-weight: 700;
-      border-radius: 50px;
-      text-decoration: none;
-      box-shadow: 0 8px 24px rgba(15, 118, 110, 0.4);
-      transition: all 0.3s ease;
-    }
-
-    .contact-email-badge:hover {
-      transform: translateY(-3px) scale(1.02);
-      box-shadow: 0 12px 32px rgba(20, 184, 166, 0.6);
-    }
-
-    /* Documentation Section */
-    section.docs-section {
-      padding: 100px 0;
-      background: rgba(15, 23, 42, 0.4);
-    }
-
-    .docs-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 20px;
-    }
-
-    .doc-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      padding: 24px;
-      text-decoration: none;
-      color: var(--text-main);
-      transition: all 0.3s ease;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-
-    .doc-card:hover {
-      transform: translateY(-4px);
-      border-color: var(--primary-light);
-      background: var(--bg-card-hover);
-    }
-
-    .doc-type {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--accent);
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-
-    .doc-title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 12px;
-      color: var(--text-main);
-    }
-
-    .doc-desc {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-bottom: 20px;
-    }
-
-    .doc-download-btn {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--primary-light);
-    }
-
-    /* Footer */
-    footer.footer {
-      border-top: 1px solid var(--border-color);
-      padding: 60px 0 40px;
-      background: #050811;
-      color: var(--text-muted);
-      font-size: 14px;
-    }
-
-    .footer-content {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 40px;
-      flex-wrap: wrap;
-      gap: 24px;
-    }
-
-    .footer-links {
-      display: flex;
-      gap: 24px;
-      list-style: none;
-    }
-
-    .footer-links a {
-      color: var(--text-muted);
-      text-decoration: none;
-      transition: color 0.2s;
-    }
-
-    .footer-links a:hover {
-      color: var(--text-main);
-    }
-
-    .copyright {
-      text-align: center;
-      padding-top: 24px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      font-size: 13px;
-    }
-
-    @media (max-width: 900px) {
-      .hero-title { font-size: 38px; }
-      .hero-subtitle { font-size: 16px; }
-      .tab-content.active { grid-template-columns: 1fr; }
-      .calculator-box { grid-template-columns: 1fr; }
-      .nav-menu { display: none; }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; }
     }
   </style>
-<style>
-.mobile-menu-btn {
-  display: none;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #f8fafc;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-@media (max-width: 768px) {
-  .mobile-menu-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  header .container, nav, .navbar {
-    position: relative;
-  }
-  .nav-links, .nav-menu, .nav-list {
-    display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: rgba(15, 23, 42, 0.98);
-    backdrop-filter: blur(12px);
-    flex-direction: column;
-    padding: 1.25rem;
-    gap: 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    z-index: 999;
-  }
-  .nav-links.active, .nav-menu.active, .nav-list.active {
-    display: flex;
-  }
-  body {
-    overflow-x: hidden;
-  }
-  .grid, .features-grid, .cards-grid {
-    grid-template-columns: 1fr !important;
-  }
-}
-</style>
-<style>
-/* Language Switcher Styling */
-.lang-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  background: rgba(255, 255, 255, 0.08);
-  padding: 3px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-.lang-btn {
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  padding: 4px 10px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  border-radius: 4px;
-  cursor: pointer;
-  text-decoration: none;
-  transition: all 0.2s ease;
-  line-height: 1.2;
-}
-.lang-btn:hover {
-  color: #ffffff;
-}
-.lang-btn.active {
-  background: #3b82f6;
-  color: #ffffff;
-}
-</style>
-<script id="auto-lang-detector">
-(function() {
-  var SAVED_KEY = 'user_lang_pref';
-  var userPref = localStorage.getItem(SAVED_KEY);
-  if (!userPref) {
-    var navLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '').toLowerCase();
-    var isKoBrowser = navLang.indexOf('ko') === 0;
-    var isEnPage = window.location.pathname.indexOf('index_en.html') !== -1;
-    if (!isKoBrowser && !isEnPage) {
-      var target = window.location.href.replace(/index\.html$/, 'index_en.html');
-      if (target === window.location.href) target = 'index_en.html';
-      window.location.replace(target);
-    } else if (isKoBrowser && isEnPage) {
-      var target = window.location.href.replace(/index_en\.html$/, 'index.html');
-      if (target === window.location.href) target = 'index.html';
-      window.location.replace(target);
-    }
-  }
-
-  document.addEventListener('DOMContentLoaded', function() {
-    var langBtns = document.querySelectorAll('.lang-btn, [data-lang], #btn-ko, #btn-en, #localeToggle, #btn-lang-toggle');
-    langBtns.forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var lang = btn.getAttribute('data-lang') || (btn.textContent || '').trim().toLowerCase();
-        if (lang.indexOf('en') !== -1) {
-          localStorage.setItem(SAVED_KEY, 'en');
-        } else if (lang.indexOf('ko') !== -1 || lang.indexOf('Enterprise Data Collaboration Platform') !== -1) {
-          localStorage.setItem(SAVED_KEY, 'ko');
-        }
-      });
-    });
-  });
-})();
-</script>
-<link rel="canonical" href="https://hkjang.github.io/kanpic/">
-
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="kanpic">
-  <meta name="twitter:description" content="kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration.">
-
-
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "BusinessApplication",
-  "name": "kanpic",
-  "url": "https://hkjang.github.io/kanpic/",
-  "description": "kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration.",
-  "applicationCategory": "BusinessApplication",
-  "operatingSystem": "Linux, macOS, Windows",
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
-  }
-}
-</script>
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {
-      "@type": "Question",
-      "name": "What is kanpic?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "kanpic is an enterprise on-premise AI data collaboration platform featuring Canvas 2D grid engine, OIDC SSO, and MCP AI integration."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Is kanpic open source?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Yes, kanpic is available under open source license on GitHub."
-      }
-    }
-  ]
-}
-</script>
-
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
 
-  <!-- Navigation Bar -->
-  <header class="navbar">
-    <div class="container nav-container">
-      <a href="#" class="brand-logo">
-        <img src="images/logo-icon.svg" alt="kanpic Logo Mark">
-        <span class="brand-text">kanpic</span>
-      </a>
-      <ul class="nav-menu">
-        <li><a href="#features" class="nav-link">Features</a></li>
-        <li><a href="#showcase" class="nav-link">Demo</a></li>
-        <li><a href="#roi" class="nav-link">TCO Savings</a></li>
-        <li><a href="#docs" class="nav-link">Docs</a></li>
+  <header class="site-header">
+    <nav class="nav container" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="kanpic home"><img src="images/logo-icon.svg" alt=""><span>kanpic</span></a>
+      <ul class="nav-links" id="nav-links">
+        <li><a href="#capabilities">Capabilities</a></li>
+        <li><a href="#deployment">Deployment</a></li>
+        <li><a href="#workflow">Workflow</a></li>
+        <li><a href="#docs">Docs</a></li>
+        <li><a href="#faq">FAQ</a></li>
       </ul>
-      <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="Open/Close Menu">
-          <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
-        </button>
       <div class="nav-actions">
-      <div class="lang-switch">
-        <a href="index.html" class="lang-btn">KO</a>
-        <a href="index_en.html" class="lang-btn active">EN</a>
+        <div class="language" aria-label="Language"><a href="index.html" lang="ko">KO</a><a href="index_en.html" lang="en" aria-current="page">EN</a></div>
+        <a class="button button-secondary" href="https://github.com/hkjang/kanpic" target="_blank" rel="noopener">GitHub ↗</a>
+        <button class="mobile-toggle" id="mobile-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Open navigation">☰</button>
       </div>
-        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-secondary">
-          <i data-lucide="file-text"></i> Executive Report (PDF)
-        </a>
-        <a href="https://github.com/hkjang/kanpic" target="_blank" class="btn btn-primary">
-          <i data-lucide="github"></i> GitHub Repository
-        </a>
-      </div>
-    </div>
+    </nav>
   </header>
 
-  <!-- Hero Section -->
-  <section class="hero">
-    <div class="container">
-      <div class="badge-pill">
-        <i data-lucide="shield-check"></i> 100% Air-Gapped & Redis-Free Architecture
-      </div>
-      <h1 class="hero-title">
-        Enterprise Data Collaboration Platform & Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform<br>
-        <span>#1 AI Data Collaboration Platform</span>
-      </h1>
-      <p class="hero-subtitle">
-        Enterprise Data Collaboration Platform Go Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Redis-Free Infrastructure, Canvas 2D Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Keycloak OIDC SSO, Enterprise Data Collaboration Platform Model Context Protocol(MCP) Enterprise Data Collaboration Platform — Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.
-      </p>
-
-      <div class="hero-btns">
-        <a href="mailto:gagagiga@naver.com" class="btn btn-primary">
-          <i data-lucide="mail"></i> Deployment & PoC Inquiry (gagagiga@naver.com)
-        </a>
-        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="btn btn-secondary">
-          <i data-lucide="download"></i> Executive Report (PDF)
-        </a>
-        <a href="USER_GUIDE.pdf" target="_blank" class="btn btn-secondary">
-          <i data-lucide="book-open"></i> Enterprise Data Collaboration Platform (PDF)
-        </a>
-      </div>
-
-      <!-- Live Mockup Window -->
-      <div class="hero-demo-wrapper">
-        <div class="demo-window">
-          <div class="demo-window-header">
-            <div class="window-dots">
-              <span class="dot dot-red"></span>
-              <span class="dot dot-yellow"></span>
-              <span class="dot dot-green"></span>
-            </div>
-            <div class="window-title">kanpic Workbooks — 2026_Financial_Performance_Report.kanpic</div>
-            <div style="width: 50px;"></div>
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">On-premises data collaboration</p>
+          <h1>A collaborative spreadsheet for networks that stay <em>private.</em></h1>
+          <p class="hero-copy">kanpic combines a browser-based Canvas spreadsheet, a Go application server, and PostgreSQL-backed persistence in a self-hosted platform designed for on-premises and air-gapped environments.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/hkjang/kanpic" target="_blank" rel="noopener">Explore on GitHub ↗</a>
+            <a class="button button-secondary" href="#deployment">See how it deploys <span aria-hidden="true">↓</span></a>
           </div>
-          <div class="grid-mockup">
-            <div class="toolbar-mock">
-              <span style="font-weight: bold; color: var(--accent);">[fx]</span>
-              <div class="formula-bar-mock">
-                =IF(B3 >= 1000000, "Enterprise Data Collaboration Platform", "Enterprise Data Collaboration Platform")
-              </div>
-              <span class="chip-tag chip-approved">Reject Input: True</span>
-            </div>
-            <table class="grid-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>A (Enterprise Data Collaboration Platform)</th>
-                  <th>B (2026 Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)</th>
-                  <th>C (Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)</th>
-                  <th>D (Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)</th>
-                </tr>
-              </thead>
+          <div class="trust-row" aria-label="kanpic highlights"><span>Air-gapped runtime</span><span>No Redis dependency</span><span>Scoped MCP access</span></div>
+        </div>
+
+        <div class="sheet-window" aria-label="kanpic spreadsheet preview">
+          <div class="window-bar"><div class="window-actions" aria-hidden="true"><i></i><i></i><i></i></div><span class="window-title">2026 Operating Plan.kanpic</span><span>Saved</span></div>
+          <div class="formula"><span class="fx">fx</span><code>=IF(C4&gt;=B4, "On track", "Review")</code><span>valid</span></div>
+          <div class="grid-wrap">
+            <table class="sheet-grid">
+              <thead><tr><th></th><th>A · Team</th><th>B · Target</th><th>C · Actual</th><th>D · Status</th></tr></thead>
               <tbody>
-                <tr>
-                  <td>1</td>
-                  <td>Enterprise Data Collaboration Platform</td>
-                  <td>1,450,000,000 Enterprise Data Collaboration Platform</td>
-                  <td><span class="chip-tag chip-approved">Enterprise Data Collaboration Platform</span></td>
-                  <td><span style="color: #34d399;">✓ Validated</span></td>
-                </tr>
-                <tr class="selected">
-                  <td>2</td>
-                  <td>AI Enterprise Data Collaboration Platform</td>
-                  <td>2,100,000,000 Enterprise Data Collaboration Platform</td>
-                  <td><span class="chip-tag chip-approved">Enterprise Data Collaboration Platform</span></td>
-                  <td><span style="color: #34d399;">✓ Validated</span></td>
-                </tr>
-                <tr>
-                  <td>3</td>
-                  <td>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</td>
-                  <td>980,000,000 Enterprise Data Collaboration Platform</td>
-                  <td><span class="chip-tag chip-pending">Enterprise Data Collaboration Platform</span></td>
-                  <td><span style="color: #34d399;">✓ Validated</span></td>
-                </tr>
+                <tr><td>1</td><td>Platform</td><td>1,250</td><td>1,318</td><td class="valid">On track</td></tr>
+                <tr><td>2</td><td>Data Operations</td><td>980</td><td>1,042</td><td class="valid">On track</td></tr>
+                <tr><td>3</td><td>Research</td><td>1,400</td><td>1,285</td><td>Review</td></tr>
+                <tr><td>4</td><td>Private Cloud</td><td>1,100</td><td>1,172</td><td class="selected">On track</td></tr>
+                <tr><td>5</td><td>Security</td><td>760</td><td>798</td><td class="valid">On track</td></tr>
               </tbody>
             </table>
           </div>
+          <div class="sheet-tabs"><span class="active">Operating plan</span><span>Regional view</span><span>Notes</span></div>
         </div>
       </div>
+    </section>
 
-    </div>
-  </section>
-
-  <!-- Features Grid Section -->
-  <section id="features" class="features">
-    <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">Why Choose kanpic?</h2>
-        <p class="section-subtitle">4 Enterprise Differentiators Overcoming Legacy SaaS &amp; Open Source Limits</p>
+    <section class="proof" aria-label="Technical highlights">
+      <div class="container proof-grid">
+        <div class="proof-item"><strong>Go + React Canvas</strong><span>Modular server with a browser-based grid editor</span></div>
+        <div class="proof-item"><strong>PostgreSQL only</strong><span>Server-authoritative persistence without Redis at runtime</span></div>
+        <div class="proof-item"><strong>Web + REST + MCP</strong><span>Human and agent workflows against the same data</span></div>
       </div>
+    </section>
 
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="shield-alert"></i>
-          </div>
-          <h3>100% Air-Gapped Network Support</h3>
-          <p>Operates independently in air-gapped networks with zero external communication. Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform 100% Enterprise Data Collaboration Platform.</p>
-        </div>
-
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="cpu"></i>
-          </div>
-          <h3>Redis-Free Infrastructure TCO Reduction</h3>
-          <p>Redis, RabbitMQ Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform PostgreSQL 1Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform TCOEnterprise Data Collaboration Platform 70% Enterprise Data Collaboration Platform.</p>
-        </div>
-
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="zap"></i>
-          </div>
-          <h3>Canvas 2D Ultra-Fast Grid Engine</h3>
-          <p>HTML DOMEnterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Canvas 2D Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform 10Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform 60fps Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-        </div>
-
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="bot"></i>
-          </div>
-          <h3>Model Context Protocol (MCP)</h3>
-          <p>Anthropic MCP Enterprise Data Collaboration Platform `/mcp` HTTP JSON-RPC 2.0 Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform LLM Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-        </div>
-
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="key-round"></i>
-          </div>
-          <h3>Keycloak OIDC PKCE SSO</h3>
-          <p>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform(Keycloak)Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform 2FA/SSO Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform SHA-256 Enterprise Data Collaboration Platform API Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-        </div>
-
-        <div class="feature-card">
-          <div class="feature-icon">
-            <i data-lucide="check-check"></i>
-          </div>
-          <h3>Data Validation (Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)</h3>
-          <p>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform(Chip), Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Custom Formula Enterprise Data Collaboration Platform `Reject Input` Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
+    <section class="section section-soft" id="capabilities">
+      <div class="container">
+        <header class="section-head"><p class="kicker">Built for controlled environments</p><h2>The spreadsheet experience, adapted to private infrastructure.</h2><p class="section-lead">kanpic focuses on deployability, data ownership, and governed access while keeping everyday import, editing, and export workflows familiar.</p></header>
+        <div class="feature-grid">
+          <article class="card"><div class="card-mark">AIR</div><h3>Offline-ready packaging</h3><p>Release bundles include the application image, web assets, CA certificates, time-zone data, and database migrations for disconnected deployment.</p></article>
+          <article class="card"><div class="card-mark">GRID</div><h3>Canvas spreadsheet editor</h3><p>A React Canvas interface handles workbook editing in the browser while the Go backend remains authoritative for persisted data.</p></article>
+          <article class="card"><div class="card-mark">I/O</div><h3>Practical file exchange</h3><p>Preview CSV, TSV, or XLSX before atomic import. Export the current workbook to XLSX or CSV through the product interfaces.</p></article>
+          <article class="card"><div class="card-mark">OIDC</div><h3>Keycloak sign-in</h3><p>Connect public or confidential Keycloak clients with Authorization Code Flow and PKCE, configured from the administration console.</p></article>
+          <article class="card"><div class="card-mark">KEY</div><h3>Scoped API keys</h3><p>Personal keys are shown once, stored as SHA-256 hashes, and checked for both <code>mcp.use</code> and each tool's required scope.</p></article>
+          <article class="card"><div class="card-mark">CFG</div><h3>Versioned administration</h3><p>Manage service settings, validate connections, inspect logs, review API keys, and restore earlier configuration versions from <code>/admin</code>.</p></article>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Interactive Showcase Section -->
-  <section id="showcase" class="showcase">
-    <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">Enterprise Data Collaboration Platform Features Enterprise Data Collaboration Platform</h2>
-        <p class="section-subtitle">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform kanpicEnterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-      </div>
-
-      <div class="tab-navigation">
-        <button class="tab-btn active" onclick="switchTab('tab-grid')">Canvas Enterprise Data Collaboration Platform & Enterprise Data Collaboration Platform</button>
-        <button class="tab-btn" onclick="switchTab('tab-validation')">Data Validation (Enterprise Data Collaboration Platform)</button>
-        <button class="tab-btn" onclick="switchTab('tab-filter')">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform & Enterprise Data Collaboration Platform</button>
-        <button class="tab-btn" onclick="switchTab('tab-mcp')">MCP AI Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</button>
-      </div>
-
-      <!-- Tab 1: Grid & Formula -->
-      <div id="tab-grid" class="tab-content active">
-        <div class="showcase-text">
-          <h3>Canvas 2D Enterprise Data Collaboration Platform & Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</h3>
-          <p>Go Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-          <ul class="showcase-list">
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (`SUM`, `AVERAGE`, `IF`, `CONCAT`)</li>
-            <li><i data-lucide="check-circle-2"></i> Goroutine Worker PoolEnterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> MS Excel Enterprise Data Collaboration Platform (`Ctrl+C/V`, `Shift+Enterprise Data Collaboration Platform`) 100% Enterprise Data Collaboration Platform</li>
-          </ul>
-        </div>
-        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-          <div style="font-family: monospace; font-size: 13px; color: var(--accent);">
-            // Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform<br>
-            A1: 1500 | B1: 2500<br>
-            C1: =SUM(A1:B1) -> <span style="color: #34d399; font-weight: bold;">4000</span><br>
-            D1: =IF(C1>=3000, "Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform", "Enterprise Data Collaboration Platform") -> <span style="color: #34d399; font-weight: bold;">"Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform"</span>
+    <section class="section" id="deployment">
+      <div class="container deploy-grid">
+        <div class="deploy-copy">
+          <p class="kicker">Simple deployment model</p>
+          <h2>Fewer moving parts inside the network boundary.</h2>
+          <p>The initial architecture is a modular Go monolith with embedded web assets and PostgreSQL as the server-authoritative store. Runtime configuration lives in the product, not across a collection of side services.</p>
+          <div class="deploy-list">
+            <div class="deploy-item"><b>01</b><div><strong>Start with PostgreSQL</strong><span><code>POSTGRES_DSN</code> is the only required environment variable.</span></div></div>
+            <div class="deploy-item"><b>02</b><div><strong>Bootstrap access</strong><span>Provide both administrator ID and password to protect the initial login.</span></div></div>
+            <div class="deploy-item"><b>03</b><div><strong>Configure in the UI</strong><span>Connect Keycloak and manage versioned service settings from <code>/admin</code>.</span></div></div>
           </div>
         </div>
-      </div>
-
-      <!-- Tab 2: Validation -->
-      <div id="tab-validation" class="tab-content">
-        <div class="showcase-text">
-          <h3>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Data Validation)</h3>
-          <p>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-          <ul class="showcase-list">
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Chip Style Validation)Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> `Reject Input = True` Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-          </ul>
-        </div>
-        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-          <div style="display: flex; gap: 10px; margin-bottom: 12px;">
-            <span class="chip-tag chip-approved">Enterprise Data Collaboration Platform</span>
-            <span class="chip-tag chip-pending">Enterprise Data Collaboration Platform</span>
-            <span class="chip-tag" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626;">Enterprise Data Collaboration Platform (Reject)</span>
-          </div>
-          <p style="font-size: 13px; color: var(--text-muted);">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform: <span style="color: #f87171;">"Enterprise Data Collaboration Platform: 0 Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform."</span></p>
+        <div class="architecture" aria-label="kanpic architecture">
+          <div class="architecture-row"><span>CLIENT</span><div class="architecture-chips"><span>React</span><span>Canvas grid</span><span>Admin console</span><span>Preferences</span></div></div>
+          <div class="architecture-row"><span>INTERFACES</span><div class="architecture-chips"><span>Web</span><span>REST API</span><span>Streamable HTTP MCP</span></div></div>
+          <div class="architecture-row"><span>APPLICATION</span><div class="architecture-chips"><span>Go modular monolith</span><span>Workbook services</span><span>Import / export</span></div></div>
+          <div class="architecture-row"><span>DATA</span><div class="architecture-chips"><span>PostgreSQL</span><span>Versioned settings</span><span>Hashed API keys</span></div></div>
         </div>
       </div>
+    </section>
 
-      <!-- Tab 3: Filter & Version -->
-      <div id="tab-filter" class="tab-content">
-        <div class="showcase-text">
-          <h3>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform & Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</h3>
-          <p>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-          <ul class="showcase-list">
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-          </ul>
-        </div>
-        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-size: 13px; color: var(--text-muted);">
-          🕒 2026-07-31 18:30 — Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Data Validation Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)<br>
-          🕒 2026-07-31 15:10 — Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (MCP AI Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)<br>
-          <button class="btn btn-secondary" style="margin-top: 12px; font-size: 12px; padding: 6px 12px;">[ Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform ]</button>
+    <section class="section section-soft" id="workflow">
+      <div class="container">
+        <header class="section-head"><p class="kicker">One governed workflow</p><h2>Move data in, work together, move results out.</h2><p class="section-lead">The same core capabilities are available to people through the browser and to approved automation through REST and MCP.</p></header>
+        <div class="workflow-grid">
+          <article class="workflow-card"><h3>Import with a preview</h3><p>Inspect CSV, TSV, or XLSX structure before committing the workbook in one atomic operation.</p></article>
+          <article class="workflow-card"><h3>Edit in the browser</h3><p>Work with a Canvas-based sheet while the server maintains the authoritative persisted state.</p></article>
+          <article class="workflow-card"><h3>Automate with scopes</h3><p>Use REST or MCP with personal API keys that are checked against endpoint and tool-level permissions.</p></article>
+          <article class="workflow-card"><h3>Export when needed</h3><p>Download the current workbook as XLSX or CSV for downstream systems and offline exchange.</p></article>
         </div>
       </div>
+    </section>
 
-      <!-- Tab 4: MCP -->
-      <div id="tab-mcp" class="tab-content">
-        <div class="showcase-text">
-          <h3>Model Context Protocol (MCP) AI Enterprise Data Collaboration Platform</h3>
-          <p>HTTP JSON-RPC 2.0 Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform AI Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-          <ul class="showcase-list">
-            <li><i data-lucide="check-circle-2"></i> `/mcp` Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform `mcp.use` Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> AI Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-            <li><i data-lucide="check-circle-2"></i> Python / Curl Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</li>
-          </ul>
+    <section class="section" id="quickstart">
+      <div class="container deploy-grid">
+        <div class="deploy-copy">
+          <p class="kicker">Quick start</p>
+          <h2>Bring up a protected local instance.</h2>
+          <p>Set the initial administrator credentials together, start the Compose stack, then open the browser. Additional identity and service configuration is managed from the admin console.</p>
+          <div class="hero-actions"><a class="button button-secondary" href="https://github.com/hkjang/kanpic#로컬-실행" target="_blank" rel="noopener">Read the setup guide ↗</a></div>
         </div>
-        <div style="background: #090d16; padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-family: monospace; font-size: 12px; color: #a7f3d0;">
-          POST /mcp HTTP/1.1<br>
-          Authorization: Bearer kanpic_live_sk_8f9a2b...<br>
-          {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate_summary"}}
-        </div>
-      </div>
+        <div class="code-shell">
+          <div class="code-head"><span>terminal</span><button class="copy-button" type="button" data-copy="quick-code">Copy</button></div>
+          <pre id="quick-code"><span class="comment"># Start kanpic with a protected bootstrap account</span>
+BOOTSTRAP_ADMIN_ID=admin \
+BOOTSTRAP_ADMIN_PASSWORD='replace-with-a-long-password' \
+<span class="cmd">docker compose up</span> --build
 
-    </div>
-  </section>
+<span class="comment"># Open the product</span>
+http://localhost:8080
 
-  <!-- ROI / TCO Calculator -->
-  <section id="roi" class="roi-calculator">
-    <div class="container">
-      <div class="calculator-box">
-        <div class="calc-inputs">
-          <h2 style="font-size: 28px; font-weight: 800; margin-bottom: 12px;">TCO Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</h2>
-          <p style="color: var(--text-muted); margin-bottom: 24px;">Enterprise Data Collaboration Platform SaaS Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.</p>
-
-          <label>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Enterprise Data Collaboration Platform): <span id="user-count-val" style="color: var(--accent); font-weight: bold;">100</span> Enterprise Data Collaboration Platform</label>
-          <input type="range" id="user-count" min="10" max="2000" value="100" oninput="calculateROI()">
-
-          <label>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Enterprise Data Collaboration Platform): <span id="server-count-val" style="color: var(--accent); font-weight: bold;">5</span> Enterprise Data Collaboration Platform</label>
-          <input type="range" id="server-count" min="1" max="50" value="5" oninput="calculateROI()">
-        </div>
-
-        <div class="calc-result">
-          <div style="font-size: 15px; color: var(--text-muted);">kanpic Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</div>
-          <div class="savings-amount" id="savings-val">₩ 34,200,000</div>
-          <p style="font-size: 13px; color: var(--text-muted);">* Enterprise Data Collaboration Platform SaaS Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Redis/MQ Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</p>
+<span class="comment"># Operational endpoints</span>
+Admin   http://localhost:8080/admin
+MCP     http://localhost:8080/mcp
+Health  http://localhost:8080/healthz</pre>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Contact Banner Section -->
-  <section id="contact" class="contact-section">
-    <div class="container">
-      <div class="contact-card">
-        <h2>Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</h2>
-        <p>
-          Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform PoC Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform(Keycloak/ERP) Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform.
-        </p>
-        <a href="mailto:gagagiga@naver.com" class="contact-email-badge">
-          <i data-lucide="mail"></i> gagagiga@naver.com
-        </a>
+    <section class="section section-soft" id="docs">
+      <div class="container">
+        <header class="section-head"><p class="kicker">Documentation</p><h2>Plan, deploy, and operate with context.</h2><p class="section-lead">Use the current README for implementation details and the role-specific guides for adoption and day-to-day operation.</p></header>
+        <div class="docs-grid">
+          <a class="doc" href="USER_GUIDE.html"><small>For users</small><h3>User guide</h3><p>Workbooks, editing, data validation, import, export, and assisted workflows.</p><span>Read online →</span></a>
+          <a class="doc" href="ADMIN_GUIDE.html"><small>For administrators</small><h3>Administrator guide</h3><p>Deployment, identity, backup, settings, API keys, MCP, and operational checks.</p><span>Read online →</span></a>
+          <a class="doc" href="https://github.com/hkjang/kanpic#readme" target="_blank" rel="noopener"><small>For builders</small><h3>Technical README</h3><p>Current prerequisites, offline installation, endpoints, and development verification.</p><span>Open on GitHub ↗</span></a>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Documentation Section -->
-  <section id="docs" class="docs-section">
-    <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</h2>
-        <p class="section-subtitle">kanpicEnterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform·Enterprise Data Collaboration Platform·Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</p>
+    <section class="section" id="faq">
+      <div class="container faq">
+        <header class="section-head"><p class="kicker">FAQ</p><h2>What to know before evaluation.</h2><p class="section-lead">The essentials for infrastructure and security teams.</p></header>
+        <div class="faq-list">
+          <details><summary>Does kanpic require internet access at runtime?</summary><p>No. The release image is designed to include the web assets, certificate bundle, time-zone data, and migrations needed for disconnected operation. Your deployment still needs access to its configured PostgreSQL service and any internal identity provider you choose.</p></details>
+          <details><summary>Does it require Redis or a message broker?</summary><p>The current architecture uses PostgreSQL as the server-authoritative store and does not require Redis at runtime. Review the release documentation for the exact version you plan to deploy.</p></details>
+          <details><summary>How is MCP access controlled?</summary><p>The Streamable HTTP endpoint requires an authorized identity or API key. Calls are checked for the general <code>mcp.use</code> permission as well as the scope required by the specific tool.</p></details>
+          <details><summary>What formats can I exchange?</summary><p>kanpic can preview and import CSV, TSV, and XLSX. The active workbook can be exported to XLSX or CSV through the supported product interfaces.</p></details>
+        </div>
       </div>
+    </section>
 
-      <div class="docs-grid">
-        <a href="EXECUTIVE_REPORT.pdf" target="_blank" class="doc-card">
-          <div>
-            <div class="doc-type">Executive Report</div>
-            <div class="doc-title">Executive Report (PDF)</div>
-            <div class="doc-desc">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (TCO, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform)</div>
-          </div>
-          <div class="doc-download-btn">
-            <i data-lucide="download"></i> PDF Enterprise Data Collaboration Platform / Enterprise Data Collaboration Platform
-          </div>
-        </a>
-
-        <a href="USER_GUIDE.pdf" target="_blank" class="doc-card">
-          <div>
-            <div class="doc-type">User Manual</div>
-            <div class="doc-title">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (PDF)</div>
-            <div class="doc-desc">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform, Enterprise Data Collaboration Platform)</div>
-          </div>
-          <div class="doc-download-btn">
-            <i data-lucide="download"></i> PDF Enterprise Data Collaboration Platform / Enterprise Data Collaboration Platform
-          </div>
-        </a>
-
-        <a href="ADMIN_GUIDE.pdf" target="_blank" class="doc-card">
-          <div>
-            <div class="doc-type">Admin Manual</div>
-            <div class="doc-title">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (PDF)</div>
-            <div class="doc-desc">DevOps Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Keycloak SSO, Enterprise Data Collaboration Platform/Enterprise Data Collaboration Platform, MCP)</div>
-          </div>
-          <div class="doc-download-btn">
-            <i data-lucide="download"></i> PDF Enterprise Data Collaboration Platform / Enterprise Data Collaboration Platform
-          </div>
-        </a>
-
-        <a href="ROADMAP_PLAN.pdf" target="_blank" class="doc-card">
-          <div>
-            <div class="doc-type">Strategic Roadmap</div>
-            <div class="doc-title">Enterprise Data Collaboration Platform·Enterprise Data Collaboration Platform·Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (PDF)</div>
-            <div class="doc-desc">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (Gantt, KPI, Enterprise Data Collaboration Platform)</div>
-          </div>
-          <div class="doc-download-btn">
-            <i data-lucide="download"></i> PDF Enterprise Data Collaboration Platform / Enterprise Data Collaboration Platform
-          </div>
-        </a>
-
-        <a href="USER_GROUPS_ANALYSIS.pdf" target="_blank" class="doc-card">
-          <div>
-            <div class="doc-type">User Analysis</div>
-            <div class="doc-title">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform (PDF)</div>
-            <div class="doc-desc">5Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</div>
-          </div>
-          <div class="doc-download-btn">
-            <i data-lucide="download"></i> PDF Enterprise Data Collaboration Platform / Enterprise Data Collaboration Platform
-          </div>
-        </a>
+    <section class="final-cta">
+      <div class="container cta-panel">
+        <h2>Keep collaborative data work inside the environment you control.</h2>
+        <p>Evaluate kanpic on your own infrastructure, test the offline deployment path, and connect identity and automation on your terms.</p>
+        <div class="hero-actions"><a class="button button-primary" href="https://github.com/hkjang/kanpic" target="_blank" rel="noopener">View kanpic on GitHub ↗</a><a class="button button-secondary" href="mailto:gagagiga@naver.com">Discuss a deployment</a></div>
       </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
-  <!-- Footer -->
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-content">
-        <a href="#" class="brand-logo">
-          <img src="images/logo-icon.svg" alt="kanpic Logo Mark">
-          <span class="brand-text">kanpic</span>
-        </a>
-        <ul class="footer-links">
-          <li><a href="mailto:gagagiga@naver.com">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform: gagagiga@naver.com</a></li>
-          <li><a href="USER_GUIDE.html" target="_blank">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</a></li>
-          <li><a href="ADMIN_GUIDE.html" target="_blank">Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform Enterprise Data Collaboration Platform</a></li>
-          <li><a href="https://github.com/hkjang/kanpic" target="_blank">GitHub Repository</a></li>
-        </ul>
-      </div>
-      <div class="copyright">
-        © 2026 kanpic Platform Core Team. Contact: <a href="mailto:gagagiga@naver.com" style="color: var(--accent);">gagagiga@naver.com</a>. Built for Enterprise Closed-Network & AI Collaboration.
-      </div>
+  <footer class="site-footer">
+    <div class="container footer-row">
+      <span>© 2026 kanpic Project</span>
+      <div class="footer-links"><a href="mailto:gagagiga@naver.com">Contact</a><a href="https://github.com/hkjang/kanpic" target="_blank" rel="noopener">GitHub</a><a href="index.html" lang="ko">한국어</a></div>
     </div>
   </footer>
 
-  <!-- Scripts -->
   <script>
-    // Initialize Lucide icons
-    lucide.createIcons();
-
-    // Tab Switcher
-    function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-
-      event.target.classList.add('active');
-      document.getElementById(tabId).classList.add('active');
-    }
-
-    // ROI Calculator Logic
-    function calculateROI() {
-      const users = parseInt(document.getElementById('user-count').value);
-      const servers = parseInt(document.getElementById('server-count').value);
-
-      document.getElementById('user-count-val').innerText = users.toLocaleString();
-      document.getElementById('server-count-val').innerText = servers.toLocaleString();
-
-      // SaaS license cost (~180,000 KRW / user / year) + Middleware ops cost (~3,000,000 KRW / server / year)
-      const saasSavings = users * 180000;
-      const infraSavings = servers * 3200000;
-      const totalSavings = saasSavings + infraSavings;
-
-      document.getElementById('savings-val').innerText = '₩ ' + totalSavings.toLocaleString();
-    }
-
-    // Initial calculation
-    calculateROI();
+    const toggle = document.getElementById('mobile-toggle');
+    const nav = document.getElementById('nav-links');
+    toggle.addEventListener('click', () => {
+      const isOpen = nav.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', String(isOpen));
+      toggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+    });
+    nav.querySelectorAll('a').forEach(link => link.addEventListener('click', () => {
+      nav.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+    }));
+    document.querySelectorAll('[data-copy]').forEach(button => {
+      button.addEventListener('click', async () => {
+        const target = document.getElementById(button.dataset.copy);
+        try {
+          await navigator.clipboard.writeText(target.innerText);
+          button.textContent = 'Copied';
+          window.setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+        } catch (_) {
+          button.textContent = 'Select text';
+        }
+      });
+    });
   </script>
-<script>document.addEventListener("DOMContentLoaded", function() { if(typeof setLanguage === "function") setLanguage("en"); });</script>
 </body>
 </html>
