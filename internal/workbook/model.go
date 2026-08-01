@@ -39,6 +39,7 @@ type Cell struct {
 }
 
 type CellInput struct {
+	SheetID     string          `json:"-"`
 	Row         int             `json:"row"`
 	Column      int             `json:"column"`
 	Value       json.RawMessage `json:"value,omitempty"`
@@ -76,11 +77,13 @@ type CellConflict struct {
 }
 
 type CellCoordinate struct {
-	Row    int `json:"row"`
-	Column int `json:"column"`
+	SheetID string `json:"sheet_id,omitempty"`
+	Row     int    `json:"row"`
+	Column  int    `json:"column"`
 }
 
 type CellFormulaError struct {
+	SheetID string `json:"sheet_id,omitempty"`
 	Row     int    `json:"row"`
 	Column  int    `json:"column"`
 	Code    string `json:"code"`

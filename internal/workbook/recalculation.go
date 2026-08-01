@@ -28,7 +28,12 @@ func submittedCoordinates(inputs []CellInput) []CellCoordinate {
 }
 
 func inputFromCell(row, column int, cell Cell) CellInput {
-	return CellInput{Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: cloneJSON(cell.Style), SpillSource: cell.SpillSource}
+	return CellInput{SheetID: cell.SheetID, Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: cloneJSON(cell.Style), SpillSource: cell.SpillSource}
+}
+
+type scopedCellKey struct {
+	sheetID string
+	cellKey
 }
 
 func parseCoordinateKey(value string) (CellCoordinate, error) {
@@ -44,24 +49,26 @@ func parseCoordinateKey(value string) (CellCoordinate, error) {
 	return CellCoordinate{Row: row, Column: column}, nil
 }
 
-func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
-	prospective := make(map[cellKey]Cell, len(existing)+len(submitted))
-	for key, cell := range existing {
-		prospective[key] = cloneCell(cell)
+func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
+	prospective := cloneAllCells(existing)
+	if prospective[currentSheetID] == nil {
+		return nil, nil, nil, ErrNotFound
 	}
-	submittedKeys := make(map[cellKey]struct{}, len(submitted))
-	changed := make(map[cellKey]struct{}, len(submitted))
+	submittedKeys := make(map[scopedCellKey]struct{}, len(submitted))
+	changed := make(map[scopedCellKey]struct{}, len(submitted))
 	for _, input := range submitted {
+		input.SheetID = currentSheetID
 		key := cellKey{input.Row, input.Column}
-		if _, duplicate := submittedKeys[key]; duplicate {
+		scoped := scopedCellKey{sheetID: currentSheetID, cellKey: key}
+		if _, duplicate := submittedKeys[scoped]; duplicate {
 			return nil, nil, nil, fmt.Errorf("%w: duplicate cell %s in one operation", ErrInvalid, cellrange.Address(input.Row, input.Column))
 		}
-		current := prospective[key]
+		current := prospective[currentSheetID][key]
 		if current.SpillSource != "" && input.SpillSource != current.SpillSource {
 			return nil, nil, nil, fmt.Errorf("%w: %s is part of the array result from %s; edit the source formula instead", ErrInvalid, cellrange.Address(input.Row, input.Column), current.SpillSource)
 		}
-		for _, cleared := range clearSpillCells(prospective, cellrange.Address(input.Row, input.Column)) {
-			changed[cleared] = struct{}{}
+		for _, cleared := range clearSpillCells(prospective[currentSheetID], cellrange.Address(input.Row, input.Column)) {
+			changed[scopedCellKey{sheetID: currentSheetID, cellKey: cleared}] = struct{}{}
 		}
 		input.Value = cloneJSON(input.Value)
 		input.Style = cloneJSON(input.Style)
@@ -71,27 +78,39 @@ func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]
 			input.Value = nil
 			input.SpillSource = ""
 		}
-		submittedKeys[key] = struct{}{}
-		cell := Cell{Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource}
+		submittedKeys[scoped] = struct{}{}
+		cell := Cell{SheetID: currentSheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource}
 		if isEmptyCell(cell) {
-			delete(prospective, key)
+			delete(prospective[currentSheetID], key)
 		} else {
-			prospective[key] = cell
+			prospective[currentSheetID][key] = cell
 		}
-		changed[key] = struct{}{}
+		changed[scoped] = struct{}{}
 	}
 	// A #SPILL! formula is also affected when a user clears a cell that used to
 	// block its result. The blocker is not a formula dependency, so retry these
 	// anchors on every ordinary mutation until expansion succeeds.
-	for key, cell := range prospective {
-		if cell.Formula != "" && string(bytes.TrimSpace(cell.Value)) == `"#SPILL!"` {
-			changed[key] = struct{}{}
+	for sheetID, cells := range prospective {
+		for key, cell := range cells {
+			if cell.Formula != "" && string(bytes.TrimSpace(cell.Value)) == `"#SPILL!"` {
+				changed[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
+			}
+			if forceAll && cell.Formula != "" {
+				changed[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
+			}
 		}
 	}
 
+	sheetNames := make(map[string]string, len(sheets))
+	sheetIDs := make(map[string]string, len(sheets))
+	for sheetID, sheet := range sheets {
+		sheetNames[sheet.Name] = sheetID
+		sheetIDs[strings.ToUpper(sheetID)] = sheetID
+	}
+	evaluator := formula.NewScoped("", sheetNames)
 	forcedSpills := make(map[string]*formula.Error)
-	recalculatedSet := make(map[cellKey]struct{})
-	formulaErrors := make(map[cellKey]CellFormulaError)
+	recalculatedSet := make(map[scopedCellKey]struct{})
+	formulaErrors := make(map[scopedCellKey]CellFormulaError)
 	pending := changed
 	stabilized := false
 	for iteration := 0; iteration < 8; iteration++ {
@@ -99,62 +118,68 @@ func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		graph, err := formula.New().Recalculate(states, addressesFromKeys(pending))
+		graph, err := evaluator.Recalculate(states, addressesFromKeys(pending))
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
-		next := make(map[cellKey]struct{})
+		next := make(map[scopedCellKey]struct{})
 		for _, result := range graph.Cells {
-			selected, parseErr := cellrange.Parse(result.Address)
-			if parseErr != nil {
+			formulaSheetID, address, valid := formula.SplitCellKey(result.Address)
+			sheetID, found := sheetIDs[formulaSheetID]
+			selected, parseErr := cellrange.Parse(address)
+			if !valid || !found || parseErr != nil {
 				return nil, nil, nil, fmt.Errorf("%w: invalid calculated address %s", ErrInvalid, result.Address)
 			}
 			key := cellKey{selected.Start.Row, selected.Start.Column}
-			recalculatedSet[key] = struct{}{}
-			current := prospective[key]
+			scoped := scopedCellKey{sheetID: sheetID, cellKey: key}
+			recalculatedSet[scoped] = struct{}{}
+			current := prospective[sheetID][key]
 			if result.Error != nil {
-				for _, cleared := range clearSpillCells(prospective, result.Address) {
-					next[cleared] = struct{}{}
-					recalculatedSet[cleared] = struct{}{}
+				for _, cleared := range clearSpillCells(prospective[sheetID], address) {
+					clearedKey := scopedCellKey{sheetID: sheetID, cellKey: cleared}
+					next[clearedKey] = struct{}{}
+					recalculatedSet[clearedKey] = struct{}{}
 				}
 				encoded, _ := json.Marshal(result.Error.Code)
 				current.Value, current.SpillSource = encoded, ""
-				prospective[key] = current
-				formulaErrors[key] = CellFormulaError{Row: key.row, Column: key.column, Code: result.Error.Code, Message: result.Error.Message}
+				prospective[sheetID][key] = current
+				formulaErrors[scoped] = formulaErrorResult(currentSheetID, sheetID, key, result.Error)
 				continue
 			}
-			delete(formulaErrors, key)
+			delete(formulaErrors, scoped)
 			if matrix, array := formulaResultMatrix(result.Value); array {
-				spillChanges, spillMessage, spillErr := materializeSpill(prospective, key, matrix)
+				spillChanges, spillMessage, spillErr := materializeSpill(prospective[sheetID], key, matrix)
 				if spillErr != nil {
 					return nil, nil, nil, spillErr
 				}
 				for _, spillKey := range spillChanges {
-					next[spillKey] = struct{}{}
-					recalculatedSet[spillKey] = struct{}{}
+					spillScoped := scopedCellKey{sheetID: sheetID, cellKey: spillKey}
+					next[spillScoped] = struct{}{}
+					recalculatedSet[spillScoped] = struct{}{}
 				}
 				if spillMessage != "" {
 					forced := &formula.Error{Code: "#SPILL!", Message: spillMessage}
 					forcedSpills[result.Address] = forced
-					formulaErrors[key] = CellFormulaError{Row: key.row, Column: key.column, Code: forced.Code, Message: forced.Message}
-					next[key] = struct{}{}
+					formulaErrors[scoped] = formulaErrorResult(currentSheetID, sheetID, key, forced)
+					next[scoped] = struct{}{}
 				} else {
 					delete(forcedSpills, result.Address)
 				}
 				continue
 			}
 			delete(forcedSpills, result.Address)
-			for _, cleared := range clearSpillCells(prospective, result.Address) {
-				next[cleared] = struct{}{}
-				recalculatedSet[cleared] = struct{}{}
+			for _, cleared := range clearSpillCells(prospective[sheetID], address) {
+				clearedKey := scopedCellKey{sheetID: sheetID, cellKey: cleared}
+				next[clearedKey] = struct{}{}
+				recalculatedSet[clearedKey] = struct{}{}
 			}
 			encoded, marshalErr := json.Marshal(result.Value)
 			if marshalErr != nil {
 				return nil, nil, nil, marshalErr
 			}
-			current = prospective[key]
+			current = prospective[sheetID][key]
 			current.Value, current.SpillSource = encoded, ""
-			prospective[key] = current
+			prospective[sheetID][key] = current
 		}
 		if len(next) == 0 {
 			stabilized = true
@@ -167,12 +192,15 @@ func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]
 	}
 
 	expanded := changedCellInputs(existing, prospective, submittedKeys)
-	recalculated := coordinatesFromKeys(recalculatedSet)
+	recalculated := coordinatesFromKeys(currentSheetID, recalculatedSet)
 	errors := make([]CellFormulaError, 0, len(formulaErrors))
 	for _, formulaErr := range formulaErrors {
 		errors = append(errors, formulaErr)
 	}
 	sort.Slice(errors, func(i, j int) bool {
+		if errors[i].SheetID != errors[j].SheetID {
+			return errors[i].SheetID < errors[j].SheetID
+		}
 		if errors[i].Row == errors[j].Row {
 			return errors[i].Column < errors[j].Column
 		}
@@ -181,17 +209,37 @@ func recalculateCellInputs(existing map[cellKey]Cell, submitted []CellInput) ([]
 	return expanded, recalculated, errors, nil
 }
 
-func formulaStates(cells map[cellKey]Cell, forced map[string]*formula.Error) (map[string]formula.CellState, error) {
-	states := make(map[string]formula.CellState, len(cells))
-	for key, cell := range cells {
-		address := cellrange.Address(key.row, key.column)
-		var value any
-		if len(cell.Value) > 0 {
-			if err := json.Unmarshal(cell.Value, &value); err != nil {
-				return nil, fmt.Errorf("%w: cell %s has invalid JSON value", ErrInvalid, address)
-			}
+func formulaErrorResult(currentSheetID, sheetID string, key cellKey, formulaErr *formula.Error) CellFormulaError {
+	result := CellFormulaError{Row: key.row, Column: key.column, Code: formulaErr.Code, Message: formulaErr.Message}
+	if sheetID != currentSheetID {
+		result.SheetID = sheetID
+	}
+	return result
+}
+
+func inputsForSheet(inputs []CellInput, sheetID string) []CellInput {
+	result := make([]CellInput, 0, len(inputs))
+	for _, input := range inputs {
+		if input.SheetID == sheetID || input.SheetID == "" {
+			result = append(result, input)
 		}
-		states[address] = formula.CellState{Value: value, Formula: cell.Formula, ForcedError: forced[address]}
+	}
+	return result
+}
+
+func formulaStates(cells map[string]map[cellKey]Cell, forced map[string]*formula.Error) (map[string]formula.CellState, error) {
+	states := make(map[string]formula.CellState)
+	for sheetID, sheetCells := range cells {
+		for key, cell := range sheetCells {
+			address := formula.CellKey(sheetID, cellrange.Address(key.row, key.column))
+			var value any
+			if len(cell.Value) > 0 {
+				if err := json.Unmarshal(cell.Value, &value); err != nil {
+					return nil, fmt.Errorf("%w: cell %s has invalid JSON value", ErrInvalid, address)
+				}
+			}
+			states[address] = formula.CellState{Value: value, Formula: cell.Formula, ForcedError: forced[address]}
+		}
 	}
 	return states, nil
 }
@@ -334,51 +382,67 @@ func changedSpillKeys(before map[cellKey]Cell, after map[cellKey]Cell, anchor ce
 	return changed
 }
 
-func changedCellInputs(existing, prospective map[cellKey]Cell, submitted map[cellKey]struct{}) []CellInput {
-	keys := make(map[cellKey]struct{}, len(existing)+len(prospective)+len(submitted))
-	for key := range existing {
-		keys[key] = struct{}{}
+func changedCellInputs(existing, prospective map[string]map[cellKey]Cell, submitted map[scopedCellKey]struct{}) []CellInput {
+	keys := make(map[scopedCellKey]struct{}, len(submitted))
+	for sheetID, cells := range existing {
+		for key := range cells {
+			keys[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
+		}
 	}
-	for key := range prospective {
-		keys[key] = struct{}{}
+	for sheetID, cells := range prospective {
+		for key := range cells {
+			keys[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
+		}
 	}
 	for key := range submitted {
 		keys[key] = struct{}{}
 	}
-	ordered := make([]cellKey, 0, len(keys))
+	ordered := make([]scopedCellKey, 0, len(keys))
 	for key := range keys {
-		if _, required := submitted[key]; required || !cellsEqual(existing[key], prospective[key]) {
+		if _, required := submitted[key]; required || !cellsEqual(existing[key.sheetID][key.cellKey], prospective[key.sheetID][key.cellKey]) {
 			ordered = append(ordered, key)
 		}
 	}
 	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].row == ordered[j].row {
-			return ordered[i].column < ordered[j].column
+		if ordered[i].sheetID != ordered[j].sheetID {
+			return ordered[i].sheetID < ordered[j].sheetID
 		}
-		return ordered[i].row < ordered[j].row
+		if ordered[i].cellKey.row == ordered[j].cellKey.row {
+			return ordered[i].cellKey.column < ordered[j].cellKey.column
+		}
+		return ordered[i].cellKey.row < ordered[j].cellKey.row
 	})
 	result := make([]CellInput, 0, len(ordered))
 	for _, key := range ordered {
-		result = append(result, inputFromCell(key.row, key.column, prospective[key]))
+		input := inputFromCell(key.cellKey.row, key.cellKey.column, prospective[key.sheetID][key.cellKey])
+		input.SheetID = key.sheetID
+		result = append(result, input)
 	}
 	return result
 }
 
-func addressesFromKeys(keys map[cellKey]struct{}) []string {
+func addressesFromKeys(keys map[scopedCellKey]struct{}) []string {
 	result := make([]string, 0, len(keys))
 	for key := range keys {
-		result = append(result, cellrange.Address(key.row, key.column))
+		result = append(result, formula.CellKey(key.sheetID, cellrange.Address(key.cellKey.row, key.cellKey.column)))
 	}
 	sort.Strings(result)
 	return result
 }
 
-func coordinatesFromKeys(keys map[cellKey]struct{}) []CellCoordinate {
+func coordinatesFromKeys(currentSheetID string, keys map[scopedCellKey]struct{}) []CellCoordinate {
 	result := make([]CellCoordinate, 0, len(keys))
 	for key := range keys {
-		result = append(result, CellCoordinate{Row: key.row, Column: key.column})
+		coordinate := CellCoordinate{Row: key.cellKey.row, Column: key.cellKey.column}
+		if key.sheetID != currentSheetID {
+			coordinate.SheetID = key.sheetID
+		}
+		result = append(result, coordinate)
 	}
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].SheetID != result[j].SheetID {
+			return result[i].SheetID < result[j].SheetID
+		}
 		if result[i].Row == result[j].Row {
 			return result[i].Column < result[j].Column
 		}

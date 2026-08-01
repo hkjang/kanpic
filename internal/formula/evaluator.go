@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"kanpic/pkg/cellrange"
 )
@@ -26,12 +27,19 @@ type Result struct {
 	Error        *Error   `json:"error,omitempty"`
 }
 
-type Evaluator struct{}
+type Evaluator struct{ scope Scope }
 
 func New() *Evaluator { return &Evaluator{} }
 
+// NewScoped creates a workbook-aware evaluator. sheets maps user-visible sheet
+// names to stable identifiers; currentSheet is the stable identifier used for
+// unqualified A1 references.
+func NewScoped(currentSheet string, sheets map[string]string) *Evaluator {
+	return &Evaluator{scope: newScope(currentSheet, sheets)}
+}
+
 func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
-	parser, err := newParser(input)
+	parser, err := e.newParser(input, e.scope.CurrentSheet)
 	if err != nil {
 		return []string{}, formulaError("#ERROR!", err.Error())
 	}
@@ -51,7 +59,7 @@ func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
 }
 
 func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
-	parser, err := newParser(input)
+	parser, err := e.newParser(input, e.scope.CurrentSheet)
 	if err != nil {
 		return Result{Dependencies: []string{}, Error: formulaError("#ERROR!", err.Error())}
 	}
@@ -64,7 +72,7 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 	}
 	normalized := make(map[string]any, len(cells))
 	for address, value := range cells {
-		normalized[strings.ToUpper(strings.ReplaceAll(address, "$", ""))] = value
+		normalized[normalizeAddress(address)] = value
 	}
 	value, evalErr := root.eval(normalized)
 	dependencies := make([]string, 0, len(parser.dependencies))
@@ -93,6 +101,8 @@ const (
 	tokenRight
 	tokenComma
 	tokenColon
+	tokenBang
+	tokenQuotedIdentifier
 )
 
 type token struct {
@@ -107,9 +117,12 @@ func lex(input string) ([]token, error) {
 	}
 	tokens := make([]token, 0)
 	for index := 0; index < len(input); {
-		character := rune(input[index])
+		character, characterSize := utf8.DecodeRuneInString(input[index:])
+		if character == utf8.RuneError && characterSize == 1 {
+			return nil, fmt.Errorf("formula is not valid UTF-8")
+		}
 		if unicode.IsSpace(character) {
-			index++
+			index += characterSize
 			continue
 		}
 		if (character >= '0' && character <= '9') || character == '.' {
@@ -151,14 +164,38 @@ func lex(input string) ([]token, error) {
 			tokens = append(tokens, token{tokenString, builder.String()})
 			continue
 		}
+		if character == '\'' {
+			index++
+			var builder strings.Builder
+			closed := false
+			for index < len(input) {
+				if input[index] == '\'' {
+					if index+1 < len(input) && input[index+1] == '\'' {
+						builder.WriteByte('\'')
+						index += 2
+						continue
+					}
+					index++
+					closed = true
+					break
+				}
+				builder.WriteByte(input[index])
+				index++
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated quoted sheet name")
+			}
+			tokens = append(tokens, token{tokenQuotedIdentifier, builder.String()})
+			continue
+		}
 		if unicode.IsLetter(character) || character == '_' || character == '$' {
 			start := index
 			for index < len(input) {
-				current := rune(input[index])
+				current, size := utf8.DecodeRuneInString(input[index:])
 				if !unicode.IsLetter(current) && !unicode.IsDigit(current) && current != '_' && current != '.' && current != '$' {
 					break
 				}
-				index++
+				index += size
 			}
 			tokens = append(tokens, token{tokenIdentifier, input[start:index]})
 			continue
@@ -175,6 +212,9 @@ func lex(input string) ([]token, error) {
 			index++
 		case ':':
 			tokens = append(tokens, token{kind: tokenColon})
+			index++
+		case '!':
+			tokens = append(tokens, token{kind: tokenBang})
 			index++
 		case '+', '-', '*', '/', '^', '&', '=':
 			tokens = append(tokens, token{tokenOperator, string(character)})
@@ -215,26 +255,27 @@ func (n referenceNode) eval(cells map[string]any) (any, error) {
 	return value, nil
 }
 
-type rangeNode struct{ selected cellrange.Range }
+type rangeNode struct {
+	rows, columns int
+	addresses     []string
+}
 
 func (n rangeNode) eval(cells map[string]any) (any, error) {
-	count := (n.selected.End.Row - n.selected.Start.Row + 1) * (n.selected.End.Column - n.selected.Start.Column + 1)
+	count := n.rows * n.columns
 	if count > 100_000 {
 		return nil, formulaError("#VALUE!", "range is too large")
 	}
 	values := make([]any, 0, count)
-	for row := n.selected.Start.Row; row <= n.selected.End.Row; row++ {
-		for column := n.selected.Start.Column; column <= n.selected.End.Column; column++ {
-			value := cells[cellrange.Address(row, column)]
-			if formulaErr, ok := value.(*Error); ok {
-				return nil, formulaErr
-			}
-			values = append(values, value)
+	for _, address := range n.addresses {
+		value := cells[address]
+		if formulaErr, ok := value.(*Error); ok {
+			return nil, formulaErr
 		}
+		values = append(values, value)
 	}
 	return arrayValue{
-		rows:    n.selected.End.Row - n.selected.Start.Row + 1,
-		columns: n.selected.End.Column - n.selected.Start.Column + 1,
+		rows:    n.rows,
+		columns: n.columns,
 		values:  values,
 	}, nil
 }
@@ -437,14 +478,19 @@ type parser struct {
 	tokens       []token
 	position     int
 	dependencies map[string]struct{}
+	scope        Scope
 }
 
-func newParser(input string) (*parser, error) {
+func (e *Evaluator) newParser(input, currentSheet string) (*parser, error) {
 	tokens, err := lex(input)
 	if err != nil {
 		return nil, err
 	}
-	return &parser{tokens: tokens, dependencies: make(map[string]struct{})}, nil
+	scope := e.scope
+	if currentSheet != "" {
+		scope.CurrentSheet = strings.ToUpper(strings.TrimSpace(currentSheet))
+	}
+	return &parser{tokens: tokens, dependencies: make(map[string]struct{}), scope: scope}, nil
 }
 func (p *parser) parse() (node, error) {
 	result, err := p.expression(0)
@@ -508,7 +554,19 @@ func (p *parser) primary() (node, error) {
 		}
 		p.position++
 		return value, nil
-	case tokenIdentifier:
+	case tokenIdentifier, tokenQuotedIdentifier:
+		if current.kind == tokenQuotedIdentifier && p.current().kind != tokenBang {
+			return nil, fmt.Errorf("quoted name %q must qualify a cell reference", current.text)
+		}
+		if p.current().kind == tokenBang {
+			p.position++
+			start := p.current()
+			if start.kind != tokenIdentifier {
+				return nil, fmt.Errorf("sheet qualifier must be followed by a cell reference")
+			}
+			p.position++
+			return p.cellReference(current.text, start.text)
+		}
 		name := strings.ToUpper(strings.ReplaceAll(current.text, "$", ""))
 		if p.current().kind == tokenLeft {
 			p.position++
@@ -541,34 +599,51 @@ func (p *parser) primary() (node, error) {
 		if !isReference(name) {
 			return nil, fmt.Errorf("unknown name %q", current.text)
 		}
-		p.dependencies[name] = struct{}{}
-		reference := referenceNode{name}
-		if p.current().kind == tokenColon {
-			p.position++
-			end := p.current()
-			if end.kind != tokenIdentifier {
-				return nil, fmt.Errorf("range end must be a cell reference")
-			}
-			p.position++
-			endAddress := strings.ToUpper(strings.ReplaceAll(end.text, "$", ""))
-			selected, err := cellrange.Parse(name + ":" + endAddress)
-			if err != nil {
-				return nil, err
-			}
-			count := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
-			if count > 100_000 {
-				return nil, formulaError("#VALUE!", "range is too large")
-			}
-			for row := selected.Start.Row; row <= selected.End.Row; row++ {
-				for column := selected.Start.Column; column <= selected.End.Column; column++ {
-					p.dependencies[cellrange.Address(row, column)] = struct{}{}
-				}
-			}
-			return rangeNode{selected}, nil
-		}
-		return reference, nil
+		return p.cellReference("", current.text)
 	}
 	return nil, fmt.Errorf("unexpected token %q", current.text)
+}
+
+func (p *parser) cellReference(qualifier, startText string) (node, error) {
+	start := normalizeCellAddress(startText)
+	if !isReference(start) {
+		return nil, fmt.Errorf("%q is not a cell reference", startText)
+	}
+	startKey, err := p.scope.resolveCell(qualifier, start)
+	if err != nil {
+		return nil, err
+	}
+	if p.current().kind != tokenColon {
+		p.dependencies[startKey] = struct{}{}
+		return referenceNode{startKey}, nil
+	}
+	p.position++
+	end := p.current()
+	if end.kind != tokenIdentifier {
+		return nil, fmt.Errorf("range end must be a cell reference")
+	}
+	p.position++
+	endAddress := normalizeCellAddress(end.text)
+	selected, parseErr := cellrange.Parse(start + ":" + endAddress)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	count := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
+	if count > 100_000 {
+		return nil, formulaError("#VALUE!", "range is too large")
+	}
+	addresses := make([]string, 0, count)
+	for row := selected.Start.Row; row <= selected.End.Row; row++ {
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			key, resolveErr := p.scope.resolveCell(qualifier, cellrange.Address(row, column))
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			p.dependencies[key] = struct{}{}
+			addresses = append(addresses, key)
+		}
+	}
+	return rangeNode{rows: selected.End.Row - selected.Start.Row + 1, columns: selected.End.Column - selected.Start.Column + 1, addresses: addresses}, nil
 }
 func (p *parser) current() token { return p.tokens[p.position] }
 func operatorPrecedence(operator string) int {

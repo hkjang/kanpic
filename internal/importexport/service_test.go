@@ -10,6 +10,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"kanpic/internal/workbook"
+	"kanpic/pkg/cellrange"
 )
 
 func TestParseCSVPreservesIdentifiersAndDoesNotExecuteFormulas(t *testing.T) {
@@ -79,6 +80,10 @@ func TestXLSXParseAndRoundTrip(t *testing.T) {
 	created, err := service.Import(ctx, ImportRequest{FileName: "report.xlsx", Data: buffer.Bytes(), ActorID: "tester", IdempotencyKey: "xlsx-1", MaxExpandedBytes: DefaultMaxExpandedBytes})
 	if err != nil {
 		t.Fatal(err)
+	}
+	calculated, err := repository.ReadRange(ctx, created.Sheets[0].ID, mustCellRange(t, "A4"))
+	if err != nil || len(calculated) != 1 || string(calculated[0].Value) != "30" {
+		t.Fatalf("imported formula was not server-calculated: cells=%#v err=%v", calculated, err)
 	}
 	exported, err := service.Export(ctx, ExportRequest{WorkbookID: created.ID, Format: "xlsx"})
 	if err != nil {
@@ -179,4 +184,13 @@ func findInput(cells []workbook.CellInput, row, column int) workbook.CellInput {
 		}
 	}
 	return workbook.CellInput{}
+}
+
+func mustCellRange(t *testing.T, value string) cellrange.Range {
+	t.Helper()
+	selected, err := cellrange.Parse(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selected
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"kanpic/internal/formula"
 	"kanpic/pkg/cellrange"
 	"kanpic/pkg/identity"
 )
@@ -18,8 +19,8 @@ type cellKey struct{ row, column int }
 
 type operation struct {
 	result        MutationResult
-	before        map[cellKey]Cell
-	after         map[cellKey]Cell
+	before        map[scopedCellKey]Cell
+	after         map[scopedCellKey]Cell
 	submitted     []CellCoordinate
 	actorID       string
 	clientID      string
@@ -115,7 +116,27 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 				state.cells[sheet.ID][cellKey{cell.Row, cell.Column}] = cell
 			}
 		}
-		r.sheetToWB[sheet.ID] = wb.ID
+	}
+	currentSheetID := ""
+	for sheetID := range state.sheets {
+		currentSheetID = sheetID
+		break
+	}
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, inputCell := range expanded {
+		key := cellKey{inputCell.Row, inputCell.Column}
+		cell := Cell{SheetID: inputCell.SheetID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), SpillSource: inputCell.SpillSource, UpdatedAt: now}
+		if isEmptyCell(cell) {
+			delete(state.cells[inputCell.SheetID], key)
+		} else {
+			state.cells[inputCell.SheetID][key] = cell
+		}
+	}
+	for sheetID := range state.sheets {
+		r.sheetToWB[sheetID] = wb.ID
 	}
 	r.workbooks[wb.ID] = state
 	r.imports[key] = wb.ID
@@ -407,6 +428,17 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 	if next == sheet {
 		return sheet, nil
 	}
+	if next.Name != sheet.Name {
+		for formulaSheetID, cells := range state.cells {
+			for key, cell := range cells {
+				renamed := formula.RenameSheetReferences(cell.Formula, sheet.Name, next.Name)
+				if renamed != cell.Formula {
+					cell.Formula = renamed
+					state.cells[formulaSheetID][key] = cell
+				}
+			}
+		}
+	}
 	state.sheets[sheetID] = next
 	r.bump(state)
 	return next, nil
@@ -422,8 +454,35 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	if len(state.sheets) == 1 {
 		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
 	}
-	delete(state.sheets, sheetID)
-	delete(state.cells, sheetID)
+	nextSheets, nextCells := cloneSheets(state.sheets), cloneAllCells(state.cells)
+	delete(nextSheets, sheetID)
+	delete(nextCells, sheetID)
+	for id, sheet := range nextSheets {
+		if sheet.Position > deleted.Position {
+			sheet.Position--
+			nextSheets[id] = sheet
+		}
+	}
+	var currentSheetID string
+	for id := range nextSheets {
+		currentSheetID = id
+		break
+	}
+	expanded, _, _, err := recalculateCellInputs(nextSheets, nextCells, currentSheetID, nil, true)
+	if err != nil {
+		return err
+	}
+	now := r.now()
+	for _, input := range expanded {
+		key := cellKey{input.Row, input.Column}
+		cell := Cell{SheetID: input.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+		if isEmptyCell(cell) {
+			delete(nextCells[input.SheetID], key)
+		} else {
+			nextCells[input.SheetID][key] = cell
+		}
+	}
+	state.sheets, state.cells = nextSheets, nextCells
 	for filterID, view := range r.filters {
 		if view.SheetID == sheetID {
 			delete(r.filters, filterID)
@@ -435,12 +494,6 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 		}
 	}
 	delete(r.sheetToWB, sheetID)
-	for id, sheet := range state.sheets {
-		if sheet.Position > deleted.Position {
-			sheet.Position--
-			state.sheets[id] = sheet
-		}
-	}
 	r.bump(state)
 	return nil
 }
@@ -506,6 +559,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				continue
 			}
 		}
+		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
 	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
@@ -520,29 +574,34 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if len(mutation.StylePatch) > 0 {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.cells[mutation.SheetID], effective)
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false)
 		if err != nil {
 			return MutationResult{}, err
 		}
-		validationWarnings, err = ValidateCellInputs(r.dataValidationsForSheetLocked(mutation.SheetID), state.cells[mutation.SheetID], expanded, effective)
+		validationWarnings, err = ValidateCellInputs(r.dataValidationsForSheetLocked(mutation.SheetID), state.cells[mutation.SheetID], inputsForSheet(expanded, mutation.SheetID), effective)
 		if err != nil {
 			return MutationResult{}, err
 		}
 	}
-	before := make(map[cellKey]Cell, len(expanded))
-	after := make(map[cellKey]Cell, len(expanded))
+	before := make(map[scopedCellKey]Cell, len(expanded))
+	after := make(map[scopedCellKey]Cell, len(expanded))
 	now := r.now()
 	for _, input := range expanded {
-		coord := cellKey{input.Row, input.Column}
-		current := state.cells[mutation.SheetID][coord]
-		before[coord] = cloneCell(current)
-		cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
-		if isEmptyCell(cell) {
-			delete(state.cells[mutation.SheetID], coord)
-		} else {
-			state.cells[mutation.SheetID][coord] = cell
+		sheetID := input.SheetID
+		if sheetID == "" {
+			sheetID = mutation.SheetID
 		}
-		after[coord] = cloneCell(cell)
+		coord := cellKey{input.Row, input.Column}
+		scoped := scopedCellKey{sheetID: sheetID, cellKey: coord}
+		current := state.cells[sheetID][coord]
+		before[scoped] = cloneCell(current)
+		cell := Cell{SheetID: sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+		if isEmptyCell(cell) {
+			delete(state.cells[sheetID], coord)
+		} else {
+			state.cells[sheetID][coord] = cell
+		}
+		after[scoped] = cloneCell(cell)
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
@@ -582,7 +641,9 @@ func (r *MemoryRepository) UndoOperation(ctx context.Context, input UndoOperatio
 	coordinates := append([]CellCoordinate(nil), target.submitted...)
 	if len(coordinates) == 0 {
 		for key := range target.after {
-			coordinates = append(coordinates, CellCoordinate{Row: key.row, Column: key.column})
+			if key.sheetID == target.result.SheetID {
+				coordinates = append(coordinates, CellCoordinate{Row: key.cellKey.row, Column: key.cellKey.column})
+			}
 		}
 		sort.Slice(coordinates, func(i, j int) bool {
 			if coordinates[i].Row == coordinates[j].Row {
@@ -597,7 +658,7 @@ func (r *MemoryRepository) UndoOperation(ctx context.Context, input UndoOperatio
 	cells := make([]CellInput, 0, len(coordinates))
 	expected := make(map[string]Cell, len(coordinates))
 	for _, coordinate := range coordinates {
-		key := cellKey{coordinate.Row, coordinate.Column}
+		key := scopedCellKey{sheetID: target.result.SheetID, cellKey: cellKey{coordinate.Row, coordinate.Column}}
 		cells = append(cells, inputFromCell(coordinate.Row, coordinate.Column, target.before[key]))
 		expected[coordinateKey(coordinate.Row, coordinate.Column)] = cloneCell(target.after[key])
 	}
@@ -766,13 +827,13 @@ func (r *MemoryRepository) bump(state *workbookState) {
 func latestChange(operations []operation, sheetID string, key cellKey, afterVersion int64, actorID, clientID string) int64 {
 	var version int64
 	for _, op := range operations {
-		if op.result.ServerVersion <= afterVersion || op.result.SheetID != sheetID {
+		if op.result.ServerVersion <= afterVersion {
 			continue
 		}
 		if clientID != "" && op.actorID == actorID && op.clientID == clientID {
 			continue
 		}
-		if _, ok := op.after[key]; ok {
+		if _, ok := op.after[scopedCellKey{sheetID: sheetID, cellKey: key}]; ok {
 			version = op.result.ServerVersion
 		}
 	}

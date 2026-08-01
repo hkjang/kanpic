@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"kanpic/internal/formula"
 	"kanpic/pkg/cellrange"
 	"kanpic/pkg/identity"
 )
@@ -123,31 +124,53 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	}
 	wb.Sheets = make([]Sheet, 0, len(input.Sheets))
 	type importBlockKey struct{ row, column int }
+	importedCells := make(map[string]map[cellKey]Cell, len(input.Sheets))
+	sheets := make(map[string]Sheet, len(input.Sheets))
 	for position, imported := range input.Sheets {
 		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, CreatedAt: now}
 		properties, _ := json.Marshal(sheetProperties{Color: imported.Color})
 		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, position, properties, now); err != nil {
 			return Workbook{}, mapPostgresError(err)
 		}
-		blocks := make(map[importBlockKey]map[string]Cell)
+		importedCells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {
 			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}
 			if isEmptyCell(cell) {
 				continue
 			}
-			block := importBlockKey{(cell.Row - 1) / cellBlockSize, (cell.Column - 1) / cellBlockSize}
+			importedCells[sheet.ID][cellKey{cell.Row, cell.Column}] = cell
+		}
+		wb.Sheets = append(wb.Sheets, sheet)
+		sheets[sheet.ID] = sheet
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, inputCell := range expanded {
+		key := cellKey{inputCell.Row, inputCell.Column}
+		cell := Cell{SheetID: inputCell.SheetID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), SpillSource: inputCell.SpillSource, UpdatedAt: now}
+		if isEmptyCell(cell) {
+			delete(importedCells[inputCell.SheetID], key)
+		} else {
+			importedCells[inputCell.SheetID][key] = cell
+		}
+	}
+	for sheetID, cells := range importedCells {
+		blocks := make(map[importBlockKey]map[string]Cell)
+		for key, cell := range cells {
+			block := importBlockKey{(key.row - 1) / cellBlockSize, (key.column - 1) / cellBlockSize}
 			if blocks[block] == nil {
 				blocks[block] = make(map[string]Cell)
 			}
-			blocks[block][coordinateKey(cell.Row, cell.Column)] = cell
+			blocks[block][coordinateKey(key.row, key.column)] = cell
 		}
 		for block, payload := range blocks {
 			data, _ := json.Marshal(payload)
-			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, sheet.ID, block.row, block.column, data, now); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5)`, sheetID, block.row, block.column, data, now); err != nil {
 				return Workbook{}, err
 			}
 		}
-		wb.Sheets = append(wb.Sheets, sheet)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO import_jobs(id,actor_id,idempotency_key,file_name,format,workbook_id,cell_count,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, identity.New(), input.ActorID, input.IdempotencyKey, input.FileName, input.Format, wb.ID, cellCount, now); err != nil {
 		return Workbook{}, err
@@ -736,6 +759,53 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 	if _, err := tx.Exec(ctx, `UPDATE sheets SET name=$2,position=$3,properties=$4 WHERE id=$1`, sheetID, sheet.Name, sheet.Position, propertiesData); err != nil {
 		return Sheet{}, mapPostgresError(err)
 	}
+	if sheet.Name != original.Name {
+		type renamedBlock struct {
+			sheetID     string
+			row, column int
+			payload     map[string]Cell
+		}
+		blocks := make([]renamedBlock, 0)
+		rows, queryErr := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1 FOR UPDATE OF b`, workbookID)
+		if queryErr != nil {
+			return Sheet{}, queryErr
+		}
+		for rows.Next() {
+			var block renamedBlock
+			var data []byte
+			if scanErr := rows.Scan(&block.sheetID, &block.row, &block.column, &data); scanErr != nil {
+				rows.Close()
+				return Sheet{}, scanErr
+			}
+			if json.Unmarshal(data, &block.payload) != nil {
+				rows.Close()
+				return Sheet{}, fmt.Errorf("%w: stored cell block is invalid", ErrInvalid)
+			}
+			changed := false
+			for key, cell := range block.payload {
+				renamed := formula.RenameSheetReferences(cell.Formula, original.Name, sheet.Name)
+				if renamed != cell.Formula {
+					cell.Formula = renamed
+					block.payload[key] = cell
+					changed = true
+				}
+			}
+			if changed {
+				blocks = append(blocks, block)
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return Sheet{}, rowsErr
+		}
+		rows.Close()
+		for _, block := range blocks {
+			data, _ := json.Marshal(block.payload)
+			if _, updateErr := tx.Exec(ctx, `UPDATE cell_blocks SET payload=$4,updated_at=$5 WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3`, block.sheetID, block.row, block.column, data, r.now()); updateErr != nil {
+				return Sheet{}, updateErr
+			}
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, sheet.WorkbookID, r.now()); err != nil {
 		return Sheet{}, err
 	}
@@ -781,7 +851,87 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position-1 WHERE workbook_id=$1 AND position>$2`, workbookID, position); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, r.now()); err != nil {
+	sheetList, err := r.listSheets(ctx, tx, workbookID)
+	if err != nil {
+		return err
+	}
+	sheets := make(map[string]Sheet, len(sheetList))
+	existing := make(map[string]map[cellKey]Cell, len(sheetList))
+	var currentSheetID string
+	for _, sheet := range sheetList {
+		sheets[sheet.ID] = sheet
+		existing[sheet.ID] = make(map[cellKey]Cell)
+		if currentSheetID == "" {
+			currentSheetID = sheet.ID
+		}
+	}
+	type deleteBlockKey struct {
+		sheetID     string
+		row, column int
+	}
+	payloads := make(map[deleteBlockKey]map[string]Cell)
+	rows, err := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1 FOR UPDATE OF b`, workbookID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var block deleteBlockKey
+		var data []byte
+		if err := rows.Scan(&block.sheetID, &block.row, &block.column, &data); err != nil {
+			rows.Close()
+			return err
+		}
+		payload := make(map[string]Cell)
+		if json.Unmarshal(data, &payload) != nil {
+			rows.Close()
+			return fmt.Errorf("%w: stored cell block is invalid", ErrInvalid)
+		}
+		payloads[block] = payload
+		for _, cell := range payload {
+			existing[block.sheetID][cellKey{cell.Row, cell.Column}] = cell
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true)
+	if err != nil {
+		return err
+	}
+	groups := make(map[deleteBlockKey][]CellInput)
+	for _, input := range expanded {
+		block := deleteBlockKey{sheetID: input.SheetID, row: (input.Row - 1) / cellBlockSize, column: (input.Column - 1) / cellBlockSize}
+		groups[block] = append(groups[block], input)
+	}
+	now := r.now()
+	for block, inputs := range groups {
+		payload := payloads[block]
+		if payload == nil {
+			payload = make(map[string]Cell)
+		}
+		for _, input := range inputs {
+			coordinate := coordinateKey(input.Row, input.Column)
+			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+			if isEmptyCell(cell) {
+				delete(payload, coordinate)
+			} else {
+				payload[coordinate] = cell
+			}
+		}
+		if len(payload) == 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3`, block.sheetID, block.row, block.column); err != nil {
+				return err
+			}
+		} else {
+			data, _ := json.Marshal(payload)
+			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(sheet_id,block_row,block_column) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, block.sheetID, block.row, block.column, data, now); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -835,17 +985,29 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 			return MutationResult{}, err
 		}
 	}
-	type blockKey struct{ row, column int }
+	type blockKey struct {
+		sheetID     string
+		row, column int
+	}
 	payloads := make(map[blockKey]map[string]Cell)
-	existing := make(map[cellKey]Cell)
-	rows, err := tx.Query(ctx, `SELECT block_row,block_column,payload FROM cell_blocks WHERE sheet_id=$1 FOR UPDATE`, mutation.SheetID)
+	sheetList, err := r.listSheets(ctx, tx, workbookID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	sheets := make(map[string]Sheet, len(sheetList))
+	existing := make(map[string]map[cellKey]Cell, len(sheetList))
+	for _, sheet := range sheetList {
+		sheets[sheet.ID] = sheet
+		existing[sheet.ID] = make(map[cellKey]Cell)
+	}
+	rows, err := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1 FOR UPDATE OF b`, workbookID)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	for rows.Next() {
 		var block blockKey
 		var data []byte
-		if err := rows.Scan(&block.row, &block.column, &data); err != nil {
+		if err := rows.Scan(&block.sheetID, &block.row, &block.column, &data); err != nil {
 			rows.Close()
 			return MutationResult{}, err
 		}
@@ -856,7 +1018,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		}
 		payloads[block] = payload
 		for _, cell := range payload {
-			existing[cellKey{cell.Row, cell.Column}] = cell
+			existing[block.sheetID][cellKey{cell.Row, cell.Column}] = cell
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -867,7 +1029,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 
 	effective := make([]CellInput, 0, len(mutation.Cells))
 	for _, input := range mutation.Cells {
-		current := existing[cellKey{input.Row, input.Column}]
+		current := existing[mutation.SheetID][cellKey{input.Row, input.Column}]
 		if mutation.Expected != nil {
 			expected, exists := mutation.Expected[coordinateKey(input.Row, input.Column)]
 			if !exists {
@@ -888,6 +1050,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 				continue
 			}
 		}
+		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
 	if len(effective) == 0 && len(mutation.StylePatch) > 0 {
@@ -901,7 +1064,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if len(mutation.StylePatch) > 0 {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(existing, effective)
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false)
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -909,7 +1072,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		if err != nil {
 			return MutationResult{}, err
 		}
-		validationWarnings, err = ValidateCellInputs(rules, existing, expanded, effective)
+		validationWarnings, err = ValidateCellInputs(rules, existing[mutation.SheetID], inputsForSheet(expanded, mutation.SheetID), effective)
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -918,7 +1081,11 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	after := make(map[string]Cell, len(expanded))
 	groups := make(map[blockKey][]CellInput)
 	for _, input := range expanded {
-		key := blockKey{(input.Row - 1) / cellBlockSize, (input.Column - 1) / cellBlockSize}
+		sheetID := input.SheetID
+		if sheetID == "" {
+			sheetID = mutation.SheetID
+		}
+		key := blockKey{sheetID: sheetID, row: (input.Row - 1) / cellBlockSize, column: (input.Column - 1) / cellBlockSize}
 		groups[key] = append(groups[key], input)
 	}
 	now := r.now()
@@ -929,22 +1096,23 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		}
 		for _, input := range inputs {
 			coordinate := coordinateKey(input.Row, input.Column)
-			before[coordinate] = payload[coordinate]
-			cell := Cell{SheetID: mutation.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+			operationKey := operationCoordinateKey(block.sheetID, input.Row, input.Column)
+			before[operationKey] = payload[coordinate]
+			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				delete(payload, coordinate)
 			} else {
 				payload[coordinate] = cell
 			}
-			after[coordinate] = cell
+			after[operationKey] = cell
 		}
 		if len(payload) == 0 {
-			if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3`, mutation.SheetID, block.row, block.column); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3`, block.sheetID, block.row, block.column); err != nil {
 				return MutationResult{}, err
 			}
 		} else {
 			data, _ := json.Marshal(payload)
-			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(sheet_id,block_row,block_column) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, mutation.SheetID, block.row, block.column, data, now); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(sheet_id,block_row,block_column) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, block.sheetID, block.row, block.column, data, now); err != nil {
 				return MutationResult{}, err
 			}
 		}
@@ -993,11 +1161,13 @@ func (r *PostgresRepository) UndoOperation(ctx context.Context, input UndoOperat
 	coordinates := append([]CellCoordinate(nil), document.SubmittedCells...)
 	if len(coordinates) == 0 {
 		for key := range document.After {
-			coordinate, err := parseCoordinateKey(key)
+			coordinate, err := parseOperationCoordinateKey(sheetID, key)
 			if err != nil {
 				return MutationResult{}, err
 			}
-			coordinates = append(coordinates, coordinate)
+			if coordinate.SheetID == "" || coordinate.SheetID == sheetID {
+				coordinates = append(coordinates, coordinate)
+			}
 		}
 		sort.Slice(coordinates, func(i, j int) bool {
 			if coordinates[i].Row == coordinates[j].Row {
@@ -1013,8 +1183,8 @@ func (r *PostgresRepository) UndoOperation(ctx context.Context, input UndoOperat
 	expected := make(map[string]Cell, len(coordinates))
 	for _, coordinate := range coordinates {
 		key := coordinateKey(coordinate.Row, coordinate.Column)
-		cells = append(cells, inputFromCell(coordinate.Row, coordinate.Column, document.Before[key]))
-		expected[key] = cloneCell(document.After[key])
+		cells = append(cells, inputFromCell(coordinate.Row, coordinate.Column, operationDocumentCell(document.Before, sheetID, coordinate.Row, coordinate.Column)))
+		expected[key] = cloneCell(operationDocumentCell(document.After, sheetID, coordinate.Row, coordinate.Column))
 	}
 	return r.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: input.ActorID, ClientID: input.ClientID, BaseVersion: targetVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, Expected: expected, OperationType: "operation.undo", UndoOfOperationID: input.OperationID})
 }
@@ -1384,7 +1554,7 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 	if baseVersion < 1 {
 		baseVersion = 0
 	}
-	rows, err := tx.Query(ctx, `SELECT server_version,payload FROM cell_operations WHERE workbook_id=$1 AND sheet_id=$2 AND server_version>$3 AND ($5='' OR actor_id<>$4 OR client_id<>$5) ORDER BY server_version`, workbookID, sheetID, baseVersion, actorID, clientID)
+	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,payload FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -1395,9 +1565,10 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 	}
 	byCoordinate := make(map[string]CellConflict)
 	for rows.Next() {
+		var operationSheetID string
 		var version int64
 		var data []byte
-		if err := rows.Scan(&version, &data); err != nil {
+		if err := rows.Scan(&operationSheetID, &version, &data); err != nil {
 			return nil, err
 		}
 		var document operationDocument
@@ -1405,7 +1576,14 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 			return nil, err
 		}
 		for coordinate, changed := range document.After {
-			if input, ok := targets[coordinate]; ok {
+			located, parseErr := parseOperationCoordinateKey(operationSheetID, coordinate)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			if located.SheetID != sheetID {
+				continue
+			}
+			if input, ok := targets[coordinateKey(located.Row, located.Column)]; ok {
 				byCoordinate[coordinate] = CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: version, PreviousValue: changed.Value, SubmittedValue: cloneJSON(input.Value)}
 			}
 		}
@@ -1424,6 +1602,28 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 }
 
 func coordinateKey(row, column int) string { return strconv.Itoa(row) + ":" + strconv.Itoa(column) }
+
+func operationCoordinateKey(sheetID string, row, column int) string {
+	return sheetID + "!" + coordinateKey(row, column)
+}
+
+func parseOperationCoordinateKey(defaultSheetID, value string) (CellCoordinate, error) {
+	sheetID := defaultSheetID
+	if index := strings.LastIndexByte(value, '!'); index >= 0 {
+		sheetID = value[:index]
+		value = value[index+1:]
+	}
+	coordinate, err := parseCoordinateKey(value)
+	coordinate.SheetID = sheetID
+	return coordinate, err
+}
+
+func operationDocumentCell(values map[string]Cell, sheetID string, row, column int) Cell {
+	if cell, ok := values[operationCoordinateKey(sheetID, row, column)]; ok {
+		return cell
+	}
+	return values[coordinateKey(row, column)]
+}
 
 func mapPostgresError(err error) error {
 	var pgError *pgconn.PgError

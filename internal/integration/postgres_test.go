@@ -580,6 +580,116 @@ func TestPostgresArrayFormulaSpillPersistsRestoresAndUndoes(t *testing.T) {
 	}
 }
 
+func TestPostgresCrossSheetFormulaRecalculatesPersistsAndConflicts(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres cross sheet", WorkspaceID: "integration", OwnerID: "cross-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), wb.ID)
+	inputSheet := wb.Sheets[0]
+	reportSheet, err := repository.CreateSheet(ctx, wb.ID, workbook.CreateSheetInput{Name: "Sales Report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: inputSheet.ID, ActorID: "cross-user", ClientID: "input", BaseVersion: 2, IdempotencyKey: "postgres-cross-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`10`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	formulaResult, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: reportSheet.ID, ActorID: "cross-user", ClientID: "report", BaseVersion: seed.ServerVersion, IdempotencyKey: "postgres-cross-formula", Cells: []workbook.CellInput{{Row: 1, Column: 2, Formula: `='Sheet1'!A1*2`}}})
+	if err != nil || len(formulaResult.FormulaErrors) != 0 {
+		t.Fatalf("cross formula=%#v error=%v", formulaResult, err)
+	}
+	renamed := "Raw Data"
+	if _, err := repository.UpdateSheet(ctx, inputSheet.ID, workbook.UpdateSheetInput{Name: &renamed}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("B1")
+	cells, err := repository.ReadRange(ctx, reportSheet.ID, selected)
+	if err != nil || len(cells) != 1 || cells[0].Formula != `='Raw Data'!A1*2` {
+		t.Fatalf("renamed cross formula cells=%#v error=%v", cells, err)
+	}
+	latest, err := repository.GetWorkbook(ctx, wb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: inputSheet.ID, ActorID: "cross-user", ClientID: "input", BaseVersion: latest.Version, IdempotencyKey: "postgres-cross-update", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`25`)}}})
+	if err != nil || len(updated.RecalculatedCells) != 1 || updated.RecalculatedCells[0].SheetID != reportSheet.ID {
+		t.Fatalf("cross update=%#v error=%v", updated, err)
+	}
+	cells, err = repository.ReadRange(ctx, reportSheet.ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "50" {
+		t.Fatalf("cross persisted cells=%#v error=%v", cells, err)
+	}
+	undone, err := repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: updated.OperationID, ActorID: "cross-user", ClientID: "input", IdempotencyKey: "postgres-cross-undo"})
+	if err != nil || len(undone.RecalculatedCells) != 1 || undone.RecalculatedCells[0].SheetID != reportSheet.ID {
+		t.Fatalf("cross undo=%#v error=%v", undone, err)
+	}
+	cells, _ = repository.ReadRange(ctx, reportSheet.ID, selected)
+	if len(cells) != 1 || string(cells[0].Value) != "20" {
+		t.Fatalf("cross undo persisted cells=%#v", cells)
+	}
+
+	// A stale edit on the dependent sheet must see the derived change even
+	// though the operation that caused it was submitted on another sheet.
+	changedAgain, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: inputSheet.ID, ActorID: "cross-user", ClientID: "input", BaseVersion: undone.ServerVersion, IdempotencyKey: "postgres-cross-change-again", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`30`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: reportSheet.ID, ActorID: "other-user", ClientID: "other", BaseVersion: undone.ServerVersion, IdempotencyKey: "postgres-cross-stale", Cells: []workbook.CellInput{{Row: 1, Column: 2, Value: json.RawMessage(`999`)}}})
+	if err != nil || changedAgain.ServerVersion+1 != stale.ServerVersion || len(stale.Conflicts) != 1 {
+		t.Fatalf("cross-sheet derived conflict=%#v error=%v", stale, err)
+	}
+}
+
+func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres deleted reference", WorkspaceID: "integration", OwnerID: "delete-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), wb.ID)
+	inputSheet := wb.Sheets[0]
+	reportSheet, err := repository.CreateSheet(ctx, wb.ID, workbook.CreateSheetInput{Name: "Report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: reportSheet.ID, ActorID: "delete-user", BaseVersion: 2, IdempotencyKey: "postgres-delete-reference", Cells: []workbook.CellInput{{Row: 1, Column: 1, Formula: `=Sheet1!A1`}, {Row: 1, Column: 2, Formula: `=A1+1`}}})
+	if err != nil || len(created.FormulaErrors) != 0 {
+		t.Fatalf("create deleted references=%#v error=%v", created, err)
+	}
+	if err := repository.DeleteSheet(ctx, inputSheet.ID); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A1:B1")
+	cells, err := repository.ReadRange(ctx, reportSheet.ID, selected)
+	if err != nil || len(cells) != 2 || string(cells[0].Value) != `"#REF!"` || string(cells[1].Value) != `"#REF!"` {
+		t.Fatalf("PostgreSQL deleted reference cells=%#v error=%v", cells, err)
+	}
+}
+
 func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

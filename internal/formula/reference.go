@@ -7,6 +7,7 @@ import (
 )
 
 var a1ReferencePattern = regexp.MustCompile(`(\$?)([A-Za-z]{1,3})(\$?)([1-9][0-9]*)`)
+var simpleSheetNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
 
 // ShiftReferences moves relative A1 references while preserving absolute axes
 // and quoted string literals. It is shared by structural workbook operations
@@ -42,6 +43,96 @@ func ShiftReferences(input string, rowDelta, columnDelta int) string {
 		inString = !inString
 	}
 	flush()
+	return result.String()
+}
+
+// RenameSheetReferences rewrites explicit sheet qualifiers outside quoted
+// string literals. It preserves formulas when a sheet is renamed and quotes
+// the new name whenever its characters require Excel-style quoting.
+func RenameSheetReferences(input, oldName, newName string) string {
+	if input == "" || strings.TrimSpace(oldName) == "" || strings.EqualFold(oldName, newName) {
+		return input
+	}
+	quotedOld := "'" + strings.ReplaceAll(oldName, "'", "''") + "'!"
+	unquotedOld := oldName + "!"
+	replacement := sheetQualifier(newName) + "!"
+	var result, segment strings.Builder
+	inString := false
+	flush := func() {
+		value := segment.String()
+		segment.Reset()
+		if !inString {
+			value = replaceFold(value, quotedOld, replacement)
+			value = replaceUnquotedQualifier(value, unquotedOld, replacement)
+		}
+		result.WriteString(value)
+	}
+	for index := 0; index < len(input); index++ {
+		character := input[index]
+		if character != '"' {
+			segment.WriteByte(character)
+			continue
+		}
+		if inString && index+1 < len(input) && input[index+1] == '"' {
+			segment.WriteString(`""`)
+			index++
+			continue
+		}
+		flush()
+		result.WriteByte('"')
+		inString = !inString
+	}
+	flush()
+	return result.String()
+}
+
+func sheetQualifier(value string) string {
+	if simpleSheetNamePattern.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func replaceFold(input, old, replacement string) string {
+	if old == "" {
+		return input
+	}
+	var result strings.Builder
+	for {
+		index := strings.Index(strings.ToUpper(input), strings.ToUpper(old))
+		if index < 0 {
+			result.WriteString(input)
+			return result.String()
+		}
+		result.WriteString(input[:index])
+		result.WriteString(replacement)
+		input = input[index+len(old):]
+	}
+}
+
+func replaceUnquotedQualifier(input, old, replacement string) string {
+	if old == "" {
+		return input
+	}
+	upperOld := strings.ToUpper(old)
+	var result strings.Builder
+	for index := 0; index < len(input); {
+		relative := strings.Index(strings.ToUpper(input[index:]), upperOld)
+		if relative < 0 {
+			result.WriteString(input[index:])
+			break
+		}
+		start := index + relative
+		end := start + len(old)
+		if start > 0 && referenceIdentifierByte(input[start-1]) {
+			result.WriteString(input[index:end])
+			index = end
+			continue
+		}
+		result.WriteString(input[index:start])
+		result.WriteString(replacement)
+		index = end
+	}
 	return result.String()
 }
 

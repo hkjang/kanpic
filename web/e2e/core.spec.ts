@@ -448,6 +448,33 @@ test('spills FILTER results and protects generated cells in the editor', async (
   expect(result.items[1].spill_source).toBe('D1')
 })
 
+test('recalculates cross-sheet formulas entered in the editor and preserves them through rename', async ({ page }) => {
+  const workbook=await page.request.post('/api/v1/workbooks',{data:{title:`교차 시트 ${Date.now()}`,workspace_id:'default'}}).then(response=>response.json())
+  const inputSheet=workbook.sheets[0]
+  const reportSheet=await page.request.post(`/api/v1/workbooks/${workbook.id}/sheets`,{data:{name:'Sales Report'}}).then(response=>response.json())
+  await page.request.patch(`/api/v1/sheets/${inputSheet.id}/cells:batch`,{data:{base_version:2,idempotency_key:`cross-seed-${workbook.id}`,cells:[{row:1,column:1,value:10}]}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.getByRole('button',{name:'Sales Report',exact:true}).click()
+  const canvas=page.locator('canvas.grid-canvas')
+  await canvas.dblclick({position:{x:208,y:42}})
+  await page.locator('input.cell-editor').fill(`='Sheet1'!A1*2`)
+  await page.locator('input.cell-editor').press('Enter')
+  const reportValue=async()=>page.request.get(`/api/v1/sheets/${reportSheet.id}/ranges/B1`).then(response=>response.json()).then(body=>body.items[0])
+  await expect.poll(async()=>(await reportValue())?.value).toBe(20)
+
+  await page.getByRole('button',{name:'Sheet1',exact:true}).click()
+  await canvas.dblclick({position:{x:70,y:42}})
+  await page.locator('input.cell-editor').fill('25')
+  await page.locator('input.cell-editor').press('Enter')
+  await expect.poll(async()=>(await reportValue())?.value).toBe(50)
+
+  await page.getByRole('button',{name:'Sheet1 시트 메뉴'}).click()
+  await page.getByRole('menuitem',{name:'이름 변경'}).click()
+  await page.getByRole('textbox',{name:'시트 이름'}).fill('Raw Data')
+  await page.getByRole('button',{name:'시트 이름 저장'}).click()
+  await expect.poll(async()=>(await reportValue())?.formula).toBe(`='Raw Data'!A1*2`)
+})
+
 test('synchronizes presence and edits between two browser tabs', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

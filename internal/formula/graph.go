@@ -38,7 +38,7 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 	values := make(map[string]any, len(cells))
 	for address, cell := range cells {
 		address = normalizeAddress(address)
-		if !isReference(address) {
+		if _, _, valid := SplitCellKey(address); !valid {
 			return GraphResult{}, fmt.Errorf("invalid cell address %q", address)
 		}
 		normalized[address] = cell
@@ -69,7 +69,8 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 		if len(nodes)+len(parseErrors) >= MaxGraphFormulas {
 			return GraphResult{}, fmt.Errorf("formula graph exceeds %d formulas", MaxGraphFormulas)
 		}
-		parser, err := newParser(cell.Formula)
+		currentSheet, _, _ := SplitCellKey(address)
+		parser, err := e.newParser(cell.Formula, currentSheet)
 		if err != nil {
 			parseErrors[address] = formulaError("#ERROR!", err.Error())
 			continue
@@ -105,7 +106,7 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 	queue := make([]string, 0, len(changed))
 	for _, address := range changed {
 		address = normalizeAddress(address)
-		if !isReference(address) {
+		if _, _, valid := SplitCellKey(address); !valid {
 			return GraphResult{}, fmt.Errorf("invalid changed cell address %q", address)
 		}
 		if !queued[address] {
@@ -231,7 +232,11 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 }
 
 func normalizeAddress(address string) string {
-	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(address), "$", ""))
+	sheet, cell, valid := SplitCellKey(address)
+	if !valid {
+		return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(address), "$", ""))
+	}
+	return CellKey(sheet, cell)
 }
 
 func isFormulaErrorCode(code string) bool {

@@ -21,3 +21,14 @@ func TestShiftReferencesDoesNotRewriteIdentifierFragments(t *testing.T) {
 		t.Fatalf("ShiftReferences() = %q", got)
 	}
 }
+
+func TestRenameSheetReferencesPreservesStringsAndQuotesNewName(t *testing.T) {
+	input := `=Sheet1!A1+'Sheet1'!B2+"Sheet1!C3"+OtherSheet1!D4`
+	want := `='Sales Data'!A1+'Sales Data'!B2+"Sheet1!C3"+OtherSheet1!D4`
+	if got := RenameSheetReferences(input, "Sheet1", "Sales Data"); got != want {
+		t.Fatalf("RenameSheetReferences() = %q, want %q", got, want)
+	}
+	if got := RenameSheetReferences(`='Bob''s Data'!A1`, "Bob's Data", "Report"); got != `=Report!A1` {
+		t.Fatalf("quoted RenameSheetReferences() = %q", got)
+	}
+}

@@ -763,6 +763,67 @@ func TestExpandedFormulaFunctionsRESTAndMCPSpill(t *testing.T) {
 	}
 }
 
+func TestCrossSheetFormulaThroughRESTAndMCP(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	wb := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]string{"title": "cross sheet api"}, http.StatusCreated)
+	inputSheet := wb.Sheets[0]
+	reportSheet := request[workbook.Sheet](t, server, http.MethodPost, "/api/v1/workbooks/"+wb.ID+"/sheets", map[string]string{"name": "Sales Report"}, http.StatusCreated)
+	seed := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+inputSheet.ID+"/cells:batch", map[string]any{
+		"base_version": 2, "idempotency_key": "cross-api-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": 10}},
+	}, http.StatusOK)
+	mcpSet := request[struct {
+		Result struct {
+			Structured workbook.MutationResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 61, "method": "tools/call", "params": map[string]any{
+		"name": "spreadsheet.formula.set", "arguments": map[string]any{
+			"sheet_id": reportSheet.ID, "row": 1, "column": 2, "formula": `='Sheet1'!A1*2`, "base_version": seed.ServerVersion, "idempotency_key": "cross-api-formula",
+		},
+	}}, http.StatusOK)
+	if len(mcpSet.Result.Structured.FormulaErrors) != 0 {
+		t.Fatalf("cross MCP formula=%#v", mcpSet.Result.Structured)
+	}
+	updated := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+inputSheet.ID+"/cells:batch", map[string]any{
+		"base_version": mcpSet.Result.Structured.ServerVersion, "idempotency_key": "cross-api-update", "cells": []map[string]any{{"row": 1, "column": 1, "value": 25}},
+	}, http.StatusOK)
+	if len(updated.RecalculatedCells) != 1 || updated.RecalculatedCells[0].SheetID != reportSheet.ID {
+		t.Fatalf("cross REST update=%#v", updated)
+	}
+	selected := request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+reportSheet.ID+"/ranges/B1", nil, http.StatusOK)
+	if len(selected.Items) != 1 || string(selected.Items[0].Value) != "50" {
+		t.Fatalf("cross REST stored cells=%#v", selected.Items)
+	}
+	dependent := request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+inputSheet.ID+"/cells:batch", map[string]any{
+		"base_version": updated.ServerVersion, "idempotency_key": "cross-api-dependent", "cells": []map[string]any{{"row": 2, "column": 1, "formula": `='Sales Report'!B1+1`}},
+	}, http.StatusOK)
+	if len(dependent.FormulaErrors) != 0 {
+		t.Fatalf("cross dependent formula=%#v", dependent)
+	}
+	request[workbook.Sheet](t, server, http.MethodPatch, "/api/v1/sheets/"+inputSheet.ID, map[string]any{"name": "Raw Data"}, http.StatusOK)
+	selected = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+reportSheet.ID+"/ranges/B1", nil, http.StatusOK)
+	if selected.Items[0].Formula != `='Raw Data'!A1*2` {
+		t.Fatalf("renamed REST formula=%#v", selected.Items)
+	}
+	reportInfo := request[formulaInfoResult](t, server, http.MethodGet, "/api/v1/sheets/"+reportSheet.ID+"/formulas/B1", nil, http.StatusOK)
+	if !reflect.DeepEqual(reportInfo.Dependencies, []string{"'Raw Data'!A1"}) || !reflect.DeepEqual(reportInfo.Dependents, []string{"'Raw Data'!A2"}) {
+		t.Fatalf("cross report formula info=%#v", reportInfo)
+	}
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/sheets/"+inputSheet.ID, nil, http.StatusNoContent)
+	selected = request[struct {
+		Items []workbook.Cell `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/sheets/"+reportSheet.ID+"/ranges/B1", nil, http.StatusOK)
+	if string(selected.Items[0].Value) != `"#REF!"` {
+		t.Fatalf("deleted REST reference=%#v", selected.Items)
+	}
+}
+
 func TestCircularFormulaIsStoredAsExplicitError(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()
