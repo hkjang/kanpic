@@ -50,6 +50,7 @@ type Repository interface {
 	UpdateNamedRange(context.Context, string, string, UpdateNamedRangeInput) (NamedRange, error)
 	DeleteNamedRange(context.Context, string, string, *int64) error
 	ApplyStructure(context.Context, StructuralMutation) (MutationResult, error)
+	ApplySheetLayout(context.Context, SheetLayoutMutation) (SheetLayoutResult, error)
 
 	ApplyCells(context.Context, CellMutation) (MutationResult, error)
 	UndoOperation(context.Context, UndoOperationInput) (MutationResult, error)

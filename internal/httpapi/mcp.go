@@ -59,6 +59,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
 	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
 	tool("spreadsheet.structure.apply", "행 또는 열을 원자적으로 삽입·삭제하고 수식, 병합, 이름 범위, 검증 및 필터 참조를 갱신합니다.", "range.write", structureSchema()),
+	tool("spreadsheet.layout.apply", "행 높이·열 너비·숨김·고정 영역을 revision 기반으로 멱등 변경합니다.", "format.write", sheetLayoutSchema()),
 	tool("spreadsheet.filter_view.list", "현재 사용자가 저장한 시트 필터 보기를 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.filter_view.get", "현재 사용자의 필터 보기 정의를 조회합니다.", "range.read", requiredProps("filter_view_id", "string")),
 	tool("spreadsheet.filter_view.create", "값·조건·색상 기준의 사용자별 필터 보기를 멱등 생성합니다.", "range.write", filterViewSchema(true)),
@@ -334,6 +335,17 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.collab.PublishStructure(result, actor, input.ClientID)
 		}
 		return result, err
+	case "spreadsheet.layout.apply":
+		var input workbook.SheetLayoutMutation
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := s.repository.ApplySheetLayout(ctx, input)
+		if err == nil && !result.Duplicate {
+			s.collab.PublishVersion(result.WorkbookID, actor, input.ClientID, result.OperationID, result.ServerVersion)
+		}
+		return result, err
 	case "spreadsheet.filter_view.list":
 		return s.repository.ListFilterViews(ctx, stringArg(args, "sheet_id"), actor)
 	case "spreadsheet.filter_view.get":
@@ -600,6 +612,25 @@ func structureSchema() map[string]any {
 			"count":           map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxStructuralCount},
 		},
 		"required": []string{"sheet_id", "base_version", "idempotency_key", "axis", "action", "index", "count"},
+	}
+}
+func sheetLayoutSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id":          map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key":   map[string]any{"type": "string", "minLength": 1},
+			"client_id":         map[string]any{"type": "string"},
+			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+			"action":            map[string]any{"type": "string", "enum": []string{"resize", "reset_size", "hide", "show", "show_all", "freeze"}},
+			"axis":              map[string]any{"type": "string", "enum": []string{"row", "column"}},
+			"start":             map[string]any{"type": "integer", "minimum": 1},
+			"count":             map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxLayoutSpan},
+			"size":              map[string]any{"type": "number"},
+			"frozen_rows":       map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenRows},
+			"frozen_columns":    map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenColumns},
+		},
+		"required": []string{"sheet_id", "idempotency_key", "expected_revision", "action"},
 	}
 }
 func filterViewSchema(create bool) map[string]any {

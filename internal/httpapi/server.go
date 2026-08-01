@@ -71,6 +71,7 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:paste", s.pasteCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/cells:fill", s.fillCells)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/structure:apply", s.applyStructure)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/layout:apply", s.applySheetLayout)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:merge", s.mergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
@@ -301,6 +302,27 @@ func (s *Server) applyStructure(w http.ResponseWriter, r *http.Request) {
 	}
 	if !result.Duplicate {
 		s.collab.PublishStructure(result, input.ActorID, input.ClientID)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) applySheetLayout(w http.ResponseWriter, r *http.Request) {
+	var input workbook.SheetLayoutMutation
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.SheetID = r.PathValue("sheetId")
+	input.ActorID = actorID(r)
+	if headerKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); headerKey != "" {
+		input.IdempotencyKey = headerKey
+	}
+	result, err := s.repository.ApplySheetLayout(r.Context(), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate {
+		s.collab.PublishVersion(result.WorkbookID, input.ActorID, input.ClientID, result.OperationID, result.ServerVersion)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -779,7 +801,7 @@ func requiredScope(r *http.Request) string {
 		}
 		return "range.write"
 	}
-	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") {
+	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") || strings.Contains(path, "layout:apply") {
 		return "format.write"
 	}
 	if strings.Contains(path, "ranges:sort") {

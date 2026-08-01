@@ -841,6 +841,62 @@ func assertPostgresStructureCell(t *testing.T, ctx context.Context, repository w
 	}
 }
 
+func TestPostgresSheetLayoutPersistsAndFollowsStructure(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres layout", OwnerID: "layout-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheet := book.Sheets[0]
+	resized, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheet.ID, ActorID: "layout-user", ClientID: "browser", ExpectedRevision: 1, IdempotencyKey: "pg-layout-resize", Action: "resize", Axis: "column", Start: 2, Count: 2, Size: 180})
+	if err != nil || resized.ServerVersion != 2 || resized.Layout.Revision != 2 {
+		t.Fatalf("PostgreSQL layout resize = %#v, error=%v", resized, err)
+	}
+	duplicate, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheet.ID, ActorID: "layout-user", ExpectedRevision: 1, IdempotencyKey: "pg-layout-resize", Action: "resize", Axis: "column", Start: 2, Count: 2, Size: 180})
+	if err != nil || !duplicate.Duplicate || duplicate.OperationID != resized.OperationID {
+		t.Fatalf("PostgreSQL layout duplicate = %#v, error=%v", duplicate, err)
+	}
+	hidden, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheet.ID, ActorID: "layout-user", ExpectedRevision: 2, IdempotencyKey: "pg-layout-hide", Action: "hide", Axis: "column", Start: 3, Count: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheet.ID, ActorID: "layout-user", ExpectedRevision: 3, IdempotencyKey: "pg-layout-freeze", Action: "freeze", FrozenRows: 1, FrozenColumns: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{SheetID: sheet.ID, ActorID: "layout-user", BaseVersion: frozen.ServerVersion, IdempotencyKey: "pg-layout-insert", Axis: "column", Action: "insert", Index: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := loaded.Sheets[0].Layout
+	if layout.Revision != 5 || layout.FrozenColumns != 4 || len(layout.ColumnWidths) != 2 || layout.ColumnWidths[0].Index != 3 || len(layout.HiddenColumns) != 1 || layout.HiddenColumns[0] != (workbook.DimensionRange{Start: 4, End: 5}) {
+		t.Fatalf("PostgreSQL transformed layout = %#v (hidden result %#v, structure %#v)", layout, hidden, structured)
+	}
+	if _, err := repository.RestoreVersion(ctx, structured.BackupVersionID, "layout-user"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := repository.GetWorkbook(ctx, book.ID)
+	if restored.Sheets[0].Layout.Revision != 4 || restored.Sheets[0].Layout.FrozenColumns != 3 || restored.Sheets[0].Layout.HiddenColumns[0] != (workbook.DimensionRange{Start: 3, End: 4}) {
+		t.Fatalf("PostgreSQL restored layout = %#v", restored.Sheets[0].Layout)
+	}
+}
+
 func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

@@ -365,6 +365,8 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	backup := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: state.workbook.Version, Name: structureBackupName(input), ActorID: input.ActorID, CreatedAt: now}
 	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID)})
 	appliedCells := changedCellCount(state.cells, nextCells)
+	target.Layout = transformLayoutForStructure(target.Layout, input)
+	state.sheets[target.ID] = target
 	state.cells, r.namedRanges, r.validations, r.filters = nextCells, nextNames, nextValidations, nextFilters
 	r.bump(state)
 	for id, item := range r.namedRanges {

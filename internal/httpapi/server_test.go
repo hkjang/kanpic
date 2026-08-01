@@ -116,6 +116,51 @@ func TestStructureRESTAndMCPAreAtomicAndVersioned(t *testing.T) {
 	}
 }
 
+func TestSheetLayoutRESTAndMCPAreRevisionedAndIdempotent(t *testing.T) {
+	t.Parallel()
+	definition, found := findMCPTool("spreadsheet.layout.apply")
+	required, requiredOK := definition.InputSchema["required"].([]string)
+	if !found || definition.Meta["required_scope"] != "format.write" || !requiredOK || len(required) != 4 {
+		t.Fatalf("layout MCP contract: %#v", definition)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPatch, "/api/v1/sheets/sheet-id/layout:apply", nil)); scope != "format.write" {
+		t.Fatalf("layout REST scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "레이아웃"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	body := map[string]any{"expected_revision": 1, "idempotency_key": "row-size", "client_id": "rest", "action": "resize", "axis": "row", "start": 2, "count": 2, "size": 48}
+	resized := request[workbook.SheetLayoutResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/layout:apply", body, http.StatusOK)
+	if resized.ServerVersion != 2 || resized.Layout.Revision != 2 || len(resized.Layout.RowHeights) != 2 {
+		t.Fatalf("REST layout resize: %#v", resized)
+	}
+	duplicate := request[workbook.SheetLayoutResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/layout:apply", body, http.StatusOK)
+	if !duplicate.Duplicate || duplicate.OperationID != resized.OperationID || duplicate.ServerVersion != resized.ServerVersion {
+		t.Fatalf("REST layout idempotency: %#v", duplicate)
+	}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/layout:apply", map[string]any{"expected_revision": 1, "idempotency_key": "stale", "action": "hide", "axis": "row", "start": 1, "count": 1}, http.StatusConflict)
+
+	mcp := request[struct {
+		Result struct {
+			Structured workbook.SheetLayoutResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.layout.apply", "arguments": map[string]any{"sheet_id": sheetID, "expected_revision": 2, "idempotency_key": "mcp-freeze", "client_id": "agent", "action": "freeze", "frozen_rows": 2, "frozen_columns": 1},
+		},
+	}, http.StatusOK)
+	if mcp.Result.Structured.ServerVersion != 3 || mcp.Result.Structured.Layout.Revision != 3 || mcp.Result.Structured.Layout.FrozenRows != 2 || mcp.Result.Structured.Layout.FrozenColumns != 1 {
+		t.Fatalf("MCP layout result: %#v", mcp.Result.Structured)
+	}
+	book := request[workbook.Workbook](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID, nil, http.StatusOK)
+	if len(book.Sheets) != 1 || book.Sheets[0].Layout.Revision != 3 || len(book.Sheets[0].Layout.RowHeights) != 2 {
+		t.Fatalf("persisted layout: %#v", book.Sheets)
+	}
+}
+
 func TestWorkbookDuplicateRESTAndMCPPreserveStructure(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()

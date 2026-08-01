@@ -140,6 +140,66 @@ test('inserts and deletes rows with formula references and automatic backup vers
   expect(versions.items.every((version:{name:string})=>version.name.includes('자동 백업'))).toBe(true)
 })
 
+test('persists variable dimensions, hidden rows and columns, and frozen panes', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button',{name:'새 워크북'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  const workbookId=page.url().split('/workbooks/')[1]
+  let workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  const sheetId=workbook.sheets[0].id as string
+  const canvas=page.locator('canvas.grid-canvas')
+  await expect(canvas).toBeVisible()
+
+  await page.getByRole('button',{name:'보기',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'시트 레이아웃'})
+  await expect(dialog).toBeVisible()
+  await page.getByLabel('행 높이').fill('60')
+  await page.getByRole('button',{name:'높이 적용'}).click()
+  await page.getByLabel('열 너비').fill('180')
+  await page.getByRole('button',{name:'너비 적용'}).click()
+  await page.getByLabel('고정 행 수').fill('1')
+  await page.getByLabel('고정 열 수').fill('1')
+  await page.getByRole('button',{name:'고정 적용'}).click()
+  await page.getByRole('button',{name:'닫기'}).click()
+
+  workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  let layout=workbook.sheets[0].layout
+  expect(layout.row_heights).toEqual([{index:1,size:60}])
+  expect(layout.column_widths).toEqual([{index:1,size:180}])
+  expect(layout.frozen_rows).toBe(1)
+  expect(layout.frozen_columns).toBe(1)
+
+  const viewport=page.locator('.grid-viewport')
+  await viewport.evaluate(element=>element.scrollTo({left:700,top:500}))
+  await expect.poll(()=>viewport.evaluate(element=>({left:element.scrollLeft,top:element.scrollTop}))).toMatchObject({left:700,top:500})
+  await canvas.click({position:{x:70,y:42}})
+  await expect(page.locator('.name-box')).toHaveValue('A1')
+  await viewport.evaluate(element=>element.scrollTo({left:0,top:0}))
+  await canvas.click({position:{x:236,y:97}})
+  await expect(page.locator('.name-box')).toHaveValue('B2')
+  await page.getByRole('button',{name:'보기',exact:true}).click()
+  await page.getByRole('button',{name:'선택 행 숨기기'}).click()
+  await page.getByRole('button',{name:'선택 열 숨기기'}).click()
+  await page.getByRole('button',{name:'닫기'}).click()
+  await expect(page.locator('.name-box')).toHaveValue('C3')
+  workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  layout=workbook.sheets[0].layout
+  expect(layout.hidden_rows).toEqual([{start:2,end:2}])
+  expect(layout.hidden_columns).toEqual([{start:2,end:2}])
+
+  await page.getByRole('button',{name:'보기',exact:true}).click()
+  await page.getByRole('button',{name:'모든 행 표시'}).click()
+  await page.getByRole('button',{name:'모든 열 표시'}).click()
+  await page.getByRole('button',{name:'고정 해제'}).click()
+  await page.getByRole('button',{name:'닫기'}).click()
+  workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  layout=workbook.sheets[0].layout
+  expect(layout.hidden_rows??[]).toEqual([])
+  expect(layout.hidden_columns??[]).toEqual([])
+  expect(layout.frozen_rows).toBe(0)
+  expect(layout.frozen_columns).toBe(0)
+})
+
 test('formats a selected range without changing values or formulas and resends offline changes', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()

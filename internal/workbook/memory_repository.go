@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -40,12 +41,13 @@ type snapshot struct {
 }
 
 type workbookState struct {
-	workbook   Workbook
-	sheets     map[string]Sheet
-	cells      map[string]map[cellKey]Cell
-	operations []operation
-	idempotent map[string]MutationResult
-	versions   []snapshot
+	workbook         Workbook
+	sheets           map[string]Sheet
+	cells            map[string]map[cellKey]Cell
+	operations       []operation
+	idempotent       map[string]MutationResult
+	layoutIdempotent map[string]SheetLayoutResult
+	versions         []snapshot
 }
 
 type MemoryRepository struct {
@@ -109,7 +111,7 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
 	state := &workbookState{workbook: wb, sheets: make(map[string]Sheet), cells: make(map[string]map[cellKey]Cell), idempotent: make(map[string]MutationResult)}
 	for position, imported := range input.Sheets {
-		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, CreatedAt: now}
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: defaultSheetLayout(), CreatedAt: now}
 		state.sheets[sheet.ID] = sheet
 		state.cells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {
@@ -177,7 +179,7 @@ func (r *MemoryRepository) CreateWorkbook(_ context.Context, input CreateWorkboo
 	defer r.mu.Unlock()
 	now := r.now()
 	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
-	sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: "Sheet1", Position: 0, CreatedAt: now}
+	sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: "Sheet1", Position: 0, Layout: defaultSheetLayout(), CreatedAt: now}
 	state := &workbookState{workbook: wb, sheets: map[string]Sheet{sheet.ID: sheet}, cells: map[string]map[cellKey]Cell{sheet.ID: {}}, idempotent: make(map[string]MutationResult)}
 	r.workbooks[wb.ID] = state
 	r.sheetToWB[sheet.ID] = wb.ID
@@ -227,7 +229,7 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 	copyState := &workbookState{workbook: copyWorkbook, sheets: make(map[string]Sheet, len(source.sheets)), cells: make(map[string]map[cellKey]Cell, len(source.cells)), idempotent: make(map[string]MutationResult)}
 	sheetIDs := make(map[string]string, len(source.sheets))
 	for _, sourceSheet := range source.sheets {
-		copySheet := sourceSheet
+		copySheet := cloneSheet(sourceSheet)
 		copySheet.ID = identity.New()
 		copySheet.WorkbookID = copyWorkbook.ID
 		copySheet.CreatedAt = now
@@ -352,7 +354,7 @@ func (r *MemoryRepository) CreateSheet(_ context.Context, workbookID string, inp
 			return Sheet{}, ErrDuplicateName
 		}
 	}
-	sheet := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: len(state.sheets), Color: input.Color, CreatedAt: r.now()}
+	sheet := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: len(state.sheets), Color: input.Color, Layout: defaultSheetLayout(), CreatedAt: r.now()}
 	state.sheets[sheet.ID] = sheet
 	state.cells[sheet.ID] = make(map[cellKey]Cell)
 	r.sheetToWB[sheet.ID] = workbookID
@@ -378,7 +380,7 @@ func (r *MemoryRepository) DuplicateSheet(_ context.Context, sheetID string, inp
 		}
 	}
 	now := r.now()
-	duplicated := Sheet{ID: identity.New(), WorkbookID: source.WorkbookID, Name: name, Position: source.Position + 1, Color: source.Color, Hidden: source.Hidden, CreatedAt: now}
+	duplicated := Sheet{ID: identity.New(), WorkbookID: source.WorkbookID, Name: name, Position: source.Position + 1, Color: source.Color, Hidden: source.Hidden, Layout: cloneSheetLayout(source.Layout), CreatedAt: now}
 	state.sheets[duplicated.ID] = duplicated
 	state.cells[duplicated.ID] = make(map[cellKey]Cell, len(state.cells[source.ID]))
 	for key, sourceCell := range state.cells[source.ID] {
@@ -450,7 +452,7 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 		}
 		next.Position = target
 	}
-	if next == sheet {
+	if reflect.DeepEqual(next, sheet) {
 		return sheet, nil
 	}
 	if next.Name != sheet.Name {
@@ -805,7 +807,7 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 func cloneSheets(source map[string]Sheet) map[string]Sheet {
 	result := make(map[string]Sheet, len(source))
 	for id, sheet := range source {
-		result[id] = sheet
+		result[id] = cloneSheet(sheet)
 	}
 	return result
 }
@@ -865,7 +867,7 @@ func (r *MemoryRepository) workbookWithSheets(state *workbookState) Workbook {
 	wb := state.workbook
 	wb.Sheets = make([]Sheet, 0, len(state.sheets))
 	for _, sheet := range state.sheets {
-		wb.Sheets = append(wb.Sheets, sheet)
+		wb.Sheets = append(wb.Sheets, cloneSheet(sheet))
 	}
 	sort.Slice(wb.Sheets, func(i, j int) bool { return wb.Sheets[i].Position < wb.Sheets[j].Position })
 	return wb

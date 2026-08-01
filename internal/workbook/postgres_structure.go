@@ -140,6 +140,11 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			return MutationResult{}, err
 		}
 	}
+	target.Layout = transformLayoutForStructure(target.Layout, input)
+	layoutData, _ := json.Marshal(target.Layout)
+	if _, err := tx.Exec(ctx, `UPDATE sheets SET properties=jsonb_set(properties,'{layout}',$2::jsonb,true) WHERE id=$1`, target.ID, layoutData); err != nil {
+		return MutationResult{}, err
+	}
 	serverVersion := currentVersion + 1
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err

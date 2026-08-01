@@ -18,13 +18,66 @@ type Workbook struct {
 }
 
 type Sheet struct {
-	ID         string    `json:"id"`
-	WorkbookID string    `json:"workbook_id"`
-	Name       string    `json:"name"`
-	Position   int       `json:"position"`
-	Color      string    `json:"color,omitempty"`
-	Hidden     bool      `json:"hidden"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string      `json:"id"`
+	WorkbookID string      `json:"workbook_id"`
+	Name       string      `json:"name"`
+	Position   int         `json:"position"`
+	Color      string      `json:"color,omitempty"`
+	Hidden     bool        `json:"hidden"`
+	Layout     SheetLayout `json:"layout"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
+// DimensionSize stores only dimensions that differ from the browser defaults.
+// Index is one-based, matching spreadsheet addresses.
+type DimensionSize struct {
+	Index int     `json:"index"`
+	Size  float64 `json:"size"`
+}
+
+// DimensionRange is an inclusive, one-based hidden row or column interval.
+type DimensionRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// SheetLayout is kept inside sheets.properties JSONB so older databases can
+// adopt layout support without a schema migration. Revision protects layout
+// edits independently from unrelated cell operations.
+type SheetLayout struct {
+	Revision      int64            `json:"revision"`
+	RowHeights    []DimensionSize  `json:"row_heights,omitempty"`
+	ColumnWidths  []DimensionSize  `json:"column_widths,omitempty"`
+	HiddenRows    []DimensionRange `json:"hidden_rows,omitempty"`
+	HiddenColumns []DimensionRange `json:"hidden_columns,omitempty"`
+	FrozenRows    int              `json:"frozen_rows"`
+	FrozenColumns int              `json:"frozen_columns"`
+}
+
+type SheetLayoutMutation struct {
+	SheetID          string  `json:"sheet_id"`
+	ActorID          string  `json:"actor_id"`
+	ClientID         string  `json:"client_id"`
+	IdempotencyKey   string  `json:"idempotency_key"`
+	ExpectedRevision int64   `json:"expected_revision"`
+	Action           string  `json:"action"`
+	Axis             string  `json:"axis,omitempty"`
+	Start            int     `json:"start,omitempty"`
+	Count            int     `json:"count,omitempty"`
+	Size             float64 `json:"size,omitempty"`
+	FrozenRows       int     `json:"frozen_rows,omitempty"`
+	FrozenColumns    int     `json:"frozen_columns,omitempty"`
+}
+
+type SheetLayoutResult struct {
+	OperationID   string      `json:"operation_id"`
+	WorkbookID    string      `json:"workbook_id"`
+	SheetID       string      `json:"sheet_id"`
+	BaseVersion   int64       `json:"base_version"`
+	ServerVersion int64       `json:"server_version"`
+	Layout        SheetLayout `json:"layout"`
+	Duplicate     bool        `json:"duplicate"`
+	CreatedAt     time.Time   `json:"created_at"`
 }
 
 type Cell struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,8 +28,9 @@ type PostgresRepository struct {
 }
 
 type sheetProperties struct {
-	Color  string `json:"color,omitempty"`
-	Hidden bool   `json:"hidden,omitempty"`
+	Color  string      `json:"color,omitempty"`
+	Hidden bool        `json:"hidden,omitempty"`
+	Layout SheetLayout `json:"layout,omitempty"`
 }
 
 type operationDocument struct {
@@ -134,8 +136,8 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	importedCells := make(map[string]map[cellKey]Cell, len(input.Sheets))
 	sheets := make(map[string]Sheet, len(input.Sheets))
 	for position, imported := range input.Sheets {
-		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, CreatedAt: now}
-		properties, _ := json.Marshal(sheetProperties{Color: imported.Color})
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: defaultSheetLayout(), CreatedAt: now}
+		properties, _ := json.Marshal(sheetProperties{Color: imported.Color, Layout: sheet.Layout})
 		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, position, properties, now); err != nil {
 			return Workbook{}, mapPostgresError(err)
 		}
@@ -242,8 +244,9 @@ func (r *PostgresRepository) CreateWorkbook(ctx context.Context, input CreateWor
 	if _, err := tx.Exec(ctx, `INSERT INTO workbooks(id,workspace_id,title,owner_id,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, wb.ID, wb.WorkspaceID, wb.Title, wb.OwnerID, wb.Version, now); err != nil {
 		return Workbook{}, err
 	}
-	sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: "Sheet1", Position: 0, CreatedAt: now}
-	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,created_at) VALUES($1,$2,$3,$4,$5)`, sheet.ID, wb.ID, sheet.Name, sheet.Position, now); err != nil {
+	sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: "Sheet1", Position: 0, Layout: defaultSheetLayout(), CreatedAt: now}
+	properties, _ := json.Marshal(sheetProperties{Layout: sheet.Layout})
+	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, sheet.Position, properties, now); err != nil {
 		return Workbook{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -348,7 +351,7 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 		item.dest.CreatedAt = now
 		var properties sheetProperties
 		_ = json.Unmarshal(item.properties, &properties)
-		item.dest.Color, item.dest.Hidden = properties.Color, properties.Hidden
+		item.dest.Color, item.dest.Hidden, item.dest.Layout = properties.Color, properties.Hidden, normalizeSheetLayout(properties.Layout)
 		copiedSheets = append(copiedSheets, item)
 		sheetIDs[item.sourceID] = item.dest.ID
 	}
@@ -564,8 +567,8 @@ func (r *PostgresRepository) CreateSheet(ctx context.Context, workbookID string,
 		return Sheet{}, err
 	}
 	now := r.now()
-	sheet := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: position, Color: input.Color, CreatedAt: now}
-	properties, _ := json.Marshal(sheetProperties{Color: input.Color})
+	sheet := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: position, Color: input.Color, Layout: defaultSheetLayout(), CreatedAt: now}
+	properties, _ := json.Marshal(sheetProperties{Color: input.Color, Layout: sheet.Layout})
 	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, workbookID, name, position, properties, now); err != nil {
 		return Sheet{}, mapPostgresError(err)
 	}
@@ -631,7 +634,7 @@ func (r *PostgresRepository) DuplicateSheet(ctx context.Context, sheetID string,
 	duplicated := Sheet{ID: identity.New(), WorkbookID: workbookID, Name: name, Position: source.Position + 1, CreatedAt: now}
 	var properties sheetProperties
 	_ = json.Unmarshal(propertiesData, &properties)
-	duplicated.Color, duplicated.Hidden = properties.Color, properties.Hidden
+	duplicated.Color, duplicated.Hidden, duplicated.Layout = properties.Color, properties.Hidden, normalizeSheetLayout(properties.Layout)
 	if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, duplicated.ID, workbookID, name, duplicated.Position, propertiesData, now); err != nil {
 		return Sheet{}, mapPostgresError(err)
 	}
@@ -738,7 +741,8 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 	}
 	var properties sheetProperties
 	_ = json.Unmarshal(propertiesData, &properties)
-	sheet.Color, sheet.Hidden = properties.Color, properties.Hidden
+	properties.Layout = normalizeSheetLayout(properties.Layout)
+	sheet.Color, sheet.Hidden, sheet.Layout = properties.Color, properties.Hidden, properties.Layout
 	original := sheet
 	originalProperties := properties
 	if input.Name != nil {
@@ -770,8 +774,8 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 	if input.Hidden != nil {
 		properties.Hidden = *input.Hidden
 	}
-	sheet.Color, sheet.Hidden = properties.Color, properties.Hidden
-	if sheet == original && properties == originalProperties {
+	sheet.Color, sheet.Hidden, sheet.Layout = properties.Color, properties.Hidden, properties.Layout
+	if reflect.DeepEqual(sheet, original) && reflect.DeepEqual(properties, originalProperties) {
 		return sheet, tx.Commit(ctx)
 	}
 	if sheet.Position != original.Position {
@@ -1636,7 +1640,7 @@ func (r *PostgresRepository) listSheets(ctx context.Context, db queryer, workboo
 		}
 		var properties sheetProperties
 		_ = json.Unmarshal(data, &properties)
-		item.Color, item.Hidden = properties.Color, properties.Hidden
+		item.Color, item.Hidden, item.Layout = properties.Color, properties.Hidden, normalizeSheetLayout(properties.Layout)
 		result = append(result, item)
 	}
 	return result, rows.Err()
