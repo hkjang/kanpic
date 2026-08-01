@@ -107,6 +107,9 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
 	tool("spreadsheet.operation.undo", "자신의 작업을 후속 변경과 충돌하지 않는 셀만 선택적으로 되돌립니다. Undo 작업을 다시 되돌리면 Redo가 됩니다.", "range.write", requiredProps2("operation_id", "string", "idempotency_key", "string")),
+	tool("spreadsheet.conflict.list", "워크북의 열린 동일 셀 충돌과 선택적으로 해소된 이력을 조회합니다.", "range.read", conflictListSchema()),
+	tool("spreadsheet.conflict.get", "충돌 전 값, 상대 사용자 값, 제출 값과 현재 서버 값을 비교 조회합니다.", "range.read", requiredProps("conflict_id", "string")),
+	tool("spreadsheet.conflict.resolve", "동일 셀 충돌을 현재 값 유지 또는 상대 사용자 값 복원으로 멱등 해소하고 버전 이력에 남깁니다.", "range.write", conflictResolutionSchema()),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
@@ -706,6 +709,29 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, clientID, nil, result)
 		}
 		return result, err
+	case "spreadsheet.conflict.list":
+		var input struct {
+			WorkbookID      string `json:"workbook_id"`
+			IncludeResolved bool   `json:"include_resolved"`
+		}
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.repository.ListCellConflicts(ctx, input.WorkbookID, input.IncludeResolved)
+	case "spreadsheet.conflict.get":
+		return s.repository.GetCellConflict(ctx, stringArg(args, "conflict_id"))
+	case "spreadsheet.conflict.resolve":
+		var input workbook.ResolveCellConflictInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := s.repository.ResolveCellConflict(ctx, stringArg(args, "conflict_id"), input)
+		if err == nil && !result.Operation.Duplicate {
+			cell := result.Conflict.CurrentCell
+			s.collab.PublishOperation(result.Conflict.WorkbookID, result.Conflict.SheetID, actor, input.ClientID, []workbook.CellInput{{Row: result.Conflict.Row, Column: result.Conflict.Column, Value: cell.Value, Formula: cell.Formula, Style: cell.Style}}, result.Operation)
+		}
+		return result, err
 	case "spreadsheet.import.preview":
 		data, err := base64.StdEncoding.DecodeString(stringArg(args, "data_base64"))
 		if err != nil {
@@ -1035,6 +1061,31 @@ func rangeFormatSchema() map[string]any {
 		"anyOf":    []any{map[string]any{"required": []string{"style"}}, map[string]any{"required": []string{"border"}}},
 	}
 }
+func conflictListSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"workbook_id":      map[string]any{"type": "string", "minLength": 1},
+			"include_resolved": map[string]any{"type": "boolean"},
+		},
+		"required": []string{"workbook_id"},
+	}
+}
+
+func conflictResolutionSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"conflict_id":       map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key":   map[string]any{"type": "string", "minLength": 1},
+			"client_id":         map[string]any{"type": "string"},
+			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+			"resolution":        map[string]any{"type": "string", "enum": []string{workbook.ConflictKeepCurrent, workbook.ConflictRestorePrevious}},
+		},
+		"required": []string{"conflict_id", "idempotency_key", "expected_revision", "resolution"},
+	}
+}
+
 func structureSchema() map[string]any {
 	return map[string]any{
 		"type": "object",

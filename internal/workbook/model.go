@@ -122,12 +122,59 @@ type UndoOperationInput struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+// CellConflictSnapshot is the complete user-editable state of one cell at a
+// point in the conflict timeline. Keeping formula and style beside the value
+// is important: a formula-only or formatting-only edit must be reviewable and
+// restorable in exactly the same way as a literal value edit.
+type CellConflictSnapshot struct {
+	Value       json.RawMessage `json:"value,omitempty"`
+	Formula     string          `json:"formula,omitempty"`
+	Style       json.RawMessage `json:"style,omitempty"`
+	SpillSource string          `json:"spill_source,omitempty"`
+}
+
 type CellConflict struct {
-	Row              int             `json:"row"`
-	Column           int             `json:"column"`
-	ChangedAtVersion int64           `json:"changed_at_version"`
-	PreviousValue    json.RawMessage `json:"previous_value,omitempty"`
-	SubmittedValue   json.RawMessage `json:"submitted_value,omitempty"`
+	ID                      string               `json:"id,omitempty"`
+	WorkbookID              string               `json:"workbook_id,omitempty"`
+	SheetID                 string               `json:"sheet_id,omitempty"`
+	OperationID             string               `json:"operation_id,omitempty"`
+	Row                     int                  `json:"row"`
+	Column                  int                  `json:"column"`
+	BaseVersion             int64                `json:"base_version,omitempty"`
+	ChangedAtVersion        int64                `json:"changed_at_version"`
+	ServerVersion           int64                `json:"server_version,omitempty"`
+	ActorID                 string               `json:"actor_id,omitempty"`
+	ClientID                string               `json:"client_id,omitempty"`
+	ConflictingActorID      string               `json:"conflicting_actor_id,omitempty"`
+	BaseCell                CellConflictSnapshot `json:"base_cell"`
+	ConflictingCell         CellConflictSnapshot `json:"conflicting_cell"`
+	SubmittedCell           CellConflictSnapshot `json:"submitted_cell"`
+	AppliedCell             CellConflictSnapshot `json:"applied_cell"`
+	CurrentCell             CellConflictSnapshot `json:"current_cell"`
+	PreviousValue           json.RawMessage      `json:"previous_value,omitempty"`
+	SubmittedValue          json.RawMessage      `json:"submitted_value,omitempty"`
+	Status                  string               `json:"status,omitempty"`
+	Resolution              string               `json:"resolution,omitempty"`
+	Revision                int64                `json:"revision,omitempty"`
+	ResolvedBy              string               `json:"resolved_by,omitempty"`
+	ResolutionOperationID   string               `json:"resolution_operation_id,omitempty"`
+	ResolutionServerVersion int64                `json:"resolution_server_version,omitempty"`
+	ResolvedAt              *time.Time           `json:"resolved_at,omitempty"`
+	CreatedAt               time.Time            `json:"created_at,omitempty"`
+	UpdatedAt               time.Time            `json:"updated_at,omitempty"`
+}
+
+type ResolveCellConflictInput struct {
+	ActorID          string `json:"-"`
+	ClientID         string `json:"client_id,omitempty"`
+	IdempotencyKey   string `json:"idempotency_key"`
+	ExpectedRevision int64  `json:"expected_revision"`
+	Resolution       string `json:"resolution"`
+}
+
+type CellConflictResolutionResult struct {
+	Conflict  CellConflict   `json:"conflict"`
+	Operation MutationResult `json:"operation"`
 }
 
 type CellCoordinate struct {

@@ -31,3 +31,4 @@
 .sheet-menu-error{padding:5px 9px}
 .sheet-tabs-error{align-self:center;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 7px}
 .sheet-tabs .sheet-status{flex:0 0 auto;background:#f7f8f9;padding-left:8px}
+.sheet-tabs .sheet-status:not(:disabled){cursor:pointer;color:#a35e12}.sheet-tabs .sheet-status:disabled{opacity:1;cursor:default}

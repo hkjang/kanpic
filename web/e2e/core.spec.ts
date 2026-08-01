@@ -31,6 +31,34 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
 })
 
+test('compares and resolves a persisted same-cell conflict', async ({ page }) => {
+  const created=await page.request.post('/api/v1/workbooks',{data:{title:`충돌 검증 ${Date.now()}`,workspace_id:'default'}}).then(response=>response.json())
+  const sheetId=created.sheets[0].id as string
+  const first=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{headers:{'X-Kanpic-Actor':'alice'},data:{base_version:1,idempotency_key:`conflict-first-${created.id}`,client_id:'alice-browser',cells:[{row:2,column:3,value:'first',style:{bold:true}}]}})
+  expect(first.ok()).toBe(true)
+  const stale=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{headers:{'X-Kanpic-Actor':'bob'},data:{base_version:1,idempotency_key:`conflict-stale-${created.id}`,client_id:'bob-browser',cells:[{row:2,column:3,value:'second',style:{italic:true}}]}})
+  expect(stale.ok()).toBe(true)
+  expect((await stale.json()).conflicts).toHaveLength(1)
+
+  await page.goto(`/workbooks/${created.id}`)
+  const conflictButton=page.getByRole('button',{name:'편집 충돌',exact:true})
+  await expect(conflictButton).toHaveAttribute('title','편집 충돌 1건')
+  await conflictButton.click()
+  const panel=page.getByRole('complementary',{name:'편집 충돌 패널'})
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('충돌 전 기준')).toBeVisible()
+  await expect(panel.getByText('first',{exact:true})).toBeVisible()
+  await expect(panel.getByText('second',{exact:true})).toBeVisible()
+  await panel.getByRole('button',{name:/먼저 반영된 값 복원/}).click()
+  await expect(panel.getByText('열린 충돌이 없습니다.')).toBeVisible()
+  await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/C2`).then(response=>response.json());return range.items[0]?.value}).toBe('first')
+  const history=await page.request.get(`/api/v1/workbooks/${created.id}/conflicts?include_resolved=true`).then(response=>response.json())
+  expect(history.items).toHaveLength(1)
+  expect(history.items[0]).toMatchObject({status:'resolved',resolution:'restore_previous',revision:2})
+  expect(history.items[0].resolution_operation_id).toBeTruthy()
+  await page.request.delete(`/api/v1/workbooks/${created.id}`)
+})
+
 test('searches workbook values and formulas and scrolls to a result on another sheet', async ({ page }) => {
   const title=`통합 검색 ${Date.now()}`
   const created=await page.request.post('/api/v1/workbooks',{data:{title,workspace_id:'default'}}).then(response=>response.json())

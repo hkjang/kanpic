@@ -1254,8 +1254,19 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 			}
 			if !cellsEqual(current, expected) {
 				changedVersion := currentVersion
-				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
+				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, BaseCell: conflictSnapshotFromCell(expected), ConflictingCell: conflictSnapshotFromCell(current), SubmittedCell: conflictSnapshotFromInput(input), PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 				continue
+			}
+		}
+		for index := range conflicts {
+			if conflicts[index].Row == input.Row && conflicts[index].Column == input.Column {
+				if emptyConflictSnapshot(conflicts[index].ConflictingCell) {
+					conflicts[index].ConflictingCell = conflictSnapshotFromCell(current)
+					conflicts[index].PreviousValue = cloneJSON(current.Value)
+				}
+				if emptyConflictSnapshot(conflicts[index].SubmittedCell) {
+					conflicts[index].SubmittedCell = conflictSnapshotFromInput(input)
+				}
 			}
 		}
 		if formatMutation {
@@ -1269,6 +1280,9 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		}
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
+	}
+	if mutation.Expected != nil && len(conflicts) > 0 && strings.HasPrefix(mutation.OperationType, "conflict.resolve.") {
+		return MutationResult{}, ErrVersionConflict
 	}
 	if len(effective) == 0 && formatMutation {
 		result := MutationResult{WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion, Conflicts: conflicts, CreatedAt: r.now()}
@@ -1342,7 +1356,15 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, Conflicts: conflicts, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, CreatedAt: now}
+	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
+		cell, ok := after[operationCoordinateKey(mutation.SheetID, row, column)]
+		if !ok {
+			cell, ok = after[coordinateKey(row, column)]
+		}
+		return cell, ok
+	}, now)
+	result.Conflicts = conflicts
 	operationType := mutation.OperationType
 	if operationType == "" {
 		operationType = "cells.batch"
@@ -1351,6 +1373,15 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, operationType, document, now)
 	if err != nil {
 		return MutationResult{}, mapPostgresError(err)
+	}
+	for _, conflict := range conflicts {
+		baseCell, _ := json.Marshal(conflict.BaseCell)
+		conflictingCell, _ := json.Marshal(conflict.ConflictingCell)
+		submittedCell, _ := json.Marshal(conflict.SubmittedCell)
+		appliedCell, _ := json.Marshal(conflict.AppliedCell)
+		if _, err := tx.Exec(ctx, `INSERT INTO cell_conflicts(id,workbook_id,sheet_id,operation_id,row_number,column_number,base_version,changed_at_version,server_version,actor_id,client_id,conflicting_actor_id,base_cell,conflicting_cell,submitted_cell,applied_cell,status,resolution,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'',1,$18,$18)`, conflict.ID, conflict.WorkbookID, conflict.SheetID, conflict.OperationID, conflict.Row, conflict.Column, conflict.BaseVersion, conflict.ChangedAtVersion, conflict.ServerVersion, conflict.ActorID, conflict.ClientID, conflict.ConflictingActorID, baseCell, conflictingCell, submittedCell, appliedCell, ConflictStatusOpen, now); err != nil {
+			return MutationResult{}, mapPostgresError(err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return MutationResult{}, err
@@ -1975,7 +2006,7 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 	if baseVersion < 1 {
 		baseVersion = 0
 	}
-	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,operation_type,payload FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
+	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,operation_type,payload,actor_id FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -1985,17 +2016,24 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 		targets[coordinateKey(input.Row, input.Column)] = input
 	}
 	byCoordinate := make(map[string]CellConflict)
+	baseCaptured := make(map[string]bool)
 	for rows.Next() {
 		var operationSheetID string
 		var version int64
 		var operationType string
 		var data []byte
-		if err := rows.Scan(&operationSheetID, &version, &operationType, &data); err != nil {
+		var conflictingActor string
+		if err := rows.Scan(&operationSheetID, &version, &operationType, &data, &conflictingActor); err != nil {
 			return nil, err
 		}
 		if structuralOperationType(operationType) {
 			for coordinate, input := range targets {
-				byCoordinate[coordinate] = CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: version, SubmittedValue: cloneJSON(input.Value)}
+				current := byCoordinate[coordinate]
+				current.Row, current.Column, current.ChangedAtVersion = input.Row, input.Column, version
+				current.ConflictingActorID = conflictingActor
+				current.SubmittedCell = conflictSnapshotFromInput(input)
+				current.SubmittedValue = cloneJSON(input.Value)
+				byCoordinate[coordinate] = current
 			}
 			continue
 		}
@@ -2012,7 +2050,19 @@ func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workb
 				continue
 			}
 			if input, ok := targets[coordinateKey(located.Row, located.Column)]; ok {
-				byCoordinate[coordinate] = CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: version, PreviousValue: changed.Value, SubmittedValue: cloneJSON(input.Value)}
+				key := coordinateKey(located.Row, located.Column)
+				current := byCoordinate[key]
+				if !baseCaptured[key] {
+					current.BaseCell = conflictSnapshotFromCell(operationDocumentCell(document.Before, operationSheetID, located.Row, located.Column))
+					baseCaptured[key] = true
+				}
+				current.Row, current.Column, current.ChangedAtVersion = input.Row, input.Column, version
+				current.ConflictingActorID = conflictingActor
+				current.ConflictingCell = conflictSnapshotFromCell(changed)
+				current.SubmittedCell = conflictSnapshotFromInput(input)
+				current.PreviousValue = cloneJSON(changed.Value)
+				current.SubmittedValue = cloneJSON(input.Value)
+				byCoordinate[key] = current
 			}
 		}
 	}

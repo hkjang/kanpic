@@ -55,6 +55,7 @@ type workbookState struct {
 
 type MemoryRepository struct {
 	mu                 sync.RWMutex
+	resolveMu          sync.Mutex
 	workbooks          map[string]*workbookState
 	sheetToWB          map[string]string
 	now                func() time.Time
@@ -68,6 +69,7 @@ type MemoryRepository struct {
 	pivotCache         map[string]PivotData
 	comments           map[string]CommentThread
 	notifications      map[string]MentionNotification
+	conflicts          map[string]CellConflict
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -85,6 +87,7 @@ func NewMemoryRepository() *MemoryRepository {
 		pivotCache:         make(map[string]PivotData),
 		comments:           make(map[string]CommentThread),
 		notifications:      make(map[string]MentionNotification),
+		conflicts:          make(map[string]CellConflict),
 	}
 }
 
@@ -484,6 +487,11 @@ func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
 			delete(r.notifications, notificationID)
 		}
 	}
+	for conflictID, conflict := range r.conflicts {
+		if conflict.WorkbookID == id {
+			delete(r.conflicts, conflictID)
+		}
+	}
 	delete(r.workbooks, id)
 	return nil
 }
@@ -737,6 +745,11 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 			delete(r.notifications, notificationID)
 		}
 	}
+	for conflictID, conflict := range r.conflicts {
+		if conflict.SheetID == sheetID {
+			delete(r.conflicts, conflictID)
+		}
+	}
 	for chartID, chart := range r.charts {
 		if chart.SheetID == sheetID {
 			delete(r.charts, chartID)
@@ -826,12 +839,16 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				if changedVersion == 0 {
 					changedVersion = state.workbook.Version
 				}
-				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
+				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, BaseCell: conflictSnapshotFromCell(expected), ConflictingCell: conflictSnapshotFromCell(current), SubmittedCell: conflictSnapshotFromInput(input), PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 				continue
 			}
 		} else if mutation.BaseVersion < state.workbook.Version {
 			if changedVersion := latestChange(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID); changedVersion > 0 {
-				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
+				baseCell, conflictingCell, conflictingActor := memoryConflictDetails(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID)
+				if emptyConflictSnapshot(conflictingCell) {
+					conflictingCell = conflictSnapshotFromCell(current)
+				}
+				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, ConflictingActorID: conflictingActor, BaseCell: baseCell, ConflictingCell: conflictingCell, SubmittedCell: conflictSnapshotFromInput(input), PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 			}
 		}
 		if formatMutation {
@@ -845,6 +862,9 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		}
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
+	}
+	if mutation.Expected != nil && len(conflicts) > 0 && strings.HasPrefix(mutation.OperationType, "conflict.resolve.") {
+		return MutationResult{}, ErrVersionConflict
 	}
 	if len(effective) == 0 && formatMutation {
 		result := MutationResult{WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: state.workbook.Version, Conflicts: conflicts, CreatedAt: r.now()}
@@ -889,12 +909,20 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, Conflicts: conflicts, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, CreatedAt: now}
+	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
+		cell, ok := after[scopedCellKey{sheetID: mutation.SheetID, cellKey: cellKey{row: row, column: column}}]
+		return cell, ok
+	}, now)
+	result.Conflicts = conflicts
 	operationType := mutation.OperationType
 	if operationType == "" {
 		operationType = "cells.batch"
 	}
 	state.operations = append(state.operations, operation{result: result, before: before, after: after, submitted: submittedCoordinates(effective), actorID: mutation.ActorID, clientID: mutation.ClientID, operationType: operationType, undoOf: mutation.UndoOfOperationID})
+	for _, conflict := range conflicts {
+		r.conflicts[conflict.ID] = cloneCellConflict(conflict)
+	}
 	state.idempotent[key] = result
 	return result, nil
 }
@@ -947,6 +975,124 @@ func (r *MemoryRepository) UndoOperation(ctx context.Context, input UndoOperatio
 		expected[coordinateKey(coordinate.Row, coordinate.Column)] = cloneCell(target.after[key])
 	}
 	return r.ApplyCells(ctx, CellMutation{SheetID: target.result.SheetID, ActorID: input.ActorID, ClientID: input.ClientID, BaseVersion: target.result.ServerVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, Expected: expected, OperationType: "operation.undo", UndoOfOperationID: input.OperationID})
+}
+
+func (r *MemoryRepository) ListCellConflicts(_ context.Context, workbookID string, includeResolved bool) ([]CellConflict, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	state, exists := r.workbooks[workbookID]
+	if !exists {
+		return nil, ErrNotFound
+	}
+	result := make([]CellConflict, 0)
+	for _, stored := range r.conflicts {
+		if stored.WorkbookID != workbookID || (!includeResolved && stored.Status != ConflictStatusOpen) {
+			continue
+		}
+		conflict := cloneCellConflict(stored)
+		current := state.cells[conflict.SheetID][cellKey{row: conflict.Row, column: conflict.Column}]
+		conflict.CurrentCell = conflictSnapshotFromCell(current)
+		result = append(result, conflict)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Status != result[j].Status {
+			return result[i].Status == ConflictStatusOpen
+		}
+		if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].CreatedAt.After(result[j].CreatedAt)
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, nil
+}
+
+func (r *MemoryRepository) GetCellConflict(_ context.Context, conflictID string) (CellConflict, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stored, exists := r.conflicts[conflictID]
+	if !exists {
+		return CellConflict{}, ErrNotFound
+	}
+	conflict := cloneCellConflict(stored)
+	if state := r.workbooks[conflict.WorkbookID]; state != nil {
+		current := state.cells[conflict.SheetID][cellKey{row: conflict.Row, column: conflict.Column}]
+		conflict.CurrentCell = conflictSnapshotFromCell(current)
+	}
+	return conflict, nil
+}
+
+func (r *MemoryRepository) ResolveCellConflict(ctx context.Context, conflictID string, input ResolveCellConflictInput) (CellConflictResolutionResult, error) {
+	if err := validateConflictResolution(input); err != nil {
+		return CellConflictResolutionResult{}, err
+	}
+	r.resolveMu.Lock()
+	defer r.resolveMu.Unlock()
+
+	conflict, err := r.GetCellConflict(ctx, conflictID)
+	if err != nil {
+		return CellConflictResolutionResult{}, err
+	}
+	if conflict.Status == ConflictStatusResolved {
+		if conflict.Resolution != input.Resolution {
+			return CellConflictResolutionResult{}, ErrRevision
+		}
+		return CellConflictResolutionResult{Conflict: conflict, Operation: MutationResult{OperationID: conflict.ResolutionOperationID, WorkbookID: conflict.WorkbookID, SheetID: conflict.SheetID, ServerVersion: conflict.ResolutionServerVersion, Duplicate: true}}, nil
+	}
+	if conflict.Revision != input.ExpectedRevision {
+		return CellConflictResolutionResult{}, ErrRevision
+	}
+
+	r.mu.RLock()
+	state := r.workbooks[conflict.WorkbookID]
+	if state == nil {
+		r.mu.RUnlock()
+		return CellConflictResolutionResult{}, ErrNotFound
+	}
+	baseVersion := state.workbook.Version
+	current := cloneCell(state.cells[conflict.SheetID][cellKey{row: conflict.Row, column: conflict.Column}])
+	r.mu.RUnlock()
+
+	target := conflictSnapshotFromCell(current)
+	if input.Resolution == ConflictRestorePrevious {
+		if !cellsEqual(current, cellFromConflictSnapshot(conflict.SheetID, conflict.Row, conflict.Column, conflict.AppliedCell)) {
+			return CellConflictResolutionResult{}, ErrVersionConflict
+		}
+		target = conflict.ConflictingCell
+	}
+	result, err := r.ApplyCells(ctx, CellMutation{
+		SheetID: conflict.SheetID, ActorID: input.ActorID, ClientID: input.ClientID,
+		BaseVersion: baseVersion, IdempotencyKey: input.IdempotencyKey,
+		Cells:         []CellInput{inputFromConflictSnapshot(conflict.Row, conflict.Column, target)},
+		Expected:      map[string]Cell{coordinateKey(conflict.Row, conflict.Column): current},
+		OperationType: "conflict.resolve." + input.Resolution,
+	})
+	if err != nil {
+		return CellConflictResolutionResult{}, err
+	}
+	if result.AppliedCells != 1 {
+		return CellConflictResolutionResult{}, ErrVersionConflict
+	}
+
+	r.mu.Lock()
+	stored := r.conflicts[conflictID]
+	if stored.Status != ConflictStatusOpen || stored.Revision != input.ExpectedRevision {
+		r.mu.Unlock()
+		return CellConflictResolutionResult{}, ErrRevision
+	}
+	now := r.now()
+	stored.Status = ConflictStatusResolved
+	stored.Resolution = input.Resolution
+	stored.Revision++
+	stored.ResolvedBy = input.ActorID
+	stored.ResolutionOperationID = result.OperationID
+	stored.ResolutionServerVersion = result.ServerVersion
+	stored.ResolvedAt = &now
+	stored.UpdatedAt = now
+	current = cloneCell(r.workbooks[stored.WorkbookID].cells[stored.SheetID][cellKey{row: stored.Row, column: stored.Column}])
+	stored.CurrentCell = conflictSnapshotFromCell(current)
+	r.conflicts[conflictID] = stored
+	r.mu.Unlock()
+	return CellConflictResolutionResult{Conflict: cloneCellConflict(stored), Operation: result}, nil
 }
 
 func (r *MemoryRepository) ReadRange(_ context.Context, sheetID string, selected cellrange.Range) ([]Cell, error) {
@@ -1192,6 +1338,34 @@ func latestChange(operations []operation, sheetID string, key cellKey, afterVers
 		}
 	}
 	return version
+}
+
+func memoryConflictDetails(operations []operation, sheetID string, key cellKey, afterVersion int64, actorID, clientID string) (CellConflictSnapshot, CellConflictSnapshot, string) {
+	var base CellConflictSnapshot
+	var conflicting CellConflictSnapshot
+	var conflictingActor string
+	found := false
+	coordinate := scopedCellKey{sheetID: sheetID, cellKey: key}
+	for _, op := range operations {
+		if op.result.ServerVersion <= afterVersion || (clientID != "" && op.actorID == actorID && op.clientID == clientID) {
+			continue
+		}
+		if op.structural {
+			conflictingActor = op.actorID
+			continue
+		}
+		changed, ok := op.after[coordinate]
+		if !ok {
+			continue
+		}
+		if !found {
+			base = conflictSnapshotFromCell(op.before[coordinate])
+			found = true
+		}
+		conflicting = conflictSnapshotFromCell(changed)
+		conflictingActor = op.actorID
+	}
+	return base, conflicting, conflictingActor
 }
 
 func isEmptyCell(cell Cell) bool {

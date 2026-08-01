@@ -126,6 +126,9 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 	// remains /versions/{id}:restore and is validated by the handler.
 	mux.HandleFunc("POST /api/v1/versions/{versionAction}", s.restoreVersion)
 	mux.HandleFunc("POST /api/v1/operations/{operationAction}", s.undoOperation)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/conflicts", s.listCellConflicts)
+	mux.HandleFunc("GET /api/v1/conflicts/{conflictId}", s.getCellConflict)
+	mux.HandleFunc("POST /api/v1/conflicts/{conflictAction}", s.resolveCellConflict)
 	mux.HandleFunc("POST /api/v1/formulas:evaluate", s.evaluateFormula)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/formulas/{address}", s.formulaInfo)
 	mux.HandleFunc("POST /api/v1/imports:preview", s.previewImport)
@@ -870,6 +873,12 @@ func requiredScope(r *http.Request) string {
 			return "format.read"
 		}
 		return "format.write"
+	}
+	if strings.Contains(path, "/conflicts") {
+		if r.Method == http.MethodGet {
+			return "range.read"
+		}
+		return "range.write"
 	}
 	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") || strings.Contains(path, "layout:apply") {
 		return "format.write"

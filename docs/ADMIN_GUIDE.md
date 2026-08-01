@@ -1,7 +1,7 @@
 # kanpic 관리자 가이드 (System Administrator Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.12.0
+- **시스템 버전**: v0.13.0
 - **문서 버전**: v1.0  
 - **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 시스템 관리자 및 DevOps 엔지니어용 통합 운영 매뉴얼 (System Administrator Manual)  

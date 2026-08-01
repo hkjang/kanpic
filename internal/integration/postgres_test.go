@@ -122,6 +122,91 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	}
 }
 
+func TestPostgresCellConflictPersistsAndResolutionIsVersioned(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "postgres conflicts", WorkspaceID: "integration", OwnerID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "alice", ClientID: "a", BaseVersion: 1, IdempotencyKey: "pg-conflict-first", Cells: []workbook.CellInput{{Row: 3, Column: 2, Value: json.RawMessage(`"first"`), Style: json.RawMessage(`{"bold":true}`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "bob", ClientID: "b", BaseVersion: 1, IdempotencyKey: "pg-conflict-stale", Cells: []workbook.CellInput{{Row: 3, Column: 2, Value: json.RawMessage(`"second"`), Style: json.RawMessage(`{"italic":true}`)}}})
+	if err != nil || len(stale.Conflicts) != 1 {
+		t.Fatalf("stale mutation: %#v %v", stale, err)
+	}
+	conflict := stale.Conflicts[0]
+	if conflict.ID == "" || conflict.ConflictingActorID != "alice" || string(conflict.ConflictingCell.Value) != `"first"` || string(conflict.AppliedCell.Value) != `"second"` {
+		t.Fatalf("persisted conflict payload: %#v", conflict)
+	}
+	// A fresh repository instance proves the comparison record is not an
+	// in-memory WebSocket artifact.
+	restarted := workbook.NewPostgresRepository(pool)
+	items, err := restarted.ListCellConflicts(ctx, book.ID, false)
+	if err != nil || len(items) != 1 || items[0].ID != conflict.ID || string(items[0].CurrentCell.Value) != `"second"` {
+		t.Fatalf("reloaded conflicts: %#v %v", items, err)
+	}
+	resolved, err := restarted.ResolveCellConflict(ctx, conflict.ID, workbook.ResolveCellConflictInput{ActorID: "bob", ClientID: "b", IdempotencyKey: "pg-conflict-restore", ExpectedRevision: 1, Resolution: workbook.ConflictRestorePrevious})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Conflict.Status != workbook.ConflictStatusResolved || resolved.Conflict.ResolutionOperationID != resolved.Operation.OperationID || resolved.Operation.ServerVersion != 4 {
+		t.Fatalf("resolved conflict: %#v", resolved)
+	}
+	selected, _ := cellrange.Parse("B3")
+	cells, err := restarted.ReadRange(ctx, sheetID, selected)
+	var restoredStyle map[string]any
+	if len(cells) == 1 {
+		_ = json.Unmarshal(cells[0].Style, &restoredStyle)
+	}
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"first"` || restoredStyle["bold"] != true {
+		t.Fatalf("restored previous server cell: %#v %v", cells, err)
+	}
+	open, err := restarted.ListCellConflicts(ctx, book.ID, false)
+	if err != nil || len(open) != 0 {
+		t.Fatalf("open conflicts after resolution: %#v %v", open, err)
+	}
+	history, err := restarted.ListCellConflicts(ctx, book.ID, true)
+	if err != nil || len(history) != 1 || history[0].Revision != 2 || history[0].ResolutionServerVersion != 4 {
+		t.Fatalf("resolved conflict history: %#v %v", history, err)
+	}
+
+	// Simulate a process interruption after the versioned restore operation
+	// committed but before the conflict row was marked resolved. Retrying the
+	// same idempotency key must finish the record instead of rejecting because
+	// the current cell now differs from the originally applied stale value.
+	_, err = restarted.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "alice", ClientID: "a", BaseVersion: 4, IdempotencyKey: "pg-recovery-first", Cells: []workbook.CellInput{{Row: 5, Column: 4, Value: json.RawMessage(`10`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondConflict, err := restarted.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "bob", ClientID: "b", BaseVersion: 4, IdempotencyKey: "pg-recovery-stale", Cells: []workbook.CellInput{{Row: 5, Column: 4, Value: json.RawMessage(`20`)}}})
+	if err != nil || len(secondConflict.Conflicts) != 1 {
+		t.Fatalf("second conflict: %#v %v", secondConflict, err)
+	}
+	crashWindowOperation, err := restarted.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "bob", ClientID: "b", BaseVersion: 6, IdempotencyKey: "pg-recovery-resolve", Cells: []workbook.CellInput{{Row: 5, Column: 4, Value: json.RawMessage(`10`)}}, OperationType: "conflict.resolve.restore_previous"})
+	if err != nil || crashWindowOperation.ServerVersion != 7 {
+		t.Fatalf("simulated pre-status resolution: %#v %v", crashWindowOperation, err)
+	}
+	recovered, err := restarted.ResolveCellConflict(ctx, secondConflict.Conflicts[0].ID, workbook.ResolveCellConflictInput{ActorID: "bob", ClientID: "b", IdempotencyKey: "pg-recovery-resolve", ExpectedRevision: 1, Resolution: workbook.ConflictRestorePrevious})
+	if err != nil || !recovered.Operation.Duplicate || recovered.Conflict.Status != workbook.ConflictStatusResolved || recovered.Conflict.ResolutionOperationID != crashWindowOperation.OperationID {
+		t.Fatalf("idempotent crash-window recovery: %#v %v", recovered, err)
+	}
+}
+
 func TestPostgresWorkbookSearchUsesCellBlocks(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

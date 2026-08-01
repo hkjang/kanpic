@@ -9,6 +9,7 @@ type Props={
   activeSheetId:string
   saveState:'saved'|'saving'|'offline'|'conflict'|'error'
   saveLabel:string
+  onStatusClick?:()=>void
   onSelect:(sheet:Sheet)=>void
   onCreate:()=>Promise<void>
   onRename:(sheet:Sheet,name:string)=>Promise<void>
@@ -18,7 +19,7 @@ type Props={
   onDelete:(sheet:Sheet)=>Promise<void>
 }
 
-export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,onSelect,onCreate,onRename,onDuplicate,onMove,onColor,onDelete}:Props){
+export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,onStatusClick,onSelect,onCreate,onRename,onDuplicate,onMove,onColor,onDelete}:Props){
   const scroller=useRef<HTMLDivElement>(null)
   const [menu,setMenu]=useState<string>(),[renaming,setRenaming]=useState<string>(),[name,setName]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState('')
   const run=async(action:()=>Promise<void>)=>{setPending(true);setError('');try{await action();setMenu(undefined);setRenaming(undefined)}catch(reason){setError(reason instanceof Error?reason.message:'시트 작업을 완료하지 못했습니다.')}finally{setPending(false)}}
@@ -46,6 +47,6 @@ export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,onSelect,onC
       {error&&<small className="sheet-menu-error">{error}</small>}
     </div>}
     {error&&<span className="sheet-tabs-error">{error}</span>}
-    <span className="sheet-status">{saveState==='offline'?<CloudOff/>:<Cloud/>} {saveLabel}</span>
+    <button className="sheet-status" disabled={!onStatusClick} onClick={onStatusClick}>{saveState==='offline'?<CloudOff/>:<Cloud/>} {saveLabel}</button>
   </div>
 }

@@ -515,6 +515,77 @@ func TestConcurrentSameCellReportsConflict(t *testing.T) {
 	}
 }
 
+func TestCellConflictRESTAndMCPComparisonResolutionFlow(t *testing.T) {
+	t.Parallel()
+	for name, scope := range map[string]string{
+		"spreadsheet.conflict.list":    "range.read",
+		"spreadsheet.conflict.get":     "range.read",
+		"spreadsheet.conflict.resolve": "range.write",
+	} {
+		definition, found := findMCPTool(name)
+		if !found || definition.Meta["required_scope"] != scope {
+			t.Fatalf("conflict MCP tool %s: %#v", name, definition)
+		}
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodGet, "/api/v1/workbooks/id/conflicts", nil)); scope != "range.read" {
+		t.Fatalf("conflict list scope=%q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/conflicts/id:resolve", nil)); scope != "range.write" {
+		t.Fatalf("conflict resolve scope=%q", scope)
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "conflict API"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	path := "/api/v1/sheets/" + sheetID + "/cells:batch"
+	request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 1, "idempotency_key": "api-first", "client_id": "browser-a", "cells": []map[string]any{{"row": 2, "column": 3, "value": "first", "style": map[string]any{"bold": true}}}}, http.StatusOK)
+	stale := request[workbook.MutationResult](t, server, http.MethodPatch, path, map[string]any{"base_version": 1, "idempotency_key": "api-stale", "client_id": "browser-b", "cells": []map[string]any{{"row": 2, "column": 3, "value": "second", "style": map[string]any{"italic": true}}}}, http.StatusOK)
+	if len(stale.Conflicts) != 1 || stale.Conflicts[0].ID == "" {
+		t.Fatalf("stale write conflict=%#v", stale)
+	}
+	conflictID := stale.Conflicts[0].ID
+	listed := request[struct {
+		Items []workbook.CellConflict `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/conflicts", nil, http.StatusOK)
+	if len(listed.Items) != 1 || string(listed.Items[0].ConflictingCell.Value) != `"first"` || string(listed.Items[0].CurrentCell.Value) != `"second"` {
+		t.Fatalf("REST conflict list=%#v", listed.Items)
+	}
+	got := request[workbook.CellConflict](t, server, http.MethodGet, "/api/v1/conflicts/"+conflictID, nil, http.StatusOK)
+	if got.OperationID != stale.OperationID || got.Revision != 1 {
+		t.Fatalf("REST conflict get=%#v", got)
+	}
+	mcpList := request[struct {
+		Result struct {
+			Structured []workbook.CellConflict `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conflict.list", "arguments": map[string]any{"workbook_id": book.ID}}}, http.StatusOK)
+	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].ID != conflictID {
+		t.Fatalf("MCP conflict list=%#v", mcpList)
+	}
+	mcpResolved := request[struct {
+		Result struct {
+			Structured workbook.CellConflictResolutionResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 42, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conflict.resolve", "arguments": map[string]any{"conflict_id": conflictID, "idempotency_key": "mcp-keep", "client_id": "agent", "expected_revision": 1, "resolution": "keep_current"}}}, http.StatusOK)
+	if mcpResolved.Result.Structured.Conflict.Status != workbook.ConflictStatusResolved || mcpResolved.Result.Structured.Operation.ServerVersion != 4 {
+		t.Fatalf("MCP conflict resolution=%#v", mcpResolved)
+	}
+	open := request[struct {
+		Items []workbook.CellConflict `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/conflicts", nil, http.StatusOK)
+	if len(open.Items) != 0 {
+		t.Fatalf("resolved conflict remains open=%#v", open.Items)
+	}
+	history := request[struct {
+		Items []workbook.CellConflict `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/conflicts?include_resolved=true", nil, http.StatusOK)
+	if len(history.Items) != 1 || history.Items[0].Resolution != workbook.ConflictKeepCurrent || history.Items[0].ResolutionOperationID == "" {
+		t.Fatalf("resolved conflict history=%#v", history.Items)
+	}
+}
+
 func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {
 	t.Parallel()
 	repository := workbook.NewMemoryRepository()
