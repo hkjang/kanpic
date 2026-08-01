@@ -120,11 +120,13 @@
     .nav-menu {
       display: flex;
       align-items: center;
-      gap: 32px;
+      gap: 16px;
       list-style: none;
     }
 
     .nav-link {
+      white-space: nowrap;
+      font-size: 0.92rem;
       color: var(--text-muted);
       text-decoration: none;
       font-size: 15px;
@@ -891,10 +893,10 @@
         <span class="brand-text">kanpic</span>
       </a>
       <ul class="nav-menu">
-        <li><a href="#features" class="nav-link">핵심 기능</a></li>
-        <li><a href="#showcase" class="nav-link">데모 시뮬레이션</a></li>
-        <li><a href="#roi" class="nav-link">TCO 절감 인디케이터</a></li>
-        <li><a href="#docs" class="nav-link">기술 문서 다운로드</a></li>
+        <li><a href="#features" class="nav-link">주요 기능</a></li>
+        <li><a href="#showcase" class="nav-link">데모</a></li>
+        <li><a href="#roi" class="nav-link">TCO 절감</a></li>
+        <li><a href="#docs" class="nav-link">문서 가이드</a></li>
       </ul>
       <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="메뉴 열기/닫기">
           <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
