@@ -47,6 +47,17 @@ describe('clipboard parsing',()=>{
     expect(materializePaste('',JSON.stringify(offset),10,7)[0].formula).toBe('=G10')
   })
 
+  it('pastes formula results when values-only is requested',()=>{
+    const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:1,rows:1,columns:2,cells:[
+      {rowOffset:0,columnOffset:0,value:2},
+      {rowOffset:0,columnOffset:1,value:4,formula:'=A1*2'},
+    ]}
+    expect(materializePaste('',JSON.stringify(payload),3,4,true)).toEqual([
+      {row:3,column:4,value:2,formula:undefined,style:undefined},
+      {row:3,column:5,value:4,formula:undefined,style:undefined},
+    ])
+  })
+
   it('rejects a destination outside the supported grid',()=>{
     expect(()=>materializePaste('1\n2',undefined,10_000,1)).toThrow('시트 한도')
   })

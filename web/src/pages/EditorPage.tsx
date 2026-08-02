@@ -4,7 +4,7 @@ import { AlertTriangle, AlignCenter, AlignLeft, AlignRight, ArrowUpDown, BadgeCh
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
-import { CanvasGrid } from '../components/CanvasGrid'
+import { CanvasGrid,type GridShortcut } from '../components/CanvasGrid'
 import { ChartDialog } from '../components/ChartDialog'
 import { ChartOverlay } from '../components/ChartOverlay'
 import { ChartPanel } from '../components/ChartPanel'
@@ -25,6 +25,7 @@ import { SortDialog } from '../components/SortDialog'
 import { StructureDialog,type StructureCommand } from '../components/StructureDialog'
 import { VersionPanel } from '../components/VersionPanel'
 import { WorkbookSearchDialog } from '../components/WorkbookSearchDialog'
+import { WorkbookShortcutsDialog } from '../components/WorkbookShortcutsDialog'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
 import { MAX_PASTE_CELLS } from '../lib/clipboard'
@@ -40,10 +41,12 @@ function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,u
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
 function parseNavigationRange(value:string){const parts=value.trim().replaceAll('$','').split(':');if(parts.length<1||parts.length>2)return;const first=parseCellAddress(parts[0]),last=parseCellAddress(parts[1]??parts[0]);if(!first||!last)return;return{startRow:Math.min(first.row,last.row),startColumn:Math.min(first.column,last.column),endRow:Math.max(first.row,last.row),endColumn:Math.max(first.column,last.column)}}
 function spillInRange(cells:Map<string,Cell>,range:{startRow:number;startColumn:number;endRow:number;endColumn:number}){for(let row=range.startRow;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){const cell=cells.get(cellKey(row,column));if(cell?.spill_source)return{cell,coordinate:address(row,column)}}}
+function editableTarget(target:EventTarget|null){return target instanceof HTMLElement&&Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))}
+function gridShortcut(shortcut:GridShortcut){window.dispatchEvent(new CustomEvent<GridShortcut>('kanpic:grid-shortcut',{detail:shortcut}))}
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`)})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const routeNavigation=useRef((()=>{const parameters=new URLSearchParams(window.location.search);return{sheetId:parameters.get('sheet_id')??'',range:parameters.get('range')??'',commentId:parameters.get('comment_id')??''}})()).current,routeNavigationApplied=useRef(false)
   const editor=useEditorStore();const editorSelection=selectedMergedBounds(editor.cells,selectedBounds(editor));const activeCell=editor.cells.get(cellKey(editor.activeRow,editor.activeColumn));const formula=activeCell?.formula||(activeCell?.value==null?'':String(activeCell.value))
@@ -59,7 +62,6 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const selectionAddress=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn?address(editor.activeRow,editor.activeColumn):`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`
   useEffect(()=>setNameBoxValue(selectionAddress),[selectionAddress])
   useEffect(()=>{connect(workbookId,handleCollaborationVersion,handleCollaborationEvent);return()=>disconnect()},[connect,disconnect,handleCollaborationEvent,handleCollaborationVersion,workbookId])
-  useEffect(()=>{const shortcut=(event:KeyboardEvent)=>{if((event.ctrlKey||event.metaKey)&&(event.key.toLowerCase()==='f'||event.key.toLowerCase()==='k')){event.preventDefault();setSearchOpen(true)}};window.addEventListener('keydown',shortcut);return()=>window.removeEventListener('keydown',shortcut)},[])
   useEffect(()=>{if(activeSheet&&collaborationStatus==='connected'){sendCursor({sheet_id:activeSheet.id,row:editor.activeRow,column:editor.activeColumn});sendSelection({sheet_id:activeSheet.id,start:{row:editorSelection.startRow,column:editorSelection.startColumn},end:{row:editorSelection.endRow,column:editorSelection.endColumn}})}},[activeSheet,collaborationStatus,sendCursor,sendSelection])
   useEffect(()=>{if(editor.conflicts>0)client.invalidateQueries({queryKey:['cell-conflicts',workbookId]})},[client,editor.conflicts,workbookId])
   useEffect(()=>{if(!conflicts.data)return;const current=useEditorStore.getState(),count=conflicts.data.items.length;if((current.saveState==='saved'||current.saveState==='conflict')&&(current.conflicts!==count||current.saveState!==(count>0?'conflict':'saved')))current.setSaveState(count>0?'conflict':'saved',count)},[conflicts.data])
@@ -116,6 +118,35 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const handleConflictResolved=(result:CellConflictResolutionResult)=>{updateVersion(result.operation.server_version);if(!result.operation.duplicate&&result.operation.applied_cells>0)editor.recordOperation(result.operation.operation_id);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const handleAIExecuted=(result:AIExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['ai-actions',workbookId]})}
   const handleAutomationExecuted=(result:AutomationExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['automations',workbookId]})}
+  const saveWorkbook=async()=>{if(!navigator.onLine){editor.setSaveState('offline');return}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)});const current=useEditorStore.getState();if(current.saveState==='saving')current.setSaveState(current.conflicts?'conflict':'saved',current.conflicts)}catch{editor.setSaveState('error')}}
+  useEffect(()=>{const shortcut=(event:KeyboardEvent)=>{if(event.defaultPrevented||editableTarget(event.target)||document.querySelector('[role="dialog"][aria-modal="true"]'))return;const primary=event.ctrlKey||event.metaKey,key=event.key.toLowerCase(),numberFormats:Record<string,string>={Digit1:'#,##0.00',Digit2:'hh:mm:ss',Digit3:'yyyy-mm-dd',Digit4:'₩#,##0',Digit5:'0.00%',Digit6:'0.00E+00'}
+    if(primary&&event.altKey&&key==='m'){event.preventDefault();setRightPanel('comments');return}
+    if(primary&&event.code==='Slash'){event.preventDefault();setShortcutsOpen(true);return}
+    if(primary&&(key==='f'||key==='k')){event.preventDefault();setSearchOpen(true);return}
+    if(primary&&key==='s'){event.preventDefault();void saveWorkbook();return}
+    if(primary&&key==='z'){event.preventDefault();void revertOperation(event.shiftKey?'redo':'undo');return}
+    if(primary&&key==='y'){event.preventDefault();void revertOperation('redo');return}
+    if(event.shiftKey&&event.key==='F11'){event.preventDefault();void createSheet();return}
+    if(primary&&event.shiftKey&&numberFormats[event.code]){event.preventDefault();void applyFormat({number_format:numberFormats[event.code]});return}
+    if(event.altKey&&event.shiftKey&&event.code==='Digit5'){event.preventDefault();void applyFormat({strike:activeCell?.style?.strike!==true});return}
+    if(primary&&event.shiftKey&&key==='b'){event.preventDefault();void applyFormat({bold:activeCell?.style?.bold!==true});return}
+    if(primary&&event.shiftKey&&key==='i'){event.preventDefault();void applyFormat({italic:activeCell?.style?.italic!==true});return}
+    if(primary&&event.shiftKey&&key==='u'){event.preventDefault();void applyFormat({underline:activeCell?.style?.underline!==true});return}
+    if(primary&&event.shiftKey&&key==='l'){event.preventDefault();void applyFormat({horizontal_align:'left'});return}
+    if(primary&&event.shiftKey&&key==='e'){event.preventDefault();void applyFormat({horizontal_align:'center'});return}
+    if(primary&&event.shiftKey&&key==='r'){event.preventDefault();void applyFormat({horizontal_align:'right'});return}
+    if(primary&&key==='b'){event.preventDefault();void applyFormat({bold:activeCell?.style?.bold!==true});return}
+    if(primary&&key==='i'){event.preventDefault();void applyFormat({italic:activeCell?.style?.italic!==true});return}
+    if(primary&&key==='u'){event.preventDefault();void applyFormat({underline:activeCell?.style?.underline!==true});return}
+    if(primary&&key==='a'){event.preventDefault();gridShortcut({command:'select-all'});return}
+    if(primary&&event.code==='Space'){event.preventDefault();gridShortcut({command:'select-column'});return}
+    if(event.shiftKey&&event.code==='Space'){event.preventDefault();gridShortcut({command:'select-row'});return}
+    if(primary&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();gridShortcut({command:'move-data-edge',direction:event.key.replace('Arrow','').toLowerCase() as 'up'|'down'|'left'|'right',extend:event.shiftKey});return}
+    if(primary&&!event.shiftKey&&key==='d'){event.preventDefault();gridShortcut({command:'fill-down'});return}
+    if(primary&&!event.shiftKey&&key==='r'){event.preventDefault();gridShortcut({command:'fill-right'});return}
+    if(primary&&event.key==='Home'){event.preventDefault();gridShortcut({command:'move-first'});return}
+    if(primary&&event.key==='End'){event.preventDefault();gridShortcut({command:'move-last'})}}
+    window.addEventListener('keydown',shortcut);return()=>window.removeEventListener('keydown',shortcut)},[activeCell?.style?.bold,activeCell?.style?.italic,activeCell?.style?.strike,activeCell?.style?.underline,applyFormat,createSheet,revertOperation,saveWorkbook])
   if(workbook.isLoading)return <div className="editor-loading">kanpic 편집기를 준비하는 중…</div>
   if(!workbook.data||!activeSheet)return <div className="editor-loading error">워크북을 찾을 수 없습니다.</div>
   const conflictCount=Math.max(conflicts.data?.items.length??0,editor.conflicts)
@@ -150,6 +181,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}
+    {shortcutsOpen&&<WorkbookShortcutsDialog onClose={()=>setShortcutsOpen(false)}/>}
     <WorkbookSearchDialog open={searchOpen} workbookId={workbookId} version={serverVersion} onClose={()=>setSearchOpen(false)} onNavigate={(item:WorkbookSearchMatch)=>navigateToRange(item.sheet_id,item.address)}/>
   </div>
 }

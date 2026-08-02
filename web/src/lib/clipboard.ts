@@ -113,15 +113,15 @@ function parsedValue(raw:string):unknown{
   return raw
 }
 
-export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number){
+export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number,valuesOnly=false){
   const internal=parseClipboardPayload(internalRaw)
   if(internal){
     if(internal.rows*internal.columns>MAX_PASTE_CELLS)throw new Error(`붙여넣기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
     return validateGridBounds(internal.cells.map(cell=>({
       row:startRow+cell.rowOffset,
       column:startColumn+cell.columnOffset,
-      value:cell.formula?undefined:cell.value,
-      formula:cell.formula?shiftFormula(cell.formula,startRow-internal.sourceRow,startColumn-internal.sourceColumn):undefined,
+      value:valuesOnly?cell.value:cell.formula?undefined:cell.value,
+      formula:valuesOnly?undefined:cell.formula?shiftFormula(cell.formula,startRow-internal.sourceRow,startColumn-internal.sourceColumn):undefined,
       style:cell.style,
     })))
   }
@@ -129,7 +129,7 @@ export function materializePaste(text:string,internalRaw:string|undefined,startR
   const count=rows.reduce((total,row)=>total+row.length,0)
   if(count>MAX_PASTE_CELLS)throw new Error(`붙여넣기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
   return validateGridBounds(rows.flatMap((row,rowOffset)=>row.map((raw,columnOffset)=>{
-    const formula=raw.startsWith('=')?raw:undefined
+    const formula=!valuesOnly&&raw.startsWith('=')?raw:undefined
     return {row:startRow+rowOffset,column:startColumn+columnOffset,value:formula?undefined:parsedValue(raw),formula}
   })))
 }

@@ -16,6 +16,10 @@ const HEADER_HEIGHT=27
 const TOTAL_ROWS=MAX_GRID_ROWS
 const TOTAL_COLUMNS=MAX_GRID_COLUMNS
 
+export type GridShortcut=
+  | {command:'fill-down'|'fill-right'|'select-all'|'select-row'|'select-column'|'move-first'|'move-last'}
+  | {command:'move-data-edge';direction:'up'|'down'|'left'|'right';extend:boolean}
+
 function columnName(column:number){let value=column,result='';while(value){value--;result=String.fromCharCode(65+value%26)+result;value=Math.floor(value/26)}return result}
 function parsedValue(raw:string):unknown{if(raw==='')return undefined;if(raw.toLowerCase()==='true')return true;if(raw.toLowerCase()==='false')return false;if(Number.isFinite(Number(raw))&&raw.trim()!=='')return Number(raw);return raw}
 function parsedAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -28,7 +32,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
 }
 
 export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[]}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[]}) {
-  const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined)
+  const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const editor=useEditorStore()
   const {activeRow,activeColumn,anchorRow,anchorColumn,editing,zoom,cells,select,setEditing,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
@@ -179,22 +183,26 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       cells.forEach(candidate=>{formulaCells[address(candidate.row,candidate.column)]=candidate.value})
       try{const evaluated=await api<{value?:unknown;error?:{code:string}}>(`/api/v1/formulas:evaluate`,{method:'POST',body:JSON.stringify({formula,cells:formulaCells})});value=evaluated.error?.code??formulaPreview(evaluated.value)}catch{value='#ERROR!'}
     }
-    await saveCell(value,formula,row,column)
+    return saveCell(value,formula,row,column)
   },[activeRow,activeColumn,cells,saveCell])
 
   useEffect(()=>{const sync=()=>flushOutbox(handleApplied);window.addEventListener('online',sync);const timer=window.setInterval(sync,3000);sync();return()=>{window.removeEventListener('online',sync);window.clearInterval(timer)}},[handleApplied])
 
-  const selectionPayload=useCallback(()=>{
-    const rows=selection.endRow-selection.startRow+1,columns=selection.endColumn-selection.startColumn+1
+  const selectionPayload=useCallback((range:FillRange=selection)=>{
+    const rows=range.endRow-range.startRow+1,columns=range.endColumn-range.startColumn+1
     if(rows*columns>MAX_PASTE_CELLS)throw new Error(`복사와 잘라내기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
-    const payload:KanpicClipboard={version:1,sourceRow:selection.startRow,sourceColumn:selection.startColumn,rows,columns,cells:[]}
-    for(let row=selection.startRow;row<=selection.endRow;row+=1)for(let column=selection.startColumn;column<=selection.endColumn;column+=1){
+    const payload:KanpicClipboard={version:1,sourceRow:range.startRow,sourceColumn:range.startColumn,rows,columns,cells:[]}
+    for(let row=range.startRow;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){
       const cell=cells.get(cellKey(row,column))
-      payload.cells.push({rowOffset:row-selection.startRow,columnOffset:column-selection.startColumn,value:cell?.value,formula:cell?.formula||undefined,style:stripMergeStyle(cell?.style)})
+      payload.cells.push({rowOffset:row-range.startRow,columnOffset:column-range.startColumn,value:cell?.value,formula:cell?.formula||undefined,style:stripMergeStyle(cell?.style)})
     }
     return payload
-  },[cells,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow])
+  },[cells,selection])
   const fillSelection=useCallback(async(target:FillRange)=>{try{const inputs=materializeFill(selectionPayload(),target);await queueCells(inputs,'fill')}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'자동 채우기를 적용하지 못했습니다.')}},[queueCells,selectionPayload,setSaveState])
+  const fillFrom=useCallback(async(source:FillRange)=>{try{const inputs=materializeFill(selectionPayload(source),selection);await queueCells(inputs,'fill')}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위를 채우지 못했습니다.')}},[queueCells,selection,selectionPayload,setSaveState])
+  const fillDown=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.startRow,endColumn:selection.endColumn}),[fillFrom,selection])
+  const fillRight=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.endRow,endColumn:selection.startColumn}),[fillFrom,selection])
+  const fillDraft=useCallback(async(raw:string)=>{try{const formula=raw.startsWith('=')?raw:undefined,current=cells.get(cellKey(activeRow,activeColumn)),payload:KanpicClipboard={version:1,sourceRow:activeRow,sourceColumn:activeColumn,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:formula?undefined:parsedValue(raw),formula,style:stripMergeStyle(current?.style)}]},inputs=[{row:activeRow,column:activeColumn,value:formula?undefined:parsedValue(raw),formula,style:current?.style},...materializeFill(payload,selection)];await queueCells(inputs,'fill');setEditing(false)}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위에 값을 채우지 못했습니다.')}},[activeColumn,activeRow,cells,queueCells,selection,setEditing,setSaveState])
 
   const selectCell=useCallback((row:number,column:number,extend=false)=>{
     let nextRow=Math.max(1,Math.min(TOTAL_ROWS,row)),nextColumn=Math.max(1,Math.min(TOTAL_COLUMNS,column));if(rowAxis.isHidden(nextRow))nextRow=row>=activeRow?rowAxis.firstVisibleAtOrAfter(nextRow):rowAxis.lastVisibleAtOrBefore(nextRow);if(columnAxis.isHidden(nextColumn))nextColumn=column>=activeColumn?columnAxis.firstVisibleAtOrAfter(nextColumn):columnAxis.lastVisibleAtOrBefore(nextColumn)
@@ -205,6 +213,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const end=extend?{row:Math.max(anchorRow,nextRow),column:Math.max(anchorColumn,nextColumn)}:{row:merged?.endRow??nextRow,column:merged?.endColumn??nextColumn}
     sendSelection({sheet_id:sheetId,start,end})
   },[anchorRow,anchorColumn,cells,select,sendCursor,sendSelection,sheetId,rowAxis,columnAxis,activeRow,activeColumn])
+  const selectRange=useCallback((startRow:number,startColumn:number,endRow:number,endColumn:number)=>{select(startRow,startColumn);select(endRow,endColumn,true);sendCursor({sheet_id:sheetId,row:endRow,column:endColumn});sendSelection({sheet_id:sheetId,start:{row:startRow,column:startColumn},end:{row:endRow,column:endColumn}})},[select,sendCursor,sendSelection,sheetId])
+  const populated=useCallback((row:number,column:number)=>{const cell=cells.get(cellKey(row,column));return cell?.value!=null||Boolean(cell?.formula)},[cells])
+  const moveDataEdge=useCallback((direction:'up'|'down'|'left'|'right',extend:boolean)=>{const rowStep=direction==='up'?-1:direction==='down'?1:0,columnStep=direction==='left'?-1:direction==='right'?1:0,filled=populated(activeRow,activeColumn);let row=activeRow,column=activeColumn;for(let index=0;index<TOTAL_ROWS+TOTAL_COLUMNS;index+=1){const nextRow=rowStep?rowAxis.nextVisible(row,rowStep):row,nextColumn=columnStep?columnAxis.nextVisible(column,columnStep):column;if(nextRow===row&&nextColumn===column)break;if(populated(nextRow,nextColumn)!==filled)break;row=nextRow;column=nextColumn}selectCell(row,column,extend)},[activeColumn,activeRow,columnAxis,populated,rowAxis,selectCell])
+  const commitAndMove=(rowOffset:number,columnOffset:number)=>{void commit(draft).then(saved=>{if(saved)selectCell(rowOffset===0?activeRow:rowAxis.nextVisible(activeRow,rowOffset>0?1:-1),columnOffset===0?activeColumn:columnAxis.nextVisible(activeColumn,columnOffset>0?1:-1))})}
+  useEffect(()=>{const shortcut=(event:Event)=>{const detail=(event as CustomEvent<GridShortcut>).detail;if(!detail)return;if(detail.command==='fill-down'){fillDown();return}if(detail.command==='fill-right'){fillRight();return}if(detail.command==='select-all'){selectRange(1,1,TOTAL_ROWS,TOTAL_COLUMNS);return}if(detail.command==='select-row'){selectRange(activeRow,1,activeRow,TOTAL_COLUMNS);return}if(detail.command==='select-column'){selectRange(1,activeColumn,TOTAL_ROWS,activeColumn);return}if(detail.command==='move-first'){selectCell(1,1);return}if(detail.command==='move-last'){selectCell(TOTAL_ROWS,TOTAL_COLUMNS);return}if(detail.command==='move-data-edge')moveDataEdge(detail.direction,detail.extend)};window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,fillDown,fillRight,moveDataEdge,selectCell,selectRange])
   const pointerPosition=(event:React.PointerEvent<HTMLCanvasElement>)=>{const rect=canvas.current!.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}}
   const pointCell=(event:React.PointerEvent<HTMLCanvasElement>)=>{const{x,y}=pointerPosition(event);if(x<HEADER_WIDTH||y<HEADER_HEIGHT)return;return{row:axisIndexAtViewport(rowAxis,y-HEADER_HEIGHT,scroll.top,frozenRows),column:axisIndexAtViewport(columnAxis,x-HEADER_WIDTH,scroll.left,frozenColumns)}}
   const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=HEADER_WIDTH+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=HEADER_HEIGHT+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
@@ -213,7 +226,23 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const pointerUp=(event:React.PointerEvent<HTMLCanvasElement>)=>{dragging.current=false;const target=fillPreviewRef.current,shouldFill=filling.current;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined);event.currentTarget.style.cursor='default';if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);if(shouldFill&&target)void fillSelection(target)}
   const pointerCancel=(event:React.PointerEvent<HTMLCanvasElement>)=>{dragging.current=false;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined);event.currentTarget.style.cursor='default';if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)}
   const editActiveCell=useCallback(()=>{if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing])
-  const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;if(event.key==='Enter'||event.key==='F2'){editActiveCell();event.preventDefault()}else if(event.key==='ArrowDown'){selectCell(rowAxis.nextVisible(activeRow,1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowUp'){selectCell(rowAxis.nextVisible(activeRow,-1),activeColumn,event.shiftKey);event.preventDefault()}else if(event.key==='ArrowRight'||event.key==='Tab'){selectCell(activeRow,columnAxis.nextVisible(activeColumn,1),event.shiftKey);event.preventDefault()}else if(event.key==='ArrowLeft'){selectCell(activeRow,columnAxis.nextVisible(activeColumn,-1),event.shiftKey);event.preventDefault()}else if(event.key==='Backspace'||event.key==='Delete'){const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)commit('');else void clearSelection();event.preventDefault()}else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey){if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
+  const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;const primary=event.ctrlKey||event.metaKey
+    if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
+    if(primary&&event.key.toLowerCase()==='a'){selectRange(1,1,TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
+    else if(primary&&event.code==='Space'){selectRange(1,activeColumn,TOTAL_ROWS,activeColumn);event.preventDefault()}
+    else if(event.shiftKey&&event.code==='Space'){selectRange(activeRow,1,activeRow,TOTAL_COLUMNS);event.preventDefault()}
+    else if(primary&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)){const direction=event.key.replace('Arrow','').toLowerCase() as 'up'|'down'|'left'|'right';moveDataEdge(direction,event.shiftKey);event.preventDefault()}
+    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='d'){fillDown();event.preventDefault()}
+    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='r'){fillRight();event.preventDefault()}
+    else if(primary&&event.key==='Home'){selectCell(1,1);event.preventDefault()}
+    else if(primary&&event.key==='End'){selectCell(TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
+    else if(event.key==='Enter'||event.key==='F2'){editActiveCell();event.preventDefault()}
+    else if(event.key==='ArrowDown'){selectCell(rowAxis.nextVisible(activeRow,1),activeColumn,event.shiftKey);event.preventDefault()}
+    else if(event.key==='ArrowUp'){selectCell(rowAxis.nextVisible(activeRow,-1),activeColumn,event.shiftKey);event.preventDefault()}
+    else if(event.key==='ArrowRight'||event.key==='Tab'){selectCell(activeRow,columnAxis.nextVisible(activeColumn,event.key==='Tab'&&event.shiftKey?-1:1),event.shiftKey);event.preventDefault()}
+    else if(event.key==='ArrowLeft'){selectCell(activeRow,columnAxis.nextVisible(activeColumn,-1),event.shiftKey);event.preventDefault()}
+    else if(event.key==='Backspace'||event.key==='Delete'){const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)void commit('');else void clearSelection();event.preventDefault()}
+    else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey){if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
   const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
   const copy=(event:React.ClipboardEvent)=>{writeClipboard(event)}
   const clearSelection=useCallback(async()=>{
@@ -229,7 +258,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'})
     worker.onmessage=async(message:MessageEvent<{cells?:PastedCell[];error?:string}>)=>{try{if(message.data.error){setSaveState('error');alert(message.data.error);return}await queueCells(message.data.cells??[],'paste')}finally{worker.terminate()}}
     worker.onerror=()=>{setSaveState('error');worker.terminate();alert('붙여넣기 데이터를 처리하지 못했습니다.')}
-    worker.postMessage({text:event.clipboardData.getData('text/plain'),internal:event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),startRow:activeRow,startColumn:activeColumn})
+    const valuesOnly=pasteAsValues.current;pasteAsValues.current=false
+    worker.postMessage({text:event.clipboardData.getData('text/plain'),internal:event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),startRow:activeRow,startColumn:activeColumn,valuesOnly})
   }
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
   const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=HEADER_WIDTH+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=HEADER_HEIGHT+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
@@ -238,7 +268,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
     <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={editActiveCell}/></div>
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
-    {editing&&dropdown?<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>void saveCell(option.value,'',activeRow,activeColumn)}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>setEditing(false)}>취소</button></div>:editing&&<input autoFocus className="cell-editor" style={{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}} value={draft} onChange={(event)=>setDraft(event.target.value)} onBlur={()=>commit(draft)} onKeyDown={(event)=>{if(event.key==='Enter'){event.preventDefault();commit(draft)}else if(event.key==='Escape'){setEditing(false);setDraft(activeText)}}}/>}
+    {editing&&dropdown?<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>void saveCell(option.value,'',activeRow,activeColumn)}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>setEditing(false)}>취소</button></div>:editing&&<input autoFocus className="cell-editor" style={{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}} value={draft} onChange={(event)=>setDraft(event.target.value)} onBlur={()=>void commit(draft)} onKeyDown={(event)=>{const primary=event.ctrlKey||event.metaKey;if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true}else if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}else if(event.key==='Tab'){event.preventDefault();commitAndMove(0,event.shiftKey?-1:1)}else if(event.key==='Escape'){setEditing(false);setDraft(activeText)}}}/>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }
