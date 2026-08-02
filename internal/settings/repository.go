@@ -88,6 +88,9 @@ var defaults = []Setting{
 	{Key: "ai.timeout_seconds", Value: json.RawMessage(`30`), ValueType: "number", Description: "AI Gateway 요청 제한 시간(초)"},
 	{Key: "ai.max_input_cells", Value: json.RawMessage(`200`), ValueType: "number", Description: "AI에 전달할 선택 범위 최대 셀 수"},
 	{Key: "ai.max_changes", Value: json.RawMessage(`100`), ValueType: "number", Description: "AI 계획 한 건의 최대 변경 셀 수"},
+	{Key: "automation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "워크북 자동화 실행 사용"},
+	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
+	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},
 	{Key: "observability.log_retention_days", Value: json.RawMessage(`30`), ValueType: "number", Description: "서버 로그 보존 일수"},
 }
@@ -228,7 +231,7 @@ func (r *Repository) Validate(ctx context.Context) (ValidationResult, error) {
 }
 
 func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
-	results := make([]TestResult, 0, 2)
+	results := make([]TestResult, 0, 4)
 	started := time.Now()
 	err := r.pool.Ping(ctx)
 	results = append(results, TestResult{Name: "PostgreSQL", Success: err == nil, Message: resultMessage(err, "연결 성공"), DurationMS: time.Since(started).Milliseconds()})
@@ -259,6 +262,11 @@ func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
 		started = time.Now()
 		testErr := testAIGateway(ctx, values)
 		results = append(results, TestResult{Name: "사내 LLM Gateway", Success: testErr == nil, Message: resultMessage(testErr, "OpenAI 호환 models 연결 성공"), DurationMS: time.Since(started).Milliseconds()})
+	}
+	if enabled, _ := values["automation.enabled"].(bool); enabled {
+		started = time.Now()
+		_, testErr := r.pool.Exec(ctx, `SELECT 1 FROM automations LIMIT 0`)
+		results = append(results, TestResult{Name: "자동화 저장소", Success: testErr == nil, Message: resultMessage(testErr, "정의·실행 이력 저장소 준비 완료"), DurationMS: time.Since(started).Milliseconds()})
 	}
 	return results, nil
 }
@@ -433,6 +441,18 @@ func validateValue(item Setting) string {
 		number, _ := value.(float64)
 		if number < 1 || number > 1000 {
 			return "AI 변경 한도는 1~1000셀이어야 합니다."
+		}
+	}
+	if item.Key == "automation.max_cells_per_run" {
+		number, _ := value.(float64)
+		if number < 1 || number > 10000 {
+			return "자동화 변경 한도는 1~10000셀이어야 합니다."
+		}
+	}
+	if item.Key == "automation.max_runs_per_hour" {
+		number, _ := value.(float64)
+		if number < 1 || number > 10000 {
+			return "자동화 실행 한도는 시간당 1~10000건이어야 합니다."
 		}
 	}
 	return ""

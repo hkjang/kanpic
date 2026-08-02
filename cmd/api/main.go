@@ -14,6 +14,7 @@ import (
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
+	"kanpic/internal/automation"
 	"kanpic/internal/database"
 	"kanpic/internal/httpapi"
 	"kanpic/internal/observability"
@@ -59,7 +60,8 @@ func main() {
 	keyRepository := apikey.New(pool)
 	authService := auth.New(pool, settingRepository, bootstrap)
 	aiService := ai.NewService(pool, settingRepository, repository, logger)
-	handler := httpapi.NewPlatformWithAI(repository, settingRepository, keyRepository, authService, logStore, aiService, logger)
+	automationService := automation.NewService(pool, settingRepository, repository, logger)
+	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger)
 	address := ":8080"
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
 

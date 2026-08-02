@@ -1,7 +1,7 @@
 # kanpic 관리자 가이드 (System Administrator Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.15.0
+- **시스템 버전**: v0.16.0
 - **문서 버전**: v1.0  
 - **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 시스템 관리자 및 DevOps 엔지니어용 통합 운영 매뉴얼 (System Administrator Manual)  
@@ -138,13 +138,28 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 - 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
 - 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
 - 공개 AI 설정 조회는 `spreadsheet.ai.config.get`, 계획·조회·승인·Undo는 `spreadsheet.ai.action.plan|list|get|approve|undo`로 제공합니다. 모든 호출에 `ai.use`가 필요하고 계획은 `range.read`, 수식 생성·오류 수정 승인은 `formula.write`, 데이터 정제 승인과 Undo는 `range.write`를 추가로 검사합니다. 설명·요약·이상치 탐지는 승인할 수 없습니다.
+- 워크북 자동화는 `spreadsheet.automation.list|get|create|update|delete|test|run|run.list|run.undo`로 제공합니다. 정의 조회·검증·이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`이 필요합니다. 검증은 `range.read`, 값 설정·지우기와 Undo는 `range.write`, 수식 실행은 `formula.write`를 추가 검사합니다.
+
+### 6.2 워크북 자동화 실행 정책
+
+관리자 콘솔의 **워크북 자동화 실행 정책** 카드는 자동화 전체 활성화와 실행 한도를 관리합니다. 설정은 다른 관리자 설정처럼 PostgreSQL에 저장되고 CRUD, revision 이력, 이전 버전 복원, 전체 검증과 실제 저장소 연결 테스트를 지원합니다.
+
+| 설정 키 | 기본값 | 유효 범위 | 설명 |
+| :--- | ---: | ---: | :--- |
+| `automation.enabled` | `false` | boolean | 실제 수동·셀 변경 자동화 실행 허용. 정의 CRUD와 쓰기 없는 검증은 계속 가능 |
+| `automation.max_cells_per_run` | `1000` | 1~10,000 | 한 실행이 변경할 수 있는 최대 셀 수 |
+| `automation.max_runs_per_hour` | `100` | 1~10,000 | 워크북 하나에서 최근 1시간 동안 시작할 수 있는 실행 수 |
+
+**정책 검증**은 값 유형과 범위를 검사합니다. **저장소 준비 상태 테스트**는 자동화가 활성화된 경우 PostgreSQL의 `automations` 테이블을 실제로 조회해 마이그레이션 적용 여부를 확인합니다. 운영 활성화 전에는 낮은 한도로 수동 실행과 Undo를 확인한 다음 셀 변경 트리거를 켜는 것을 권장합니다.
+
+자동화 정의는 이름별 유일성과 revision 기반 낙관적 잠금을 사용하며 삭제는 soft delete로 처리됩니다. 실행은 기준 워크북 버전, 작업 정의, 변경 전 셀 스냅샷, 실제 셀 작업 및 Undo 작업 ID를 `automation_runs`에 보존합니다. 수동 재시도는 사용자·자동화·멱등 키로, 셀 변경 재전송은 원본 `operation_id`로 중복 제거합니다. 실행은 정확한 기준 버전 및 셀 스냅샷이 일치할 때만 적용되고, 성공·실패·Undo는 구조화 로그와 감사 로그에서 추적할 수 있습니다.
 
 ---
 
 ## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 7.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `014_ai_analysis_clean.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `015_automations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다.
 
 ### 7.2 백업 및 복구 명령어 (pg_dump)
 

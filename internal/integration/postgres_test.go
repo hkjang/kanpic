@@ -22,6 +22,7 @@ import (
 	kanpicai "kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
+	"kanpic/internal/automation"
 	"kanpic/internal/database"
 	"kanpic/internal/importexport"
 	"kanpic/internal/settings"
@@ -450,8 +451,11 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	bobRecipient := fmt.Sprintf("bob-%s@example.com", book.ID)
+	danaRecipient := fmt.Sprintf("dana-%s@example.com", book.ID)
+	erinRecipient := fmt.Sprintf("erin-%s@example.com", book.ID)
 	sheet := book.Sheets[0]
-	thread, err := repository.CreateCommentThread(ctx, book.ID, "alice", workbook.CreateCommentThreadInput{IdempotencyKey: "pg-comment", SheetID: sheet.ID, Range: "B2:C3", Content: "@bob@example.com 확인 부탁드립니다"})
+	thread, err := repository.CreateCommentThread(ctx, book.ID, "alice", workbook.CreateCommentThreadInput{IdempotencyKey: "pg-comment", SheetID: sheet.ID, Range: "B2:C3", Content: "@" + bobRecipient + " 확인 부탁드립니다"})
 	if err != nil || len(thread.Messages) != 1 || thread.Messages[0].AuthorID != "alice" || thread.Messages[0].Revision != 1 {
 		t.Fatalf("PostgreSQL comment create = %#v, %v", thread, err)
 	}
@@ -459,7 +463,7 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err != nil || duplicate.ID != thread.ID || duplicate.Messages[0].Content != thread.Messages[0].Content {
 		t.Fatalf("PostgreSQL comment idempotency = %#v, %v", duplicate, err)
 	}
-	replied, err := repository.AddCommentReply(ctx, thread.ID, "charlie", workbook.CreateCommentReplyInput{IdempotencyKey: "pg-reply", Content: "처리 중입니다 @dana"})
+	replied, err := repository.AddCommentReply(ctx, thread.ID, "charlie", workbook.CreateCommentReplyInput{IdempotencyKey: "pg-reply", Content: "처리 중입니다 @" + danaRecipient})
 	if err != nil || replied.Revision != 2 || len(replied.Messages) != 2 || replied.Messages[1].AuthorID != "charlie" {
 		t.Fatalf("PostgreSQL reply = %#v, %v", replied, err)
 	}
@@ -467,19 +471,19 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err != nil || len(listed) != 1 || len(listed[0].Messages) != 2 {
 		t.Fatalf("PostgreSQL comment list = %#v, %v", listed, err)
 	}
-	bob, err := repository.ListMentionNotifications(ctx, []string{"BOB@example.com"}, true, 50)
+	bob, err := repository.ListMentionNotifications(ctx, []string{bobRecipient}, true, 50)
 	if err != nil || len(bob) != 1 || bob[0].ThreadID != thread.ID || bob[0].Range != "B2:C3" {
 		t.Fatalf("PostgreSQL mention list = %#v, %v", bob, err)
 	}
-	read, err := repository.MarkMentionNotificationRead(ctx, bob[0].ID, []string{"bob@example.com"})
+	read, err := repository.MarkMentionNotificationRead(ctx, bob[0].ID, []string{bobRecipient})
 	if err != nil || read.ReadAt == nil || read.SheetName != sheet.Name {
 		t.Fatalf("PostgreSQL mention read = %#v, %v", read, err)
 	}
-	updated, err := repository.UpdateCommentMessage(ctx, thread.Messages[0].ID, "alice", workbook.UpdateCommentMessageInput{Content: "담당자 변경 @erin", ExpectedRevision: thread.Messages[0].Revision})
+	updated, err := repository.UpdateCommentMessage(ctx, thread.Messages[0].ID, "alice", workbook.UpdateCommentMessageInput{Content: "담당자 변경 @" + erinRecipient, ExpectedRevision: thread.Messages[0].Revision})
 	if err != nil || updated.Revision != 3 || updated.Messages[0].Revision != 2 {
 		t.Fatalf("PostgreSQL message update = %#v, %v", updated, err)
 	}
-	if old, err := repository.ListMentionNotifications(ctx, []string{"bob@example.com"}, false, 50); err != nil || len(old) != 0 {
+	if old, err := repository.ListMentionNotifications(ctx, []string{bobRecipient}, false, 50); err != nil || len(old) != 0 {
 		t.Fatalf("PostgreSQL stale mention = %#v, %v", old, err)
 	}
 	resolvedValue := true
@@ -498,7 +502,7 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err != nil || moved.Range != "B3:C4" || moved.Revision != 5 {
 		t.Fatalf("PostgreSQL moved comment = %#v, %v", moved, err)
 	}
-	erin, err := repository.ListMentionNotifications(ctx, []string{"erin"}, false, 50)
+	erin, err := repository.ListMentionNotifications(ctx, []string{erinRecipient}, false, 50)
 	if err != nil || len(erin) != 1 || erin[0].Range != "B3:C4" {
 		t.Fatalf("PostgreSQL moved mention = %#v, %v", erin, err)
 	}
@@ -512,7 +516,7 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err := repository.DeleteWorkbook(ctx, book.ID); err != nil {
 		t.Fatal(err)
 	}
-	if hidden, err := repository.ListMentionNotifications(ctx, []string{"erin"}, false, 50); err != nil || len(hidden) != 0 {
+	if hidden, err := repository.ListMentionNotifications(ctx, []string{erinRecipient}, false, 50); err != nil || len(hidden) != 0 {
 		t.Fatalf("deleted workbook notifications remain visible = %#v, %v", hidden, err)
 	}
 	if _, err := repository.GetCommentThread(ctx, thread.ID); !errors.Is(err, workbook.ErrNotFound) {
@@ -1985,5 +1989,141 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 	stale, err = service.Get(ctx, stale.ID, actor)
 	if err != nil || stale.Status != kanpicai.StatusPlanned || stale.Revision != 1 {
 		t.Fatalf("stale action changed=%#v, %v", stale, err)
+	}
+}
+
+func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("automation-user-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "automation lifecycle", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	sheetID := book.Sheets[0].ID
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheetID, ActorID: actor, ClientID: "browser", BaseVersion: 1, IdempotencyKey: "automation-seed",
+		Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`3`)}, {Row: 2, Column: 1, Value: json.RawMessage(`4`)}},
+	})
+	if err != nil || seed.ServerVersion != 2 {
+		t.Fatalf("seed=%#v, %v", seed, err)
+	}
+	config := staticAISettings{
+		"automation.enabled":           true,
+		"automation.max_cells_per_run": float64(1000),
+		"automation.max_runs_per_hour": float64(1000),
+	}
+	service := automation.NewService(pool, config, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	createInput := automation.CreateInput{
+		Name: "두 배 수식", Enabled: true, IdempotencyKey: "automation-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerManual},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetFormula, SheetID: sheetID, Range: "B1:B2", Formula: "=A1*2"},
+	}
+	item, err := service.Create(ctx, book.ID, actor, createInput)
+	if err != nil || item.Revision != 1 || item.Action.Range != "B1:B2" {
+		t.Fatalf("created=%#v, %v", item, err)
+	}
+	duplicate, err := service.Create(ctx, book.ID, actor, createInput)
+	if err != nil || !duplicate.Duplicate || duplicate.ID != item.ID {
+		t.Fatalf("duplicate create=%#v, %v", duplicate, err)
+	}
+	preview, err := service.Preview(ctx, item.ID)
+	if err != nil || preview.BaseVersion != seed.ServerVersion || len(preview.Changes) != 2 || preview.Changes[1].After.Formula != "=A2*2" {
+		t.Fatalf("preview=%#v, %v", preview, err)
+	}
+	selected, _ := cellrange.Parse("B1:B2")
+	cells, err := repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 0 {
+		t.Fatalf("preview wrote cells=%#v, %v", cells, err)
+	}
+	runInput := automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-run", ExpectedRevision: item.Revision}
+	executed, err := service.Run(ctx, item.ID, runInput)
+	if err != nil || executed.Run.Status != automation.StatusSucceeded || executed.Operation.ServerVersion != 3 || executed.Operation.AppliedCells != 2 {
+		t.Fatalf("executed=%#v, %v", executed, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 2 || cells[0].Formula != "=A1*2" || string(cells[0].Value) != "6" || cells[1].Formula != "=A2*2" || string(cells[1].Value) != "8" {
+		t.Fatalf("formula cells=%#v, %v", cells, err)
+	}
+	duplicateRun, err := service.Run(ctx, item.ID, runInput)
+	if err != nil || !duplicateRun.Run.Duplicate || duplicateRun.Operation.OperationID != executed.Operation.OperationID || duplicateRun.Operation.ServerVersion != 3 {
+		t.Fatalf("duplicate run=%#v, %v", duplicateRun, err)
+	}
+	runs, err := service.ListRuns(ctx, item.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].ID != executed.Run.ID {
+		t.Fatalf("runs=%#v, %v", runs, err)
+	}
+	undone, err := service.Undo(ctx, executed.Run.ID, automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-undo"})
+	if err != nil || undone.Run.Status != automation.StatusUndone || undone.Operation.ServerVersion != 4 || undone.Operation.AppliedCells != 2 {
+		t.Fatalf("undone=%#v, %v", undone, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 0 {
+		t.Fatalf("undo cells=%#v, %v", cells, err)
+	}
+	duplicateUndo, err := service.Undo(ctx, executed.Run.ID, automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-undo"})
+	if err != nil || !duplicateUndo.Run.Duplicate || duplicateUndo.Operation.OperationID != undone.Operation.OperationID {
+		t.Fatalf("duplicate undo=%#v, %v", duplicateUndo, err)
+	}
+	updated, err := service.Update(ctx, item.ID, actor, automation.UpdateInput{Name: item.Name, Enabled: true, Trigger: item.Trigger, Action: automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: sheetID, Range: "B1:B2", Value: json.RawMessage(`"완료"`)}, ExpectedRevision: 1})
+	if err != nil || updated.Revision != 2 {
+		t.Fatalf("updated=%#v, %v", updated, err)
+	}
+	if _, err := service.Update(ctx, item.ID, actor, automation.UpdateInput{Name: item.Name, Enabled: true, Trigger: item.Trigger, Action: updated.Action, ExpectedRevision: 1}); !errors.Is(err, automation.ErrRevision) {
+		t.Fatalf("stale update error=%v", err)
+	}
+	triggered, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "A3 변경 알림", Enabled: true, IdempotencyKey: "automation-trigger-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerCellChange, SheetID: sheetID, Range: "A3"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: sheetID, Range: "C3", Value: json.RawMessage(`"triggered"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeCells := []workbook.CellInput{{Row: 3, Column: 1, Value: json.RawMessage(`1`)}}
+	changed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: "browser", BaseVersion: undone.Operation.ServerVersion, IdempotencyKey: "automation-trigger-source", Cells: changeCells})
+	if err != nil || changed.ServerVersion != 5 {
+		t.Fatalf("trigger source=%#v, %v", changed, err)
+	}
+	triggerRuns, err := service.TriggerCellChange(ctx, changed, changeCells, actor)
+	if err != nil || len(triggerRuns) != 1 || triggerRuns[0].Run.AutomationID != triggered.ID || triggerRuns[0].Operation.ServerVersion != 6 {
+		t.Fatalf("trigger runs=%#v, %v", triggerRuns, err)
+	}
+	selected, _ = cellrange.Parse("C3")
+	cells, err = repository.ReadRange(ctx, sheetID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"triggered"` {
+		t.Fatalf("triggered cell=%#v, %v", cells, err)
+	}
+	triggerRuns, err = service.TriggerCellChange(ctx, changed, changeCells, actor)
+	if err != nil || len(triggerRuns) != 1 || !triggerRuns[0].Run.Duplicate || triggerRuns[0].Operation.ServerVersion != 6 {
+		t.Fatalf("duplicate trigger=%#v, %v", triggerRuns, err)
+	}
+	if err := service.Delete(ctx, triggered.ID, actor, triggered.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(ctx, triggered.ID); !errors.Is(err, automation.ErrNotFound) {
+		t.Fatalf("deleted automation error=%v", err)
+	}
+	if err := service.Delete(ctx, item.ID, actor, updated.Revision); err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.List(ctx, book.ID)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("automations after delete=%#v, %v", items, err)
+	}
+	var auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_type='automation' AND actor_id=$1`, actor).Scan(&auditCount); err != nil || auditCount != 8 {
+		t.Fatalf("automation audit count=%d, %v", auditCount, err)
 	}
 }

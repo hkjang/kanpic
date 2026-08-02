@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"kanpic/internal/ai"
+	"kanpic/internal/automation"
 	"kanpic/internal/workbook"
 )
 
@@ -42,6 +43,61 @@ func (f *fakeAIOrchestrator) Undo(_ context.Context, _ string, _ ai.ApprovalInpu
 	f.action.Status, f.action.Revision, f.action.UndoOperationID = ai.StatusUndone, 3, "ai-undo"
 	result := workbook.MutationResult{OperationID: "ai-undo", WorkbookID: f.action.WorkbookID, SheetID: f.action.SheetID, BaseVersion: f.action.BaseVersion + 1, ServerVersion: f.action.BaseVersion + 2, AppliedCells: 1}
 	return ai.ExecutionResult{Action: f.action, Operation: result}, nil
+}
+
+type fakeAutomationService struct {
+	item         automation.Automation
+	run          automation.Run
+	triggerCalls int
+}
+
+func (f *fakeAutomationService) Create(_ context.Context, workbookID, actorID string, input automation.CreateInput) (automation.Automation, error) {
+	f.item = automation.Automation{ID: "automation-id", WorkbookID: workbookID, Name: input.Name, Enabled: input.Enabled, Trigger: input.Trigger, Action: input.Action, Revision: 1, CreatedBy: actorID, UpdatedBy: actorID}
+	return f.item, nil
+}
+func (f *fakeAutomationService) List(_ context.Context, _ string) ([]automation.Automation, error) {
+	if f.item.ID == "" {
+		return []automation.Automation{}, nil
+	}
+	return []automation.Automation{f.item}, nil
+}
+func (f *fakeAutomationService) Get(_ context.Context, _ string) (automation.Automation, error) {
+	if f.item.ID == "" {
+		return automation.Automation{}, automation.ErrNotFound
+	}
+	return f.item, nil
+}
+func (f *fakeAutomationService) Update(_ context.Context, _, actorID string, input automation.UpdateInput) (automation.Automation, error) {
+	f.item.Name, f.item.Enabled, f.item.Trigger, f.item.Action, f.item.UpdatedBy = input.Name, input.Enabled, input.Trigger, input.Action, actorID
+	f.item.Revision++
+	return f.item, nil
+}
+func (f *fakeAutomationService) Delete(_ context.Context, _, _ string, _ int64) error {
+	f.item = automation.Automation{}
+	return nil
+}
+func (f *fakeAutomationService) Preview(_ context.Context, _ string) (automation.Preview, error) {
+	return automation.Preview{AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, BaseVersion: 1, Changes: []automation.PreviewChange{{Row: 1, Column: 2, Address: "B1", After: automation.CellSnapshot{Value: json.RawMessage(`"완료"`)}}}}, nil
+}
+func (f *fakeAutomationService) Run(_ context.Context, _ string, input automation.RunInput) (automation.ExecutionResult, error) {
+	operation := workbook.MutationResult{OperationID: "automation-operation", WorkbookID: f.item.WorkbookID, SheetID: f.item.Action.SheetID, BaseVersion: 1, ServerVersion: 2, AppliedCells: 1}
+	f.run = automation.Run{ID: "automation-run", AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, ActorID: input.ActorID, TriggerType: automation.TriggerManual, Status: automation.StatusSucceeded, OperationID: operation.OperationID, Operation: &operation}
+	return automation.ExecutionResult{Run: f.run, Operation: operation, Changes: []workbook.CellInput{{Row: 1, Column: 2, Value: json.RawMessage(`"완료"`)}}}, nil
+}
+func (f *fakeAutomationService) ListRuns(_ context.Context, _ string, _ int) ([]automation.Run, error) {
+	if f.run.ID == "" {
+		return []automation.Run{}, nil
+	}
+	return []automation.Run{f.run}, nil
+}
+func (f *fakeAutomationService) Undo(_ context.Context, _ string, input automation.RunInput) (automation.ExecutionResult, error) {
+	operation := workbook.MutationResult{OperationID: "automation-undo", WorkbookID: f.item.WorkbookID, SheetID: f.item.Action.SheetID, BaseVersion: 2, ServerVersion: 3, AppliedCells: 1}
+	f.run.Status, f.run.UndoOperationID, f.run.UndoOperation = automation.StatusUndone, operation.OperationID, &operation
+	return automation.ExecutionResult{Run: f.run, Operation: operation}, nil
+}
+func (f *fakeAutomationService) TriggerCellChange(_ context.Context, _ workbook.MutationResult, _ []workbook.CellInput, _ string) ([]automation.ExecutionResult, error) {
+	f.triggerCalls++
+	return []automation.ExecutionResult{}, nil
 }
 
 func TestWorkbookCellVersionFlow(t *testing.T) {
@@ -676,6 +732,111 @@ func TestAIActionRESTAndMCPShareSafeExecutionContract(t *testing.T) {
 	if mcpUndo.Result.Structured.Action.Status != ai.StatusUndone || mcpUndo.Result.Structured.Operation.OperationID != "ai-undo" {
 		t.Fatalf("MCP AI undo=%#v", mcpUndo)
 	}
+}
+
+func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
+	t.Parallel()
+	expectedScopes := map[string]string{
+		"spreadsheet.automation.list":     "automation.read",
+		"spreadsheet.automation.get":      "automation.read",
+		"spreadsheet.automation.create":   "automation.write",
+		"spreadsheet.automation.update":   "automation.write",
+		"spreadsheet.automation.delete":   "automation.write",
+		"spreadsheet.automation.test":     "automation.read",
+		"spreadsheet.automation.run":      "automation.run",
+		"spreadsheet.automation.run.list": "automation.read",
+		"spreadsheet.automation.run.undo": "automation.run",
+	}
+	for name, scope := range expectedScopes {
+		definition, found := findMCPTool(name)
+		if !found || definition.Meta["required_scope"] != scope {
+			t.Fatalf("automation MCP tool %s=%#v", name, definition)
+		}
+	}
+	createTool, _ := findMCPTool("spreadsheet.automation.create")
+	properties, _ := createTool.InputSchema["properties"].(map[string]any)
+	triggerSchema, _ := properties["trigger"].(map[string]any)
+	actionSchema, _ := properties["action"].(map[string]any)
+	if triggerSchema["type"] != "object" || actionSchema["type"] != "object" {
+		t.Fatalf("automation create schema=%#v", createTool.InputSchema)
+	}
+	for _, expectation := range []struct {
+		method string
+		path   string
+		scope  string
+	}{
+		{http.MethodGet, "/api/v1/workbooks/book/automations", "automation.read"},
+		{http.MethodPost, "/api/v1/workbooks/book/automations", "automation.write"},
+		{http.MethodPost, "/api/v1/automations/id:test", "automation.read"},
+		{http.MethodPost, "/api/v1/automations/id:run", "automation.run"},
+		{http.MethodPost, "/api/v1/automation-runs/run-id:undo", "automation.run"},
+		{http.MethodDelete, "/api/v1/automations/id?expected_revision=1", "automation.write"},
+	} {
+		request := httptest.NewRequest(expectation.method, expectation.path, nil)
+		if scope := requiredScope(request); scope != expectation.scope {
+			t.Fatalf("%s %s scope=%q, want %q", expectation.method, expectation.path, scope, expectation.scope)
+		}
+	}
+	if automation.RequiredActionScope(automation.ActionSetFormula) != "formula.write" || automation.RequiredActionScope(automation.ActionSetValue) != "range.write" {
+		t.Fatal("automation action scope contract is inconsistent")
+	}
+
+	repository := workbook.NewMemoryRepository()
+	service := &fakeAutomationService{}
+	server := httptest.NewServer(NewPlatformWithServices(repository, nil, nil, nil, nil, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "Automation API"}, http.StatusCreated)
+	created := request[automation.Automation](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/automations", map[string]any{
+		"name": "수동 상태 변경", "enabled": true, "idempotency_key": "create-automation",
+		"trigger": map[string]any{"type": automation.TriggerManual},
+		"action":  map[string]any{"type": automation.ActionSetValue, "sheet_id": book.Sheets[0].ID, "range": "B1", "value": "완료"},
+	}, http.StatusCreated)
+	if created.ID != "automation-id" || created.Revision != 1 || created.Action.Range != "B1" {
+		t.Fatalf("REST automation create=%#v", created)
+	}
+	preview := request[automation.Preview](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":test", map[string]any{}, http.StatusOK)
+	if len(preview.Changes) != 1 || preview.Changes[0].Address != "B1" {
+		t.Fatalf("REST automation preview=%#v", preview)
+	}
+	updated := request[automation.Automation](t, server, http.MethodPatch, "/api/v1/automations/"+created.ID, map[string]any{
+		"name": "수동 수식 변경", "enabled": true, "expected_revision": 1,
+		"trigger": map[string]any{"type": automation.TriggerManual},
+		"action":  map[string]any{"type": automation.ActionSetFormula, "sheet_id": book.Sheets[0].ID, "range": "B1", "formula": "=A1*2"},
+	}, http.StatusOK)
+	if updated.Revision != 2 || updated.Action.Type != automation.ActionSetFormula {
+		t.Fatalf("REST automation update=%#v", updated)
+	}
+	mcpGet := request[struct {
+		Result struct {
+			Structured automation.Automation `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 80, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.automation.get", "arguments": map[string]any{"automation_id": created.ID}}}, http.StatusOK)
+	if mcpGet.Result.Structured.Revision != 2 || mcpGet.Result.Structured.Action.Formula != "=A1*2" {
+		t.Fatalf("MCP automation get=%#v", mcpGet)
+	}
+	mcpRun := request[struct {
+		Result struct {
+			Structured automation.ExecutionResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 81, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.automation.run", "arguments": map[string]any{"automation_id": created.ID, "expected_revision": 2, "idempotency_key": "run-automation"}}}, http.StatusOK)
+	if mcpRun.Result.Structured.Run.Status != automation.StatusSucceeded || mcpRun.Result.Structured.Operation.OperationID != "automation-operation" {
+		t.Fatalf("MCP automation run=%#v", mcpRun)
+	}
+	runs := request[struct {
+		Items []automation.Run `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/automations/"+created.ID+"/runs", nil, http.StatusOK)
+	if len(runs.Items) != 1 || runs.Items[0].ID != "automation-run" {
+		t.Fatalf("REST automation runs=%#v", runs)
+	}
+	undo := request[automation.ExecutionResult](t, server, http.MethodPost, "/api/v1/automation-runs/automation-run:undo", map[string]any{"idempotency_key": "undo-automation"}, http.StatusOK)
+	if undo.Run.Status != automation.StatusUndone || undo.Operation.OperationID != "automation-undo" {
+		t.Fatalf("REST automation undo=%#v", undo)
+	}
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+book.Sheets[0].ID+"/cells:batch", map[string]any{"base_version": 1, "idempotency_key": "trigger-source", "cells": []map[string]any{{"row": 1, "column": 1, "value": 2}}}, http.StatusOK)
+	if service.triggerCalls != 1 {
+		t.Fatalf("cell-change automation trigger calls=%d", service.triggerCalls)
+	}
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/automations/"+created.ID+"?expected_revision=2", nil, http.StatusNoContent)
 }
 
 func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {

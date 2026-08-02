@@ -1,0 +1,765 @@
+package automation
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"kanpic/internal/formula"
+	"kanpic/internal/workbook"
+	"kanpic/pkg/cellrange"
+	"kanpic/pkg/identity"
+)
+
+const (
+	defaultMaxCells   = 1_000
+	defaultMaxRuns    = 100
+	definitionColumns = `id::text,workbook_id::text,name,enabled,trigger_definition,action_definition,revision,idempotency_key,created_by,updated_by,created_at,updated_at`
+	runColumns        = `id::text,automation_id::text,workbook_id::text,actor_id,idempotency_key,trigger_type,coalesce(trigger_operation_id::text,''),status,base_version,action_snapshot,cells_snapshot,expected_snapshot,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,started_at,completed_at,updated_at`
+)
+
+type settingsProvider interface {
+	Values(context.Context) (map[string]any, error)
+}
+
+type runtimeConfig struct {
+	Enabled        bool
+	MaxCellsPerRun int
+	MaxRunsPerHour int
+}
+
+type Service struct {
+	pool     *pgxpool.Pool
+	settings settingsProvider
+	books    workbook.Repository
+	logger   *slog.Logger
+	now      func() time.Time
+}
+
+func NewService(pool *pgxpool.Pool, settings settingsProvider, books workbook.Repository, logger *slog.Logger) *Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Service{pool: pool, settings: settings, books: books, logger: logger, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (s *Service) Create(ctx context.Context, workbookID, actorID string, input CreateInput) (Automation, error) {
+	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return Automation{}, fmt.Errorf("%w: actor and idempotency_key are required", ErrInvalid)
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return Automation{}, err
+	}
+	name, trigger, action, err := s.validateDefinition(ctx, workbookID, input.Name, input.Trigger, input.Action, config.MaxCellsPerRun)
+	if err != nil {
+		return Automation{}, err
+	}
+	now := s.now()
+	item := Automation{ID: identity.New(), WorkbookID: workbookID, Name: name, Enabled: input.Enabled, Trigger: trigger, Action: action, Revision: 1, CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now, idempotencyKey: input.IdempotencyKey}
+	triggerJSON, _ := json.Marshal(trigger)
+	actionJSON, _ := json.Marshal(action)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Automation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `INSERT INTO automations(id,workbook_id,name,enabled,trigger_definition,action_definition,revision,idempotency_key,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,1,$7,$8,$8,$9,$9) ON CONFLICT(workbook_id,created_by,idempotency_key) DO NOTHING`, item.ID, workbookID, name, input.Enabled, triggerJSON, actionJSON, input.IdempotencyKey, actorID, now)
+	if err != nil {
+		return Automation{}, mapConstraintError(err)
+	}
+	if command.RowsAffected() == 0 {
+		duplicate, err := scanAutomation(tx.QueryRow(ctx, `SELECT `+definitionColumns+` FROM automations WHERE workbook_id=$1 AND created_by=$2 AND idempotency_key=$3`, workbookID, actorID, input.IdempotencyKey))
+		if err != nil {
+			return Automation{}, err
+		}
+		duplicate.Duplicate = true
+		return duplicate, tx.Commit(ctx)
+	}
+	if err := insertAudit(ctx, tx, actorID, "automation.create", item.ID, map[string]any{"workbook_id": workbookID, "name": name, "trigger": trigger.Type, "action": action.Type}, now); err != nil {
+		return Automation{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Service) List(ctx context.Context, workbookID string) ([]Automation, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+definitionColumns+` FROM automations WHERE workbook_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC,id`, workbookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Automation, 0)
+	for rows.Next() {
+		item, err := scanAutomation(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) Get(ctx context.Context, id string) (Automation, error) {
+	return scanAutomation(s.pool.QueryRow(ctx, `SELECT `+definitionColumns+` FROM automations WHERE id=$1 AND deleted_at IS NULL`, id))
+}
+
+func (s *Service) Update(ctx context.Context, id, actorID string, input UpdateInput) (Automation, error) {
+	if input.ExpectedRevision < 1 || strings.TrimSpace(actorID) == "" {
+		return Automation{}, fmt.Errorf("%w: actor and positive expected_revision are required", ErrInvalid)
+	}
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return Automation{}, err
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return Automation{}, err
+	}
+	name, trigger, action, err := s.validateDefinition(ctx, current.WorkbookID, input.Name, input.Trigger, input.Action, config.MaxCellsPerRun)
+	if err != nil {
+		return Automation{}, err
+	}
+	triggerJSON, _ := json.Marshal(trigger)
+	actionJSON, _ := json.Marshal(action)
+	now := s.now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Automation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row := tx.QueryRow(ctx, `UPDATE automations SET name=$2,enabled=$3,trigger_definition=$4,action_definition=$5,revision=revision+1,updated_by=$6,updated_at=$7 WHERE id=$1 AND deleted_at IS NULL AND revision=$8 RETURNING `+definitionColumns, id, name, input.Enabled, triggerJSON, actionJSON, actorID, now, input.ExpectedRevision)
+	item, err := scanAutomation(row)
+	if errors.Is(err, ErrNotFound) {
+		if _, getErr := s.Get(ctx, id); getErr != nil {
+			return Automation{}, getErr
+		}
+		return Automation{}, ErrRevision
+	}
+	if err != nil {
+		return Automation{}, mapConstraintError(err)
+	}
+	if err := insertAudit(ctx, tx, actorID, "automation.update", id, map[string]any{"revision": item.Revision, "enabled": item.Enabled}, now); err != nil {
+		return Automation{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Service) Delete(ctx context.Context, id, actorID string, expectedRevision int64) error {
+	if expectedRevision < 1 || strings.TrimSpace(actorID) == "" {
+		return fmt.Errorf("%w: actor and positive expected_revision are required", ErrInvalid)
+	}
+	now := s.now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `UPDATE automations SET deleted_at=$3,enabled=false,revision=revision+1,updated_by=$2,updated_at=$3 WHERE id=$1 AND deleted_at IS NULL AND revision=$4`, id, actorID, now, expectedRevision)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		if _, getErr := s.Get(ctx, id); getErr != nil {
+			return getErr
+		}
+		return ErrRevision
+	}
+	if err := insertAudit(ctx, tx, actorID, "automation.delete", id, map[string]any{"revision": expectedRevision}, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) Preview(ctx context.Context, id string) (Preview, error) {
+	item, err := s.Get(ctx, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return Preview{}, err
+	}
+	return s.buildPreview(ctx, item, config.MaxCellsPerRun)
+}
+
+func (s *Service) Run(ctx context.Context, id string, input RunInput) (ExecutionResult, error) {
+	if strings.TrimSpace(input.ActorID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return ExecutionResult{}, fmt.Errorf("%w: actor and idempotency_key are required", ErrInvalid)
+	}
+	if existing, err := s.getRunByKey(ctx, id, input.ActorID, input.IdempotencyKey); err == nil {
+		if existing.Status == StatusRunning {
+			return s.executeRun(ctx, existing, input.ClientID)
+		}
+		existing.Duplicate = true
+		return executionFromRun(existing), nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return ExecutionResult{}, err
+	}
+	if input.TriggerOperationID != "" {
+		if existing, err := s.getRunByTrigger(ctx, id, input.TriggerOperationID); err == nil {
+			if existing.Status == StatusRunning {
+				return s.executeRun(ctx, existing, input.ClientID)
+			}
+			existing.Duplicate = true
+			return executionFromRun(existing), nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return ExecutionResult{}, err
+		}
+	}
+	item, err := s.Get(ctx, id)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if input.ExpectedRevision > 0 && input.ExpectedRevision != item.Revision {
+		return ExecutionResult{}, ErrRevision
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if !config.Enabled || !item.Enabled {
+		return ExecutionResult{}, ErrDisabled
+	}
+	triggerType := input.TriggerType
+	if triggerType == "" {
+		triggerType = TriggerManual
+	}
+	if triggerType != TriggerManual && triggerType != TriggerCellChange {
+		return ExecutionResult{}, fmt.Errorf("%w: unsupported run trigger", ErrInvalid)
+	}
+	if triggerType == TriggerCellChange && item.Trigger.Type != TriggerCellChange {
+		return ExecutionResult{}, fmt.Errorf("%w: automation does not use a cell-change trigger", ErrInvalid)
+	}
+	if err := s.checkRate(ctx, item.WorkbookID, config.MaxRunsPerHour); err != nil {
+		return ExecutionResult{}, err
+	}
+	preview, cells, expected, err := s.buildExecution(ctx, item, config.MaxCellsPerRun)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	now := s.now()
+	run := Run{ID: identity.New(), AutomationID: item.ID, WorkbookID: item.WorkbookID, ActorID: input.ActorID, TriggerType: triggerType, TriggerOperationID: input.TriggerOperationID, Status: StatusRunning, BaseVersion: preview.BaseVersion, Action: item.Action, StartedAt: now, UpdatedAt: now, cells: cells, expected: expected, idempotencyKey: input.IdempotencyKey}
+	actionJSON, _ := json.Marshal(run.Action)
+	cellsJSON, _ := json.Marshal(cells)
+	expectedJSON, _ := json.Marshal(expected)
+	command, err := s.pool.Exec(ctx, `INSERT INTO automation_runs(id,automation_id,workbook_id,actor_id,idempotency_key,trigger_type,trigger_operation_id,status,base_version,action_snapshot,cells_snapshot,expected_snapshot,started_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,'running',$8,$9,$10,$11,$12,$12) ON CONFLICT(automation_id,actor_id,idempotency_key) DO NOTHING`, run.ID, run.AutomationID, run.WorkbookID, run.ActorID, run.idempotencyKey, run.TriggerType, run.TriggerOperationID, run.BaseVersion, actionJSON, cellsJSON, expectedJSON, now)
+	if err != nil {
+		if isUniqueViolation(err) && run.TriggerOperationID != "" {
+			duplicate, getErr := s.getRunByTrigger(ctx, run.AutomationID, run.TriggerOperationID)
+			if getErr != nil {
+				return ExecutionResult{}, getErr
+			}
+			duplicate.Duplicate = true
+			return executionFromRun(duplicate), nil
+		}
+		return ExecutionResult{}, err
+	}
+	if command.RowsAffected() == 0 {
+		duplicate, err := s.getRunByKey(ctx, item.ID, input.ActorID, input.IdempotencyKey)
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		if duplicate.Status == StatusRunning {
+			return s.executeRun(ctx, duplicate, input.ClientID)
+		}
+		duplicate.Duplicate = true
+		return executionFromRun(duplicate), nil
+	}
+	return s.executeRun(ctx, run, input.ClientID)
+}
+
+func (s *Service) ListRuns(ctx context.Context, automationID string, limit int) ([]Run, error) {
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+runColumns+` FROM automation_runs WHERE automation_id=$1 ORDER BY started_at DESC,id LIMIT $2`, automationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Run, 0)
+	for rows.Next() {
+		item, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) Undo(ctx context.Context, runID string, input RunInput) (ExecutionResult, error) {
+	if strings.TrimSpace(input.ActorID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return ExecutionResult{}, fmt.Errorf("%w: actor and idempotency_key are required", ErrInvalid)
+	}
+	run, err := s.getRun(ctx, runID)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if run.Status == StatusUndone && run.undoKey == input.IdempotencyKey && run.UndoOperation != nil {
+		run.Duplicate = true
+		return ExecutionResult{Run: run, Operation: *run.UndoOperation}, nil
+	}
+	if run.Status != StatusSucceeded && !(run.Status == StatusUndoing && run.undoKey == input.IdempotencyKey) {
+		return ExecutionResult{}, fmt.Errorf("%w: only a succeeded run can be undone", ErrInvalid)
+	}
+	if run.Status == StatusSucceeded {
+		command, err := s.pool.Exec(ctx, `UPDATE automation_runs SET status='undoing',undo_idempotency_key=$2,updated_at=$3 WHERE id=$1 AND status='succeeded'`, run.ID, input.IdempotencyKey, s.now())
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		if command.RowsAffected() != 1 {
+			return ExecutionResult{}, ErrRevision
+		}
+		run.Status, run.undoKey = StatusUndoing, input.IdempotencyKey
+	}
+	result, err := s.books.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: run.OperationID, ActorID: automationActor(run.AutomationID), ClientID: input.ClientID, IdempotencyKey: "automation-undo:" + run.ID})
+	if err != nil {
+		_, _ = s.pool.Exec(context.Background(), `UPDATE automation_runs SET status='succeeded',error_message=$2,updated_at=$3 WHERE id=$1 AND status='undoing'`, run.ID, trimLength(err.Error(), 2000), s.now())
+		return ExecutionResult{}, err
+	}
+	now := s.now()
+	payload, _ := json.Marshal(result)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `UPDATE automation_runs SET status='undone',undo_operation_id=$2,undo_result=$3,error_message='',completed_at=$4,updated_at=$4 WHERE id=$1 AND status='undoing' AND undo_idempotency_key=$5`, run.ID, result.OperationID, payload, now, input.IdempotencyKey)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return ExecutionResult{}, ErrRevision
+	}
+	if err := insertAudit(ctx, tx, input.ActorID, "automation.run.undo", run.ID, map[string]any{"automation_id": run.AutomationID, "operation_id": result.OperationID, "server_version": result.ServerVersion}, now); err != nil {
+		return ExecutionResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ExecutionResult{}, err
+	}
+	run.Status, run.UndoOperationID, run.UndoOperation, run.ErrorMessage, run.CompletedAt, run.UpdatedAt = StatusUndone, result.OperationID, &result, "", &now, now
+	return ExecutionResult{Run: run, Operation: result}, nil
+}
+
+func (s *Service) TriggerCellChange(ctx context.Context, mutation workbook.MutationResult, changed []workbook.CellInput, actorID string) ([]ExecutionResult, error) {
+	if mutation.Duplicate || mutation.AppliedCells == 0 || mutation.OperationID == "" || len(changed) == 0 {
+		return []ExecutionResult{}, nil
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !config.Enabled {
+		return []ExecutionResult{}, nil
+	}
+	items, err := s.List(ctx, mutation.WorkbookID)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ExecutionResult, 0)
+	errs := make([]error, 0)
+	for _, item := range items {
+		if !item.Enabled || item.Trigger.Type != TriggerCellChange || item.Trigger.SheetID != mutation.SheetID || !triggerMatches(item.Trigger.Range, changed) {
+			continue
+		}
+		result, runErr := s.Run(ctx, item.ID, RunInput{ActorID: actorID, ClientID: "automation:" + item.ID, IdempotencyKey: "trigger:" + mutation.OperationID, ExpectedRevision: item.Revision, TriggerType: TriggerCellChange, TriggerOperationID: mutation.OperationID})
+		if runErr != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", item.ID, runErr))
+			continue
+		}
+		results = append(results, result)
+	}
+	return results, errors.Join(errs...)
+}
+
+func (s *Service) executeRun(ctx context.Context, run Run, clientID string) (ExecutionResult, error) {
+	result, err := s.books.ApplyCells(ctx, workbook.CellMutation{SheetID: run.Action.SheetID, ActorID: automationActor(run.AutomationID), ClientID: clientID, BaseVersion: run.BaseVersion, IdempotencyKey: "automation-run:" + run.ID, Cells: run.cells, Expected: run.expected, OperationType: "automation." + run.Action.Type, RequireExactVersion: true})
+	if err != nil {
+		s.markRunFailed(run.ID, err)
+		return ExecutionResult{}, err
+	}
+	now := s.now()
+	payload, _ := json.Marshal(result)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `UPDATE automation_runs SET status='succeeded',operation_id=$2,operation_result=$3,error_message='',completed_at=$4,updated_at=$4 WHERE id=$1 AND status='running'`, run.ID, result.OperationID, payload, now)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if command.RowsAffected() != 1 {
+		current, getErr := s.getRun(ctx, run.ID)
+		if getErr == nil && current.Status == StatusSucceeded && current.Operation != nil {
+			current.Duplicate = true
+			return executionFromRun(current), nil
+		}
+		return ExecutionResult{}, ErrRevision
+	}
+	if err := insertAudit(ctx, tx, run.ActorID, "automation.run", run.ID, map[string]any{"automation_id": run.AutomationID, "trigger": run.TriggerType, "operation_id": result.OperationID, "server_version": result.ServerVersion}, now); err != nil {
+		return ExecutionResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ExecutionResult{}, err
+	}
+	run.Status, run.OperationID, run.Operation, run.CompletedAt, run.UpdatedAt = StatusSucceeded, result.OperationID, &result, &now, now
+	s.logger.Info("automation run succeeded", "automation_id", run.AutomationID, "run_id", run.ID, "trigger", run.TriggerType, "operation_id", result.OperationID)
+	return ExecutionResult{Run: run, Operation: result, Changes: cloneInputs(run.cells)}, nil
+}
+
+func (s *Service) buildPreview(ctx context.Context, item Automation, maxCells int) (Preview, error) {
+	preview, _, _, err := s.buildExecution(ctx, item, maxCells)
+	return preview, err
+}
+
+func (s *Service) buildExecution(ctx context.Context, item Automation, maxCells int) (Preview, []workbook.CellInput, map[string]workbook.Cell, error) {
+	selected, err := cellrange.Parse(item.Action.Range)
+	if err != nil {
+		return Preview{}, nil, nil, fmt.Errorf("%w: invalid action range", ErrInvalid)
+	}
+	book, err := s.books.GetWorkbook(ctx, item.WorkbookID)
+	if err != nil {
+		return Preview{}, nil, nil, err
+	}
+	existing, err := s.books.ReadRange(ctx, item.Action.SheetID, selected)
+	if err != nil {
+		return Preview{}, nil, nil, err
+	}
+	current := make(map[string]workbook.Cell, len(existing))
+	for _, cell := range existing {
+		current[coordinateKey(cell.Row, cell.Column)] = cell
+	}
+	changes := make([]PreviewChange, 0)
+	inputs := make([]workbook.CellInput, 0)
+	expected := make(map[string]workbook.Cell)
+	for row := selected.Start.Row; row <= selected.End.Row; row++ {
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			beforeCell, exists := current[coordinateKey(row, column)]
+			if !exists {
+				beforeCell = workbook.Cell{SheetID: item.Action.SheetID, Row: row, Column: column}
+			}
+			before := snapshotFromCell(beforeCell)
+			if before.SpillSource != "" {
+				return Preview{}, nil, nil, fmt.Errorf("%w: %s is an array spill result", ErrInvalid, cellrange.Address(row, column))
+			}
+			after := CellSnapshot{Style: cloneRaw(before.Style)}
+			switch item.Action.Type {
+			case ActionSetValue:
+				after.Value = cloneRaw(item.Action.Value)
+			case ActionSetFormula:
+				after.Formula = formula.ShiftReferences(item.Action.Formula, row-selected.Start.Row, column-selected.Start.Column)
+			case ActionClear:
+			}
+			if snapshotsEqual(before, after) {
+				continue
+			}
+			changes = append(changes, PreviewChange{Row: row, Column: column, Address: cellrange.Address(row, column), Before: before, After: after})
+			inputs = append(inputs, workbook.CellInput{Row: row, Column: column, Value: cloneRaw(after.Value), Formula: after.Formula, Style: cloneRaw(after.Style)})
+			expected[coordinateKey(row, column)] = beforeCell
+		}
+	}
+	if len(inputs) == 0 {
+		return Preview{}, nil, nil, fmt.Errorf("%w: automation has no effective changes", ErrInvalid)
+	}
+	if len(inputs) > maxCells {
+		return Preview{}, nil, nil, fmt.Errorf("%w: automation exceeds the %d cell limit", ErrInvalid, maxCells)
+	}
+	sortPreview(changes)
+	return Preview{AutomationID: item.ID, WorkbookID: item.WorkbookID, BaseVersion: book.Version, Changes: changes}, inputs, expected, nil
+}
+
+func (s *Service) validateDefinition(ctx context.Context, workbookID, name string, trigger TriggerDefinition, action ActionDefinition, maxCells int) (string, TriggerDefinition, ActionDefinition, error) {
+	name = strings.TrimSpace(name)
+	if len(name) < 1 || len(name) > 120 {
+		return "", trigger, action, fmt.Errorf("%w: name must contain 1 to 120 characters", ErrInvalid)
+	}
+	book, err := s.books.GetWorkbook(ctx, workbookID)
+	if err != nil {
+		return "", trigger, action, err
+	}
+	sheets := make(map[string]struct{}, len(book.Sheets))
+	for _, sheet := range book.Sheets {
+		sheets[sheet.ID] = struct{}{}
+	}
+	trigger.Type = strings.TrimSpace(trigger.Type)
+	switch trigger.Type {
+	case TriggerManual:
+		trigger.SheetID, trigger.Range = "", ""
+	case TriggerCellChange:
+		if _, ok := sheets[trigger.SheetID]; !ok {
+			return "", trigger, action, fmt.Errorf("%w: trigger sheet must belong to the workbook", ErrInvalid)
+		}
+		selected, err := cellrange.Parse(trigger.Range)
+		if err != nil {
+			return "", trigger, action, fmt.Errorf("%w: invalid trigger range", ErrInvalid)
+		}
+		trigger.Range = rangeAddress(selected)
+	default:
+		return "", trigger, action, fmt.Errorf("%w: trigger type must be manual or cell_change", ErrInvalid)
+	}
+	if _, ok := sheets[action.SheetID]; !ok {
+		return "", trigger, action, fmt.Errorf("%w: action sheet must belong to the workbook", ErrInvalid)
+	}
+	selected, err := cellrange.Parse(action.Range)
+	if err != nil {
+		return "", trigger, action, fmt.Errorf("%w: invalid action range", ErrInvalid)
+	}
+	rows, columns := selected.End.Row-selected.Start.Row+1, selected.End.Column-selected.Start.Column+1
+	if rows < 1 || columns < 1 || rows > maxCells || columns > maxCells || rows > maxCells/columns {
+		return "", trigger, action, fmt.Errorf("%w: action range must contain 1 to %d cells", ErrInvalid, maxCells)
+	}
+	action.Range = rangeAddress(selected)
+	action.Formula = strings.TrimSpace(action.Formula)
+	switch action.Type {
+	case ActionSetValue:
+		if action.Formula != "" || !validScalar(action.Value) {
+			return "", trigger, action, fmt.Errorf("%w: set_value requires one JSON string, number or boolean", ErrInvalid)
+		}
+	case ActionSetFormula:
+		if len(bytes.TrimSpace(action.Value)) != 0 || !strings.HasPrefix(action.Formula, "=") || len(action.Formula) > 8192 {
+			return "", trigger, action, fmt.Errorf("%w: set_formula requires a formula beginning with '=' up to 8192 characters", ErrInvalid)
+		}
+	case ActionClear:
+		if len(bytes.TrimSpace(action.Value)) != 0 || action.Formula != "" {
+			return "", trigger, action, fmt.Errorf("%w: clear cannot contain a value or formula", ErrInvalid)
+		}
+	default:
+		return "", trigger, action, fmt.Errorf("%w: action type must be set_value, set_formula or clear", ErrInvalid)
+	}
+	return name, trigger, action, nil
+}
+
+func (s *Service) config(ctx context.Context) (runtimeConfig, error) {
+	config := runtimeConfig{Enabled: false, MaxCellsPerRun: defaultMaxCells, MaxRunsPerHour: defaultMaxRuns}
+	if s.settings == nil {
+		return config, nil
+	}
+	values, err := s.settings.Values(ctx)
+	if err != nil {
+		return config, err
+	}
+	if value, ok := values["automation.enabled"].(bool); ok {
+		config.Enabled = value
+	}
+	config.MaxCellsPerRun = boundedSetting(values["automation.max_cells_per_run"], defaultMaxCells, 1, workbook.MaxPasteCells)
+	config.MaxRunsPerHour = boundedSetting(values["automation.max_runs_per_hour"], defaultMaxRuns, 1, 10_000)
+	return config, nil
+}
+
+func (s *Service) checkRate(ctx context.Context, workbookID string, limit int) error {
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE workbook_id=$1 AND started_at >= now()-interval '1 hour'`, workbookID).Scan(&count); err != nil {
+		return err
+	}
+	if count >= limit {
+		return fmt.Errorf("%w: workbook allows %d runs per hour", ErrRate, limit)
+	}
+	return nil
+}
+
+func (s *Service) markRunFailed(id string, runErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := s.now()
+	_, _ = s.pool.Exec(ctx, `UPDATE automation_runs SET status='failed',error_message=$2,completed_at=$3,updated_at=$3 WHERE id=$1 AND status='running'`, id, trimLength(runErr.Error(), 2000), now)
+	s.logger.Error("automation run failed", "run_id", id, "error", runErr)
+}
+
+type scanner interface{ Scan(...any) error }
+
+func scanAutomation(row scanner) (Automation, error) {
+	var item Automation
+	var triggerJSON, actionJSON []byte
+	err := row.Scan(&item.ID, &item.WorkbookID, &item.Name, &item.Enabled, &triggerJSON, &actionJSON, &item.Revision, &item.idempotencyKey, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Automation{}, ErrNotFound
+	}
+	if err != nil {
+		return Automation{}, err
+	}
+	if err := json.Unmarshal(triggerJSON, &item.Trigger); err != nil {
+		return Automation{}, err
+	}
+	if err := json.Unmarshal(actionJSON, &item.Action); err != nil {
+		return Automation{}, err
+	}
+	return item, nil
+}
+
+func scanRun(row scanner) (Run, error) {
+	var item Run
+	var actionJSON, cellsJSON, expectedJSON, operationJSON, undoJSON []byte
+	err := row.Scan(&item.ID, &item.AutomationID, &item.WorkbookID, &item.ActorID, &item.idempotencyKey, &item.TriggerType, &item.TriggerOperationID, &item.Status, &item.BaseVersion, &actionJSON, &cellsJSON, &expectedJSON, &item.OperationID, &operationJSON, &item.undoKey, &item.UndoOperationID, &undoJSON, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, ErrNotFound
+	}
+	if err != nil {
+		return Run{}, err
+	}
+	if err := json.Unmarshal(actionJSON, &item.Action); err != nil {
+		return Run{}, err
+	}
+	if err := json.Unmarshal(cellsJSON, &item.cells); err != nil {
+		return Run{}, err
+	}
+	if err := json.Unmarshal(expectedJSON, &item.expected); err != nil {
+		return Run{}, err
+	}
+	if len(operationJSON) > 0 && string(operationJSON) != "null" {
+		var result workbook.MutationResult
+		if err := json.Unmarshal(operationJSON, &result); err != nil {
+			return Run{}, err
+		}
+		item.Operation = &result
+	}
+	if len(undoJSON) > 0 && string(undoJSON) != "null" {
+		var result workbook.MutationResult
+		if err := json.Unmarshal(undoJSON, &result); err != nil {
+			return Run{}, err
+		}
+		item.UndoOperation = &result
+	}
+	return item, nil
+}
+
+func (s *Service) getRun(ctx context.Context, id string) (Run, error) {
+	return scanRun(s.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM automation_runs WHERE id=$1`, id))
+}
+
+func (s *Service) getRunByKey(ctx context.Context, automationID, actorID, key string) (Run, error) {
+	return scanRun(s.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM automation_runs WHERE automation_id=$1 AND actor_id=$2 AND idempotency_key=$3`, automationID, actorID, key))
+}
+
+func (s *Service) getRunByTrigger(ctx context.Context, automationID, operationID string) (Run, error) {
+	return scanRun(s.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM automation_runs WHERE automation_id=$1 AND trigger_operation_id=$2`, automationID, operationID))
+}
+
+func executionFromRun(run Run) ExecutionResult {
+	result := ExecutionResult{Run: run, Changes: cloneInputs(run.cells)}
+	if run.Status == StatusUndone && run.UndoOperation != nil {
+		result.Operation = *run.UndoOperation
+	} else if run.Operation != nil {
+		result.Operation = *run.Operation
+	}
+	return result
+}
+
+func insertAudit(ctx context.Context, tx pgx.Tx, actor, action, resourceID string, metadata any, now time.Time) error {
+	payload, _ := json.Marshal(metadata)
+	_, err := tx.Exec(ctx, `INSERT INTO audit_logs(actor_id,action,resource_type,resource_id,result,metadata,created_at) VALUES($1,$2,'automation',$3,'success',$4,$5)`, actor, action, resourceID, payload, now)
+	return err
+}
+
+func validScalar(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || len(trimmed) > 65536 || !json.Valid(trimmed) {
+		return false
+	}
+	var value any
+	if json.Unmarshal(trimmed, &value) != nil {
+		return false
+	}
+	switch value.(type) {
+	case string, float64, bool:
+		return true
+	default:
+		return false
+	}
+}
+
+func triggerMatches(rawRange string, cells []workbook.CellInput) bool {
+	selected, err := cellrange.Parse(rawRange)
+	if err != nil {
+		return false
+	}
+	for _, cell := range cells {
+		if cell.Row >= selected.Start.Row && cell.Row <= selected.End.Row && cell.Column >= selected.Start.Column && cell.Column <= selected.End.Column {
+			return true
+		}
+	}
+	return false
+}
+
+func snapshotFromCell(cell workbook.Cell) CellSnapshot {
+	return CellSnapshot{Value: cloneRaw(cell.Value), Formula: cell.Formula, Style: cloneRaw(cell.Style), SpillSource: cell.SpillSource}
+}
+
+func snapshotsEqual(left, right CellSnapshot) bool {
+	return bytes.Equal(bytes.TrimSpace(left.Value), bytes.TrimSpace(right.Value)) && left.Formula == right.Formula && bytes.Equal(bytes.TrimSpace(left.Style), bytes.TrimSpace(right.Style)) && left.SpillSource == right.SpillSource
+}
+
+func cloneRaw(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
+}
+
+func cloneInputs(values []workbook.CellInput) []workbook.CellInput {
+	result := make([]workbook.CellInput, len(values))
+	for index, value := range values {
+		result[index] = value
+		result[index].Value = cloneRaw(value.Value)
+		result[index].Style = cloneRaw(value.Style)
+	}
+	return result
+}
+
+func coordinateKey(row, column int) string { return fmt.Sprintf("%d:%d", row, column) }
+
+func rangeAddress(value cellrange.Range) string {
+	start, end := cellrange.Address(value.Start.Row, value.Start.Column), cellrange.Address(value.End.Row, value.End.Column)
+	if start == end {
+		return start
+	}
+	return start + ":" + end
+}
+
+func automationActor(id string) string { return "automation:" + id }
+
+func trimLength(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
+}
+
+func boundedSetting(value any, fallback, minimum, maximum int) int {
+	number, ok := value.(float64)
+	if !ok || number < float64(minimum) || number > float64(maximum) {
+		return fallback
+	}
+	return int(number)
+}
+
+func mapConstraintError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return fmt.Errorf("%w: an automation with the same name already exists", ErrInvalid)
+	}
+	return err
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func sortPreview(changes []PreviewChange) {
+	sort.SliceStable(changes, func(i, j int) bool {
+		if changes[i].Row == changes[j].Row {
+			return changes[i].Column < changes[j].Column
+		}
+		return changes[i].Row < changes[j].Row
+	})
+}

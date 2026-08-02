@@ -15,6 +15,7 @@ import (
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
+	"kanpic/internal/automation"
 	"kanpic/internal/buildinfo"
 	"kanpic/internal/collaboration"
 	"kanpic/internal/formula"
@@ -29,17 +30,18 @@ import (
 const maxJSONBody = 2 << 20
 
 type Server struct {
-	repository workbook.Repository
-	logger     *slog.Logger
-	settings   *settings.Repository
-	keys       *apikey.Repository
-	auth       *auth.Service
-	logs       *observability.Store
-	build      buildinfo.BuildInfo
-	formula    *formula.Evaluator
-	files      *importexport.Service
-	collab     *collaboration.Hub
-	ai         ai.Orchestrator
+	repository  workbook.Repository
+	logger      *slog.Logger
+	settings    *settings.Repository
+	keys        *apikey.Repository
+	auth        *auth.Service
+	logs        *observability.Store
+	build       buildinfo.BuildInfo
+	formula     *formula.Evaluator
+	files       *importexport.Service
+	collab      *collaboration.Hub
+	ai          ai.Orchestrator
+	automations automation.ServiceAPI
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -51,10 +53,19 @@ func NewPlatform(repository workbook.Repository, settingRepository *settings.Rep
 }
 
 func NewPlatformWithAI(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, logger *slog.Logger) http.Handler {
+	return NewPlatformWithServices(repository, settingRepository, keys, authService, logs, aiService, nil, logger)
+}
+
+func NewPlatformWithServices(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, automationService automation.ServiceAPI, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService}
+	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService, automations: automationService}
+	if automationService != nil {
+		s.collab.SetMutationListener(func(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor, _ string) {
+			s.triggerCellAutomationsContext(ctx, result, cells, actor)
+		})
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/version", s.versionInfo)
@@ -178,6 +189,16 @@ func NewPlatformWithAI(repository workbook.Repository, settingRepository *settin
 		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/ai/actions", s.listAIActions)
 		mux.HandleFunc("GET /api/v1/ai/actions/{actionId}", s.getAIAction)
 		mux.HandleFunc("POST /api/v1/ai/actions/{actionAction}", s.executeAIAction)
+	}
+	if automationService != nil {
+		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/automations", s.listAutomations)
+		mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/automations", s.createAutomation)
+		mux.HandleFunc("GET /api/v1/automations/{automationId}", s.getAutomation)
+		mux.HandleFunc("PATCH /api/v1/automations/{automationId}", s.updateAutomation)
+		mux.HandleFunc("DELETE /api/v1/automations/{automationId}", s.deleteAutomation)
+		mux.HandleFunc("POST /api/v1/automations/{automationAction}", s.executeAutomationAction)
+		mux.HandleFunc("GET /api/v1/automations/{automationId}/runs", s.listAutomationRuns)
+		mux.HandleFunc("POST /api/v1/automation-runs/{runAction}", s.undoAutomationRun)
 	}
 	mux.HandleFunc("POST /mcp", s.mcp)
 	if directory := staticDirectory(); directory != "" {
@@ -549,6 +570,7 @@ func (s *Server) applyCellsWithLimit(w http.ResponseWriter, r *http.Request, lim
 	}
 	if !result.Duplicate {
 		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, input.Cells, result)
+		s.triggerCellAutomations(r, result, input.Cells)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -895,6 +917,18 @@ func requiredScope(r *http.Request) string {
 	}
 	if strings.Contains(path, "/ai/") || strings.Contains(path, "/ai:") {
 		return "ai.use"
+	}
+	if strings.Contains(path, "/automation-runs/") {
+		return "automation.run"
+	}
+	if strings.Contains(path, "/automations") {
+		if r.Method == http.MethodGet || strings.HasSuffix(path, ":test") {
+			return "automation.read"
+		}
+		if strings.HasSuffix(path, ":run") {
+			return "automation.run"
+		}
+		return "automation.write"
 	}
 	if strings.Contains(path, "ranges:format") || strings.Contains(path, "ranges:merge") || strings.Contains(path, "ranges:unmerge") || strings.Contains(path, "layout:apply") {
 		return "format.write"

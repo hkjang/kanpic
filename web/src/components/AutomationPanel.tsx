@@ -1,0 +1,67 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Check, Clock3, Eye, Pencil, Play, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2, Workflow } from 'lucide-react'
+import { FormEvent, useEffect, useState } from 'react'
+import { api, newIdempotencyKey } from '../lib/api'
+import { collaborationClientId } from '../lib/client'
+import type { Automation, AutomationAction, AutomationExecutionResult, AutomationPreview, AutomationRun, AutomationTrigger, Sheet } from '../types'
+import './AutomationPanel.css'
+
+type Props={workbookId:string;sheets:Sheet[];activeSheetId:string;selectionRange:string;onClose:()=>void;onExecuted:(result:AutomationExecutionResult)=>void}
+type ValueKind='string'|'number'|'boolean'
+
+const triggerLabel=(trigger:AutomationTrigger)=>trigger.type==='manual'?'수동 실행':`셀 변경 · ${trigger.range}`
+const actionLabel=(action:AutomationAction)=>action.type==='set_formula'?'수식 설정':action.type==='set_value'?'값 설정':'내용 지우기'
+const snapshotText=(snapshot:{value?:unknown;formula?:string})=>snapshot.formula||(snapshot.value===undefined||snapshot.value===null||snapshot.value===''?'(빈 셀)':typeof snapshot.value==='string'?snapshot.value:JSON.stringify(snapshot.value))
+
+export function AutomationPanel({workbookId,sheets,activeSheetId,selectionRange,onClose,onExecuted}:Props){
+  const client=useQueryClient()
+  const [editing,setEditing]=useState<Automation|null|undefined>()
+  const [previewItem,setPreviewItem]=useState<Automation>()
+  const [preview,setPreview]=useState<AutomationPreview>()
+  const [pending,setPending]=useState('')
+  const [error,setError]=useState('')
+  const automations=useQuery({queryKey:['automations',workbookId],queryFn:()=>api<{items:Automation[]}>(`/api/v1/workbooks/${workbookId}/automations`)})
+  const runs=useQuery({queryKey:['automation-runs',previewItem?.id],queryFn:()=>api<{items:AutomationRun[]}>(`/api/v1/automations/${previewItem!.id}/runs?limit=12`),enabled:Boolean(previewItem)})
+  const refresh=async(id?:string)=>{await client.invalidateQueries({queryKey:['automations',workbookId]});if(id)await client.invalidateQueries({queryKey:['automation-runs',id]})}
+  const test=async(item:Automation)=>{setPending(`test:${item.id}`);setError('');setPreviewItem(item);try{setPreview(await api<AutomationPreview>(`/api/v1/automations/${item.id}:test`,{method:'POST',body:'{}'}))}catch(reason){setPreview(undefined);setError(reason instanceof Error?reason.message:'자동화를 검증하지 못했습니다.')}finally{setPending('')}}
+  const run=async(item:Automation)=>{setPending(`run:${item.id}`);setError('');try{const result=await api<AutomationExecutionResult>(`/api/v1/automations/${item.id}:run`,{method:'POST',body:JSON.stringify({expected_revision:item.revision,idempotency_key:newIdempotencyKey(),client_id:collaborationClientId()})});onExecuted(result);setPreview(undefined);await refresh(item.id)}catch(reason){setError(reason instanceof Error?reason.message:'자동화를 실행하지 못했습니다.')}finally{setPending('')}}
+  const undo=async(item:AutomationRun)=>{setPending(`undo:${item.id}`);setError('');try{const result=await api<AutomationExecutionResult>(`/api/v1/automation-runs/${item.id}:undo`,{method:'POST',body:JSON.stringify({idempotency_key:newIdempotencyKey(),client_id:collaborationClientId()})});onExecuted(result);await refresh(item.automation_id)}catch(reason){setError(reason instanceof Error?reason.message:'자동화 실행을 되돌리지 못했습니다.')}finally{setPending('')}}
+  const remove=async(item:Automation)=>{if(!confirm(`'${item.name}' 자동화를 삭제할까요?`))return;setPending(`delete:${item.id}`);setError('');try{await api(`/api/v1/automations/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});if(previewItem?.id===item.id){setPreviewItem(undefined);setPreview(undefined)}await refresh()}catch(reason){setError(reason instanceof Error?reason.message:'자동화를 삭제하지 못했습니다.')}finally{setPending('')}}
+  const saved=async(item:Automation)=>{setEditing(undefined);await refresh(item.id);await test(item)}
+  return <aside className="automation-panel" aria-label="자동화 패널">
+    <header><span><Workflow/> 자동화</span><button aria-label="자동화 패널 닫기" onClick={onClose}>×</button></header>
+    <div className="automation-scroll">
+      <div className="automation-intro"><div><strong>검증 가능한 워크북 자동화</strong><p>실행 전에 최신 셀 기준 변경 내용을 확인하고, 실행 후에는 서버 버전으로 Undo할 수 있습니다.</p></div><button className="primary" onClick={()=>setEditing(null)}><Plus/> 새 자동화</button></div>
+      {automations.isLoading&&<div className="automation-state"><RefreshCw className="spin"/>자동화를 불러오는 중…</div>}
+      {automations.isError&&<div className="automation-error"><AlertTriangle/>자동화 목록을 불러오지 못했습니다.</div>}
+      {(automations.data?.items.length??0)===0&&!automations.isLoading&&<div className="automation-empty"><Workflow/><strong>등록된 자동화가 없습니다</strong><span>수동 또는 셀 변경 트리거를 추가하세요.</span></div>}
+      <div className="automation-list">{automations.data?.items.map(item=><article className={previewItem?.id===item.id?'selected':''} key={item.id}><div className="automation-item-head"><span className={item.enabled?'enabled':'disabled'}>{item.enabled?'사용':'중지'}</span><strong>{item.name}</strong><small>r{item.revision}</small></div><p>{triggerLabel(item.trigger)} → {actionLabel(item.action)} {item.action.range}</p><div><button onClick={()=>void test(item)} disabled={pending!==''}><Eye/> 검증</button><button onClick={()=>setEditing(item)} disabled={pending!==''}><Pencil/> 수정</button><button onClick={()=>void remove(item)} disabled={pending!==''}><Trash2/></button></div></article>)}</div>
+      {editing!==undefined&&<AutomationForm item={editing??undefined} workbookId={workbookId} sheets={sheets} activeSheetId={activeSheetId} selectionRange={selectionRange} onClose={()=>setEditing(undefined)} onSaved={saved}/>}
+      {previewItem&&preview&&<section className="automation-preview"><div className="automation-section-title"><div><Eye/><span><strong>실행 미리보기</strong><small>{previewItem.name} · 기준 v{preview.base_version}</small></span></div><em>{preview.changes.length}셀</em></div><div className="automation-change-list">{preview.changes.slice(0,20).map(change=><article key={`${change.row}:${change.column}`}><strong>{change.address}</strong><div><small>현재</small><code>{snapshotText(change.before)}</code></div><span>→</span><div><small>실행 후</small><code>{snapshotText(change.after)}</code></div></article>)}</div>{preview.changes.length>20&&<small className="automation-truncated">앞 20개 변경만 표시합니다.</small>}<div className="automation-approval"><p><ShieldCheck/> {preview.changes.length}개 셀을 하나의 원자적 작업으로 적용합니다.</p><button className="primary" disabled={!previewItem.enabled||pending!==''} onClick={()=>void run(previewItem)}>{pending===`run:${previewItem.id}`?<RefreshCw className="spin"/>:<Play/>} 검토한 자동화 실행</button></div></section>}
+      {previewItem&&<section className="automation-history"><div className="automation-section-title"><div><Clock3/><span><strong>실행 이력</strong><small>성공, 실패와 Undo 상태</small></span></div></div>{runs.data?.items.length===0&&<p>실행 이력이 없습니다.</p>}{runs.data?.items.map(item=><article key={item.id}><div><strong>{runStatus(item.status)}</strong><small>{new Date(item.started_at).toLocaleString('ko-KR')} · 기준 v{item.base_version}</small>{item.error_message&&<em>{item.error_message}</em>}</div>{item.status==='succeeded'&&<button disabled={pending!==''} onClick={()=>void undo(item)}><RotateCcw/> Undo</button>}{item.status==='undone'&&<Check/>}</article>)}</section>}
+      {error&&<div className="automation-error" role="alert"><AlertTriangle/>{error}</div>}
+    </div>
+  </aside>
+}
+
+function AutomationForm({item,workbookId,sheets,activeSheetId,selectionRange,onClose,onSaved}:{item?:Automation;workbookId:string;sheets:Sheet[];activeSheetId:string;selectionRange:string;onClose:()=>void;onSaved:(item:Automation)=>void}){
+  const [name,setName]=useState('새 자동화')
+  const [enabled,setEnabled]=useState(true)
+  const [triggerType,setTriggerType]=useState<AutomationTrigger['type']>('manual')
+  const [triggerSheet,setTriggerSheet]=useState(activeSheetId)
+  const [triggerRange,setTriggerRange]=useState(selectionRange)
+  const [actionType,setActionType]=useState<AutomationAction['type']>('set_value')
+  const [actionSheet,setActionSheet]=useState(activeSheetId)
+  const [actionRange,setActionRange]=useState(selectionRange)
+  const [formula,setFormula]=useState('=A1')
+  const [valueKind,setValueKind]=useState<ValueKind>('string')
+  const [value,setValue]=useState('완료')
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState('')
+  useEffect(()=>{if(!item)return;setName(item.name);setEnabled(item.enabled);setTriggerType(item.trigger.type);setTriggerSheet(item.trigger.sheet_id||activeSheetId);setTriggerRange(item.trigger.range||selectionRange);setActionType(item.action.type);setActionSheet(item.action.sheet_id);setActionRange(item.action.range);setFormula(item.action.formula||'=A1');const next=item.action.value;setValueKind(typeof next==='number'?'number':typeof next==='boolean'?'boolean':'string');setValue(next===undefined?'완료':String(next))},[item,activeSheetId,selectionRange])
+  const submit=async(event:FormEvent)=>{event.preventDefault();setSaving(true);setError('');const trigger:AutomationTrigger=triggerType==='manual'?{type:'manual'}:{type:'cell_change',sheet_id:triggerSheet,range:triggerRange};const action:AutomationAction={type:actionType,sheet_id:actionSheet,range:actionRange,...(actionType==='set_formula'?{formula}:actionType==='set_value'?{value:literalValue(valueKind,value)}:{})};try{const saved=await api<Automation>(item?`/api/v1/automations/${item.id}`:`/api/v1/workbooks/${workbookId}/automations`,{method:item?'PATCH':'POST',body:JSON.stringify({...(!item?{idempotency_key:newIdempotencyKey()}:{}),name,enabled,trigger,action,...(item?{expected_revision:item.revision}:{})})});onSaved(saved)}catch(reason){setError(reason instanceof Error?reason.message:'자동화를 저장하지 못했습니다.')}finally{setSaving(false)}}
+  return <form className="automation-form" onSubmit={event=>void submit(event)}><div className="automation-form-title"><strong>{item?'자동화 수정':'새 자동화'}</strong><button type="button" onClick={onClose}>×</button></div><label>이름<input aria-label="자동화 이름" value={name} maxLength={120} onChange={event=>setName(event.target.value)}/></label><label className="automation-check"><input type="checkbox" checked={enabled} onChange={event=>setEnabled(event.target.checked)}/> 저장 후 사용</label><fieldset><legend>트리거</legend><label>실행 조건<select aria-label="자동화 트리거" value={triggerType} onChange={event=>setTriggerType(event.target.value as AutomationTrigger['type'])}><option value="manual">수동 실행</option><option value="cell_change">셀 변경 시</option></select></label>{triggerType==='cell_change'&&<div className="automation-inline"><label>시트<select aria-label="트리거 시트" value={triggerSheet} onChange={event=>setTriggerSheet(event.target.value)}>{sheets.map(sheet=><option value={sheet.id} key={sheet.id}>{sheet.name}</option>)}</select></label><label>감시 범위<input aria-label="트리거 범위" value={triggerRange} onChange={event=>setTriggerRange(event.target.value.toUpperCase())}/></label></div>}</fieldset><fieldset><legend>작업</legend><label>작업 유형<select aria-label="자동화 작업" value={actionType} onChange={event=>setActionType(event.target.value as AutomationAction['type'])}><option value="set_value">값 설정</option><option value="set_formula">수식 설정</option><option value="clear">내용 지우기</option></select></label><div className="automation-inline"><label>시트<select aria-label="작업 시트" value={actionSheet} onChange={event=>setActionSheet(event.target.value)}>{sheets.map(sheet=><option value={sheet.id} key={sheet.id}>{sheet.name}</option>)}</select></label><label>대상 범위<input aria-label="작업 범위" value={actionRange} onChange={event=>setActionRange(event.target.value.toUpperCase())}/></label></div>{actionType==='set_formula'&&<label>기준 수식<input aria-label="자동화 수식" value={formula} onChange={event=>setFormula(event.target.value)}/><small>대상 범위의 왼쪽 위 셀을 기준으로 상대 참조가 이동합니다.</small></label>}{actionType==='set_value'&&<div className="automation-inline value"><label>값 유형<select aria-label="자동화 값 유형" value={valueKind} onChange={event=>setValueKind(event.target.value as ValueKind)}><option value="string">문자열</option><option value="number">숫자</option><option value="boolean">불리언</option></select></label><label>값{valueKind==='boolean'?<select aria-label="자동화 값" value={value} onChange={event=>setValue(event.target.value)}><option value="true">TRUE</option><option value="false">FALSE</option></select>:<input aria-label="자동화 값" value={value} onChange={event=>setValue(event.target.value)}/>}</label></div>}</fieldset>{error&&<div className="automation-error" role="alert"><AlertTriangle/>{error}</div>}<div className="automation-form-actions"><button type="button" onClick={onClose}>취소</button><button className="primary" disabled={saving||!name.trim()||!actionRange.trim()||(triggerType==='cell_change'&&!triggerRange.trim())} type="submit">{saving?<RefreshCw className="spin"/>:<Save/>} 저장 후 검증</button></div></form>
+}
+
+function literalValue(kind:ValueKind,value:string){if(kind==='number')return Number(value);if(kind==='boolean')return value==='true';return value}
+function runStatus(status:AutomationRun['status']){return {running:'실행 중',succeeded:'성공',failed:'실패',undoing:'Undo 중',undone:'Undo 완료'}[status]}

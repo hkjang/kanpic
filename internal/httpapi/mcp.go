@@ -12,6 +12,7 @@ import (
 
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
+	"kanpic/internal/automation"
 	"kanpic/internal/importexport"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
@@ -117,6 +118,15 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.ai.action.get", "AI 계획, 변경 미리보기, 모델·도구 감사 이력과 적용 상태를 조회합니다.", "ai.use", requiredProps("action_id", "string")),
 	tool("spreadsheet.ai.action.approve", "미리 본 AI 수식 또는 데이터 정제 계획을 revision과 워크북 버전을 확인한 뒤 원자적으로 적용합니다.", "ai.use", aiExecutionSchema()),
 	tool("spreadsheet.ai.action.undo", "승인된 AI 작업을 사용자별 작업 이력으로 안전하게 되돌립니다.", "ai.use", aiExecutionSchema()),
+	tool("spreadsheet.automation.list", "워크북의 수동·셀 변경 자동화 정의와 revision을 조회합니다.", "automation.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.automation.get", "자동화 트리거와 셀 작업 정의를 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
+	tool("spreadsheet.automation.create", "수동 또는 셀 변경 트리거와 원자적 값·수식 작업을 멱등 생성합니다.", "automation.write", automationCreateSchema()),
+	tool("spreadsheet.automation.update", "자동화 정의와 활성 상태를 revision 기반으로 변경합니다.", "automation.write", automationUpdateSchema()),
+	tool("spreadsheet.automation.delete", "자동화를 revision 기반으로 비활성화하고 삭제합니다.", "automation.write", automationDeleteSchema()),
+	tool("spreadsheet.automation.test", "최신 서버 셀을 사용해 쓰기 없이 자동화 변경 미리보기를 검증합니다.", "automation.read", requiredProps("automation_id", "string")),
+	tool("spreadsheet.automation.run", "자동화를 멱등 실행하고 하나의 서버 권위 셀 작업으로 반영합니다.", "automation.run", automationRunSchema()),
+	tool("spreadsheet.automation.run.list", "자동화 실행·실패·Undo 이력을 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
+	tool("spreadsheet.automation.run.undo", "성공한 자동화 실행을 후속 변경과 충돌하지 않는 범위에서 되돌립니다.", "automation.run", automationUndoSchema()),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
@@ -336,6 +346,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells, OperationType: operationType})
 		if err == nil && !result.Duplicate {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, input.Cells, result)
+			s.triggerCellAutomations(r, result, input.Cells)
 		}
 		return result, err
 	case "spreadsheet.range.format":
@@ -702,6 +713,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells})
 		if err == nil && !result.Duplicate {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, "", cells, result)
+			s.triggerCellAutomations(r, result, cells)
 		}
 		return result, err
 	case "spreadsheet.formula.evaluate":
@@ -797,6 +809,95 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		if err == nil && !result.Operation.Duplicate {
 			s.collab.PublishOperation(result.Action.WorkbookID, result.Action.SheetID, actor, input.ClientID, result.Changes, result.Operation)
+		}
+		return result, err
+	case "spreadsheet.automation.list":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		return s.automations.List(ctx, stringArg(args, "workbook_id"))
+	case "spreadsheet.automation.get":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		return s.automations.Get(ctx, stringArg(args, "automation_id"))
+	case "spreadsheet.automation.create":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		var input automation.CreateInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.automations.Create(ctx, stringArg(args, "workbook_id"), actor, input)
+	case "spreadsheet.automation.update":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		var input automation.UpdateInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		return s.automations.Update(ctx, stringArg(args, "automation_id"), actor, input)
+	case "spreadsheet.automation.delete":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		revision, err := numberArg(args, "expected_revision")
+		if err != nil || revision < 1 {
+			return nil, fmt.Errorf("expected_revision must be a positive integer")
+		}
+		return okResult(s.automations.Delete(ctx, stringArg(args, "automation_id"), actor, revision))
+	case "spreadsheet.automation.test":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		if err := requireMCPScopes(r, "range.read"); err != nil {
+			return nil, err
+		}
+		return s.automations.Preview(ctx, stringArg(args, "automation_id"))
+	case "spreadsheet.automation.run":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		item, err := s.automations.Get(ctx, stringArg(args, "automation_id"))
+		if err != nil {
+			return nil, err
+		}
+		if err := requireMCPScopes(r, automation.RequiredActionScope(item.Action.Type)); err != nil {
+			return nil, err
+		}
+		var input automation.RunInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := s.automations.Run(ctx, item.ID, input)
+		if err == nil {
+			s.publishAutomationResult(actor, input.ClientID, result)
+		}
+		return result, err
+	case "spreadsheet.automation.run.list":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		limit, _ := numberArg(args, "limit")
+		return s.automations.ListRuns(ctx, stringArg(args, "automation_id"), int(limit))
+	case "spreadsheet.automation.run.undo":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		if err := requireMCPScopes(r, "range.write"); err != nil {
+			return nil, err
+		}
+		var input automation.RunInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := s.automations.Undo(ctx, stringArg(args, "run_id"), input)
+		if err == nil {
+			s.publishAutomationResult(actor, input.ClientID, result)
 		}
 		return result, err
 	case "spreadsheet.import.preview":
@@ -1193,6 +1294,98 @@ func aiExecutionSchema() map[string]any {
 			"client_id":         map[string]any{"type": "string"},
 		},
 		"required": []string{"action_id", "expected_revision", "idempotency_key"},
+	}
+}
+
+func automationTriggerSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type":     map[string]any{"type": "string", "enum": []string{automation.TriggerManual, automation.TriggerCellChange}},
+			"sheet_id": map[string]any{"type": "string"},
+			"range":    map[string]any{"type": "string"},
+		},
+		"required": []string{"type"},
+	}
+}
+
+func automationActionSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type":     map[string]any{"type": "string", "enum": []string{automation.ActionSetValue, automation.ActionSetFormula, automation.ActionClear}},
+			"sheet_id": map[string]any{"type": "string", "minLength": 1},
+			"range":    map[string]any{"type": "string", "minLength": 1},
+			"value":    map[string]any{},
+			"formula":  map[string]any{"type": "string", "maxLength": 8192},
+		},
+		"required": []string{"type", "sheet_id", "range"},
+	}
+}
+
+func automationCreateSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"workbook_id":     map[string]any{"type": "string", "minLength": 1},
+			"name":            map[string]any{"type": "string", "minLength": 1, "maxLength": 120},
+			"enabled":         map[string]any{"type": "boolean"},
+			"trigger":         automationTriggerSchema(),
+			"action":          automationActionSchema(),
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+		},
+		"required": []string{"workbook_id", "name", "enabled", "trigger", "action", "idempotency_key"},
+	}
+}
+
+func automationUpdateSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"automation_id":     map[string]any{"type": "string", "minLength": 1},
+			"name":              map[string]any{"type": "string", "minLength": 1, "maxLength": 120},
+			"enabled":           map[string]any{"type": "boolean"},
+			"trigger":           automationTriggerSchema(),
+			"action":            automationActionSchema(),
+			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"automation_id", "name", "enabled", "trigger", "action", "expected_revision"},
+	}
+}
+
+func automationDeleteSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"automation_id":     map[string]any{"type": "string", "minLength": 1},
+			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"automation_id", "expected_revision"},
+	}
+}
+
+func automationRunSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"automation_id":     map[string]any{"type": "string", "minLength": 1},
+			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+			"idempotency_key":   map[string]any{"type": "string", "minLength": 1},
+			"client_id":         map[string]any{"type": "string"},
+		},
+		"required": []string{"automation_id", "expected_revision", "idempotency_key"},
+	}
+}
+
+func automationUndoSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"run_id":          map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"client_id":       map[string]any{"type": "string"},
+		},
+		"required": []string{"run_id", "idempotency_key"},
 	}
 }
 

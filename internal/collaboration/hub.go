@@ -92,6 +92,7 @@ type Hub struct {
 	logger     *slog.Logger
 	mu         sync.RWMutex
 	rooms      map[string]map[*client]struct{}
+	onMutation func(context.Context, workbook.MutationResult, []workbook.CellInput, string, string)
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) *Hub {
@@ -99,6 +100,12 @@ func New(repository workbook.Repository, logger *slog.Logger) *Hub {
 		logger = slog.Default()
 	}
 	return &Hub{repository: repository, logger: logger, rooms: make(map[string]map[*client]struct{})}
+}
+
+func (h *Hub) SetMutationListener(listener func(context.Context, workbook.MutationResult, []workbook.CellInput, string, string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onMutation = listener
 }
 
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request, workbookID, actorID string, canWrite bool) {
@@ -234,6 +241,12 @@ func (h *Hub) handle(ctx context.Context, peer *client, incoming inboundEvent) {
 		}
 		if !result.Duplicate {
 			h.PublishOperation(peer.workbookID, operation.SheetID, peer.actorID, peer.clientID, operation.Cells, result)
+			h.mu.RLock()
+			listener := h.onMutation
+			h.mu.RUnlock()
+			if listener != nil {
+				listener(ctx, result, operation.Cells, peer.actorID, peer.clientID)
+			}
 		}
 	default:
 		h.sendError(peer, incoming.ID, "unknown_event", "event type is not supported")
