@@ -137,6 +137,7 @@ test('previews, runs, audits, triggers, and undoes PostgreSQL automations', asyn
   try{
     expect((await putSetting('automation.max_cells_per_run',1000)).ok()).toBe(true)
     expect((await putSetting('automation.max_runs_per_hour',1000)).ok()).toBe(true)
+    expect((await putSetting('automation.scheduler_poll_seconds',5)).ok()).toBe(true)
     expect((await putSetting('automation.enabled',true)).ok()).toBe(true)
     const tested=await page.request.post('/api/v1/admin/settings:test',{data:{}}).then(response=>response.json())
     expect(tested.items.find((item:{name:string})=>item.name==='자동화 저장소')).toMatchObject({success:true})
@@ -174,6 +175,12 @@ test('previews, runs, audits, triggers, and undoes PostgreSQL automations', asyn
     const triggerRuns=await page.request.get(`/api/v1/automations/${triggered.id}/runs`).then(response=>response.json())
     expect(triggerRuns.items).toHaveLength(1)
     expect(triggerRuns.items[0]).toMatchObject({trigger_type:'cell_change',status:'succeeded',trigger_operation_id:changed.operation_id})
+
+    const scheduled=await page.request.post(`/api/v1/workbooks/${workbookId}/automations`,{data:{name:'서울 매시간 갱신',enabled:true,idempotency_key:`schedule-create-${workbookId}`,trigger:{type:'schedule',cron:'0 * * * *',timezone:'Asia/Seoul'},action:{type:'set_value',sheet_id:sheetId,range:'D2',value:'scheduled'}}}).then(response=>response.json())
+    expect(scheduled).toMatchObject({name:'서울 매시간 갱신',trigger:{type:'schedule',cron:'0 * * * *',timezone:'Asia/Seoul'}})
+    expect(Date.parse(scheduled.next_run_at)).not.toBeNaN()
+    const schedulePreview=await page.request.post(`/api/v1/automations/${scheduled.id}:test`,{data:{}}).then(response=>response.json())
+    expect(schedulePreview.changes).toEqual([expect.objectContaining({address:'D2',after:{value:'scheduled'}})])
   }finally{
     if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)
     await page.request.post(`/api/v1/admin/settings/versions/${restoreRevision}:restore`,{data:{}})

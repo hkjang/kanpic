@@ -85,6 +85,34 @@ describe('AutomationPanel',()=>{
     fireEvent.click(undoButton)
     await waitFor(()=>expect(onExecuted).toHaveBeenCalledWith(undone))
   })
+
+  it('creates a timezone-aware Cron schedule and shows its next run',async()=>{
+    const scheduled:Automation={...automation,id:'schedule-1',name:'매시간 갱신',trigger:{type:'schedule',cron:'0 * * * *',timezone:'Asia/Seoul'},next_run_at:'2026-08-02T01:00:00Z'}
+    let items:Automation[]=[]
+    const fetchMock=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+      const path=String(input),method=init?.method??'GET'
+      if(path==='/api/v1/workbooks/book-1/automations'&&method==='GET')return json({items})
+      if(path==='/api/v1/workbooks/book-1/automations'&&method==='POST'){
+        const body=JSON.parse(String(init?.body)) as Record<string,unknown>
+        expect(body).toMatchObject({name:'매시간 갱신',trigger:{type:'schedule',cron:'0 * * * *',timezone:'Asia/Seoul'}})
+        items=[scheduled]
+        return json(scheduled,201)
+      }
+      if(path==='/api/v1/automations/schedule-1:test')return json({...preview,automation_id:scheduled.id})
+      if(path==='/api/v1/automations/schedule-1/runs?limit=12')return json({items:[]})
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock)
+    renderPanel()
+    await screen.findByText('등록된 자동화가 없습니다')
+    fireEvent.click(screen.getByRole('button',{name:/새 자동화/}))
+    fireEvent.change(screen.getByLabelText('자동화 이름'),{target:{value:'매시간 갱신'}})
+    fireEvent.change(screen.getByLabelText('자동화 트리거'),{target:{value:'schedule'}})
+    fireEvent.change(screen.getByLabelText('스케줄 프리셋'),{target:{value:'0 * * * *'}})
+    fireEvent.click(screen.getByRole('button',{name:/저장 후 검증/}))
+    expect(await screen.findByText(/다음 실행/)).toBeInTheDocument()
+    expect(screen.getByText(/0 \* \* \* \*/)).toBeInTheDocument()
+  })
 })
 
 function json(value:unknown,status=200){return new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}})}

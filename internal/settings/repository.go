@@ -91,6 +91,7 @@ var defaults = []Setting{
 	{Key: "automation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "워크북 자동화 실행 사용"},
 	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
 	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},
+	{Key: "automation.scheduler_poll_seconds", Value: json.RawMessage(`15`), ValueType: "number", Description: "PostgreSQL 스케줄 자동화 확인 주기(초)"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},
 	{Key: "observability.log_retention_days", Value: json.RawMessage(`30`), ValueType: "number", Description: "서버 로그 보존 일수"},
 }
@@ -265,8 +266,8 @@ func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
 	}
 	if enabled, _ := values["automation.enabled"].(bool); enabled {
 		started = time.Now()
-		_, testErr := r.pool.Exec(ctx, `SELECT 1 FROM automations LIMIT 0`)
-		results = append(results, TestResult{Name: "자동화 저장소", Success: testErr == nil, Message: resultMessage(testErr, "정의·실행 이력 저장소 준비 완료"), DurationMS: time.Since(started).Milliseconds()})
+		_, testErr := r.pool.Exec(ctx, `SELECT a.next_run_at,r.scheduled_for FROM automations a LEFT JOIN automation_runs r ON r.automation_id=a.id LIMIT 0`)
+		results = append(results, TestResult{Name: "자동화 저장소", Success: testErr == nil, Message: resultMessage(testErr, "정의·예약·실행 이력 저장소 준비 완료"), DurationMS: time.Since(started).Milliseconds()})
 	}
 	return results, nil
 }
@@ -453,6 +454,12 @@ func validateValue(item Setting) string {
 		number, _ := value.(float64)
 		if number < 1 || number > 10000 {
 			return "자동화 실행 한도는 시간당 1~10000건이어야 합니다."
+		}
+	}
+	if item.Key == "automation.scheduler_poll_seconds" {
+		number, _ := value.(float64)
+		if number < 5 || number > 300 {
+			return "자동화 스케줄 확인 주기는 5~300초여야 합니다."
 		}
 	}
 	return ""

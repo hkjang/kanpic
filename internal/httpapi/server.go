@@ -65,6 +65,13 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		s.collab.SetMutationListener(func(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor, _ string) {
 			s.triggerCellAutomationsContext(ctx, result, cells, actor)
 		})
+		if scheduled, ok := automationService.(interface {
+			SetScheduledExecutionListener(func(automation.ExecutionResult))
+		}); ok {
+			scheduled.SetScheduledExecutionListener(func(result automation.ExecutionResult) {
+				s.publishAutomationResult(result.Run.ActorID, "scheduler", result)
+			})
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)

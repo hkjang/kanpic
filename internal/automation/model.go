@@ -10,16 +10,18 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("automation not found")
-	ErrInvalid  = errors.New("invalid automation")
-	ErrRevision = errors.New("automation revision conflict")
-	ErrDisabled = errors.New("automation is disabled")
-	ErrRate     = errors.New("automation rate limit exceeded")
+	ErrNotFound  = errors.New("automation not found")
+	ErrInvalid   = errors.New("invalid automation")
+	ErrRevision  = errors.New("automation revision conflict")
+	ErrDisabled  = errors.New("automation is disabled")
+	ErrRate      = errors.New("automation rate limit exceeded")
+	ErrNoChanges = errors.New("automation has no effective changes")
 )
 
 const (
 	TriggerManual     = "manual"
 	TriggerCellChange = "cell_change"
+	TriggerSchedule   = "schedule"
 
 	ActionSetValue   = "set_value"
 	ActionSetFormula = "set_formula"
@@ -27,15 +29,18 @@ const (
 
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
+	StatusSkipped   = "skipped"
 	StatusFailed    = "failed"
 	StatusUndoing   = "undoing"
 	StatusUndone    = "undone"
 )
 
 type TriggerDefinition struct {
-	Type    string `json:"type"`
-	SheetID string `json:"sheet_id,omitempty"`
-	Range   string `json:"range,omitempty"`
+	Type     string `json:"type"`
+	SheetID  string `json:"sheet_id,omitempty"`
+	Range    string `json:"range,omitempty"`
+	Cron     string `json:"cron,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 }
 
 type ActionDefinition struct {
@@ -58,6 +63,7 @@ type Automation struct {
 	UpdatedBy      string            `json:"updated_by"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+	NextRunAt      *time.Time        `json:"next_run_at,omitempty"`
 	Duplicate      bool              `json:"duplicate,omitempty"`
 	idempotencyKey string
 }
@@ -79,12 +85,13 @@ type UpdateInput struct {
 }
 
 type RunInput struct {
-	ActorID            string `json:"-"`
-	ClientID           string `json:"client_id,omitempty"`
-	IdempotencyKey     string `json:"idempotency_key"`
-	ExpectedRevision   int64  `json:"expected_revision,omitempty"`
-	TriggerType        string `json:"-"`
-	TriggerOperationID string `json:"-"`
+	ActorID            string     `json:"-"`
+	ClientID           string     `json:"client_id,omitempty"`
+	IdempotencyKey     string     `json:"idempotency_key"`
+	ExpectedRevision   int64      `json:"expected_revision,omitempty"`
+	TriggerType        string     `json:"-"`
+	TriggerOperationID string     `json:"-"`
+	ScheduledFor       *time.Time `json:"-"`
 }
 
 type CellSnapshot struct {
@@ -116,6 +123,7 @@ type Run struct {
 	ActorID            string                   `json:"actor_id"`
 	TriggerType        string                   `json:"trigger_type"`
 	TriggerOperationID string                   `json:"trigger_operation_id,omitempty"`
+	ScheduledFor       *time.Time               `json:"scheduled_for,omitempty"`
 	Status             string                   `json:"status"`
 	BaseVersion        int64                    `json:"base_version"`
 	Action             ActionDefinition         `json:"action"`

@@ -2127,3 +2127,116 @@ func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
 		t.Fatalf("automation audit count=%d, %v", auditCount, err)
 	}
 }
+
+func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("schedule-user-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "scheduled automation", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	config := staticAISettings{
+		"automation.enabled":                true,
+		"automation.max_cells_per_run":      float64(1000),
+		"automation.max_runs_per_hour":      float64(1000),
+		"automation.scheduler_poll_seconds": float64(5),
+	}
+	service := automation.NewService(pool, config, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	item, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "평일 상태 갱신", Enabled: true, IdempotencyKey: "schedule-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "*/5 * * * MON-FRI", Timezone: "Asia/Seoul"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "B1", Value: json.RawMessage(`"scheduled"`)},
+	})
+	if err != nil || item.NextRunAt == nil || item.Trigger.Cron != "*/5 * * * MON-FRI" || item.Trigger.Timezone != "Asia/Seoul" {
+		t.Fatalf("scheduled automation=%#v, %v", item, err)
+	}
+	now := time.Now().UTC().Truncate(time.Minute)
+	firstDue := now.Add(-10 * time.Minute)
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, firstDue); err != nil {
+		t.Fatal(err)
+	}
+	results, err := service.RunDueSchedules(ctx, now, 10)
+	if err != nil || len(results) != 1 || results[0].Run.Status != automation.StatusSucceeded || results[0].Run.ScheduledFor == nil || !results[0].Run.ScheduledFor.Equal(firstDue) || results[0].Operation.ServerVersion != 2 {
+		t.Fatalf("first scheduled results=%#v, %v", results, err)
+	}
+	selected, _ := cellrange.Parse("B1")
+	cells, err := repository.ReadRange(ctx, book.Sheets[0].ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"scheduled"` {
+		t.Fatalf("scheduled cells=%#v, %v", cells, err)
+	}
+	stored, err := service.Get(ctx, item.ID)
+	if err != nil || stored.NextRunAt == nil || !stored.NextRunAt.After(now) {
+		t.Fatalf("advanced schedule=%#v, %v", stored, err)
+	}
+	duplicateTick, err := service.RunDueSchedules(ctx, now, 10)
+	if err != nil || len(duplicateTick) != 0 {
+		t.Fatalf("duplicate due tick=%#v, %v", duplicateTick, err)
+	}
+	secondDue := now.Add(-5 * time.Minute)
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, secondDue); err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := service.RunDueSchedules(ctx, now, 10)
+	if err != nil || len(skipped) != 1 || skipped[0].Run.Status != automation.StatusSkipped || skipped[0].Operation.OperationID != "" {
+		t.Fatalf("no-change schedule=%#v, %v", skipped, err)
+	}
+	after, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil || after.Version != 2 {
+		t.Fatalf("skipped schedule changed workbook=%#v, %v", after, err)
+	}
+	runs, err := service.ListRuns(ctx, item.ID, 10)
+	if err != nil || len(runs) != 2 || runs[0].Status != automation.StatusSkipped || runs[1].Status != automation.StatusSucceeded {
+		t.Fatalf("scheduled run history=%#v, %v", runs, err)
+	}
+	backgroundItem, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "백그라운드 예약 실행", Enabled: true, IdempotencyKey: "schedule-background-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "0 * * * *", Timezone: "UTC"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "C1", Value: json.RawMessage(`"background"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backgroundDue := now.Add(-time.Minute)
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, backgroundItem.ID, backgroundDue); err != nil {
+		t.Fatal(err)
+	}
+	completed := make(chan automation.ExecutionResult, 1)
+	service.SetScheduledExecutionListener(func(result automation.ExecutionResult) { completed <- result })
+	schedulerContext, stopScheduler := context.WithCancel(ctx)
+	schedulerDone := make(chan struct{})
+	go func() {
+		service.RunScheduler(schedulerContext)
+		close(schedulerDone)
+	}()
+	select {
+	case result := <-completed:
+		if result.Run.AutomationID != backgroundItem.ID || result.Run.TriggerType != automation.TriggerSchedule || result.Run.Status != automation.StatusSucceeded {
+			t.Fatalf("background schedule result=%#v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("background scheduler did not execute the due automation")
+	}
+	stopScheduler()
+	<-schedulerDone
+	selected, _ = cellrange.Parse("C1")
+	cells, err = repository.ReadRange(ctx, book.Sheets[0].ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"background"` {
+		t.Fatalf("background scheduled cells=%#v, %v", cells, err)
+	}
+	var auditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_type='automation' AND actor_id=$1 AND action IN ('automation.run','automation.run.skip') AND resource_id IN (SELECT id::text FROM automation_runs WHERE workbook_id=$2)`, "system:scheduler", book.ID).Scan(&auditCount); err != nil || auditCount != 3 {
+		t.Fatalf("scheduled audit count=%d, %v", auditCount, err)
+	}
+}

@@ -46,9 +46,14 @@ func (f *fakeAIOrchestrator) Undo(_ context.Context, _ string, _ ai.ApprovalInpu
 }
 
 type fakeAutomationService struct {
-	item         automation.Automation
-	run          automation.Run
-	triggerCalls int
+	item              automation.Automation
+	run               automation.Run
+	triggerCalls      int
+	scheduledListener func(automation.ExecutionResult)
+}
+
+func (f *fakeAutomationService) SetScheduledExecutionListener(listener func(automation.ExecutionResult)) {
+	f.scheduledListener = listener
 }
 
 func (f *fakeAutomationService) Create(_ context.Context, workbookID, actorID string, input automation.CreateInput) (automation.Automation, error) {
@@ -760,6 +765,12 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	if triggerSchema["type"] != "object" || actionSchema["type"] != "object" {
 		t.Fatalf("automation create schema=%#v", createTool.InputSchema)
 	}
+	triggerProperties, _ := triggerSchema["properties"].(map[string]any)
+	triggerType, _ := triggerProperties["type"].(map[string]any)
+	triggerEnums, _ := triggerType["enum"].([]string)
+	if triggerProperties["cron"] == nil || triggerProperties["timezone"] == nil || !reflect.DeepEqual(triggerEnums, []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule}) {
+		t.Fatalf("automation schedule schema=%#v", triggerSchema)
+	}
 	for _, expectation := range []struct {
 		method string
 		path   string
@@ -785,6 +796,9 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	service := &fakeAutomationService{}
 	server := httptest.NewServer(NewPlatformWithServices(repository, nil, nil, nil, nil, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	defer server.Close()
+	if service.scheduledListener == nil {
+		t.Fatal("scheduled automation collaboration listener was not registered")
+	}
 	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "Automation API"}, http.StatusCreated)
 	created := request[automation.Automation](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/automations", map[string]any{
 		"name": "수동 상태 변경", "enabled": true, "idempotency_key": "create-automation",

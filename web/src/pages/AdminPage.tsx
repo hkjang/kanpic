@@ -32,7 +32,7 @@ function SettingsPanel(){
   const byKey=useMemo(()=>new Map(settings.data?.items.map(item=>[item.key,item])),[settings.data])
   const oidcKeys=['auth.oidc.enabled','auth.oidc.issuer_url','auth.oidc.client_id','auth.oidc.client_secret','auth.oidc.scopes','auth.oidc.admin_roles','auth.oidc.ca_pem','server.public_url']
   const aiKeys=['ai.enabled','ai.gateway_url','ai.model','ai.api_key','ai.timeout_seconds','ai.max_input_cells','ai.max_changes','ai.ca_pem']
-  const automationKeys=['automation.enabled','automation.max_cells_per_run','automation.max_runs_per_hour']
+  const automationKeys=['automation.enabled','automation.max_cells_per_run','automation.max_runs_per_hour','automation.scheduler_poll_seconds']
   return <main className="console-content"><div className="content-title"><div><span className="eyebrow">PLATFORM CONFIGURATION</span><h1>시스템 설정</h1><p>서비스 설정을 변경하고 저장된 버전을 검증·복원합니다.</p></div><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 설정 추가</button></div>
     {message&&<div className="result-banner"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     <section className="admin-card oidc-card"><div className="card-heading"><div className="card-icon"><ShieldCheck/></div><div><h2>Keycloak OIDC 간편 연결</h2><p>Public Client는 secret 없이, Confidential Client는 Client Secret과 PKCE로 연결합니다.</p></div><span className={byKey.get('auth.oidc.enabled')?.value?'enabled-badge':'disabled-badge'}>{byKey.get('auth.oidc.enabled')?.value?'사용 중':'사용 안 함'}</span></div>
@@ -43,7 +43,7 @@ function SettingsPanel(){
       <div className="settings-form-grid">{aiKeys.map(key=>{const item=byKey.get(key);return item?<SettingField key={key} item={item} onSave={value=>save(item,value)}/>:null})}</div>
       <div className="card-actions"><button className="secondary" onClick={()=>validate.mutate()} disabled={validate.isPending}><CheckCircle2/> 설정 검증</button><button className="primary" onClick={()=>test.mutate()} disabled={test.isPending}><RefreshCw className={test.isPending?'spin':''}/> Gateway 연결 테스트</button></div>
     </section>
-    <section className="admin-card oidc-card"><div className="card-heading"><div className="card-icon"><Workflow/></div><div><h2>워크북 자동화 실행 정책</h2><p>PostgreSQL 작업 로그를 사용하는 수동·셀 변경 자동화의 실행 범위와 시간당 한도를 설정합니다.</p></div><span className={byKey.get('automation.enabled')?.value?'enabled-badge':'disabled-badge'}>{byKey.get('automation.enabled')?.value?'사용 중':'사용 안 함'}</span></div>
+    <section className="admin-card oidc-card"><div className="card-heading"><div className="card-icon"><Workflow/></div><div><h2>워크북 자동화 실행 정책</h2><p>PostgreSQL 작업 로그를 사용하는 수동·셀 변경·Cron 스케줄 자동화의 실행 범위, 시간당 한도와 확인 주기를 설정합니다.</p></div><span className={byKey.get('automation.enabled')?.value?'enabled-badge':'disabled-badge'}>{byKey.get('automation.enabled')?.value?'사용 중':'사용 안 함'}</span></div>
       <div className="settings-form-grid">{automationKeys.map(key=>{const item=byKey.get(key);return item?<SettingField key={key} item={item} onSave={value=>save(item,value)}/>:null})}</div>
       <div className="card-actions"><button className="secondary" onClick={()=>validate.mutate()} disabled={validate.isPending}><CheckCircle2/> 정책 검증</button><button className="primary" onClick={()=>test.mutate()} disabled={test.isPending}><RefreshCw className={test.isPending?'spin':''}/> 저장소 준비 상태 테스트</button></div>
     </section>

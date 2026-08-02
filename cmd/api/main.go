@@ -64,6 +64,9 @@ func main() {
 	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger)
 	address := ":8080"
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
+	runtimeContext, stopRuntime := context.WithCancel(context.Background())
+	defer stopRuntime()
+	go automationService.RunScheduler(runtimeContext)
 
 	go func() {
 		logger.Info("kanpic API started", "address", address, "storage", "postgres")
@@ -76,6 +79,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	stopRuntime()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {

@@ -118,9 +118,9 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.ai.action.get", "AI 계획, 변경 미리보기, 모델·도구 감사 이력과 적용 상태를 조회합니다.", "ai.use", requiredProps("action_id", "string")),
 	tool("spreadsheet.ai.action.approve", "미리 본 AI 수식 또는 데이터 정제 계획을 revision과 워크북 버전을 확인한 뒤 원자적으로 적용합니다.", "ai.use", aiExecutionSchema()),
 	tool("spreadsheet.ai.action.undo", "승인된 AI 작업을 사용자별 작업 이력으로 안전하게 되돌립니다.", "ai.use", aiExecutionSchema()),
-	tool("spreadsheet.automation.list", "워크북의 수동·셀 변경 자동화 정의와 revision을 조회합니다.", "automation.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.automation.list", "워크북의 수동·셀 변경·Cron 스케줄 자동화 정의, revision과 다음 실행 시각을 조회합니다.", "automation.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.automation.get", "자동화 트리거와 셀 작업 정의를 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
-	tool("spreadsheet.automation.create", "수동 또는 셀 변경 트리거와 원자적 값·수식 작업을 멱등 생성합니다.", "automation.write", automationCreateSchema()),
+	tool("spreadsheet.automation.create", "수동, 셀 변경 또는 시간대 기반 Cron 트리거와 원자적 값·수식 작업을 멱등 생성합니다.", "automation.write", automationCreateSchema()),
 	tool("spreadsheet.automation.update", "자동화 정의와 활성 상태를 revision 기반으로 변경합니다.", "automation.write", automationUpdateSchema()),
 	tool("spreadsheet.automation.delete", "자동화를 revision 기반으로 비활성화하고 삭제합니다.", "automation.write", automationDeleteSchema()),
 	tool("spreadsheet.automation.test", "최신 서버 셀을 사용해 쓰기 없이 자동화 변경 미리보기를 검증합니다.", "automation.read", requiredProps("automation_id", "string")),
@@ -1301,9 +1301,11 @@ func automationTriggerSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"type":     map[string]any{"type": "string", "enum": []string{automation.TriggerManual, automation.TriggerCellChange}},
+			"type":     map[string]any{"type": "string", "enum": []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule}},
 			"sheet_id": map[string]any{"type": "string"},
 			"range":    map[string]any{"type": "string"},
+			"cron":     map[string]any{"type": "string", "description": "표준 5필드 Cron 또는 @hourly/@daily/@weekly/@monthly/@yearly"},
+			"timezone": map[string]any{"type": "string", "description": "IANA 시간대. 생략하면 UTC"},
 		},
 		"required": []string{"type"},
 	}
