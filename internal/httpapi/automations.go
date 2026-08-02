@@ -2,7 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +15,8 @@ import (
 	"kanpic/internal/automation"
 	"kanpic/internal/workbook"
 )
+
+const maxAutomationWebhookPayload = 1 << 20
 
 func (s *Server) listAutomations(w http.ResponseWriter, r *http.Request) {
 	items, err := s.automations.List(r.Context(), r.PathValue("workbookId"))
@@ -79,6 +86,8 @@ func (s *Server) executeAutomationAction(w http.ResponseWriter, r *http.Request)
 		phase, action = "test", strings.TrimSuffix(action, ":test")
 	case strings.HasSuffix(action, ":run"):
 		phase, action = "run", strings.TrimSuffix(action, ":run")
+	case strings.HasSuffix(action, ":webhook"):
+		phase, action = "webhook", strings.TrimSuffix(action, ":webhook")
 	default:
 		s.writeAutomationError(w, r, automation.ErrNotFound)
 		return
@@ -93,6 +102,10 @@ func (s *Server) executeAutomationAction(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		writeJSON(w, http.StatusOK, preview)
+		return
+	}
+	if phase == "webhook" {
+		s.invokeAutomationWebhook(w, r, action)
 		return
 	}
 	item, err := s.automations.Get(r.Context(), action)
@@ -117,6 +130,59 @@ func (s *Server) executeAutomationAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.publishAutomationResult(input.ActorID, input.ClientID, result)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) invokeAutomationWebhook(w http.ResponseWriter, r *http.Request, automationID string) {
+	principal, ok := apiPrincipal(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "api_key_required", "message": "웹훅 호출에는 개인 API 키 Bearer 인증이 필요합니다."}})
+		return
+	}
+	if !principal.Allows("automation.webhook.invoke") {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "insufficient_scope", "message": "automation.webhook.invoke scope가 필요합니다."}})
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 200 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 헤더는 1~200자여야 합니다."}})
+		return
+	}
+	mediaType, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaErr != nil || mediaType != "application/json" {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"error": map[string]string{"code": "unsupported_media_type", "message": "Content-Type application/json이 필요합니다."}})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAutomationWebhookPayload)
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "payload_too_large", "message": "웹훅 payload는 1MiB 이하여야 합니다."}})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_payload", "message": "웹훅 payload를 읽을 수 없습니다."}})
+		return
+	}
+	if len(payload) > 0 && !json.Valid(payload) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_payload", "message": "웹훅 payload는 유효한 JSON이어야 합니다."}})
+		return
+	}
+	digest := sha256.Sum256(payload)
+	result, err := s.automations.Run(r.Context(), automationID, automation.RunInput{
+		ActorID:        principal.UserID,
+		ClientID:       "webhook:" + principal.KeyID,
+		IdempotencyKey: idempotencyKey,
+		TriggerType:    automation.TriggerWebhook,
+		TriggerKeyID:   principal.KeyID,
+		PayloadDigest:  hex.EncodeToString(digest[:]),
+		PayloadBytes:   len(payload),
+	})
+	if err != nil {
+		s.writeAutomationError(w, r, err)
+		return
+	}
+	s.publishAutomationResult(principal.UserID, "webhook:"+principal.KeyID, result)
 	writeJSON(w, http.StatusOK, result)
 }
 

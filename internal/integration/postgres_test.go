@@ -4,6 +4,8 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2164,6 +2167,24 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Minute)
 	firstDue := now.Add(-10 * time.Minute)
+	deletedBook, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "deleted scheduled automation", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedItem, err := service.Create(ctx, deletedBook.ID, actor, automation.CreateInput{
+		Name: "삭제된 워크북 예약", Enabled: true, IdempotencyKey: "deleted-schedule-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "*/5 * * * *", Timezone: "UTC"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: deletedBook.Sheets[0].ID, Range: "A1", Value: json.RawMessage(`"must-not-run"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, deletedItem.ID, firstDue); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteWorkbook(ctx, deletedBook.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, firstDue); err != nil {
 		t.Fatal(err)
 	}
@@ -2238,5 +2259,80 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	var auditCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_type='automation' AND actor_id=$1 AND action IN ('automation.run','automation.run.skip') AND resource_id IN (SELECT id::text FROM automation_runs WHERE workbook_id=$2)`, "system:scheduler", book.ID).Scan(&auditCount); err != nil || auditCount != 3 {
 		t.Fatalf("scheduled audit count=%d, %v", auditCount, err)
+	}
+}
+
+func TestPostgresWebhookAutomationStoresOnlyPayloadMetadataAndDeduplicates(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("webhook-user-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "webhook automation", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	keys := apikey.New(pool)
+	key, err := keys.Create(ctx, actor, apikey.CreateInput{Name: "webhook integration", Scopes: []string{"automation.webhook.invoke"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keys.Revoke(context.Background(), key.ID, actor, false)
+	service := automation.NewService(pool, staticAISettings{
+		"automation.enabled":           true,
+		"automation.max_cells_per_run": float64(1000),
+		"automation.max_runs_per_hour": float64(1000),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	item, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "외부 승인 수신", Enabled: true, IdempotencyKey: "webhook-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerWebhook},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "B1", Value: json.RawMessage(`"received"`)},
+	})
+	if err != nil || item.Trigger.Type != automation.TriggerWebhook || item.NextRunAt != nil {
+		t.Fatalf("webhook automation=%#v, %v", item, err)
+	}
+	payload := []byte(`{"event":"approved","sensitive":"not-persisted"}`)
+	digest := sha256.Sum256(payload)
+	digestText := hex.EncodeToString(digest[:])
+	input := automation.RunInput{ActorID: actor, IdempotencyKey: "delivery-1", TriggerType: automation.TriggerWebhook, TriggerKeyID: key.ID, PayloadDigest: digestText, PayloadBytes: len(payload)}
+	result, err := service.Run(ctx, item.ID, input)
+	if err != nil || result.Run.Status != automation.StatusSucceeded || result.Run.TriggerKeyID != key.ID || result.Run.PayloadDigest != digestText || result.Run.PayloadBytes != len(payload) || result.Operation.ServerVersion != 2 {
+		t.Fatalf("webhook result=%#v, %v", result, err)
+	}
+	duplicate, err := service.Run(ctx, item.ID, automation.RunInput{ActorID: actor, IdempotencyKey: "delivery-1", TriggerType: automation.TriggerWebhook, TriggerKeyID: key.ID, PayloadDigest: strings.Repeat("0", 64), PayloadBytes: 2})
+	if err != nil || !duplicate.Run.Duplicate || duplicate.Run.ID != result.Run.ID || duplicate.Run.PayloadDigest != digestText {
+		t.Fatalf("webhook duplicate=%#v, %v", duplicate, err)
+	}
+	skipped, err := service.Run(ctx, item.ID, automation.RunInput{ActorID: actor, IdempotencyKey: "delivery-2", TriggerType: automation.TriggerWebhook, TriggerKeyID: key.ID, PayloadDigest: digestText, PayloadBytes: len(payload)})
+	if err != nil || skipped.Run.Status != automation.StatusSkipped || skipped.Operation.OperationID != "" {
+		t.Fatalf("webhook no-change=%#v, %v", skipped, err)
+	}
+	runs, err := service.ListRuns(ctx, item.ID, 10)
+	if err != nil || len(runs) != 2 || runs[0].Status != automation.StatusSkipped || runs[1].Status != automation.StatusSucceeded {
+		t.Fatalf("webhook runs=%#v, %v", runs, err)
+	}
+	var storedDigest, storedKey string
+	var storedBytes, rawPayloadMatches int
+	if err := pool.QueryRow(ctx, `SELECT metadata->>'payload_digest',metadata->>'trigger_key_id',(metadata->>'payload_bytes')::int FROM audit_logs WHERE resource_type='automation' AND resource_id=$1 AND action='automation.run'`, result.Run.ID).Scan(&storedDigest, &storedKey, &storedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id=$1 AND (action_snapshot::text LIKE '%not-persisted%' OR cells_snapshot::text LIKE '%not-persisted%' OR expected_snapshot::text LIKE '%not-persisted%')`, item.ID).Scan(&rawPayloadMatches); err != nil {
+		t.Fatal(err)
+	}
+	if storedDigest != digestText || storedKey != key.ID || storedBytes != len(payload) || rawPayloadMatches != 0 {
+		t.Fatalf("webhook audit digest=%q key=%q bytes=%d raw_matches=%d", storedDigest, storedKey, storedBytes, rawPayloadMatches)
+	}
+	_, err = service.Run(ctx, item.ID, automation.RunInput{ActorID: actor, IdempotencyKey: "missing-key", TriggerType: automation.TriggerWebhook, PayloadDigest: digestText, PayloadBytes: len(payload)})
+	if !errors.Is(err, automation.ErrInvalid) {
+		t.Fatalf("webhook missing key error=%v", err)
 	}
 }

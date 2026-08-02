@@ -3,6 +3,7 @@ package automation
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,8 @@ const (
 	defaultSchedulerPoll     = 15 * time.Second
 	defaultSchedulerBatch    = 50
 	definitionColumns        = `id::text,workbook_id::text,name,enabled,trigger_definition,action_definition,revision,idempotency_key,created_by,updated_by,created_at,updated_at,next_run_at`
-	runColumns               = `id::text,automation_id::text,workbook_id::text,actor_id,idempotency_key,trigger_type,coalesce(trigger_operation_id::text,''),scheduled_for,status,base_version,action_snapshot,cells_snapshot,expected_snapshot,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,started_at,completed_at,updated_at`
+	dueDefinitionColumns     = `a.id::text,a.workbook_id::text,a.name,a.enabled,a.trigger_definition,a.action_definition,a.revision,a.idempotency_key,a.created_by,a.updated_by,a.created_at,a.updated_at,a.next_run_at`
+	runColumns               = `id::text,automation_id::text,workbook_id::text,actor_id,idempotency_key,trigger_type,coalesce(trigger_operation_id::text,''),scheduled_for,coalesce(trigger_key_id::text,''),payload_digest,payload_bytes,status,base_version,action_snapshot,cells_snapshot,expected_snapshot,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,started_at,completed_at,updated_at`
 	scheduledAutomationActor = "system:scheduler"
 )
 
@@ -210,8 +212,8 @@ func (s *Service) Preview(ctx context.Context, id string) (Preview, error) {
 }
 
 func (s *Service) Run(ctx context.Context, id string, input RunInput) (ExecutionResult, error) {
-	if strings.TrimSpace(input.ActorID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
-		return ExecutionResult{}, fmt.Errorf("%w: actor and idempotency_key are required", ErrInvalid)
+	if strings.TrimSpace(input.ActorID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" || len(input.IdempotencyKey) > 200 {
+		return ExecutionResult{}, fmt.Errorf("%w: actor and a 1 to 200 character idempotency_key are required", ErrInvalid)
 	}
 	if input.ScheduledFor != nil {
 		if existing, err := s.getRunBySchedule(ctx, id, *input.ScheduledFor); err == nil {
@@ -225,6 +227,9 @@ func (s *Service) Run(ctx context.Context, id string, input RunInput) (Execution
 		}
 	}
 	if existing, err := s.getRunByKey(ctx, id, input.ActorID, input.IdempotencyKey); err == nil {
+		if input.TriggerType != "" && existing.TriggerType != input.TriggerType {
+			return ExecutionResult{}, fmt.Errorf("%w: idempotency_key was already used by another trigger", ErrInvalid)
+		}
 		if existing.Status == StatusRunning {
 			return s.executeRun(ctx, existing, input.ClientID)
 		}
@@ -262,7 +267,7 @@ func (s *Service) Run(ctx context.Context, id string, input RunInput) (Execution
 	if triggerType == "" {
 		triggerType = TriggerManual
 	}
-	if triggerType != TriggerManual && triggerType != TriggerCellChange && triggerType != TriggerSchedule {
+	if triggerType != TriggerManual && triggerType != TriggerCellChange && triggerType != TriggerSchedule && triggerType != TriggerWebhook {
 		return ExecutionResult{}, fmt.Errorf("%w: unsupported run trigger", ErrInvalid)
 	}
 	if triggerType == TriggerCellChange && item.Trigger.Type != TriggerCellChange {
@@ -271,11 +276,20 @@ func (s *Service) Run(ctx context.Context, id string, input RunInput) (Execution
 	if triggerType == TriggerSchedule && (item.Trigger.Type != TriggerSchedule || input.ScheduledFor == nil) {
 		return ExecutionResult{}, fmt.Errorf("%w: scheduled run requires a schedule trigger and due time", ErrInvalid)
 	}
+	if triggerType == TriggerWebhook {
+		if item.Trigger.Type != TriggerWebhook || strings.TrimSpace(input.TriggerKeyID) == "" {
+			return ExecutionResult{}, fmt.Errorf("%w: webhook run requires a webhook trigger and API key", ErrInvalid)
+		}
+		decoded, digestErr := hex.DecodeString(input.PayloadDigest)
+		if digestErr != nil || len(decoded) != 32 || input.PayloadBytes < 0 || input.PayloadBytes > 1<<20 {
+			return ExecutionResult{}, fmt.Errorf("%w: invalid webhook payload metadata", ErrInvalid)
+		}
+	}
 	if err := s.checkRate(ctx, item.WorkbookID, config.MaxRunsPerHour); err != nil {
 		return ExecutionResult{}, err
 	}
 	preview, cells, expected, err := s.buildExecution(ctx, item, config.MaxCellsPerRun)
-	skipped := triggerType == TriggerSchedule && errors.Is(err, ErrNoChanges)
+	skipped := triggerType != TriggerManual && errors.Is(err, ErrNoChanges)
 	if err != nil && !skipped {
 		return ExecutionResult{}, err
 	}
@@ -285,7 +299,7 @@ func (s *Service) Run(ctx context.Context, id string, input RunInput) (Execution
 	if skipped {
 		status, completedAt = StatusSkipped, &now
 	}
-	run := Run{ID: identity.New(), AutomationID: item.ID, WorkbookID: item.WorkbookID, ActorID: input.ActorID, TriggerType: triggerType, TriggerOperationID: input.TriggerOperationID, ScheduledFor: cloneTime(input.ScheduledFor), Status: status, BaseVersion: preview.BaseVersion, Action: item.Action, StartedAt: now, CompletedAt: completedAt, UpdatedAt: now, cells: cells, expected: expected, idempotencyKey: input.IdempotencyKey}
+	run := Run{ID: identity.New(), AutomationID: item.ID, WorkbookID: item.WorkbookID, ActorID: input.ActorID, TriggerType: triggerType, TriggerOperationID: input.TriggerOperationID, ScheduledFor: cloneTime(input.ScheduledFor), TriggerKeyID: input.TriggerKeyID, PayloadDigest: input.PayloadDigest, PayloadBytes: input.PayloadBytes, Status: status, BaseVersion: preview.BaseVersion, Action: item.Action, StartedAt: now, CompletedAt: completedAt, UpdatedAt: now, cells: cells, expected: expected, idempotencyKey: input.IdempotencyKey}
 	created, err := s.insertRun(ctx, run)
 	if err != nil {
 		if isUniqueViolation(err) && run.TriggerOperationID != "" {
@@ -336,7 +350,7 @@ func (s *Service) insertRun(ctx context.Context, run Run) (bool, error) {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	command, err := tx.Exec(ctx, `INSERT INTO automation_runs(id,automation_id,workbook_id,actor_id,idempotency_key,trigger_type,trigger_operation_id,scheduled_for,status,base_version,action_snapshot,cells_snapshot,expected_snapshot,started_at,completed_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8,$9,$10,$11,$12,$13,$14,$15,$14) ON CONFLICT(automation_id,actor_id,idempotency_key) DO NOTHING`, run.ID, run.AutomationID, run.WorkbookID, run.ActorID, run.idempotencyKey, run.TriggerType, run.TriggerOperationID, run.ScheduledFor, run.Status, run.BaseVersion, actionJSON, cellsJSON, expectedJSON, run.StartedAt, run.CompletedAt)
+	command, err := tx.Exec(ctx, `INSERT INTO automation_runs(id,automation_id,workbook_id,actor_id,idempotency_key,trigger_type,trigger_operation_id,scheduled_for,trigger_key_id,payload_digest,payload_bytes,status,base_version,action_snapshot,cells_snapshot,expected_snapshot,started_at,completed_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8,nullif($9,'')::uuid,$10,$11,$12,$13,$14,$15,$16,$17,$18,$17) ON CONFLICT(automation_id,actor_id,idempotency_key) DO NOTHING`, run.ID, run.AutomationID, run.WorkbookID, run.ActorID, run.idempotencyKey, run.TriggerType, run.TriggerOperationID, run.ScheduledFor, run.TriggerKeyID, run.PayloadDigest, run.PayloadBytes, run.Status, run.BaseVersion, actionJSON, cellsJSON, expectedJSON, run.StartedAt, run.CompletedAt)
 	if err != nil {
 		return false, err
 	}
@@ -348,7 +362,7 @@ func (s *Service) insertRun(ctx context.Context, run Run) (bool, error) {
 		if run.Status == StatusFailed {
 			action = "automation.run.failed"
 		}
-		if err := insertAudit(ctx, tx, run.ActorID, action, run.ID, map[string]any{"automation_id": run.AutomationID, "trigger": run.TriggerType, "scheduled_for": run.ScheduledFor, "base_version": run.BaseVersion, "error": run.ErrorMessage}, run.UpdatedAt); err != nil {
+		if err := insertAudit(ctx, tx, run.ActorID, action, run.ID, runAuditMetadata(run, map[string]any{"base_version": run.BaseVersion, "error": run.ErrorMessage}), run.UpdatedAt); err != nil {
 			return false, err
 		}
 	}
@@ -472,7 +486,7 @@ func (s *Service) RunDueSchedules(ctx context.Context, now time.Time, limit int)
 		limit = defaultSchedulerBatch
 	}
 	now = now.UTC()
-	rows, err := s.pool.Query(ctx, `SELECT `+definitionColumns+` FROM automations WHERE enabled AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at<=$1 ORDER BY next_run_at,id LIMIT $2`, now, limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+dueDefinitionColumns+` FROM automations a JOIN workbooks w ON w.id=a.workbook_id WHERE a.enabled AND a.deleted_at IS NULL AND w.deleted_at IS NULL AND a.next_run_at IS NOT NULL AND a.next_run_at<=$1 ORDER BY a.next_run_at,a.id LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +638,7 @@ func (s *Service) executeRun(ctx context.Context, run Run, clientID string) (Exe
 		}
 		return ExecutionResult{}, ErrRevision
 	}
-	if err := insertAudit(ctx, tx, run.ActorID, "automation.run", run.ID, map[string]any{"automation_id": run.AutomationID, "trigger": run.TriggerType, "operation_id": result.OperationID, "server_version": result.ServerVersion}, now); err != nil {
+	if err := insertAudit(ctx, tx, run.ActorID, "automation.run", run.ID, runAuditMetadata(run, map[string]any{"operation_id": result.OperationID, "server_version": result.ServerVersion}), now); err != nil {
 		return ExecutionResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -730,8 +744,10 @@ func (s *Service) validateDefinition(ctx context.Context, workbookID, name strin
 			return "", trigger, action, err
 		}
 		trigger.Cron, trigger.Timezone = schedule.Expression, schedule.Timezone
+	case TriggerWebhook:
+		trigger.SheetID, trigger.Range, trigger.Cron, trigger.Timezone = "", "", "", ""
 	default:
-		return "", trigger, action, fmt.Errorf("%w: trigger type must be manual, cell_change or schedule", ErrInvalid)
+		return "", trigger, action, fmt.Errorf("%w: trigger type must be manual, cell_change, schedule or webhook", ErrInvalid)
 	}
 	if _, ok := sheets[action.SheetID]; !ok {
 		return "", trigger, action, fmt.Errorf("%w: action sheet must belong to the workbook", ErrInvalid)
@@ -805,7 +821,7 @@ func (s *Service) markRunFailed(run Run, runErr error) {
 		var command pgconn.CommandTag
 		command, err = tx.Exec(ctx, `UPDATE automation_runs SET status='failed',error_message=$2,completed_at=$3,updated_at=$3 WHERE id=$1 AND status='running'`, run.ID, errorMessage, now)
 		if err == nil && command.RowsAffected() == 1 {
-			err = insertAudit(ctx, tx, run.ActorID, "automation.run.failed", run.ID, map[string]any{"automation_id": run.AutomationID, "trigger": run.TriggerType, "scheduled_for": run.ScheduledFor, "base_version": run.BaseVersion, "error": errorMessage}, now)
+			err = insertAudit(ctx, tx, run.ActorID, "automation.run.failed", run.ID, runAuditMetadata(run, map[string]any{"base_version": run.BaseVersion, "error": errorMessage}), now)
 		}
 		if err == nil {
 			err = tx.Commit(ctx)
@@ -841,7 +857,7 @@ func scanAutomation(row scanner) (Automation, error) {
 func scanRun(row scanner) (Run, error) {
 	var item Run
 	var actionJSON, cellsJSON, expectedJSON, operationJSON, undoJSON []byte
-	err := row.Scan(&item.ID, &item.AutomationID, &item.WorkbookID, &item.ActorID, &item.idempotencyKey, &item.TriggerType, &item.TriggerOperationID, &item.ScheduledFor, &item.Status, &item.BaseVersion, &actionJSON, &cellsJSON, &expectedJSON, &item.OperationID, &operationJSON, &item.undoKey, &item.UndoOperationID, &undoJSON, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.AutomationID, &item.WorkbookID, &item.ActorID, &item.idempotencyKey, &item.TriggerType, &item.TriggerOperationID, &item.ScheduledFor, &item.TriggerKeyID, &item.PayloadDigest, &item.PayloadBytes, &item.Status, &item.BaseVersion, &actionJSON, &cellsJSON, &expectedJSON, &item.OperationID, &operationJSON, &item.undoKey, &item.UndoOperationID, &undoJSON, &item.ErrorMessage, &item.StartedAt, &item.CompletedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
@@ -1020,6 +1036,23 @@ func mapConstraintError(err error) error {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func runAuditMetadata(run Run, values map[string]any) map[string]any {
+	metadata := map[string]any{
+		"automation_id": run.AutomationID,
+		"trigger":       run.TriggerType,
+		"scheduled_for": run.ScheduledFor,
+	}
+	if run.TriggerKeyID != "" {
+		metadata["trigger_key_id"] = run.TriggerKeyID
+		metadata["payload_digest"] = run.PayloadDigest
+		metadata["payload_bytes"] = run.PayloadBytes
+	}
+	for key, value := range values {
+		metadata[key] = value
+	}
+	return metadata
 }
 
 func sortPreview(changes []PreviewChange) {

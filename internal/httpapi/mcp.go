@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,6 +127,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.automation.delete", "자동화를 revision 기반으로 비활성화하고 삭제합니다.", "automation.write", automationDeleteSchema()),
 	tool("spreadsheet.automation.test", "최신 서버 셀을 사용해 쓰기 없이 자동화 변경 미리보기를 검증합니다.", "automation.read", requiredProps("automation_id", "string")),
 	tool("spreadsheet.automation.run", "자동화를 멱등 실행하고 하나의 서버 권위 셀 작업으로 반영합니다.", "automation.run", automationRunSchema()),
+	tool("spreadsheet.automation.webhook.invoke", "개인 API 키로 인증한 JSON webhook payload의 digest만 감사에 보존하고 자동화를 멱등 실행합니다.", "automation.webhook.invoke", automationWebhookSchema()),
 	tool("spreadsheet.automation.run.list", "자동화 실행·실패·Undo 이력을 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
 	tool("spreadsheet.automation.run.undo", "성공한 자동화 실행을 후속 변경과 충돌하지 않는 범위에서 되돌립니다.", "automation.run", automationUndoSchema()),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
@@ -877,6 +880,36 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.publishAutomationResult(actor, input.ClientID, result)
 		}
 		return result, err
+	case "spreadsheet.automation.webhook.invoke":
+		if s.automations == nil {
+			return nil, automation.ErrDisabled
+		}
+		principal, ok := apiPrincipal(r)
+		if !ok {
+			return nil, errors.New("API key authentication is required for webhook invocation")
+		}
+		payload := []byte{}
+		if value, exists := args["payload"]; exists {
+			var err error
+			payload, err = json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid webhook payload: %w", err)
+			}
+		}
+		if len(payload) > maxAutomationWebhookPayload {
+			return nil, errors.New("webhook payload exceeds 1MiB")
+		}
+		digest := sha256.Sum256(payload)
+		clientID := stringArg(args, "client_id")
+		if clientID == "" {
+			clientID = "webhook:" + principal.KeyID
+		}
+		input := automation.RunInput{ActorID: principal.UserID, ClientID: clientID, IdempotencyKey: stringArg(args, "idempotency_key"), TriggerType: automation.TriggerWebhook, TriggerKeyID: principal.KeyID, PayloadDigest: hex.EncodeToString(digest[:]), PayloadBytes: len(payload)}
+		result, err := s.automations.Run(ctx, stringArg(args, "automation_id"), input)
+		if err == nil {
+			s.publishAutomationResult(principal.UserID, input.ClientID, result)
+		}
+		return result, err
 	case "spreadsheet.automation.run.list":
 		if s.automations == nil {
 			return nil, automation.ErrDisabled
@@ -1301,13 +1334,26 @@ func automationTriggerSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"type":     map[string]any{"type": "string", "enum": []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule}},
+			"type":     map[string]any{"type": "string", "enum": []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule, automation.TriggerWebhook}},
 			"sheet_id": map[string]any{"type": "string"},
 			"range":    map[string]any{"type": "string"},
 			"cron":     map[string]any{"type": "string", "description": "표준 5필드 Cron 또는 @hourly/@daily/@weekly/@monthly/@yearly"},
 			"timezone": map[string]any{"type": "string", "description": "IANA 시간대. 생략하면 UTC"},
 		},
 		"required": []string{"type"},
+	}
+}
+
+func automationWebhookSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"automation_id":   map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"client_id":       map[string]any{"type": "string"},
+			"payload":         map[string]any{"description": "최대 1MiB JSON 값. 원문은 저장하지 않고 SHA-256과 byte 수만 기록합니다."},
+		},
+		"required": []string{"automation_id", "idempotency_key"},
 	}
 }
 

@@ -12,9 +12,11 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"kanpic/internal/ai"
+	"kanpic/internal/apikey"
 	"kanpic/internal/automation"
 	"kanpic/internal/workbook"
 )
@@ -50,6 +52,7 @@ type fakeAutomationService struct {
 	run               automation.Run
 	triggerCalls      int
 	scheduledListener func(automation.ExecutionResult)
+	lastRunInput      automation.RunInput
 }
 
 func (f *fakeAutomationService) SetScheduledExecutionListener(listener func(automation.ExecutionResult)) {
@@ -85,6 +88,15 @@ func (f *fakeAutomationService) Preview(_ context.Context, _ string) (automation
 	return automation.Preview{AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, BaseVersion: 1, Changes: []automation.PreviewChange{{Row: 1, Column: 2, Address: "B1", After: automation.CellSnapshot{Value: json.RawMessage(`"완료"`)}}}}, nil
 }
 func (f *fakeAutomationService) Run(_ context.Context, _ string, input automation.RunInput) (automation.ExecutionResult, error) {
+	f.lastRunInput = input
+	triggerType := input.TriggerType
+	if triggerType == "" {
+		triggerType = automation.TriggerManual
+	}
+	if triggerType == automation.TriggerWebhook {
+		f.run = automation.Run{ID: "automation-webhook-run", AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, ActorID: input.ActorID, TriggerType: triggerType, TriggerKeyID: input.TriggerKeyID, PayloadDigest: input.PayloadDigest, PayloadBytes: input.PayloadBytes, Status: automation.StatusSucceeded}
+		return automation.ExecutionResult{Run: f.run}, nil
+	}
 	operation := workbook.MutationResult{OperationID: "automation-operation", WorkbookID: f.item.WorkbookID, SheetID: f.item.Action.SheetID, BaseVersion: 1, ServerVersion: 2, AppliedCells: 1}
 	f.run = automation.Run{ID: "automation-run", AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, ActorID: input.ActorID, TriggerType: automation.TriggerManual, Status: automation.StatusSucceeded, OperationID: operation.OperationID, Operation: &operation}
 	return automation.ExecutionResult{Run: f.run, Operation: operation, Changes: []workbook.CellInput{{Row: 1, Column: 2, Value: json.RawMessage(`"완료"`)}}}, nil
@@ -742,15 +754,16 @@ func TestAIActionRESTAndMCPShareSafeExecutionContract(t *testing.T) {
 func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	t.Parallel()
 	expectedScopes := map[string]string{
-		"spreadsheet.automation.list":     "automation.read",
-		"spreadsheet.automation.get":      "automation.read",
-		"spreadsheet.automation.create":   "automation.write",
-		"spreadsheet.automation.update":   "automation.write",
-		"spreadsheet.automation.delete":   "automation.write",
-		"spreadsheet.automation.test":     "automation.read",
-		"spreadsheet.automation.run":      "automation.run",
-		"spreadsheet.automation.run.list": "automation.read",
-		"spreadsheet.automation.run.undo": "automation.run",
+		"spreadsheet.automation.list":           "automation.read",
+		"spreadsheet.automation.get":            "automation.read",
+		"spreadsheet.automation.create":         "automation.write",
+		"spreadsheet.automation.update":         "automation.write",
+		"spreadsheet.automation.delete":         "automation.write",
+		"spreadsheet.automation.test":           "automation.read",
+		"spreadsheet.automation.run":            "automation.run",
+		"spreadsheet.automation.webhook.invoke": "automation.webhook.invoke",
+		"spreadsheet.automation.run.list":       "automation.read",
+		"spreadsheet.automation.run.undo":       "automation.run",
 	}
 	for name, scope := range expectedScopes {
 		definition, found := findMCPTool(name)
@@ -768,8 +781,13 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	triggerProperties, _ := triggerSchema["properties"].(map[string]any)
 	triggerType, _ := triggerProperties["type"].(map[string]any)
 	triggerEnums, _ := triggerType["enum"].([]string)
-	if triggerProperties["cron"] == nil || triggerProperties["timezone"] == nil || !reflect.DeepEqual(triggerEnums, []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule}) {
+	if triggerProperties["cron"] == nil || triggerProperties["timezone"] == nil || !reflect.DeepEqual(triggerEnums, []string{automation.TriggerManual, automation.TriggerCellChange, automation.TriggerSchedule, automation.TriggerWebhook}) {
 		t.Fatalf("automation schedule schema=%#v", triggerSchema)
+	}
+	webhookTool, _ := findMCPTool("spreadsheet.automation.webhook.invoke")
+	webhookProperties, _ := webhookTool.InputSchema["properties"].(map[string]any)
+	if webhookProperties["payload"] == nil || webhookProperties["idempotency_key"] == nil {
+		t.Fatalf("automation webhook schema=%#v", webhookTool.InputSchema)
 	}
 	for _, expectation := range []struct {
 		method string
@@ -780,6 +798,7 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 		{http.MethodPost, "/api/v1/workbooks/book/automations", "automation.write"},
 		{http.MethodPost, "/api/v1/automations/id:test", "automation.read"},
 		{http.MethodPost, "/api/v1/automations/id:run", "automation.run"},
+		{http.MethodPost, "/api/v1/automations/id:webhook", "automation.webhook.invoke"},
 		{http.MethodPost, "/api/v1/automation-runs/run-id:undo", "automation.run"},
 		{http.MethodDelete, "/api/v1/automations/id?expected_revision=1", "automation.write"},
 	} {
@@ -798,6 +817,10 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	defer server.Close()
 	if service.scheduledListener == nil {
 		t.Fatal("scheduled automation collaboration listener was not registered")
+	}
+	unauthorizedWebhook := request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/automation-id:webhook", map[string]any{"event": "changed"}, http.StatusUnauthorized)
+	if errorValue, _ := unauthorizedWebhook["error"].(map[string]any); errorValue["code"] != "api_key_required" {
+		t.Fatalf("unauthorized webhook=%#v", unauthorizedWebhook)
 	}
 	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "Automation API"}, http.StatusCreated)
 	created := request[automation.Automation](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/automations", map[string]any{
@@ -836,6 +859,17 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	if mcpRun.Result.Structured.Run.Status != automation.StatusSucceeded || mcpRun.Result.Structured.Operation.OperationID != "automation-operation" {
 		t.Fatalf("MCP automation run=%#v", mcpRun)
 	}
+	mcpWebhook := request[struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 82, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.automation.webhook.invoke", "arguments": map[string]any{"automation_id": created.ID, "idempotency_key": "hook", "payload": map[string]any{"event": "changed"}}}}, http.StatusOK)
+	if !mcpWebhook.Result.IsError || len(mcpWebhook.Result.Content) != 1 || !strings.Contains(mcpWebhook.Result.Content[0].Text, "API key authentication") {
+		t.Fatalf("MCP webhook without key=%#v", mcpWebhook)
+	}
 	runs := request[struct {
 		Items []automation.Run `json:"items"`
 	}](t, server, http.MethodGet, "/api/v1/automations/"+created.ID+"/runs", nil, http.StatusOK)
@@ -851,6 +885,48 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 		t.Fatalf("cell-change automation trigger calls=%d", service.triggerCalls)
 	}
 	request[map[string]any](t, server, http.MethodDelete, "/api/v1/automations/"+created.ID+"?expected_revision=2", nil, http.StatusNoContent)
+}
+
+func TestAutomationWebhookRequiresScopedAPIKeyAndBoundsJSONPayload(t *testing.T) {
+	t.Parallel()
+	service := &fakeAutomationService{item: automation.Automation{ID: "hook-id", WorkbookID: "book-id", Trigger: automation.TriggerDefinition{Type: automation.TriggerWebhook}}}
+	server := &Server{automations: service, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	principal := apikey.Principal{UserID: "hook-user", KeyID: "11111111-1111-4111-8111-111111111111", Scopes: map[string]struct{}{"automation.webhook.invoke": {}}}
+	call := func(body, idempotencyKey string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/automations/hook-id:webhook", strings.NewReader(body))
+		request = request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal))
+		request.Header.Set("Content-Type", "application/json")
+		if idempotencyKey != "" {
+			request.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		response := httptest.NewRecorder()
+		server.invokeAutomationWebhook(response, request, "hook-id")
+		return response
+	}
+	if response := call(`{"event":"ok"}`, ""); response.Code != http.StatusBadRequest {
+		t.Fatalf("missing idempotency status=%d body=%s", response.Code, response.Body.String())
+	}
+	withoutType := httptest.NewRequest(http.MethodPost, "/api/v1/automations/hook-id:webhook", strings.NewReader(`{"event":"ok"}`))
+	withoutType = withoutType.WithContext(context.WithValue(withoutType.Context(), principalContextKey{}, principal))
+	withoutType.Header.Set("Idempotency-Key", "missing-content-type")
+	withoutTypeResponse := httptest.NewRecorder()
+	server.invokeAutomationWebhook(withoutTypeResponse, withoutType, "hook-id")
+	if withoutTypeResponse.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("missing content type status=%d body=%s", withoutTypeResponse.Code, withoutTypeResponse.Body.String())
+	}
+	if response := call(`{"event":`, "invalid-json"); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := call(strings.Repeat("x", maxAutomationWebhookPayload+1), "too-large"); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large payload status=%d body=%s", response.Code, response.Body.String())
+	}
+	payload := `{"event":"ok"}`
+	if response := call(payload, "delivery-1"); response.Code != http.StatusOK {
+		t.Fatalf("valid webhook status=%d body=%s", response.Code, response.Body.String())
+	}
+	if service.lastRunInput.TriggerType != automation.TriggerWebhook || service.lastRunInput.TriggerKeyID != principal.KeyID || service.lastRunInput.PayloadBytes != len(payload) || len(service.lastRunInput.PayloadDigest) != 64 {
+		t.Fatalf("webhook run input=%#v", service.lastRunInput)
+	}
 }
 
 func TestPasteEndpointAppliesMoreThanBatchLimitAtomically(t *testing.T) {

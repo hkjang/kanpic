@@ -113,6 +113,33 @@ describe('AutomationPanel',()=>{
     expect(await screen.findByText(/다음 실행/)).toBeInTheDocument()
     expect(screen.getByText(/0 \* \* \* \*/)).toBeInTheDocument()
   })
+
+  it('creates an API-key authenticated inbound webhook and shows its endpoint',async()=>{
+    const webhook:Automation={...automation,id:'webhook-1',name:'승인 수신',trigger:{type:'webhook'}}
+    let items:Automation[]=[]
+    const fetchMock=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+      const path=String(input),method=init?.method??'GET'
+      if(path==='/api/v1/workbooks/book-1/automations'&&method==='GET')return json({items})
+      if(path==='/api/v1/workbooks/book-1/automations'&&method==='POST'){
+        const body=JSON.parse(String(init?.body)) as Record<string,unknown>
+        expect(body).toMatchObject({name:'승인 수신',trigger:{type:'webhook'}})
+        items=[webhook]
+        return json(webhook,201)
+      }
+      if(path==='/api/v1/automations/webhook-1:test')return json({...preview,automation_id:webhook.id})
+      if(path==='/api/v1/automations/webhook-1/runs?limit=12')return json({items:[]})
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock)
+    renderPanel()
+    await screen.findByText('등록된 자동화가 없습니다')
+    fireEvent.click(screen.getByRole('button',{name:/새 자동화/}))
+    fireEvent.change(screen.getByLabelText('자동화 이름'),{target:{value:'승인 수신'}})
+    fireEvent.change(screen.getByLabelText('자동화 트리거'),{target:{value:'webhook'}})
+    expect(screen.getByText(/JSON 원문은 저장하지 않습니다/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:/저장 후 검증/}))
+    expect(await screen.findByText(/POST \/api\/v1\/automations\/webhook-1:webhook/)).toBeInTheDocument()
+  })
 })
 
 function json(value:unknown,status=200){return new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}})}

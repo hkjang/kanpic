@@ -30,6 +30,7 @@ const agentScopes = [
   'chart.*',
   'pivot.*',
   'automation.*',
+  'automation.webhook.invoke',
   'version.*',
   'comment.*',
   'profile.read',

@@ -266,8 +266,8 @@ func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
 	}
 	if enabled, _ := values["automation.enabled"].(bool); enabled {
 		started = time.Now()
-		_, testErr := r.pool.Exec(ctx, `SELECT a.next_run_at,r.scheduled_for FROM automations a LEFT JOIN automation_runs r ON r.automation_id=a.id LIMIT 0`)
-		results = append(results, TestResult{Name: "자동화 저장소", Success: testErr == nil, Message: resultMessage(testErr, "정의·예약·실행 이력 저장소 준비 완료"), DurationMS: time.Since(started).Milliseconds()})
+		_, testErr := r.pool.Exec(ctx, `SELECT a.next_run_at,r.scheduled_for,r.trigger_key_id,r.payload_digest,r.payload_bytes FROM automations a LEFT JOIN automation_runs r ON r.automation_id=a.id LIMIT 0`)
+		results = append(results, TestResult{Name: "자동화 저장소", Success: testErr == nil, Message: resultMessage(testErr, "정의·예약·웹훅·실행 이력 저장소 준비 완료"), DurationMS: time.Since(started).Milliseconds()})
 	}
 	return results, nil
 }

@@ -22,6 +22,7 @@ const (
 	TriggerManual     = "manual"
 	TriggerCellChange = "cell_change"
 	TriggerSchedule   = "schedule"
+	TriggerWebhook    = "webhook"
 
 	ActionSetValue   = "set_value"
 	ActionSetFormula = "set_formula"
@@ -92,6 +93,9 @@ type RunInput struct {
 	TriggerType        string     `json:"-"`
 	TriggerOperationID string     `json:"-"`
 	ScheduledFor       *time.Time `json:"-"`
+	TriggerKeyID       string     `json:"-"`
+	PayloadDigest      string     `json:"-"`
+	PayloadBytes       int        `json:"-"`
 }
 
 type CellSnapshot struct {
@@ -124,6 +128,9 @@ type Run struct {
 	TriggerType        string                   `json:"trigger_type"`
 	TriggerOperationID string                   `json:"trigger_operation_id,omitempty"`
 	ScheduledFor       *time.Time               `json:"scheduled_for,omitempty"`
+	TriggerKeyID       string                   `json:"trigger_key_id,omitempty"`
+	PayloadDigest      string                   `json:"payload_digest,omitempty"`
+	PayloadBytes       int                      `json:"payload_bytes,omitempty"`
 	Status             string                   `json:"status"`
 	BaseVersion        int64                    `json:"base_version"`
 	Action             ActionDefinition         `json:"action"`

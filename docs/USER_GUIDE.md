@@ -1,7 +1,7 @@
 # kanpic 사용자 가이드 (Enterprise User Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.17.0
+- **시스템 버전**: v0.18.0
 - **문서 버전**: v1.0  
 - **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 엔드유저용 최종 사용 설명서 (End-User Manual)  
@@ -312,7 +312,7 @@ AI는 선택한 범위의 데이터만 사내 Gateway에 전달하며 셀에 적
 편집기 오른쪽 아래 **자동화** 버튼에서 반복되는 셀 작업을 워크북 단위 규칙으로 관리합니다. 관리자가 자동화 실행을 활성화하기 전에도 정의와 쓰기 없는 미리보기는 만들 수 있지만 실제 실행은 차단됩니다.
 
 1. 자동화 패널에서 **새 자동화**를 누르고 이름과 사용 여부를 지정합니다.
-2. **수동 실행**, **셀 변경 시** 또는 **일정(Cron)**을 선택합니다. 셀 변경 트리거는 감시할 시트와 A1 범위를 함께 지정합니다. 일정은 프리셋을 고르거나 `분 시 일 월 요일` 형식의 5필드 Cron과 `Asia/Seoul` 같은 IANA 시간대를 입력합니다.
+2. **수동 실행**, **셀 변경 시**, **일정(Cron)** 또는 **인바운드 웹훅**을 선택합니다. 셀 변경 트리거는 감시할 시트와 A1 범위를 함께 지정합니다. 일정은 프리셋을 고르거나 `분 시 일 월 요일` 형식의 5필드 Cron과 `Asia/Seoul` 같은 IANA 시간대를 입력합니다. 웹훅은 저장 뒤 카드에 전용 호출 경로가 표시됩니다.
 3. 작업 시트와 대상 범위를 정한 뒤 **값 설정**, **수식 설정**, **내용 지우기** 중 하나를 선택합니다. 값은 문자열·숫자·불리언만 허용되며 수식은 `=`로 시작해야 합니다.
 4. **저장 후 검증**을 누르면 현재 서버 셀과 실행 후 값을 비교하는 미리보기가 표시됩니다. 이 단계에서는 셀이 변경되지 않습니다.
 5. 변경 범위와 기준 워크북 버전을 확인한 후 **검토한 자동화 실행**을 눌러 한 번의 원자적 작업으로 적용합니다.
@@ -320,9 +320,26 @@ AI는 선택한 범위의 데이터만 사내 Gateway에 전달하며 셀에 적
 
 수식을 여러 셀에 적용하면 대상 범위의 왼쪽 위 셀을 기준으로 상대 참조가 이동합니다. 실행 직전에 자동화 revision과 최신 워크북 버전 및 대상 셀 스냅샷을 확인하므로, 검증 이후 다른 사용자가 값을 바꾼 경우 실행을 중단하고 다시 검증해야 합니다. 같은 멱등 키나 같은 셀 변경 작업이 재전송되어도 실행은 한 번만 생성됩니다. 자동화 결과는 일반 셀 작업과 마찬가지로 저장·수식 재계산·WebSocket 협업 전파·버전 이력에 반영됩니다.
 
-현재 지원하는 트리거는 수동 실행, 셀 변경과 Cron 일정이며 작업은 값 설정, 수식 설정, 내용 지우기입니다. Cron은 `*`, 목록, 범위, step, 영문 월·요일 이름과 `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly` 별칭을 지원합니다. 예약 시각은 PostgreSQL에 저장되므로 서버 재시작 후에도 이어지며, 같은 예약 시각은 여러 서버 인스턴스가 확인해도 한 번만 반영됩니다. 대상 셀이 이미 원하는 상태라면 워크북 버전을 만들지 않고 **변경 없음**으로 기록합니다. 장시간 중단 뒤에는 과거 실행을 모두 몰아서 적용하지 않고 재개 시점에 한 번 처리한 후 다음 미래 시각으로 진행합니다. 웹훅, 알림, AI와 MCP 연쇄 실행은 이후 단계에서 추가됩니다. 자동화가 자신의 트리거 범위를 다시 변경하더라도 연쇄 자동화를 자동으로 발생시키지 않습니다.
+현재 지원하는 트리거는 수동 실행, 셀 변경, Cron 일정과 인증된 인바운드 웹훅이며 작업은 값 설정, 수식 설정, 내용 지우기입니다. Cron은 `*`, 목록, 범위, step, 영문 월·요일 이름과 `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly` 별칭을 지원합니다. 예약 시각은 PostgreSQL에 저장되므로 서버 재시작 후에도 이어지며, 같은 예약 시각은 여러 서버 인스턴스가 확인해도 한 번만 반영됩니다. 대상 셀이 이미 원하는 상태라면 워크북 버전을 만들지 않고 **변경 없음**으로 기록합니다. 장시간 중단 뒤에는 과거 실행을 모두 몰아서 적용하지 않고 재개 시점에 한 번 처리한 후 다음 미래 시각으로 진행합니다. 아웃바운드 웹훅 호출, 알림, AI와 MCP 연쇄 실행은 이후 단계에서 추가됩니다. 자동화가 자신의 트리거 범위를 다시 변경하더라도 연쇄 자동화를 자동으로 발생시키지 않습니다.
 
-에이전트는 `mcp.use`와 기능별 scope를 함께 사용합니다. 정의 조회·검증·실행 이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`이 필요합니다. 검증에는 `range.read`, 값 설정·지우기 실행 및 Undo에는 `range.write`, 수식 실행에는 `formula.write`가 추가로 필요합니다. MCP 도구는 `spreadsheet.automation.list`, `get`, `create`, `update`, `delete`, `test`, `run`, `run.list`, `run.undo`입니다.
+### 13.1 인바운드 웹훅 호출
+
+1. `/preferences`의 **개인 API 키**에서 `automation.webhook.invoke` scope를 가진 전용 키를 만듭니다. 원문 키는 생성 직후 한 번만 표시되므로 호출 시스템의 Secret Manager에 저장합니다.
+2. 웹훅 자동화 카드에 표시되는 `POST /api/v1/automations/{automationId}:webhook` 경로를 호출합니다.
+3. `Authorization: Bearer <API_KEY>`, 재전송 전체에서 같은 `Idempotency-Key`, `Content-Type: application/json`을 보냅니다.
+4. 키를 회전하면 기존 키는 즉시 폐기되므로 외부 호출 시스템의 secret도 함께 교체합니다. 더 이상 사용하지 않으면 키를 폐기합니다.
+
+```bash
+curl -X POST 'https://kanpic.internal/api/v1/automations/AUTOMATION_ID:webhook' \
+  -H 'Authorization: Bearer kp_live_...' \
+  -H 'Idempotency-Key: source-event-20260802-001' \
+  -H 'Content-Type: application/json' \
+  --data '{"event":"approved","request_id":"REQ-001"}'
+```
+
+payload는 비어 있거나 최대 1MiB의 유효한 JSON이어야 합니다. kanpic은 payload 내용을 셀 작업·실행 이력·감사 로그에 저장하지 않으며 원본 바이트의 SHA-256, byte 수와 API 키 ID만 기록합니다. 같은 사용자·자동화·`Idempotency-Key` 조합을 다시 보내면 다른 payload여도 첫 실행 결과를 반환하므로, 원본 시스템의 이벤트 ID를 안정적인 멱등 키로 사용하십시오. 대상이 이미 원하는 상태면 새 워크북 버전 없이 **변경 없음** 실행으로 기록합니다.
+
+에이전트는 `mcp.use`와 기능별 scope를 함께 사용합니다. 정의 조회·검증·실행 이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`, 웹훅 호출에는 `automation.webhook.invoke`가 필요합니다. 검증에는 `range.read`, 값 설정·지우기 실행 및 Undo에는 `range.write`, 수식 실행에는 `formula.write`가 추가로 필요합니다. MCP 도구는 `spreadsheet.automation.list`, `get`, `create`, `update`, `delete`, `test`, `run`, `webhook.invoke`, `run.list`, `run.undo`입니다.
 
 ---
 

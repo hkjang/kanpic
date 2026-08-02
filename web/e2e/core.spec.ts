@@ -134,6 +134,7 @@ test('previews, runs, audits, triggers, and undoes PostgreSQL automations', asyn
   const restoreRevision=versions.items[0].revision as number
   const putSetting=(key:string,value:unknown)=>page.request.put(`/api/v1/admin/settings/${key}`,{data:{key,value,value_type:typeof value==='boolean'?'boolean':'number',secret:false,description:`E2E ${key}`}})
   let workbookId=''
+  let webhookKeyId=''
   try{
     expect((await putSetting('automation.max_cells_per_run',1000)).ok()).toBe(true)
     expect((await putSetting('automation.max_runs_per_hour',1000)).ok()).toBe(true)
@@ -181,7 +182,29 @@ test('previews, runs, audits, triggers, and undoes PostgreSQL automations', asyn
     expect(Date.parse(scheduled.next_run_at)).not.toBeNaN()
     const schedulePreview=await page.request.post(`/api/v1/automations/${scheduled.id}:test`,{data:{}}).then(response=>response.json())
     expect(schedulePreview.changes).toEqual([expect.objectContaining({address:'D2',after:{value:'scheduled'}})])
+
+    const webhook=await page.request.post(`/api/v1/workbooks/${workbookId}/automations`,{data:{name:'외부 승인 수신',enabled:true,idempotency_key:`webhook-create-${workbookId}`,trigger:{type:'webhook'},action:{type:'set_value',sheet_id:sheetId,range:'E2',value:'received'}}}).then(response=>response.json())
+    const unauthenticated=await page.request.post(`/api/v1/automations/${webhook.id}:webhook`,{headers:{'Idempotency-Key':`delivery-${workbookId}`},data:{event:'approved'}})
+    expect(unauthenticated.status()).toBe(401)
+    const webhookKey=await page.request.post('/api/v1/me/api-keys',{data:{name:'E2E webhook',scopes:['automation.webhook.invoke'],expires_at:null}}).then(response=>response.json())
+    webhookKeyId=webhookKey.id as string
+    const webhookHeaders={Authorization:`Bearer ${webhookKey.secret}`,'Idempotency-Key':`delivery-${workbookId}`}
+    const delivered=await page.request.post(`/api/v1/automations/${webhook.id}:webhook`,{headers:webhookHeaders,data:{event:'approved',sensitive:'not-persisted'}}).then(response=>response.json())
+    expect(delivered.run).toMatchObject({trigger_type:'webhook',trigger_key_id:webhookKeyId,status:'succeeded'})
+    expect(delivered.run.payload_digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(delivered.run.payload_bytes).toBeGreaterThan(0)
+    await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/E2`).then(response=>response.json());return range.items[0]?.value}).toBe('received')
+    const duplicateDelivery=await page.request.post(`/api/v1/automations/${webhook.id}:webhook`,{headers:webhookHeaders,data:{event:'changed'}}).then(response=>response.json())
+    expect(duplicateDelivery.run).toMatchObject({id:delivered.run.id,duplicate:true,payload_digest:delivered.run.payload_digest})
+    const webhookRuns=await page.request.get(`/api/v1/automations/${webhook.id}/runs`).then(response=>response.json())
+    expect(webhookRuns.items).toHaveLength(1)
+    expect(webhookRuns.items[0]).toMatchObject({trigger_type:'webhook',trigger_key_id:webhookKeyId,payload_digest:delivered.run.payload_digest})
+    expect((await page.request.delete(`/api/v1/me/api-keys/${webhookKeyId}`)).status()).toBe(204)
+    const revoked=await page.request.post(`/api/v1/automations/${webhook.id}:webhook`,{headers:{...webhookHeaders,'Idempotency-Key':`delivery-revoked-${workbookId}`},data:{event:'revoked'}})
+    expect(revoked.status()).toBe(401)
+    webhookKeyId=''
   }finally{
+    if(webhookKeyId)await page.request.delete(`/api/v1/me/api-keys/${webhookKeyId}`)
     if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)
     await page.request.post(`/api/v1/admin/settings/versions/${restoreRevision}:restore`,{data:{}})
   }

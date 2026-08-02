@@ -1,7 +1,7 @@
 # kanpic 관리자 가이드 (System Administrator Manual)
 
 - **제품명**: kanpic 데이터 협업 플랫폼  
-- **시스템 버전**: v0.17.0
+- **시스템 버전**: v0.18.0
 - **문서 버전**: v1.0  
 - **최종 수정일**: 2026년 8월 2일
 - **문서 분류**: 시스템 관리자 및 DevOps 엔지니어용 통합 운영 매뉴얼 (System Administrator Manual)  
@@ -138,7 +138,7 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 - 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
 - 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
 - 공개 AI 설정 조회는 `spreadsheet.ai.config.get`, 계획·조회·승인·Undo는 `spreadsheet.ai.action.plan|list|get|approve|undo`로 제공합니다. 모든 호출에 `ai.use`가 필요하고 계획은 `range.read`, 수식 생성·오류 수정 승인은 `formula.write`, 데이터 정제 승인과 Undo는 `range.write`를 추가로 검사합니다. 설명·요약·이상치 탐지는 승인할 수 없습니다.
-- 워크북 자동화는 `spreadsheet.automation.list|get|create|update|delete|test|run|run.list|run.undo`로 제공합니다. 정의 조회·검증·이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`이 필요합니다. 검증은 `range.read`, 값 설정·지우기와 Undo는 `range.write`, 수식 실행은 `formula.write`를 추가 검사합니다.
+- 워크북 자동화는 `spreadsheet.automation.list|get|create|update|delete|test|run|webhook.invoke|run.list|run.undo`로 제공합니다. 정의 조회·검증·이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`, 웹훅 전달에는 `automation.webhook.invoke`가 필요합니다. 검증은 `range.read`, 값 설정·지우기와 Undo는 `range.write`, 수식 실행은 `formula.write`를 추가 검사합니다. 웹훅 MCP 호출도 개인 API 키 인증이 필수입니다.
 
 ### 6.2 워크북 자동화 실행 정책
 
@@ -151,16 +151,16 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 | `automation.max_runs_per_hour` | `100` | 1~10,000 | 워크북 하나에서 최근 1시간 동안 시작할 수 있는 실행 수 |
 | `automation.scheduler_poll_seconds` | `15` | 5~300 | PostgreSQL에서 실행 예정 자동화를 확인하는 주기(초) |
 
-**정책 검증**은 값 유형과 범위를 검사합니다. **저장소 준비 상태 테스트**는 자동화가 활성화된 경우 PostgreSQL의 `automations.next_run_at`과 `automation_runs.scheduled_for`를 실제로 조회해 예약 실행 마이그레이션까지 적용됐는지 확인합니다. 운영 활성화 전에는 낮은 한도로 수동 실행과 Undo를 확인한 다음 셀 변경 및 일정 트리거를 켜는 것을 권장합니다. 확인 주기는 서버 재시작 없이 다음 스케줄러 tick부터 반영됩니다.
+**정책 검증**은 값 유형과 범위를 검사합니다. **저장소 준비 상태 테스트**는 자동화가 활성화된 경우 PostgreSQL의 예약 및 웹훅 감사 컬럼을 실제로 조회해 최신 마이그레이션까지 적용됐는지 확인합니다. 운영 활성화 전에는 낮은 한도로 수동 실행과 Undo를 확인한 다음 셀 변경·일정·웹훅 트리거를 켜는 것을 권장합니다. 확인 주기는 서버 재시작 없이 다음 스케줄러 tick부터 반영됩니다.
 
-자동화 정의는 이름별 유일성과 revision 기반 낙관적 잠금을 사용하며 삭제는 soft delete로 처리됩니다. 실행은 기준 워크북 버전, 작업 정의, 변경 전 셀 스냅샷, 예약 기준 시각, 실제 셀 작업 및 Undo 작업 ID를 `automation_runs`에 보존합니다. 수동 재시도는 사용자·자동화·멱등 키로, 셀 변경 재전송은 원본 `operation_id`로, 예약 실행은 자동화와 `scheduled_for` 조합으로 중복 제거합니다. 다중 인스턴스가 같은 예약을 조회해도 서버 권위 셀 작업과 PostgreSQL 유일 제약으로 한 번만 반영됩니다. 실행은 정확한 기준 버전 및 셀 스냅샷이 일치할 때만 적용되고, 성공·변경 없음·실패·Undo는 구조화 로그와 감사 로그에서 추적할 수 있습니다.
+자동화 정의는 이름별 유일성과 revision 기반 낙관적 잠금을 사용하며 삭제는 soft delete로 처리됩니다. 실행은 기준 워크북 버전, 작업 정의, 변경 전 셀 스냅샷, 예약 기준 시각, 실제 셀 작업 및 Undo 작업 ID를 `automation_runs`에 보존합니다. 수동·웹훅 재시도는 사용자·자동화·멱등 키로, 셀 변경 재전송은 원본 `operation_id`로, 예약 실행은 자동화와 `scheduled_for` 조합으로 중복 제거합니다. 웹훅 payload 원문은 보존하지 않고 API 키 UUID, SHA-256과 byte 수만 저장합니다. 다중 인스턴스가 같은 예약을 조회해도 서버 권위 셀 작업과 PostgreSQL 유일 제약으로 한 번만 반영됩니다. 실행은 정확한 기준 버전 및 셀 스냅샷이 일치할 때만 적용되고, 성공·변경 없음·실패·Undo는 구조화 로그와 감사 로그에서 추적할 수 있습니다.
 
 ---
 
 ## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 7.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `016_scheduled_automations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `017_webhook_automations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가합니다.
 
 ### 7.2 백업 및 복구 명령어 (pg_dump)
 

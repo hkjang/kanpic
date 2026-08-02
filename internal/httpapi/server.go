@@ -932,6 +932,9 @@ func requiredScope(r *http.Request) string {
 		if r.Method == http.MethodGet || strings.HasSuffix(path, ":test") {
 			return "automation.read"
 		}
+		if strings.HasSuffix(path, ":webhook") {
+			return "automation.webhook.invoke"
+		}
 		if strings.HasSuffix(path, ":run") {
 			return "automation.run"
 		}
