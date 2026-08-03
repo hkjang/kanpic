@@ -84,6 +84,22 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/duplicate", s.duplicateWorkbook)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sharing", s.getWorkbookSharing)
+	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}/sharing", s.updateWorkbookSharing)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sharing:transfer-ownership", s.transferWorkbookOwnership)
+	mux.HandleFunc("PUT /api/v1/workbooks/{workbookId}/shares", s.putWorkbookShare)
+	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}/shares/{shareId}", s.deleteWorkbookShare)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/access-requests", s.listAccessRequests)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/access-requests", s.createAccessRequest)
+	mux.HandleFunc("POST /api/v1/access-requests/{requestAction}", s.decideAccessRequest)
+	mux.HandleFunc("GET /api/v1/departments", s.listDepartments)
+	mux.HandleFunc("POST /api/v1/departments", s.createDepartment)
+	mux.HandleFunc("GET /api/v1/departments/{departmentId}", s.getDepartment)
+	mux.HandleFunc("PATCH /api/v1/departments/{departmentId}", s.updateDepartment)
+	mux.HandleFunc("DELETE /api/v1/departments/{departmentId}", s.deleteDepartment)
+	mux.HandleFunc("POST /api/v1/departments/{departmentId}/members", s.addDepartmentMembers)
+	mux.HandleFunc("DELETE /api/v1/departments/{departmentId}/members/{memberId}", s.removeDepartmentMember)
+	mux.HandleFunc("GET /api/v1/me/departments", s.listMyDepartments)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sheets", s.createSheet)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/comments", s.listCommentThreads)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/comments", s.createCommentThread)
@@ -237,7 +253,7 @@ func (s *Server) createWorkbook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWorkbooks(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repository.ListWorkbooks(r.Context(), r.URL.Query().Get("workspace_id"))
+	items, err := s.repository.ListWorkbooks(r.Context(), r.URL.Query().Get("workspace_id"), s.accessPrincipal(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -251,12 +267,22 @@ func (s *Server) getWorkbook(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	if access, ok := workbookAccessFrom(r); ok {
+		item.AccessRole, item.AccessSource = access.Role, access.Source
+	}
+	if sharing, err := s.repository.GetWorkbookSharing(r.Context(), item.ID); err == nil {
+		item.SharedCount = len(sharing.Shares)
+	}
 	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) duplicateWorkbook(w http.ResponseWriter, r *http.Request) {
 	var input workbook.DuplicateWorkbookInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if access, ok := workbookAccessFrom(r); ok && !access.CanCopy {
+		s.writeCopyDenied(w, r, access)
 		return
 	}
 	input.OwnerID = actorID(r)
@@ -670,6 +696,10 @@ func (s *Server) webSocket(w http.ResponseWriter, r *http.Request) {
 	if principal, ok := apiPrincipal(r); ok {
 		canWrite = principal.Allows("range.write")
 	}
+	// Viewers and commenters join the session read-only.
+	if access, ok := workbookAccessFrom(r); ok && !access.CanWrite {
+		canWrite = false
+	}
 	s.collab.ServeHTTP(w, r, r.PathValue("workbookId"), actorID(r), canWrite)
 }
 
@@ -684,7 +714,7 @@ func (s *Server) publishCurrentVersion(ctx context.Context, workbookID, actor, c
 }
 
 func (s *Server) workbookIDForSheet(ctx context.Context, sheetID string) string {
-	books, err := s.repository.ListWorkbooks(ctx, "")
+	books, err := s.repository.ListWorkbooks(ctx, "", workbook.AccessPrincipal{Admin: true, Authenticated: true})
 	if err != nil {
 		return ""
 	}
@@ -768,6 +798,12 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 		}
+		guarded, allowed := s.authorizeWorkbookRequest(w, r)
+		if !allowed {
+			s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
+			return
+		}
+		r = guarded
 		next.ServeHTTP(w, r)
 		s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 	})
@@ -791,6 +827,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code, message = http.StatusConflict, "invalid_base_version", "클라이언트 버전이 서버보다 최신입니다. 다시 동기화하세요."
 	case errors.Is(err, workbook.ErrVersionConflict):
 		status, code, message = http.StatusConflict, "version_conflict", "워크북 구조가 변경되었습니다. 최신 버전으로 다시 동기화하세요."
+	case errors.Is(err, workbook.ErrForbidden):
+		status, code, message = http.StatusForbidden, "workbook_access_denied", "이 워크북에 대한 권한이 없습니다."
 	case errors.Is(err, workbook.ErrRevision):
 		status, code, message = http.StatusConflict, "revision_conflict", "다른 사용자가 규칙을 변경했습니다. 다시 불러오세요."
 	default:
@@ -874,6 +912,18 @@ func requiredScope(r *http.Request) string {
 			return "profile.read"
 		}
 		return "profile.write"
+	}
+	if strings.Contains(path, "/departments") {
+		if r.Method == http.MethodGet {
+			return "workbook.read"
+		}
+		return "admin.*"
+	}
+	if strings.Contains(path, "/sharing") || strings.Contains(path, "/shares") || strings.Contains(path, "/access-requests") {
+		if r.Method == http.MethodGet {
+			return "workbook.read"
+		}
+		return "workbook.write"
 	}
 	if strings.Contains(path, "/comments") || strings.Contains(path, "/comment-messages") || strings.Contains(path, "/notifications") {
 		if r.Method == http.MethodGet {

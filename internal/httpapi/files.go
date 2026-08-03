@@ -51,6 +51,15 @@ func (s *Server) executeExport(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	// Exporting is a copy, so viewers follow the workbook download policy.
+	access, allowed := s.authorizeWorkbookID(w, r, input.WorkbookID, workbook.CapabilityRead)
+	if !allowed {
+		return
+	}
+	if !access.CanCopy {
+		s.writeCopyDenied(w, r, access)
+		return
+	}
 	exported, err := s.files.Export(r.Context(), input)
 	if err != nil {
 		s.fileError(w, err)

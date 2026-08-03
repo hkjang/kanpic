@@ -20,11 +20,32 @@ var (
 	ErrDuplicateName   = errors.New("name already exists")
 	ErrValidation      = errors.New("data validation failed")
 	ErrRevision        = errors.New("revision conflict")
+	ErrForbidden       = errors.New("access denied")
 )
 
 type Repository interface {
 	CreateWorkbook(context.Context, CreateWorkbookInput) (Workbook, error)
-	ListWorkbooks(context.Context, string) ([]Workbook, error)
+	ListWorkbooks(context.Context, string, AccessPrincipal) ([]Workbook, error)
+
+	// Sharing, departments and access requests.
+	WorkbookIDForResource(context.Context, string, string) (string, error)
+	ResolveWorkbookAccess(context.Context, string, AccessPrincipal) (WorkbookAccess, error)
+	GetWorkbookSharing(context.Context, string) (WorkbookSharing, error)
+	UpdateWorkbookSharing(context.Context, string, UpdateSharingInput) (WorkbookSharing, error)
+	PutWorkbookShare(context.Context, string, ShareInput) (WorkbookShare, error)
+	DeleteWorkbookShare(context.Context, string, string) error
+	TransferWorkbookOwnership(context.Context, string, TransferOwnershipInput) (WorkbookSharing, error)
+	CreateDepartment(context.Context, CreateDepartmentInput) (Department, error)
+	GetDepartment(context.Context, string) (Department, error)
+	ListDepartments(context.Context) ([]Department, error)
+	ListDepartmentsForUser(context.Context, string) ([]Department, error)
+	UpdateDepartment(context.Context, string, UpdateDepartmentInput) (Department, error)
+	DeleteDepartment(context.Context, string) error
+	AddDepartmentMembers(context.Context, string, DepartmentMembersInput) (Department, error)
+	RemoveDepartmentMember(context.Context, string, string) (Department, error)
+	CreateAccessRequest(context.Context, string, CreateAccessRequestInput) (AccessRequest, error)
+	ListAccessRequests(context.Context, string, bool) ([]AccessRequest, error)
+	DecideAccessRequest(context.Context, string, DecideAccessRequestInput) (AccessRequest, error)
 	GetWorkbook(context.Context, string) (Workbook, error)
 	DuplicateWorkbook(context.Context, string, DuplicateWorkbookInput) (Workbook, error)
 	UpdateWorkbook(context.Context, string, UpdateWorkbookInput) (Workbook, error)

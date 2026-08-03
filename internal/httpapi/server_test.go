@@ -238,6 +238,13 @@ func TestCommentsAndMentionNotificationsShareRESTAndMCPContracts(t *testing.T) {
 	defer server.Close()
 	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "댓글 협업"}, http.StatusCreated)
 	sheetID := book.Sheets[0].ID
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{
+		"principal_type": "user", "principal_id": "alice", "role": "editor",
+	}, http.StatusOK)
+	// A commenter may reply on a thread but never edit a cell.
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{
+		"principal_type": "user", "principal_id": "charlie", "role": "commenter",
+	}, http.StatusOK)
 	created := requestAs[workbook.CommentThread](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/comments", map[string]any{
 		"idempotency_key": "rest-comment", "sheet_id": sheetID, "range": "B2:C3", "content": "@bob@example.com 검토 부탁드립니다",
 	}, http.StatusCreated)
@@ -338,6 +345,9 @@ func TestChartsShareRESTAndMCPContracts(t *testing.T) {
 			{"row": 2, "column": 1, "value": "1월"}, {"row": 2, "column": 2, "value": 42},
 		},
 	}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{
+		"principal_type": "user", "principal_id": "alice", "role": "editor",
+	}, http.StatusOK)
 	created := requestAs[workbook.Chart](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/charts", map[string]any{
 		"idempotency_key": "chart-api", "sheet_id": sheetID, "source_sheet_id": sheetID, "type": "bar", "title": "월별 매출", "source_range": "A1:B2",
 	}, http.StatusCreated)
@@ -417,6 +427,9 @@ func TestPivotsShareRESTAndMCPContracts(t *testing.T) {
 			{"row": 2, "column": 1, "value": "동부"}, {"row": 2, "column": 2, "value": 42},
 			{"row": 3, "column": 1, "value": "서부"}, {"row": 3, "column": 2, "value": 55},
 		},
+	}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{
+		"principal_type": "user", "principal_id": "alice", "role": "editor",
 	}, http.StatusOK)
 	created := requestAs[workbook.Pivot](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/pivots", map[string]any{
 		"idempotency_key": "pivot-api", "sheet_id": sheetID, "source_sheet_id": sheetID, "name": "지역별 매출", "source_range": "A1:B3", "refresh_mode": "manual",
@@ -2097,4 +2110,126 @@ func TestWorkbookReplaceRESTAndMCPShareContract(t *testing.T) {
 	if len(scoped.Items) != 1 || scoped.Items[0].Address != "A2" {
 		t.Fatalf("whole cell search = %#v", scoped)
 	}
+}
+
+func TestWorkbookSharingEnforcesRolesAcrossRESTAndMCP(t *testing.T) {
+	t.Parallel()
+	if scope := requiredScope(httptest.NewRequest(http.MethodPut, "/api/v1/workbooks/book/shares", nil)); scope != "workbook.write" {
+		t.Fatalf("share scope = %q", scope)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/departments", nil)); scope != "admin.*" {
+		t.Fatalf("department scope = %q", scope)
+	}
+	for _, name := range []string{"spreadsheet.share.list", "spreadsheet.share.grant", "spreadsheet.share.link", "spreadsheet.department.create", "spreadsheet.access_request.decide"} {
+		definition, found := findMCPTool(name)
+		if !found {
+			t.Fatalf("missing MCP tool %s", name)
+		}
+		if name == "spreadsheet.department.create" && definition.Meta["required_scope"] != "admin.*" {
+			t.Fatalf("%s scope = %#v", name, definition.Meta)
+		}
+	}
+
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "공유 정책"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	writeCell := func(actor, key string, status int) {
+		requestAs[map[string]any](t, server, actor, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+			"base_version": 1, "idempotency_key": key, "cells": []map[string]any{{"row": 1, "column": 1, "value": actor}},
+		}, status)
+	}
+
+	// A restricted workbook is invisible to everybody but its owner.
+	requestAs[map[string]any](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
+	writeCell("alice", "alice-denied", http.StatusForbidden)
+	listed := requestAs[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, "alice", http.MethodGet, "/api/v1/workbooks", nil, http.StatusOK)
+	if len(listed.Items) != 0 {
+		t.Fatalf("alice must not see restricted workbooks: %#v", listed.Items)
+	}
+
+	// Asking for access works without any access at all.
+	requestAs[workbook.AccessRequest](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/access-requests", map[string]any{"requested_role": "editor", "message": "분석이 필요합니다"}, http.StatusCreated)
+	pending := request[struct {
+		Items []workbook.AccessRequest `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/access-requests?status=pending", nil, http.StatusOK)
+	if len(pending.Items) != 1 || pending.Items[0].RequesterID != "alice" {
+		t.Fatalf("pending requests = %#v", pending.Items)
+	}
+	approved := request[workbook.AccessRequest](t, server, http.MethodPost, "/api/v1/access-requests/"+pending.Items[0].ID+":approve", map[string]any{"role": "viewer"}, http.StatusOK)
+	if approved.Status != workbook.AccessRequestApproved {
+		t.Fatalf("approval = %#v", approved)
+	}
+	viewed := requestAs[workbook.Workbook](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusOK)
+	if viewed.AccessRole != workbook.RoleViewer || viewed.AccessSource != workbook.AccessSourceUser {
+		t.Fatalf("viewer workbook = %#v", viewed)
+	}
+	writeCell("alice", "alice-viewer", http.StatusForbidden)
+
+	// A commenter may open a thread but still may not edit cells.
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{"principal_type": "user", "principal_id": "alice", "role": "commenter"}, http.StatusOK)
+	requestAs[workbook.CommentThread](t, server, "alice", http.MethodPost, "/api/v1/workbooks/"+book.ID+"/comments", map[string]any{
+		"sheet_id": sheetID, "range": "A1", "content": "확인 부탁드립니다", "idempotency_key": "share-comment",
+	}, http.StatusCreated)
+	writeCell("alice", "alice-commenter", http.StatusForbidden)
+
+	// Editors write and, by default, may also share.
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{"principal_type": "user", "principal_id": "alice", "role": "editor"}, http.StatusOK)
+	writeCell("alice", "alice-editor", http.StatusOK)
+	requestAs[map[string]any](t, server, "alice", http.MethodPatch, "/api/v1/workbooks/"+book.ID+"/sharing", map[string]any{"link_access": "restricted"}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/workbooks/"+book.ID+"/sharing", map[string]any{"sharing_locked": true}, http.StatusOK)
+	requestAs[map[string]any](t, server, "alice", http.MethodPatch, "/api/v1/workbooks/"+book.ID+"/sharing", map[string]any{"link_access": "organization"}, http.StatusForbidden)
+
+	// Link access reaches everyone who is signed in, at the configured role.
+	requestAs[map[string]any](t, server, "bob", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/workbooks/"+book.ID+"/sharing", map[string]any{"link_access": "organization", "link_role": "viewer", "viewer_can_copy": false}, http.StatusOK)
+	linked := requestAs[workbook.Workbook](t, server, "bob", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusOK)
+	if linked.AccessRole != workbook.RoleViewer || linked.AccessSource != workbook.AccessSourceLink {
+		t.Fatalf("link access workbook = %#v", linked)
+	}
+	writeCell("bob", "bob-link", http.StatusForbidden)
+	requestAs[map[string]any](t, server, "bob", http.MethodPost, "/api/v1/exports", map[string]any{"workbook_id": book.ID, "format": "csv"}, http.StatusForbidden)
+
+	// A department share promotes every member, including nested departments.
+	head := request[workbook.Department](t, server, http.MethodPost, "/api/v1/departments", map[string]any{"name": "경영지원본부"}, http.StatusCreated)
+	team := request[workbook.Department](t, server, http.MethodPost, "/api/v1/departments", map[string]any{"name": "재무팀", "parent_id": head.ID}, http.StatusCreated)
+	request[workbook.Department](t, server, http.MethodPost, "/api/v1/departments/"+team.ID+"/members", map[string]any{"user_ids": []string{"bob"}}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{"principal_type": "department", "principal_id": head.ID, "principal_label": head.Name, "role": "editor"}, http.StatusOK)
+	writeCell("bob", "bob-department", http.StatusOK)
+	mine := requestAs[struct {
+		Items []workbook.Department `json:"items"`
+	}](t, server, "bob", http.MethodGet, "/api/v1/me/departments", nil, http.StatusOK)
+	if len(mine.Items) != 2 {
+		t.Fatalf("bob departments = %#v", mine.Items)
+	}
+
+	// MCP calls share the same decision.
+	denied := requestAs[struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}](t, server, "dana", http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 77, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.range.write", "arguments": map[string]any{"sheet_id": sheetID, "idempotency_key": "dana-mcp", "cells": []map[string]any{{"row": 5, "column": 5, "value": 1}}},
+		},
+	}, http.StatusOK)
+	if !denied.Result.IsError {
+		t.Fatal("an MCP write without access must fail")
+	}
+
+	// Ownership transfer keeps the previous owner as an editor when asked.
+	transferred := request[struct {
+		Sharing workbook.WorkbookSharing `json:"sharing"`
+	}](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/sharing:transfer-ownership", map[string]any{"new_owner_id": "alice", "keep_as_editor": true}, http.StatusOK)
+	if transferred.Sharing.OwnerID != "alice" {
+		t.Fatalf("transferred sharing = %#v", transferred.Sharing)
+	}
+	afterTransfer := request[workbook.Workbook](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusOK)
+	if afterTransfer.AccessRole != workbook.RoleEditor {
+		t.Fatalf("previous owner role = %s", afterTransfer.AccessRole)
+	}
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
 }

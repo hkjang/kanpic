@@ -213,6 +213,7 @@ test('previews, runs, audits, triggers, and undoes PostgreSQL automations', asyn
 test('compares and resolves a persisted same-cell conflict', async ({ page }) => {
   const created=await page.request.post('/api/v1/workbooks',{data:{title:`충돌 검증 ${Date.now()}`,workspace_id:'default'}}).then(response=>response.json())
   const sheetId=created.sheets[0].id as string
+  for(const actor of ['alice','bob'])await page.request.put(`/api/v1/workbooks/${created.id}/shares`,{data:{principal_type:'user',principal_id:actor,role:'editor'}})
   const first=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{headers:{'X-Kanpic-Actor':'alice'},data:{base_version:1,idempotency_key:`conflict-first-${created.id}`,client_id:'alice-browser',cells:[{row:2,column:3,value:'first',style:{bold:true}}]}})
   expect(first.ok()).toBe(true)
   const stale=await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`,{headers:{'X-Kanpic-Actor':'bob'},data:{base_version:1,idempotency_key:`conflict-stale-${created.id}`,client_id:'bob-browser',cells:[{row:2,column:3,value:'second',style:{italic:true}}]}})
@@ -280,6 +281,7 @@ test('collaborates with anchored comments, replies, and mention notifications', 
   expect(comments.items).toHaveLength(1)
   expect(comments.items[0].range).toBe(anchorRange)
 
+  await page.request.put(`/api/v1/workbooks/${created.id}/shares`,{data:{principal_type:'user',principal_id:'bob@example.com',role:'commenter'}})
   const reviewer=await context.newPage()
   await reviewer.setExtraHTTPHeaders({'X-Kanpic-Actor':'bob@example.com'})
   await reviewer.goto('/')
@@ -797,6 +799,7 @@ test('persists personal filter views and compresses filtered canvas rows', async
   await expect.poll(async()=>{const result=await filterViews();return result.items[0]?.id}).not.toBeUndefined()
   const viewId=(await filterViews()).items[0].id as string
   await expect.poll(async()=>(await filterResult(viewId)).hidden_rows).toEqual([3,4,5])
+  await page.request.put(`/api/v1/workbooks/${workbookId}/shares`,{data:{principal_type:'user',principal_id:'other-filter-user',role:'viewer'}})
   const otherUser=await filterViews({'X-Kanpic-Actor':'other-filter-user'})
   expect(otherUser.items).toEqual([])
   await page.getByRole('button',{name:'필터 닫기'}).click()

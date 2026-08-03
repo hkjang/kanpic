@@ -55,7 +55,7 @@ func (s *Server) getFormulaInfo(ctx context.Context, sheetID, address string) (f
 	if len(selectedCells) != 1 || selectedCells[0].Formula == "" {
 		return formulaInfoResult{}, workbook.ErrNotFound
 	}
-	books, err := s.repository.ListWorkbooks(ctx, "")
+	books, err := s.repository.ListWorkbooks(ctx, "", workbook.AccessPrincipal{Admin: true, Authenticated: true})
 	if err != nil {
 		return formulaInfoResult{}, err
 	}

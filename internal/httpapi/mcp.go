@@ -46,6 +46,19 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.delete", "워크북을 삭제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.share.list", "워크북의 공유 대상과 링크 액세스, 호출자의 유효 권한을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.share.grant", "사용자·부서·역할에 뷰어·댓글 작성자·편집자 권한을 부여하거나 변경합니다.", "workbook.write", shareGrantSchema()),
+	tool("spreadsheet.share.revoke", "공유 항목을 제거합니다.", "workbook.write", requiredProps2("workbook_id", "string", "share_id", "string")),
+	tool("spreadsheet.share.link", "링크 액세스 범위와 역할, 편집자 공유 허용과 뷰어 복사 허용을 변경합니다.", "workbook.write", shareLinkSchema()),
+	tool("spreadsheet.share.transfer_ownership", "워크북 소유자를 변경합니다.", "workbook.write", requiredProps2("workbook_id", "string", "new_owner_id", "string")),
+	tool("spreadsheet.access_request.list", "워크북의 액세스 요청을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.access_request.decide", "액세스 요청을 승인하거나 거부합니다.", "workbook.write", accessRequestDecisionSchema()),
+	tool("spreadsheet.department.list", "부서 계층과 구성원 수를 조회합니다.", "workbook.read", map[string]any{"type": "object", "properties": map[string]any{}}),
+	tool("spreadsheet.department.create", "부서를 생성합니다.", "admin.*", departmentSchema()),
+	tool("spreadsheet.department.update", "부서 이름, 설명 또는 상위 부서를 변경합니다.", "admin.*", requiredProps("department_id", "string")),
+	tool("spreadsheet.department.delete", "하위 부서가 없는 부서를 삭제하고 관련 공유를 정리합니다.", "admin.*", requiredProps("department_id", "string")),
+	tool("spreadsheet.department.add_members", "부서에 구성원을 추가합니다.", "admin.*", requiredProps2("department_id", "string", "user_ids", "array")),
+	tool("spreadsheet.department.remove_member", "부서에서 구성원을 제거합니다.", "admin.*", requiredProps2("department_id", "string", "user_id", "string")),
 	tool("spreadsheet.sheet.list", "워크북의 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.sheet.create", "워크북에 시트를 추가합니다.", "workbook.write", requiredProps2("workbook_id", "string", "name", "string")),
 	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
@@ -201,6 +214,9 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	if principal, ok := apiPrincipal(r); ok && !principal.Allows(definition.Meta["required_scope"].(string)) {
 		return nil, errors.New("insufficient scope: " + definition.Meta["required_scope"].(string))
 	}
+	if err := s.authorizeMCPTool(r, name, args); err != nil {
+		return nil, err
+	}
 	ctx, actor := r.Context(), actorID(r)
 	switch name {
 	case "platform.version.get":
@@ -215,7 +231,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			"client_secret_configured": strings.TrimSpace(config.ClientSecret) != "",
 		}, err
 	case "spreadsheet.workbook.list":
-		return s.repository.ListWorkbooks(ctx, stringArg(args, "workspace_id"))
+		return s.repository.ListWorkbooks(ctx, stringArg(args, "workspace_id"), s.accessPrincipal(r))
 	case "spreadsheet.workbook.get":
 		return s.repository.GetWorkbook(ctx, stringArg(args, "workbook_id"))
 	case "spreadsheet.workbook.search":
@@ -261,6 +277,85 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return item, err
 	case "spreadsheet.workbook.delete":
 		return okResult(s.repository.DeleteWorkbook(ctx, stringArg(args, "workbook_id")))
+	case "spreadsheet.share.list":
+		return s.sharingResult(ctx, r, stringArg(args, "workbook_id"))
+	case "spreadsheet.share.grant":
+		var input workbook.ShareInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		workbookID := stringArg(args, "workbook_id")
+		if _, err := s.repository.PutWorkbookShare(ctx, workbookID, input); err != nil {
+			return nil, err
+		}
+		return s.sharingResult(ctx, r, workbookID)
+	case "spreadsheet.share.revoke":
+		workbookID := stringArg(args, "workbook_id")
+		if err := s.repository.DeleteWorkbookShare(ctx, workbookID, stringArg(args, "share_id")); err != nil {
+			return nil, err
+		}
+		return s.sharingResult(ctx, r, workbookID)
+	case "spreadsheet.share.link":
+		var input workbook.UpdateSharingInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		workbookID := stringArg(args, "workbook_id")
+		if _, err := s.repository.UpdateWorkbookSharing(ctx, workbookID, input); err != nil {
+			return nil, err
+		}
+		return s.sharingResult(ctx, r, workbookID)
+	case "spreadsheet.share.transfer_ownership":
+		var input workbook.TransferOwnershipInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		workbookID := stringArg(args, "workbook_id")
+		if _, err := s.repository.TransferWorkbookOwnership(ctx, workbookID, input); err != nil {
+			return nil, err
+		}
+		return s.sharingResult(ctx, r, workbookID)
+	case "spreadsheet.access_request.list":
+		items, err := s.repository.ListAccessRequests(ctx, stringArg(args, "workbook_id"), false)
+		return map[string]any{"items": items}, err
+	case "spreadsheet.access_request.decide":
+		var input workbook.DecideAccessRequestInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		return s.repository.DecideAccessRequest(ctx, stringArg(args, "request_id"), input)
+	case "spreadsheet.department.list":
+		items, err := s.repository.ListDepartments(ctx)
+		return map[string]any{"items": items}, err
+	case "spreadsheet.department.create":
+		var input workbook.CreateDepartmentInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		return s.repository.CreateDepartment(ctx, input)
+	case "spreadsheet.department.update":
+		var input workbook.UpdateDepartmentInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		return s.repository.UpdateDepartment(ctx, stringArg(args, "department_id"), input)
+	case "spreadsheet.department.delete":
+		return okResult(s.repository.DeleteDepartment(ctx, stringArg(args, "department_id")))
+	case "spreadsheet.department.add_members":
+		var input workbook.DepartmentMembersInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		return s.repository.AddDepartmentMembers(ctx, stringArg(args, "department_id"), input)
+	case "spreadsheet.department.remove_member":
+		return s.repository.RemoveDepartmentMember(ctx, stringArg(args, "department_id"), stringArg(args, "user_id"))
 	case "spreadsheet.sheet.list":
 		wb, err := s.repository.GetWorkbook(ctx, stringArg(args, "workbook_id"))
 		return wb.Sheets, err
@@ -1120,6 +1215,43 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+
+func shareGrantSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id":     map[string]any{"type": "string", "minLength": 1},
+		"principal_type":  map[string]any{"type": "string", "enum": []string{workbook.PrincipalUser, workbook.PrincipalDepartment, workbook.PrincipalRole}},
+		"principal_id":    map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxPrincipalIDRunes},
+		"principal_label": map[string]any{"type": "string"},
+		"role":            map[string]any{"type": "string", "enum": []string{string(workbook.RoleViewer), string(workbook.RoleCommenter), string(workbook.RoleEditor)}},
+	}, "required": []string{"workbook_id", "principal_type", "principal_id", "role"}}
+}
+
+func shareLinkSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id":     map[string]any{"type": "string", "minLength": 1},
+		"link_access":     map[string]any{"type": "string", "enum": []string{workbook.LinkAccessRestricted, workbook.LinkAccessOrganization, workbook.LinkAccessAnyone}},
+		"link_role":       map[string]any{"type": "string", "enum": []string{string(workbook.RoleViewer), string(workbook.RoleCommenter), string(workbook.RoleEditor)}},
+		"sharing_locked":  map[string]any{"type": "boolean"},
+		"viewer_can_copy": map[string]any{"type": "boolean"},
+	}, "required": []string{"workbook_id"}}
+}
+
+func accessRequestDecisionSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workbook_id": map[string]any{"type": "string", "minLength": 1},
+		"request_id":  map[string]any{"type": "string", "minLength": 1},
+		"approve":     map[string]any{"type": "boolean"},
+		"role":        map[string]any{"type": "string", "enum": []string{string(workbook.RoleViewer), string(workbook.RoleCommenter), string(workbook.RoleEditor)}},
+	}, "required": []string{"workbook_id", "request_id", "approve"}}
+}
+
+func departmentSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"name":        map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxDepartmentNameRunes},
+		"parent_id":   map[string]any{"type": "string"},
+		"description": map[string]any{"type": "string", "maxLength": workbook.MaxDepartmentDescriptionRunes},
+	}, "required": []string{"name"}}
 }
 
 func workbookSearchSchema() map[string]any {

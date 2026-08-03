@@ -1,0 +1,319 @@
+package httpapi
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"kanpic/internal/workbook"
+)
+
+type accessContextKey struct{}
+
+// resourceCollections maps the first path segment after /api/v1 to the resource
+// kind the identifier that follows belongs to. Keeping the table here means one
+// authorization pass protects every workbook-scoped route, including routes that
+// only receive a nested identifier such as a chart or a comment message.
+var resourceCollections = map[string]string{
+	"workbooks":           "workbookId",
+	"sheets":              "sheetId",
+	"charts":              "chartId",
+	"pivots":              "pivotId",
+	"named-ranges":        "namedRangeId",
+	"comments":            "commentId",
+	"comment-messages":    "messageId",
+	"conflicts":           "conflictId",
+	"versions":            "versionId",
+	"operations":          "operationId",
+	"filter-views":        "filterViewId",
+	"data-validations":    "dataValidationId",
+	"conditional-formats": "conditionalFormatId",
+	"automations":         "automationId",
+	"automation-runs":     "automationRunId",
+	"access-requests":     "accessRequestId",
+}
+
+type authorizationTarget struct {
+	kind       string
+	id         string
+	capability workbook.Capability
+}
+
+// accessPrincipal assembles the identity an authorization decision is made for.
+// Sessions carry identity provider roles, API keys carry their owner, and the
+// development actor header keeps open local setups usable.
+func (s *Server) accessPrincipal(r *http.Request) workbook.AccessPrincipal {
+	if user, ok := sessionUser(r); ok {
+		admin := s.auth != nil && s.auth.IsAdmin(r.Context(), user)
+		return workbook.AccessPrincipal{UserID: user.ID, Email: user.Email, Roles: user.Roles, Admin: admin, Authenticated: true}
+	}
+	if principal, ok := apiPrincipal(r); ok {
+		return workbook.AccessPrincipal{UserID: principal.UserID, Admin: principal.Allows("admin.*"), Authenticated: true}
+	}
+	return workbook.AccessPrincipal{UserID: actorID(r), Authenticated: true}
+}
+
+// capabilityForRequest translates a route into the minimum role it needs.
+func capabilityForRequest(r *http.Request) workbook.Capability {
+	path := r.URL.Path
+	readOnly := r.Method == http.MethodGet || r.Method == http.MethodHead
+	switch {
+	case strings.HasPrefix(path, "/ws/"):
+		return workbook.CapabilityRead
+	// Asking for access is exactly what a user without access needs to do.
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/access-requests"):
+		return ""
+
+	case strings.Contains(path, "/sharing") || strings.Contains(path, "/shares") || strings.Contains(path, "/access-requests"):
+		if readOnly {
+			return workbook.CapabilityRead
+		}
+		return workbook.CapabilityManage
+	case readOnly:
+		return workbook.CapabilityRead
+	// Comment threads and replies are the only writes a commenter may perform.
+	case strings.Contains(path, "/comments") || strings.Contains(path, "/comment-messages") || strings.Contains(path, "/replies"):
+		return workbook.CapabilityComment
+	// Deleting a workbook outright, like transferring it, stays with the owner.
+	case r.Method == http.MethodDelete && workbookDeletePath(path):
+		return workbook.CapabilityManage
+	default:
+		return workbook.CapabilityWrite
+	}
+}
+
+func workbookDeletePath(path string) bool {
+	trimmed := strings.Trim(strings.TrimPrefix(path, "/api/v1/"), "/")
+	segments := strings.Split(trimmed, "/")
+	return len(segments) == 2 && segments[0] == "workbooks"
+}
+
+// authorizationTargetFor finds the workbook-scoped resource a request addresses.
+// Path values are unavailable before routing, so the identifier is read from the
+// URL and any ":action" suffix is removed.
+func authorizationTargetFor(r *http.Request) (authorizationTarget, bool) {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/ws/workbooks/") {
+		id := strings.Trim(strings.TrimPrefix(path, "/ws/workbooks/"), "/")
+		if id == "" {
+			return authorizationTarget{}, false
+		}
+		return authorizationTarget{kind: "workbookId", id: id, capability: workbook.CapabilityRead}, true
+	}
+	if !strings.HasPrefix(path, "/api/v1/") {
+		return authorizationTarget{}, false
+	}
+	segments := strings.Split(strings.Trim(strings.TrimPrefix(path, "/api/v1/"), "/"), "/")
+	if len(segments) < 2 {
+		return authorizationTarget{}, false
+	}
+	collection, identifier := segments[0], segments[1]
+	if collection == "ai" && len(segments) >= 3 && segments[1] == "actions" {
+		collection, identifier = "ai-actions", segments[2]
+	}
+	kind, ok := resourceCollections[collection]
+	if collection == "ai-actions" {
+		kind, ok = "aiActionId", true
+	}
+	if !ok {
+		return authorizationTarget{}, false
+	}
+	if index := strings.Index(identifier, ":"); index >= 0 {
+		identifier = identifier[:index]
+	}
+	if strings.TrimSpace(identifier) == "" {
+		return authorizationTarget{}, false
+	}
+	capability := capabilityForRequest(r)
+	if capability == "" {
+		return authorizationTarget{}, false
+	}
+	return authorizationTarget{kind: kind, id: identifier, capability: capability}, true
+}
+
+// resolveTargetWorkbook finds the workbook a target belongs to. Automations and
+// AI actions live in their own services, so they are asked first and fall back
+// to the workbook repository.
+func (s *Server) resolveTargetWorkbook(ctx context.Context, r *http.Request, target authorizationTarget) (string, bool, error) {
+	switch target.kind {
+	case "automationId":
+		if s.automations != nil {
+			if item, err := s.automations.Get(ctx, target.id); err == nil && item.WorkbookID != "" {
+				return item.WorkbookID, true, nil
+			}
+		}
+	case "aiActionId":
+		if s.ai != nil {
+			if item, err := s.ai.Get(ctx, actorID(r), target.id); err == nil && item.WorkbookID != "" {
+				return item.WorkbookID, true, nil
+			}
+		}
+	}
+	workbookID, err := s.repository.WorkbookIDForResource(ctx, target.kind, target.id)
+	if err != nil {
+		return "", false, err
+	}
+	return workbookID, true, nil
+}
+
+// authorizeWorkbookRequest enforces the workbook sharing rules for one request
+// and stores the resolved access for handlers that need the effective role.
+func (s *Server) authorizeWorkbookRequest(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	target, ok := authorizationTargetFor(r)
+	if !ok {
+		return r, true
+	}
+	workbookID, resolved, err := s.resolveTargetWorkbook(r.Context(), r, target)
+	if err != nil {
+		// Resources owned by side services cannot always be traced back to a
+		// workbook; their handlers still perform their own actor checks.
+		if target.kind == "automationId" || target.kind == "automationRunId" || target.kind == "aiActionId" {
+			return r, true
+		}
+		s.writeError(w, r, err)
+		return r, false
+	}
+	if !resolved {
+		return r, true
+	}
+	principal := s.accessPrincipal(r)
+	access, err := s.repository.ResolveWorkbookAccess(r.Context(), workbookID, principal)
+	if err != nil {
+		s.writeError(w, r, err)
+		return r, false
+	}
+	if !access.Role.Allows(target.capability) {
+		// Managing sharing is also granted to editors unless the owner locked it.
+		if !(target.capability == workbook.CapabilityManage && access.CanManage) {
+			s.writeAccessDenied(w, r, access, target.capability)
+			return r, false
+		}
+	}
+	return r.WithContext(context.WithValue(r.Context(), accessContextKey{}, access)), true
+}
+
+func (s *Server) writeAccessDenied(w http.ResponseWriter, r *http.Request, access workbook.WorkbookAccess, capability workbook.Capability) {
+	message := "이 워크북에 대한 권한이 없습니다."
+	code := "workbook_access_denied"
+	if access.Role != workbook.RoleNone {
+		switch capability {
+		case workbook.CapabilityComment:
+			message = "댓글을 작성할 권한이 없습니다. 보기 전용으로 공유되었습니다."
+		case workbook.CapabilityWrite:
+			message = "편집 권한이 없습니다. 소유자에게 편집자 권한을 요청하세요."
+			code = "workbook_read_only"
+		case workbook.CapabilityManage:
+			message = "공유 설정은 소유자만 변경할 수 있습니다."
+			code = "workbook_sharing_locked"
+		}
+	}
+	writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{
+		"code": code, "message": message, "trace_id": w.Header().Get("X-Trace-ID"),
+		"access": access,
+	}})
+}
+
+// writeCopyDenied reports a blocked download, print or copy for a viewer.
+func (s *Server) writeCopyDenied(w http.ResponseWriter, r *http.Request, access workbook.WorkbookAccess) {
+	writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{
+		"code": "workbook_copy_disabled", "message": "소유자가 뷰어의 내보내기와 복사를 제한했습니다.",
+		"trace_id": w.Header().Get("X-Trace-ID"), "access": access,
+	}})
+}
+
+// workbookAccessFrom returns the access resolved by the authorization pass.
+func workbookAccessFrom(r *http.Request) (workbook.WorkbookAccess, bool) {
+	access, ok := r.Context().Value(accessContextKey{}).(workbook.WorkbookAccess)
+	return access, ok
+}
+
+// authorizeWorkbookID checks a workbook identified inside the request body, such
+// as an export request, and returns the resolved access.
+func (s *Server) authorizeWorkbookID(w http.ResponseWriter, r *http.Request, workbookID string, capability workbook.Capability) (workbook.WorkbookAccess, bool) {
+	if strings.TrimSpace(workbookID) == "" {
+		s.writeError(w, r, workbook.ErrNotFound)
+		return workbook.WorkbookAccess{}, false
+	}
+	access, err := s.repository.ResolveWorkbookAccess(r.Context(), workbookID, s.accessPrincipal(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return workbook.WorkbookAccess{}, false
+	}
+	if !access.Role.Allows(capability) {
+		s.writeAccessDenied(w, r, access, capability)
+		return workbook.WorkbookAccess{}, false
+	}
+	return access, true
+}
+
+// mcpResourceArgs maps MCP tool arguments to the resource they identify so the
+// tool surface enforces the same sharing rules as REST.
+var mcpResourceArgs = []struct{ arg, kind string }{
+	{"workbook_id", "workbookId"},
+	{"sheet_id", "sheetId"},
+	{"chart_id", "chartId"},
+	{"pivot_id", "pivotId"},
+	{"named_range_id", "namedRangeId"},
+	{"comment_id", "commentId"},
+	{"message_id", "messageId"},
+	{"conflict_id", "conflictId"},
+	{"version_id", "versionId"},
+	{"operation_id", "operationId"},
+	{"filter_view_id", "filterViewId"},
+	{"data_validation_id", "dataValidationId"},
+	{"conditional_format_id", "conditionalFormatId"},
+	{"automation_id", "automationId"},
+	{"action_id", "aiActionId"},
+}
+
+func mcpCapability(name string) workbook.Capability {
+	switch {
+	case strings.HasPrefix(name, "spreadsheet.share.") || strings.HasPrefix(name, "spreadsheet.department."):
+		if strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".get") {
+			return workbook.CapabilityRead
+		}
+		return workbook.CapabilityManage
+	case strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".get") || strings.HasSuffix(name, ".read") ||
+		strings.HasSuffix(name, ".data") || strings.HasSuffix(name, ".drilldown") || strings.HasSuffix(name, ".search") ||
+		strings.HasSuffix(name, ".evaluate") || strings.HasSuffix(name, ".preview"):
+		return workbook.CapabilityRead
+	case strings.HasPrefix(name, "spreadsheet.comment.") || strings.HasPrefix(name, "spreadsheet.notification."):
+		return workbook.CapabilityComment
+	case strings.HasSuffix(name, ".transfer_ownership") || strings.HasSuffix(name, ".delete") && strings.HasPrefix(name, "spreadsheet.workbook."):
+		return workbook.CapabilityManage
+	default:
+		return workbook.CapabilityWrite
+	}
+}
+
+// authorizeMCPTool resolves the workbook a tool call targets and rejects calls
+// the principal may not perform.
+func (s *Server) authorizeMCPTool(r *http.Request, name string, args map[string]any) error {
+	capability := mcpCapability(name)
+	for _, candidate := range mcpResourceArgs {
+		value := strings.TrimSpace(stringArg(args, candidate.arg))
+		if value == "" {
+			continue
+		}
+		workbookID, resolved, err := s.resolveTargetWorkbook(r.Context(), r, authorizationTarget{kind: candidate.kind, id: value, capability: capability})
+		if err != nil {
+			if candidate.kind == "automationId" || candidate.kind == "automationRunId" || candidate.kind == "aiActionId" {
+				return nil
+			}
+			return err
+		}
+		if !resolved {
+			return nil
+		}
+		access, err := s.repository.ResolveWorkbookAccess(r.Context(), workbookID, s.accessPrincipal(r))
+		if err != nil {
+			return err
+		}
+		if !access.Role.Allows(capability) && !(capability == workbook.CapabilityManage && access.CanManage) {
+			return fmt.Errorf("%w: 이 워크북에 대한 %s 권한이 없습니다", workbook.ErrForbidden, capability)
+		}
+		return nil
+	}
+	return nil
+}

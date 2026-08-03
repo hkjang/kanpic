@@ -70,6 +70,10 @@ type MemoryRepository struct {
 	comments           map[string]CommentThread
 	notifications      map[string]MentionNotification
 	conflicts          map[string]CellConflict
+	shares             map[string]map[string]WorkbookShare
+	departments        map[string]Department
+	departmentMembers  map[string][]string
+	accessRequests     map[string]AccessRequest
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -88,6 +92,10 @@ func NewMemoryRepository() *MemoryRepository {
 		comments:           make(map[string]CommentThread),
 		notifications:      make(map[string]MentionNotification),
 		conflicts:          make(map[string]CellConflict),
+		shares:             make(map[string]map[string]WorkbookShare),
+		departments:        make(map[string]Department),
+		departmentMembers:  make(map[string][]string),
+		accessRequests:     make(map[string]AccessRequest),
 	}
 }
 
@@ -126,7 +134,7 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 		return r.workbookWithSheets(state), nil
 	}
 	now := r.now()
-	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	state := &workbookState{workbook: wb, sheets: make(map[string]Sheet), cells: make(map[string]map[cellKey]Cell), idempotent: make(map[string]MutationResult)}
 	for position, imported := range input.Sheets {
 		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: defaultSheetLayout(), CreatedAt: now}
@@ -259,7 +267,7 @@ func (r *MemoryRepository) CreateWorkbook(_ context.Context, input CreateWorkboo
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: "Sheet1", Position: 0, Layout: defaultSheetLayout(), CreatedAt: now}
 	state := &workbookState{workbook: wb, sheets: map[string]Sheet{sheet.ID: sheet}, cells: map[string]map[cellKey]Cell{sheet.ID: {}}, idempotent: make(map[string]MutationResult)}
 	r.workbooks[wb.ID] = state
@@ -267,17 +275,29 @@ func (r *MemoryRepository) CreateWorkbook(_ context.Context, input CreateWorkboo
 	return r.workbookWithSheets(state), nil
 }
 
-func (r *MemoryRepository) ListWorkbooks(_ context.Context, workspaceID string) ([]Workbook, error) {
+func (r *MemoryRepository) ListWorkbooks(_ context.Context, workspaceID string, principal AccessPrincipal) ([]Workbook, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]Workbook, 0, len(r.workbooks))
-	for _, state := range r.workbooks {
-		if workspaceID == "" || state.workbook.WorkspaceID == workspaceID {
-			result = append(result, r.workbookWithSheets(state))
+	closure := r.departmentClosureLocked(principal)
+	items := make([]Workbook, 0, len(r.workbooks))
+	for id, state := range r.workbooks {
+		if workspaceID != "" && state.workbook.WorkspaceID != workspaceID {
+			continue
 		}
+		sharing, err := r.sharingLocked(id)
+		if err != nil {
+			return nil, err
+		}
+		access := resolveAccess(id, principal, sharing, closure)
+		if access.Role == RoleNone {
+			continue
+		}
+		item := r.workbookWithSheets(state)
+		item.AccessRole, item.AccessSource, item.SharedCount = access.Role, access.Source, len(sharing.Shares)
+		items = append(items, item)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
-	return result, nil
+	sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+	return items, nil
 }
 
 func (r *MemoryRepository) GetWorkbook(_ context.Context, id string) (Workbook, error) {

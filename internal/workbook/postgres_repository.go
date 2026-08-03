@@ -130,7 +130,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	now := r.now()
-	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	if _, err := tx.Exec(ctx, `INSERT INTO workbooks(id,workspace_id,title,owner_id,version,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)`, wb.ID, wb.WorkspaceID, wb.Title, wb.OwnerID, now); err != nil {
 		return Workbook{}, err
 	}
@@ -243,7 +243,7 @@ func (r *PostgresRepository) CreateWorkbook(ctx context.Context, input CreateWor
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	now := r.now()
-	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now}
+	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	if _, err := tx.Exec(ctx, `INSERT INTO workbooks(id,workspace_id,title,owner_id,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)`, wb.ID, wb.WorkspaceID, wb.Title, wb.OwnerID, wb.Version, now); err != nil {
 		return Workbook{}, err
 	}
@@ -259,12 +259,40 @@ func (r *PostgresRepository) CreateWorkbook(ctx context.Context, input CreateWor
 	return wb, nil
 }
 
-func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID string) ([]Workbook, error) {
-	query := `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at FROM workbooks WHERE deleted_at IS NULL`
-	args := []any{}
+// ListWorkbooks returns only the workbooks the principal may open: the ones
+// they own, the ones shared with them directly, through a department or an
+// identity provider role, and the ones opened up by link access. Administrators
+// see every workbook so they can audit and repair sharing.
+func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID string, principal AccessPrincipal) ([]Workbook, error) {
+	identities := principal.identities()
+	roles := principal.roleSet()
+	closure, err := r.departmentClosure(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	departmentIDs := make([]string, 0, len(closure))
+	for id := range closure {
+		departmentIDs = append(departmentIDs, id)
+	}
+	query := `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy
+		FROM workbooks WHERE deleted_at IS NULL`
+	args := []any{identities, roles, departmentIDs}
+	if !principal.Admin {
+		query += ` AND (
+			lower(owner_id) = ANY($1)
+			OR link_access IN ('organization','anyone')
+			OR EXISTS (
+				SELECT 1 FROM workbook_shares s WHERE s.workbook_id = workbooks.id AND (
+					(s.principal_type='user' AND lower(s.principal_id) = ANY($1))
+					OR (s.principal_type='role' AND lower(s.principal_id) = ANY($2))
+					OR (s.principal_type='department' AND lower(s.principal_id) = ANY($3))
+				)
+			)
+		)`
+	}
 	if workspaceID != "" {
-		query += ` AND workspace_id=$1`
 		args = append(args, workspaceID)
+		query += fmt.Sprintf(` AND workspace_id=$%d`, len(args))
 	}
 	query += ` ORDER BY updated_at DESC`
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -275,7 +303,7 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	items := make([]Workbook, 0)
 	for rows.Next() {
 		var wb Workbook
-		if err := rows.Scan(&wb.ID, &wb.WorkspaceID, &wb.Title, &wb.OwnerID, &wb.Favorite, &wb.Version, &wb.CreatedAt, &wb.UpdatedAt); err != nil {
+		if err := rows.Scan(&wb.ID, &wb.WorkspaceID, &wb.Title, &wb.OwnerID, &wb.Favorite, &wb.Version, &wb.CreatedAt, &wb.UpdatedAt, &wb.LinkAccess, &wb.LinkRole, &wb.SharingLocked, &wb.ViewerCanCopy); err != nil {
 			return nil, err
 		}
 		items = append(items, wb)
@@ -283,18 +311,30 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	shares, err := r.sharesFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range items {
 		items[i].Sheets, err = r.listSheets(ctx, r.pool, items[i].ID)
 		if err != nil {
 			return nil, err
 		}
+		items[i].SharedCount = len(shares[items[i].ID])
+		access := resolveAccess(items[i].ID, principal, sharingFromWorkbook(items[i], shares[items[i].ID]), closure)
+		items[i].AccessRole, items[i].AccessSource = access.Role, access.Source
 	}
 	return items, nil
 }
 
 func (r *PostgresRepository) GetWorkbook(ctx context.Context, id string) (Workbook, error) {
 	var wb Workbook
-	err := r.pool.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&wb.ID, &wb.WorkspaceID, &wb.Title, &wb.OwnerID, &wb.Favorite, &wb.Version, &wb.CreatedAt, &wb.UpdatedAt)
+	err := r.pool.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&wb.ID, &wb.WorkspaceID, &wb.Title, &wb.OwnerID, &wb.Favorite, &wb.Version, &wb.CreatedAt, &wb.UpdatedAt, &wb.LinkAccess, &wb.LinkRole, &wb.SharingLocked, &wb.ViewerCanCopy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workbook{}, ErrNotFound
 	}

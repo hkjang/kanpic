@@ -1,25 +1,113 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Activity, ArrowLeft, Bot, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
+import { Activity, ArrowLeft, Building2, Bot, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
-import type { BuildInfo, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
+import type { BuildInfo, Department, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='settings'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['logs','keys','system'].includes(value||'')?value as Tab:'settings'}
+type Tab='settings'|'departments'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['departments','logs','keys','system'].includes(value||'')?value as Tab:'settings'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
   const navigate=(next:Tab)=>{history.replaceState(null,'',`/admin?tab=${next}`);setTab(next)}
   return <div className="console-shell"><aside className="console-sidebar"><Brand/><div className="console-label">ADMIN CONSOLE</div><nav>
     <button className={tab==='settings'?'active':''} onClick={()=>navigate('settings')}><Settings2/> 시스템 설정 <ChevronRight/></button>
+    <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
   </nav><div className="console-nav-group"><span>관리</span><a><Users/> 사용자 및 역할</a><a><Database/> 워크스페이스</a><a><ShieldCheck/> 보안 정책</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='settings'&&<SettingsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='settings'&&<SettingsPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
+}
+
+/**
+ * Departments decide which workbooks a person reaches, so the console keeps the
+ * hierarchy, membership and the resulting share reach in one place.
+ */
+function DepartmentsPanel(){
+  const client=useQueryClient()
+  const [name,setName]=useState(''),[parentID,setParentID]=useState(''),[description,setDescription]=useState('')
+  const [selected,setSelected]=useState<string>(),[member,setMember]=useState(''),[message,setMessage]=useState(''),[error,setError]=useState('')
+  const departments=useQuery({queryKey:['departments'],queryFn:()=>api<{items:Department[]}>('/api/v1/departments')})
+  const items=departments.data?.items??[]
+  const current=items.find(item=>item.id===selected)
+  const detail=useQuery({queryKey:['department',selected],queryFn:()=>api<Department>(`/api/v1/departments/${selected}`),enabled:Boolean(selected)})
+  const run=async(action:()=>Promise<unknown>,success:string)=>{
+    setError('');setMessage('')
+    try{await action();await client.invalidateQueries({queryKey:['departments']});if(selected)await client.invalidateQueries({queryKey:['department',selected]});setMessage(success)}
+    catch(reason){setError(reason instanceof Error?reason.message:'요청을 처리하지 못했습니다.')}
+  }
+  const create=()=>run(async()=>{
+    const created=await api<Department>('/api/v1/departments',{method:'POST',body:JSON.stringify({name:name.trim(),parent_id:parentID||undefined,description:description.trim()})})
+    setName('');setDescription('');setSelected(created.id)
+  },'부서를 만들었습니다.')
+  const addMember=()=>run(async()=>{
+    await api<Department>(`/api/v1/departments/${selected}/members`,{method:'POST',body:JSON.stringify({user_ids:member.split(/[,\s]+/).filter(Boolean)})})
+    setMember('')
+  },'구성원을 추가했습니다.')
+  const removeMember=(userID:string)=>run(()=>api<Department>(`/api/v1/departments/${selected}/members/${encodeURIComponent(userID)}`,{method:'DELETE'}),'구성원을 제거했습니다.')
+  const remove=(department:Department)=>{
+    if(!window.confirm(`'${department.name}' 부서를 삭제하면 이 부서로 공유된 워크북 권한도 함께 사라집니다. 계속할까요?`))return
+    void run(async()=>{await api(`/api/v1/departments/${department.id}`,{method:'DELETE'});if(selected===department.id)setSelected(undefined)},'부서를 삭제했습니다.')
+  }
+  const rename=(department:Department,next:string)=>{
+    const trimmed=next.trim()
+    if(!trimmed||trimmed===department.name)return
+    void run(()=>api<Department>(`/api/v1/departments/${department.id}`,{method:'PATCH',body:JSON.stringify({name:trimmed,expected_revision:department.revision})}),'부서 이름을 변경했습니다.')
+  }
+  const move=(department:Department,parent:string)=>void run(()=>api<Department>(`/api/v1/departments/${department.id}`,{method:'PATCH',body:JSON.stringify({parent_id:parent,expected_revision:department.revision})}),'상위 부서를 변경했습니다.')
+  return <section className="console-panel">
+    <header className="panel-header"><div><h1>부서 및 공유</h1><p>부서를 만들고 구성원을 배치하면 워크북을 부서 단위로 공유할 수 있습니다. 상위 부서에 공유하면 하위 부서 구성원까지 권한을 상속합니다.</p></div></header>
+    <div className="department-layout">
+      <div className="department-tree">
+        <h2>부서 계층 {items.length>0&&<span>{items.length}개</span>}</h2>
+        {departments.isLoading?<div className="loading-card">부서를 불러오는 중…</div>:items.length===0?<div className="empty-state small"><Building2/><h3>부서가 없습니다</h3><p>첫 부서를 만들어 조직 구조를 등록하세요.</p></div>:<ul>
+          {items.map(item=><li key={item.id} style={{paddingLeft:12+item.depth*16}}>
+            <button className={selected===item.id?'active':''} onClick={()=>setSelected(item.id)}><Building2/><span><strong>{item.name}</strong><small>{item.member_count}명{item.description?` · ${item.description}`:''}</small></span></button>
+            <button className="department-delete" aria-label={`${item.name} 삭제`} onClick={()=>remove(item)}><Trash2/></button>
+          </li>)}
+        </ul>}
+        <div className="department-create">
+          <h3><Plus/> 부서 추가</h3>
+          <input aria-label="부서 이름" placeholder="부서 이름" value={name} onChange={event=>setName(event.target.value)}/>
+          <select aria-label="상위 부서" value={parentID} onChange={event=>setParentID(event.target.value)}>
+            <option value="">최상위 부서</option>
+            {items.map(item=><option key={item.id} value={item.id}>{item.path||item.name}</option>)}
+          </select>
+          <input aria-label="부서 설명" placeholder="설명 (선택)" value={description} onChange={event=>setDescription(event.target.value)}/>
+          <button className="primary" disabled={!name.trim()} onClick={create}>부서 만들기</button>
+        </div>
+      </div>
+      <div className="department-detail">
+        {!current?<div className="empty-state small"><Users/><h3>부서를 선택하세요</h3><p>구성원을 추가하거나 상위 부서를 변경할 수 있습니다.</p></div>:<>
+          <h2>{current.path||current.name}</h2>
+          <div className="department-fields">
+            <label>부서 이름<input aria-label="선택한 부서 이름" defaultValue={current.name} key={`${current.id}-${current.revision}`} onBlur={event=>rename(current,event.target.value)}/></label>
+            <label>상위 부서<select aria-label="선택한 부서의 상위 부서" value={current.parent_id??''} onChange={event=>move(current,event.target.value)}>
+              <option value="">최상위 부서</option>
+              {items.filter(item=>item.id!==current.id).map(item=><option key={item.id} value={item.id}>{item.path||item.name}</option>)}
+            </select></label>
+          </div>
+          <div className="department-members">
+            <h3>구성원 {detail.data?.member_count??current.member_count}명</h3>
+            <div className="department-member-add">
+              <input aria-label="추가할 구성원" placeholder="사용자 ID 또는 이메일 (쉼표로 여러 명)" value={member} onChange={event=>setMember(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&member.trim())addMember()}}/>
+              <button disabled={!member.trim()} onClick={addMember}>추가</button>
+            </div>
+            <ul>
+              {(detail.data?.members??[]).map(userID=><li key={userID}><span>{userID}</span><button aria-label={`${userID} 제거`} onClick={()=>removeMember(userID)}><Trash2/></button></li>)}
+              {(detail.data?.members??[]).length===0&&<li className="department-empty">아직 구성원이 없습니다.</li>}
+            </ul>
+          </div>
+        </>}
+      </div>
+    </div>
+    {error&&<div className="panel-error" role="alert">{error}</div>}
+    {message&&<div className="panel-message" role="status">{message}</div>}
+  </section>
 }
 
 function SettingsPanel(){

@@ -15,6 +15,16 @@ type Workbook struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Sheets      []Sheet   `json:"sheets,omitempty"`
+
+	// Sharing state and, for list and read responses, the effective access of
+	// the requesting principal.
+	LinkAccess    string    `json:"link_access,omitempty"`
+	LinkRole      ShareRole `json:"link_role,omitempty"`
+	SharingLocked bool      `json:"sharing_locked,omitempty"`
+	ViewerCanCopy bool      `json:"viewer_can_copy,omitempty"`
+	AccessRole    ShareRole `json:"access_role,omitempty"`
+	AccessSource  string    `json:"access_source,omitempty"`
+	SharedCount   int       `json:"shared_count,omitempty"`
 }
 
 type Sheet struct {

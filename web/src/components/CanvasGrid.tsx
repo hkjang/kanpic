@@ -47,7 +47,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,readOnly=false,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;readOnly?:boolean;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
@@ -189,8 +189,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
 
   const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
 
+  const readOnlyNotice=useCallback(()=>{setSaveState('error');alert('보기 전용 권한입니다. 소유자에게 편집 권한을 요청하세요.')},[setSaveState])
   const queueCells=useCallback(async(inputs:PastedCell[],endpoint:'batch'|'paste'|'fill')=>{
     if(inputs.length===0)return
+    if(readOnly){readOnlyNotice();return}
     if(inputs.length>(endpoint==='batch'?1000:MAX_PASTE_CELLS)){setSaveState('error');alert(endpoint==='batch'?'한 번에 최대 1,000셀까지 변경할 수 있습니다.':`${endpoint==='fill'?'자동 채우기':'붙여넣기'}는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}
     const spillChild=inputs.find(input=>cells.get(cellKey(input.row,input.column))?.spill_source)
     if(spillChild){const source=cells.get(cellKey(spillChild.row,spillChild.column))?.spill_source;setSaveState('error');alert(`${address(spillChild.row,spillChild.column)}은(는) ${source} 배열 수식의 결과입니다. 원본 수식 셀을 편집하세요.`);return}
@@ -203,9 +205,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const id=newIdempotencyKey()
     await enqueue({id,sheetId,endpoint,attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:collaborationClientId(),cells:inputs}})
     await flushOutbox(handleApplied)
-  },[cells,handleApplied,putCells,setSaveState,sheetId,version,validations])
+  },[cells,handleApplied,putCells,setSaveState,sheetId,version,validations,readOnly,readOnlyNotice])
 
   const saveCell=useCallback(async(value:unknown,formula:string,row:number,column:number)=>{
+    if(readOnly){readOnlyNotice();return false}
     const current=cells.get(cellKey(row,column))
     if(current?.spill_source){setSaveState('error');alert(`${address(row,column)}은(는) ${current.spill_source} 배열 수식의 결과입니다. 원본 수식 셀을 편집하세요.`);return false}
     const style=current?.style,input={row,column,value,formula,style}
@@ -217,7 +220,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const id=newIdempotencyKey()
     await enqueue({id,sheetId,endpoint:'batch',attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:collaborationClientId(),cells:[input]}})
     await flushOutbox(handleApplied);return true
-  },[sheetId,version,cells,putCell,setEditing,setSaveState,handleApplied,validations])
+  },[sheetId,version,cells,putCell,setEditing,setSaveState,handleApplied,validations,readOnly,readOnlyNotice])
 
   const commit=useCallback(async(raw:string,row=activeRow,column=activeColumn)=>{
     const formula=raw.startsWith('=')?raw:''
@@ -293,7 +296,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(target.axis==='row'&&wholeRowsSelected&&target.index>=selection.startRow&&target.index<=selection.endRow)return{start:selection.startRow,count:selection.endRow-selection.startRow+1}
     return{start:target.index,count:1}
   }
-  const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=HEADER_WIDTH+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=HEADER_HEIGHT+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
+  const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(readOnly)return false;if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=HEADER_WIDTH+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=HEADER_HEIGHT+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
   const applyLayoutCommand=useCallback(async(command:LayoutCommand)=>{if(!onLayout)return;try{await onLayout(command)}catch{/* the editor page reports layout failures */}},[onLayout])
   const applyStructureCommand=useCallback(async(command:StructureCommand)=>{if(!onStructure)return;try{await onStructure(command)}catch{/* the editor page reports structure failures */}},[onStructure])
   const pointerDown=(event:React.PointerEvent<HTMLCanvasElement>)=>{
@@ -354,15 +357,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(shouldFill&&target)void fillSelection(target)
   }
   const pointerCancel=(event:React.PointerEvent<HTMLCanvasElement>)=>{resizeDrag.current=null;setResizePreview(undefined);finishGesture(event)}
-  const editActiveCell=useCallback(()=>{if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing])
+  const editActiveCell=useCallback(()=>{if(readOnly){readOnlyNotice();return}if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing,readOnly,readOnlyNotice])
   const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;const primary=event.ctrlKey||event.metaKey
     if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
     if(primary&&event.key.toLowerCase()==='a'){selectRange(1,1,TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
     else if(primary&&event.code==='Space'){selectRange(1,activeColumn,TOTAL_ROWS,activeColumn);event.preventDefault()}
     else if(event.shiftKey&&event.code==='Space'){selectRange(activeRow,1,activeRow,TOTAL_COLUMNS);event.preventDefault()}
     else if(primary&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)){const direction=event.key.replace('Arrow','').toLowerCase() as 'up'|'down'|'left'|'right';moveDataEdge(direction,event.shiftKey);event.preventDefault()}
-    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='d'){fillDown();event.preventDefault()}
-    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='r'){fillRight();event.preventDefault()}
+    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='d'){if(readOnly)readOnlyNotice();else fillDown();event.preventDefault()}
+    else if(primary&&!event.shiftKey&&event.key.toLowerCase()==='r'){if(readOnly)readOnlyNotice();else fillRight();event.preventDefault()}
     else if(primary&&event.key==='Home'){selectCell(1,1);event.preventDefault()}
     else if(primary&&event.key==='End'){selectCell(TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
     else if(event.key==='Home'){selectCell(activeRow,columnAxis.firstVisibleAtOrAfter(1),event.shiftKey);event.preventDefault()}
@@ -381,8 +384,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       })
       event.preventDefault()
     }
-    else if(event.key==='Backspace'||event.key==='Delete'){const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)void commit('');else void clearSelection();event.preventDefault()}
-    else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey&&!event.altKey){if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
+    else if(event.key==='Backspace'||event.key==='Delete'){if(readOnly){readOnlyNotice();event.preventDefault();return}const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)void commit('');else void clearSelection();event.preventDefault()}
+    else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey&&!event.altKey){if(readOnly){readOnlyNotice();event.preventDefault();return}if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
   const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();internalClipboard.current=payload;event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
   const copy=(event:React.ClipboardEvent)=>{writeClipboard(event)}
   const clearSelection=useCallback(async()=>{
@@ -521,35 +524,35 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     onMenuCommand?.({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(cells,region)?1:0})
   }
   const clipboardMenuItems=():MenuItem[]=>[
-    {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',icon:<Scissors/>,onSelect:()=>void copySelection(true)},
+    {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',icon:<Scissors/>,disabled:readOnly,onSelect:()=>void copySelection(true)},
     {kind:'item',label:'복사',shortcut:'Ctrl+C',icon:<Copy/>,onSelect:()=>void copySelection(false)},
-    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,onSelect:()=>void pasteFromClipboard(false)},
-    {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',icon:<Clipboard/>,onSelect:()=>void pasteFromClipboard(true)},
+    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(false)},
+    {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',icon:<Clipboard/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(true)},
   ]
   const cellMenuItems=(range:FillRange):MenuItem[]=>{
     const rows=range.endRow-range.startRow+1,columns=range.endColumn-range.startColumn+1
     const merged=Boolean(cellMerge(cells.get(cellKey(range.startRow,range.startColumn))))
     const rowLabel=rows>1?`행 ${range.startRow}–${range.endRow}`:`행 ${range.startRow}`,columnLabel=columns>1?`열 ${columnName(range.startColumn)}–${columnName(range.endColumn)}`:`열 ${columnName(range.startColumn)}`
     return [...clipboardMenuItems(),{kind:'separator'},
-      {kind:'item',label:`위에 행 ${rows}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis:'row',action:'insert',index:range.startRow,count:rows})},
-      {kind:'item',label:`아래에 행 ${rows}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis:'row',action:'insert',index:range.endRow+1,count:rows})},
-      {kind:'item',label:`왼쪽에 열 ${columns}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis:'column',action:'insert',index:range.startColumn,count:columns})},
-      {kind:'item',label:`오른쪽에 열 ${columns}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis:'column',action:'insert',index:range.endColumn+1,count:columns})},
+      {kind:'item',label:`위에 행 ${rows}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis:'row',action:'insert',index:range.startRow,count:rows})},
+      {kind:'item',label:`아래에 행 ${rows}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis:'row',action:'insert',index:range.endRow+1,count:rows})},
+      {kind:'item',label:`왼쪽에 열 ${columns}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis:'column',action:'insert',index:range.startColumn,count:columns})},
+      {kind:'item',label:`오른쪽에 열 ${columns}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis:'column',action:'insert',index:range.endColumn+1,count:columns})},
       {kind:'separator'},
-      {kind:'item',label:`${rowLabel} 삭제`,icon:<Trash2/>,danger:true,disabled:!onStructure,onSelect:()=>{if(window.confirm(`${rowLabel}을(를) 삭제할까요?`))void applyStructureCommand({axis:'row',action:'delete',index:range.startRow,count:rows})}},
-      {kind:'item',label:`${columnLabel} 삭제`,icon:<Trash2/>,danger:true,disabled:!onStructure,onSelect:()=>{if(window.confirm(`${columnLabel}을(를) 삭제할까요?`))void applyStructureCommand({axis:'column',action:'delete',index:range.startColumn,count:columns})}},
-      {kind:'item',label:'내용 지우기',shortcut:'Delete',icon:<Eraser/>,onSelect:()=>void clearSelection()},
-      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'clear-format'})},
+      {kind:'item',label:`${rowLabel} 삭제`,icon:<Trash2/>,danger:true,disabled:readOnly||!onStructure,onSelect:()=>{if(window.confirm(`${rowLabel}을(를) 삭제할까요?`))void applyStructureCommand({axis:'row',action:'delete',index:range.startRow,count:rows})}},
+      {kind:'item',label:`${columnLabel} 삭제`,icon:<Trash2/>,danger:true,disabled:readOnly||!onStructure,onSelect:()=>{if(window.confirm(`${columnLabel}을(를) 삭제할까요?`))void applyStructureCommand({axis:'column',action:'delete',index:range.startColumn,count:columns})}},
+      {kind:'item',label:'내용 지우기',shortcut:'Delete',icon:<Eraser/>,disabled:readOnly,onSelect:()=>void clearSelection()},
+      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'clear-format'})},
       {kind:'separator'},
-      {kind:'item',label:merged?'셀 병합 해제':'셀 병합',disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'merge',merge:!merged})},
-      {kind:'submenu',label:'데이터',disabled:!onMenuCommand,items:[
+      {kind:'item',label:merged?'셀 병합 해제':'셀 병합',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'merge',merge:!merged})},
+      {kind:'submenu',label:'데이터',disabled:readOnly||!onMenuCommand,items:[
         {kind:'item',label:'범위 정렬…',icon:<ArrowUpAZ/>,onSelect:()=>onMenuCommand?.({command:'sort-dialog'})},
         {kind:'item',label:'필터 보기…',icon:<Filter/>,onSelect:()=>onMenuCommand?.({command:'filter'})},
         {kind:'item',label:'데이터 검증…',icon:<BadgeCheck/>,onSelect:()=>onMenuCommand?.({command:'data-validation'})},
         {kind:'item',label:'조건부 서식…',icon:<Palette/>,onSelect:()=>onMenuCommand?.({command:'conditional-format'})},
         {kind:'item',label:'이름 범위 지정…',icon:<Link2/>,onSelect:()=>onMenuCommand?.({command:'named-range'})},
       ]},
-      {kind:'submenu',label:'삽입',disabled:!onMenuCommand,items:[
+      {kind:'submenu',label:'삽입',disabled:readOnly||!onMenuCommand,items:[
         {kind:'item',label:'차트 만들기…',icon:<BarChart3/>,onSelect:()=>onMenuCommand?.({command:'chart'})},
         {kind:'item',label:'피벗 테이블 만들기…',icon:<Table2/>,onSelect:()=>onMenuCommand?.({command:'pivot'})},
         {kind:'item',label:'댓글 추가',icon:<MessageSquarePlus/>,onSelect:()=>onMenuCommand?.({command:'comment'})},
@@ -564,36 +567,36 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const label=isColumn?count>1?`열 ${columnName(first)}–${columnName(first+count-1)}`:`열 ${columnName(first)}`:count>1?`행 ${first}–${first+count-1}`:`행 ${first}`
     const unit=isColumn?'열':'행'
     return [{kind:'label',label},...clipboardMenuItems(),{kind:'separator'},
-      {kind:'item',label:isColumn?`왼쪽에 열 ${count}개 삽입`:`위에 행 ${count}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first,count})},
-      {kind:'item',label:isColumn?`오른쪽에 열 ${count}개 삽입`:`아래에 행 ${count}개 삽입`,disabled:!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first+count,count})},
-      {kind:'item',label:`${label} 삭제`,icon:<Trash2/>,danger:true,disabled:!onStructure,onSelect:()=>{if(window.confirm(`${label}을(를) 삭제할까요?`))void applyStructureCommand({axis,action:'delete',index:first,count})}},
-      {kind:'item',label:`${label} 내용 지우기`,icon:<Eraser/>,onSelect:()=>void clearSelection()},
+      {kind:'item',label:isColumn?`왼쪽에 열 ${count}개 삽입`:`위에 행 ${count}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first,count})},
+      {kind:'item',label:isColumn?`오른쪽에 열 ${count}개 삽입`:`아래에 행 ${count}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first+count,count})},
+      {kind:'item',label:`${label} 삭제`,icon:<Trash2/>,danger:true,disabled:readOnly||!onStructure,onSelect:()=>{if(window.confirm(`${label}을(를) 삭제할까요?`))void applyStructureCommand({axis,action:'delete',index:first,count})}},
+      {kind:'item',label:`${label} 내용 지우기`,icon:<Eraser/>,disabled:readOnly,onSelect:()=>void clearSelection()},
       {kind:'separator'},
-      {kind:'item',label:isColumn?'열 너비 자동 맞춤':'행 높이 자동 맞춤',disabled:!onLayout,onSelect:()=>autoFit({axis,index})},
-      {kind:'item',label:isColumn?'열 너비 지정…':'행 높이 지정…',disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
-      {kind:'item',label:`${label} 숨기기`,icon:<EyeOff/>,disabled:!onLayout,onSelect:()=>void applyLayoutCommand({action:'hide',axis,start:first,count})},
-      {kind:'item',label:`모든 ${unit} 표시`,disabled:!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis})},
-      {kind:'item',label:isColumn?`${columnName(index)}열까지 고정`:`${index}행까지 고정`,icon:<PanelTop/>,disabled:!onLayout,onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:isColumn?frozenRows:index,frozen_columns:isColumn?index:frozenColumns})},
-      {kind:'item',label:'고정 해제',disabled:!onLayout||(frozenRows===0&&frozenColumns===0),onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:0,frozen_columns:0})},
+      {kind:'item',label:isColumn?'열 너비 자동 맞춤':'행 높이 자동 맞춤',disabled:readOnly||!onLayout,onSelect:()=>autoFit({axis,index})},
+      {kind:'item',label:isColumn?'열 너비 지정…':'행 높이 지정…',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
+      {kind:'item',label:`${label} 숨기기`,icon:<EyeOff/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'hide',axis,start:first,count})},
+      {kind:'item',label:`모든 ${unit} 표시`,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis})},
+      {kind:'item',label:isColumn?`${columnName(index)}열까지 고정`:`${index}행까지 고정`,icon:<PanelTop/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:isColumn?frozenRows:index,frozen_columns:isColumn?index:frozenColumns})},
+      {kind:'item',label:'고정 해제',disabled:readOnly||!onLayout||(frozenRows===0&&frozenColumns===0),onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:0,frozen_columns:0})},
       ...(isColumn?[{kind:'separator'} as MenuItem,
-        {kind:'item',label:'이 열 기준 오름차순 정렬',icon:<ArrowUpAZ/>,disabled:!onMenuCommand,onSelect:()=>sortByColumn(index,'asc')} as MenuItem,
-        {kind:'item',label:'이 열 기준 내림차순 정렬',icon:<ArrowDownAZ/>,disabled:!onMenuCommand,onSelect:()=>sortByColumn(index,'desc')} as MenuItem,
-        {kind:'item',label:'필터 보기…',icon:<Filter/>,disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'filter'})} as MenuItem,
+        {kind:'item',label:'이 열 기준 오름차순 정렬',icon:<ArrowUpAZ/>,disabled:readOnly||!onMenuCommand,onSelect:()=>sortByColumn(index,'asc')} as MenuItem,
+        {kind:'item',label:'이 열 기준 내림차순 정렬',icon:<ArrowDownAZ/>,disabled:readOnly||!onMenuCommand,onSelect:()=>sortByColumn(index,'desc')} as MenuItem,
+        {kind:'item',label:'필터 보기…',icon:<Filter/>,disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'filter'})} as MenuItem,
       ]:[]),
       {kind:'separator'},
-      {kind:'item',label:'조건부 서식…',icon:<Palette/>,disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'conditional-format'})},
-      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'clear-format'})},
+      {kind:'item',label:'조건부 서식…',icon:<Palette/>,disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'conditional-format'})},
+      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'clear-format'})},
     ]
   }
   const cornerMenuItems=():MenuItem[]=>[
     {kind:'item',label:'전체 선택',shortcut:'Ctrl+A',onSelect:()=>selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1})},
-    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,onSelect:()=>void pasteFromClipboard(false)},
+    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(false)},
     {kind:'separator'},
-    {kind:'item',label:'모든 행 표시',icon:<Rows3/>,disabled:!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'row'})},
-    {kind:'item',label:'모든 열 표시',disabled:!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'column'})},
-    {kind:'item',label:'고정 해제',icon:<PanelTop/>,disabled:!onLayout||(frozenRows===0&&frozenColumns===0),onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:0,frozen_columns:0})},
+    {kind:'item',label:'모든 행 표시',icon:<Rows3/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'row'})},
+    {kind:'item',label:'모든 열 표시',disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'column'})},
+    {kind:'item',label:'고정 해제',icon:<PanelTop/>,disabled:readOnly||!onLayout||(frozenRows===0&&frozenColumns===0),onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:0,frozen_columns:0})},
     {kind:'separator'},
-    {kind:'item',label:'시트 레이아웃…',disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
+    {kind:'item',label:'시트 레이아웃…',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
   ]
   const openContextMenu=(event:React.MouseEvent<HTMLCanvasElement>)=>{
     event.preventDefault()
