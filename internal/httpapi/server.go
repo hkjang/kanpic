@@ -80,6 +80,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("POST /api/v1/workbooks", s.createWorkbook)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}", s.getWorkbook)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/search", s.searchWorkbook)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/search:replace", s.replaceWorkbook)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/duplicate", s.duplicateWorkbook)
@@ -946,7 +947,7 @@ func requiredScope(r *http.Request) string {
 	if strings.Contains(path, "ranges:sort") {
 		return "range.write"
 	}
-	if strings.Contains(path, "structure:apply") {
+	if strings.Contains(path, "structure:apply") || strings.HasSuffix(path, "search:replace") {
 		return "range.write"
 	}
 	if strings.Contains(path, "/ranges/") {

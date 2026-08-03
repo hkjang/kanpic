@@ -40,7 +40,8 @@ var mcpTools = []mcpTool{
 	tool("platform.auth.config", "OIDC 로그인 활성화 상태를 조회합니다.", "", nil),
 	tool("spreadsheet.workbook.list", "접근 가능한 워크북을 조회합니다.", "workbook.read", props("workspace_id", "string")),
 	tool("spreadsheet.workbook.get", "워크북 메타데이터와 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
-	tool("spreadsheet.workbook.search", "워크북 전체의 셀 값과 수식을 검색하고 시트·A1 주소를 반환합니다.", "workbook.read", workbookSearchSchema()),
+	tool("spreadsheet.workbook.search", "워크북 전체의 셀 값과 수식을 대소문자·전체 셀·정규식·시트 범위 옵션으로 검색하고 시트·A1 주소를 반환합니다.", "workbook.read", workbookSearchSchema()),
+	tool("spreadsheet.workbook.replace", "검색 조건과 동일한 셀의 값 또는 수식을 미리보기하거나 시트별 원자적·실행 취소 가능한 작업으로 바꿉니다.", "range.write", workbookReplaceSchema()),
 	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다.", "workbook.write", requiredProps("title", "string")),
 	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
@@ -223,6 +224,23 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		return s.repository.SearchWorkbook(ctx, stringArg(args, "workbook_id"), input)
+	case "spreadsheet.workbook.replace":
+		var input workbook.ReplaceWorkbookInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		result, err := workbook.ReplaceWorkbookCells(ctx, s.repository, stringArg(args, "workbook_id"), input)
+		if err != nil {
+			return nil, err
+		}
+		for _, sheet := range result.Sheets {
+			if sheet.Operation.Duplicate {
+				continue
+			}
+			s.collab.PublishOperation(sheet.Operation.WorkbookID, sheet.SheetID, actor, input.ClientID, sheet.Cells, sheet.Operation)
+		}
+		return result, nil
 	case "spreadsheet.workbook.create":
 		var input workbook.CreateWorkbookInput
 		decodeMCP(args, &input)
@@ -1108,10 +1126,36 @@ func workbookSearchSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"workbook_id": map[string]any{"type": "string", "minLength": 1},
-			"query":       map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxSearchQueryRunes},
-			"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxSearchLimit},
-			"offset":      map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxSearchOffset},
+			"workbook_id":   map[string]any{"type": "string", "minLength": 1},
+			"query":         map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxSearchQueryRunes},
+			"sheet_id":      map[string]any{"type": "string"},
+			"match_case":    map[string]any{"type": "boolean"},
+			"whole_cell":    map[string]any{"type": "boolean"},
+			"use_regex":     map[string]any{"type": "boolean"},
+			"skip_formulas": map[string]any{"type": "boolean"},
+			"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxSearchLimit},
+			"offset":        map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxSearchOffset},
+		},
+		"required": []string{"workbook_id", "query"},
+	}
+}
+
+func workbookReplaceSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"workbook_id":     map[string]any{"type": "string", "minLength": 1},
+			"query":           map[string]any{"type": "string", "minLength": 1, "maxLength": workbook.MaxSearchQueryRunes},
+			"replacement":     map[string]any{"type": "string", "maxLength": workbook.MaxReplacementRunes},
+			"sheet_id":        map[string]any{"type": "string"},
+			"range":           map[string]any{"type": "string"},
+			"match_case":      map[string]any{"type": "boolean"},
+			"whole_cell":      map[string]any{"type": "boolean"},
+			"use_regex":       map[string]any{"type": "boolean"},
+			"skip_formulas":   map[string]any{"type": "boolean"},
+			"preview":         map[string]any{"type": "boolean"},
+			"client_id":       map[string]any{"type": "string"},
+			"idempotency_key": map[string]any{"type": "string"},
 		},
 		"required": []string{"workbook_id", "query"},
 	}

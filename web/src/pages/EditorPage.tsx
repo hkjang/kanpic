@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, AlignCenter, AlignLeft, AlignRight, ArrowUpDown, BadgeCheck, BarChart3, Bold, Bot, ChevronLeft, Download, Filter, History, Italic, Link2, MessageSquare, MoreHorizontal, Palette, Redo2, Search, Share2, Table2, Underline, Undo2, Workflow, ZoomIn, ZoomOut } from 'lucide-react'
+import { AlertTriangle, AlignCenter, AlignLeft, AlignRight, ArrowUpDown, BadgeCheck, BarChart3, Bold, Bot, ChevronLeft, Download, Filter, History, Italic, Link2, MessageSquare, MoreHorizontal, Palette, Redo2, Search, Share2, Table2, TableCellsMerge, TableCellsSplit, Underline, Undo2, Workflow, ZoomIn, ZoomOut } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
-import { CanvasGrid,type GridShortcut } from '../components/CanvasGrid'
+import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
+import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
+import { ContextMenu,type MenuItem } from '../components/ContextMenu'
 import { ChartDialog } from '../components/ChartDialog'
 import { ChartOverlay } from '../components/ChartOverlay'
 import { ChartPanel } from '../components/ChartPanel'
@@ -28,14 +30,14 @@ import { WorkbookSearchDialog } from '../components/WorkbookSearchDialog'
 import { WorkbookShortcutsDialog } from '../components/WorkbookShortcutsDialog'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
-import { MAX_PASTE_CELLS } from '../lib/clipboard'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS } from '../lib/clipboard'
 import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, PivotData, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -43,11 +45,15 @@ function parseNavigationRange(value:string){const parts=value.trim().replaceAll(
 function spillInRange(cells:Map<string,Cell>,range:{startRow:number;startColumn:number;endRow:number;endColumn:number}){for(let row=range.startRow;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){const cell=cells.get(cellKey(row,column));if(cell?.spill_source)return{cell,coordinate:address(row,column)}}}
 function editableTarget(target:EventTarget|null){return target instanceof HTMLElement&&Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))}
 function gridShortcut(shortcut:GridShortcut){window.dispatchEvent(new CustomEvent<GridShortcut>('kanpic:grid-shortcut',{detail:shortcut}))}
+const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`)})
   const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
+  const [showFormulas,setShowFormulas]=useState(false),[replaceMode,setReplaceMode]=useState(false)
+  const layoutQueue=useRef<Promise<unknown>>(Promise.resolve()),nameBoxRef=useRef<HTMLInputElement>(null)
+  const [overflowMenu,setOverflowMenu]=useState<{x:number;y:number}>()
   const routeNavigation=useRef((()=>{const parameters=new URLSearchParams(window.location.search);return{sheetId:parameters.get('sheet_id')??'',range:parameters.get('range')??'',commentId:parameters.get('comment_id')??''}})()).current,routeNavigationApplied=useRef(false)
   const editor=useEditorStore();const editorSelection=selectedMergedBounds(editor.cells,selectedBounds(editor));const activeCell=editor.cells.get(cellKey(editor.activeRow,editor.activeColumn));const formula=activeCell?.formula||(activeCell?.value==null?'':String(activeCell.value))
   const conflicts=useQuery({queryKey:['cell-conflicts',workbookId,false],queryFn:()=>api<{items:CellConflict[]}>(`/api/v1/workbooks/${workbookId}/conflicts`)})
@@ -60,7 +66,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   useEffect(()=>{if(routeNavigationApplied.current||!workbook.data)return;routeNavigationApplied.current=true;const sheet=workbook.data.sheets.find(candidate=>candidate.id===routeNavigation.sheetId);if(!sheet)return;const target=parseNavigationRange(routeNavigation.range);if(target)setPendingNavigation({sheetId:sheet.id,range:target});setActiveSheet(sheet)},[routeNavigation,workbook.data])
   useEffect(()=>{editor.reset();if(pendingNavigation&&pendingNavigation.sheetId===activeSheet?.id){const target=pendingNavigation.range;editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true);setPendingNavigation(undefined)}},[activeSheet?.id])
   const selectionAddress=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn?address(editor.activeRow,editor.activeColumn):`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`
-  useEffect(()=>setNameBoxValue(selectionAddress),[selectionAddress])
+  // Keep whatever the user is typing: only mirror the selection into the name
+  // box when it does not have focus.
+  useEffect(()=>{if(document.activeElement!==nameBoxRef.current)setNameBoxValue(selectionAddress)},[selectionAddress])
   useEffect(()=>{connect(workbookId,handleCollaborationVersion,handleCollaborationEvent);return()=>disconnect()},[connect,disconnect,handleCollaborationEvent,handleCollaborationVersion,workbookId])
   useEffect(()=>{if(activeSheet&&collaborationStatus==='connected'){sendCursor({sheet_id:activeSheet.id,row:editor.activeRow,column:editor.activeColumn});sendSelection({sheet_id:activeSheet.id,start:{row:editorSelection.startRow,column:editorSelection.startColumn},end:{row:editorSelection.endRow,column:editorSelection.endColumn}})}},[activeSheet,collaborationStatus,sendCursor,sendSelection])
   useEffect(()=>{if(editor.conflicts>0)client.invalidateQueries({queryKey:['cell-conflicts',workbookId]})},[client,editor.conflicts,workbookId])
@@ -101,7 +109,16 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
 	const deletePivot=async(item:Pivot)=>{await api(`/api/v1/pivots/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshPivots();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
 	const refreshPivot=async(item:Pivot)=>{await api<PivotData>(`/api/v1/pivots/${item.id}/refresh`,{method:'POST',body:'{}'});await refreshPivots()}
   const navigateToRange=(sheetId:string,value:string)=>{const target=parseNavigationRange(value),sheet=workbook.data?.sheets.find(candidate=>candidate.id===sheetId);if(!target||!sheet)return false;if(activeSheet?.id===sheetId){editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true)}else{setPendingNavigation({sheetId,range:target});setActiveSheet(sheet)}return true}
-  const submitNameBox=()=>{const value=nameBoxValue.trim(),named=(namedRanges.data?.items??[]).find(item=>item.name.toLowerCase()===value.toLowerCase());if(named){navigateToRange(named.sheet_id,named.range);return}if(!activeSheet||!navigateToRange(activeSheet.id,value))setNameBoxValue(selectionAddress)}
+  // After a successful jump the name box shows the resolved range and hands
+  // focus back to the grid, so the typed name is never left stale.
+  const submitNameBox=()=>{
+    const value=nameBoxValue.trim(),named=(namedRanges.data?.items??[]).find(item=>item.name.toLowerCase()===value.toLowerCase())
+    const target=named?{sheetId:named.sheet_id,reference:named.range}:activeSheet?{sheetId:activeSheet.id,reference:value}:undefined
+    const parsed=target?parseNavigationRange(target.reference):undefined
+    if(!target||!parsed||!navigateToRange(target.sheetId,target.reference)){setNameBoxValue(selectionAddress);return}
+    setNameBoxValue(parsed.startRow===parsed.endRow&&parsed.startColumn===parsed.endColumn?address(parsed.startRow,parsed.startColumn):`${address(parsed.startRow,parsed.startColumn)}:${address(parsed.endRow,parsed.endColumn)}`)
+    nameBoxRef.current?.blur()
+  }
   const refreshWorkbook=async()=>client.invalidateQueries({queryKey:['workbook',workbookId]})
   const createSheet=async()=>{const sheet=await api<Sheet>(`/api/v1/workbooks/${workbookId}/sheets`,{method:'POST',body:JSON.stringify({name:nextSheetName()})});setActiveSheet(sheet);await refreshWorkbook()}
   const updateSheet=async(sheet:Sheet,input:Record<string,unknown>)=>{const updated=await api<Sheet>(`/api/v1/sheets/${sheet.id}`,{method:'PATCH',body:JSON.stringify(input)});if(activeSheet?.id===sheet.id)setActiveSheet(updated);await refreshWorkbook()}
@@ -112,17 +129,93 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const changeMerge=async(merge:boolean)=>{if(!activeSheet)return;const rows=editorSelection.endRow-editorSelection.startRow+1,columns=editorSelection.endColumn-editorSelection.startColumn+1;if(merge&&rows*columns<2){alert('두 개 이상의 셀을 선택해 병합하세요.');return}if(rows*columns>MAX_PASTE_CELLS){alert(`셀 병합은 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}const spill=spillInRange(editor.cells,editorSelection);if(spill){alert(`${spill.coordinate}은(는) ${spill.cell.spill_source} 배열 수식의 결과이므로 병합할 수 없습니다.`);return}if(merge){for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1)if(cellMerge(editor.cells.get(cellKey(row,column)))){alert('선택 범위가 기존 병합 셀과 겹칩니다. 먼저 병합을 해제하세요.');return}}const updatedAt=new Date().toISOString(),optimistic:Cell[]=[];for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1){const current=editor.cells.get(cellKey(row,column));optimistic.push({sheet_id:activeSheet.id,row,column,value:current?.value,formula:current?.formula,spill_source:current?.spill_source,style:applyMergeStyle(current?.style,editorSelection,merge),updated_at:updatedAt})}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey(),endpoint=merge?'merge':'unmerge';await enqueue({id,sheetId:activeSheet.id,endpoint,attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
   const sortSelection=async(options:SortOptions)=>{if(!activeSheet)return;const spill=spillInRange(editor.cells,editorSelection);if(spill){const error=new Error(`${spill.coordinate}은(는) ${spill.cell.spill_source} 배열 수식의 결과이므로 정렬할 수 없습니다.`);alert(error.message);throw error}let optimistic:Cell[];try{optimistic=materializeSort(editor.cells,editorSelection,options,activeSheet.id)}catch(error){alert(error instanceof Error?error.message:'범위를 정렬하지 못했습니다.');throw error}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId:activeSheet.id,endpoint:'sort',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`,keys:options.keys,header_rows:options.headerRows,case_sensitive:options.caseSensitive}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
   const applyStructure=async(command:StructureCommand)=>{if(!activeSheet)return;if(!navigator.onLine){alert('행과 열 구조 변경은 서버에 연결된 상태에서만 사용할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),idempotencyKey=newIdempotencyKey();const result=await api<MutationResult>(`/api/v1/sheets/${activeSheet.id}/structure:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,base_version:latest.version,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});const targetRow=Math.max(1,command.axis==='row'?command.index:editorSelection.startRow),targetColumn=Math.max(1,command.axis==='column'?command.index:editorSelection.startColumn);editor.reset();editor.select(targetRow,targetColumn);updateVersion(result.server_version);editor.setSaveState('saved');await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]}),client.invalidateQueries({queryKey:['pivot-data']}),client.invalidateQueries({queryKey:['filter-views']}),client.invalidateQueries({queryKey:['filter-result']})])}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'행 또는 열을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
-  const applyLayout=async(command:LayoutCommand)=>{if(!activeSheet)return;if(!navigator.onLine){alert('시트 레이아웃은 서버에 연결된 상태에서 변경할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),sheet=latest.sheets.find(item=>item.id===activeSheet.id);if(!sheet)throw new Error('시트를 찾을 수 없습니다.');const idempotencyKey=newIdempotencyKey();const result=await api<SheetLayoutResult>(`/api/v1/sheets/${activeSheet.id}/layout:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,expected_revision:sheet.layout?.revision??1,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});setActiveSheet(current=>current?.id===result.sheet_id?{...current,layout:result.layout}:current);updateVersion(result.server_version);editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'시트 레이아웃을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
+  const applySheetLayout=async(command:LayoutCommand)=>{if(!activeSheet)return;if(!navigator.onLine){alert('시트 레이아웃은 서버에 연결된 상태에서 변경할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),sheet=latest.sheets.find(item=>item.id===activeSheet.id);if(!sheet)throw new Error('시트를 찾을 수 없습니다.');const idempotencyKey=newIdempotencyKey();const result=await api<SheetLayoutResult>(`/api/v1/sheets/${activeSheet.id}/layout:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,expected_revision:sheet.layout?.revision??1,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});setActiveSheet(current=>current?.id===result.sheet_id?{...current,layout:result.layout}:current);updateVersion(result.server_version);editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'시트 레이아웃을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
+  // Header drags, auto-fit and menu commands can fire back to back, so layout
+  // mutations run one at a time and never race on the sheet layout revision.
+  const applyLayout=(command:LayoutCommand)=>{
+    const next=layoutQueue.current.catch(()=>{}).then(()=>applySheetLayout(command))
+    layoutQueue.current=next
+    return next
+  }
   const exportWorkbook=async(format:'xlsx'|'csv')=>{const response=await fetch('/api/v1/exports',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({workbook_id:workbookId,sheet_id:activeSheet?.id,format})});if(!response.ok)return alert('파일을 내보내지 못했습니다.');const blob=await response.blob();const disposition=response.headers.get('Content-Disposition')||'';const encoded=disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];const basic=disposition.match(/filename="?([^";]+)"?/)?.[1];const name=encoded?decodeURIComponent(encoded):basic||`kanpic.${format}`;const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();URL.revokeObjectURL(link.href)}
   const handleRestored=async(result:MutationResult)=>{editor.reset();updateVersion(result.server_version);await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]})])}
   const handleConflictResolved=(result:CellConflictResolutionResult)=>{updateVersion(result.operation.server_version);if(!result.operation.duplicate&&result.operation.applied_cells>0)editor.recordOperation(result.operation.operation_id);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const handleAIExecuted=(result:AIExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['ai-actions',workbookId]})}
   const handleAutomationExecuted=(result:AutomationExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['automations',workbookId]})}
+  const clearFormat=()=>applyFormat(Object.fromEntries(CLEARABLE_STYLE_KEYS.map(key=>[key,null])))
+  const hideSelection=(axis:'row'|'column')=>applyLayout(axis==='row'
+    ?{action:'hide',axis,start:editorSelection.startRow,count:editorSelection.endRow-editorSelection.startRow+1}
+    :{action:'hide',axis,start:editorSelection.startColumn,count:editorSelection.endColumn-editorSelection.startColumn+1})
+  const freezeToSelection=()=>applyLayout({action:'freeze',frozen_rows:Math.max(0,Math.min(100,editorSelection.startRow-1)),frozen_columns:Math.max(0,Math.min(50,editorSelection.startColumn-1))})
+  // Whole-row and whole-column selections insert or delete directly; anything
+  // else opens the dialog so the axis is chosen explicitly.
+  const changeStructure=async(action:'insert'|'delete')=>{
+    const wholeRows=editorSelection.startColumn<=1&&editorSelection.endColumn>=MAX_GRID_COLUMNS
+    const wholeColumns=editorSelection.startRow<=1&&editorSelection.endRow>=MAX_GRID_ROWS
+    if(!wholeRows&&!wholeColumns){setStructureOpen(true);return}
+    const axis=wholeRows?'row':'column'
+    const index=axis==='row'?editorSelection.startRow:editorSelection.startColumn
+    const count=axis==='row'?editorSelection.endRow-editorSelection.startRow+1:editorSelection.endColumn-editorSelection.startColumn+1
+    if(action==='delete'&&!window.confirm(`선택한 ${count}개 ${axis==='row'?'행':'열'}을 삭제할까요? 삭제 전 복구 버전이 자동 생성됩니다.`))return
+    await applyStructure({axis,action,index,count})
+  }
+  const moveSheet=(delta:number)=>{const sheets=workbook.data?.sheets??[];if(sheets.length<2||!activeSheet)return;const index=sheets.findIndex(sheet=>sheet.id===activeSheet.id);setActiveSheet(sheets[(index+delta+sheets.length)%sheets.length])}
+  const openSearch=(replace:boolean)=>{setReplaceMode(replace);setSearchOpen(true)}
+  const copySelectionLink=async()=>{
+    const parameters=new URLSearchParams({sheet_id:activeSheet?.id??'',range:selectionAddress})
+    const link=`${window.location.origin}/workbooks/${workbookId}?${parameters.toString()}`
+    try{await navigator.clipboard?.writeText(link)}catch{window.prompt('셀 링크를 복사하세요.',link)}
+  }
+  const handleReplaced=async(result:ReplaceResult)=>{updateVersion(result.server_version);editor.reset();editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}
+  // Sorting a whole column keeps the surrounding data block together, so the
+  // computed region is confirmed before the existing range sort runs.
+  const sortRegion=async(command:Extract<GridMenuCommand,{command:'sort-region'}>)=>{
+    const {region,column,direction,headerRows}=command
+    const label=`${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`
+    if(!window.confirm(`${label} 범위를 ${column}열 기준 ${direction==='asc'?'오름차순':'내림차순'}으로 정렬할까요?${headerRows?' 첫 행은 머리글로 유지합니다.':''}`))return
+    editor.select(region.startRow,region.startColumn);editor.select(region.endRow,region.endColumn,true)
+    await sortSelection({keys:[{column,direction}],headerRows,caseSensitive:false})
+  }
+  const handleGridMenu=(command:GridMenuCommand)=>{
+    switch(command.command){
+      case 'sort-dialog':setSortOpen(true);return
+      case 'sort-region':void sortRegion(command);return
+      case 'filter':setFilterOpen(true);return
+      case 'comment':setRightPanel('comments');return
+      case 'named-range':setNamedRangeOpen(true);return
+      case 'conditional-format':setConditionalFormatOpen(true);return
+      case 'data-validation':setValidationOpen(true);return
+      case 'chart':setChartDialog(null);return
+      case 'pivot':setPivotDialog(null);return
+      case 'format-dialog':setFormatOpen(true);return
+      case 'layout-dialog':setLayoutOpen(true);return
+      case 'structure-dialog':setStructureOpen(true);return
+      case 'clear-format':void clearFormat();return
+      case 'find-replace':openSearch(true);return
+      case 'merge':void changeMerge(command.merge);return
+    }
+  }
   const saveWorkbook=async()=>{if(!navigator.onLine){editor.setSaveState('offline');return}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)});const current=useEditorStore.getState();if(current.saveState==='saving')current.setSaveState(current.conflicts?'conflict':'saved',current.conflicts)}catch{editor.setSaveState('error')}}
   useEffect(()=>{const shortcut=(event:KeyboardEvent)=>{if(event.defaultPrevented||editableTarget(event.target)||document.querySelector('[role="dialog"][aria-modal="true"]'))return;const primary=event.ctrlKey||event.metaKey,key=event.key.toLowerCase(),numberFormats:Record<string,string>={Digit1:'#,##0.00',Digit2:'hh:mm:ss',Digit3:'yyyy-mm-dd',Digit4:'₩#,##0',Digit5:'0.00%',Digit6:'0.00E+00'}
     if(primary&&event.altKey&&key==='m'){event.preventDefault();setRightPanel('comments');return}
     if(primary&&event.code==='Slash'){event.preventDefault();setShortcutsOpen(true);return}
-    if(primary&&(key==='f'||key==='k')){event.preventDefault();setSearchOpen(true);return}
+    if(primary&&key==='h'){event.preventDefault();openSearch(true);return}
+    if(primary&&(key==='f'||key==='k')){event.preventDefault();openSearch(false);return}
+    if(primary&&event.code==='Backquote'){event.preventDefault();setShowFormulas(current=>!current);return}
+    if(primary&&event.code==='Backslash'){event.preventDefault();void clearFormat();return}
+    if(primary&&event.altKey&&(event.code==='Equal'||event.code==='NumpadAdd')){event.preventDefault();void changeStructure('insert');return}
+    if(primary&&event.altKey&&(event.code==='Minus'||event.code==='NumpadSubtract')){event.preventDefault();void changeStructure('delete');return}
+    if(event.altKey&&!primary&&(event.code==='Equal'||event.code==='NumpadAdd')){event.preventDefault();gridShortcut({command:'auto-sum'});return}
+    if(primary&&!event.shiftKey&&event.code==='Semicolon'){event.preventDefault();gridShortcut({command:'insert-today'});return}
+    if(primary&&event.shiftKey&&event.code==='Semicolon'){event.preventDefault();gridShortcut({command:'insert-now'});return}
+    if(primary&&event.altKey&&event.code==='Digit0'){event.preventDefault();void hideSelection('column');return}
+    if(primary&&event.altKey&&event.code==='Digit9'){event.preventDefault();void hideSelection('row');return}
+    if(primary&&event.shiftKey&&event.code==='Digit0'){event.preventDefault();void applyLayout({action:'show_all',axis:'column'});return}
+    if(primary&&event.shiftKey&&event.code==='Digit9'){event.preventDefault();void applyLayout({action:'show_all',axis:'row'});return}
+    if(primary&&event.key==='PageDown'){event.preventDefault();moveSheet(1);return}
+    if(primary&&event.key==='PageUp'){event.preventDefault();moveSheet(-1);return}
+    if(event.key==='PageDown'||event.key==='PageUp'){event.preventDefault();gridShortcut({command:'move-page',direction:event.altKey?event.key==='PageDown'?'right':'left':event.key==='PageDown'?'down':'up',extend:event.shiftKey});return}
+    if(primary&&event.shiftKey&&key==='a'){event.preventDefault();gridShortcut({command:'select-data-region'});return}
     if(primary&&key==='s'){event.preventDefault();void saveWorkbook();return}
     if(primary&&key==='z'){event.preventDefault();void revertOperation(event.shiftKey?'redo':'undo');return}
     if(primary&&key==='y'){event.preventDefault();void revertOperation('redo');return}
@@ -153,11 +246,142 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const displaySaveState=conflictCount>0&&editor.saveState==='saved'?'conflict':editor.saveState
   const saveLabel={saved:'모든 변경사항 저장됨',saving:'저장 중…',offline:'오프라인 · 로컬 저장',conflict:`충돌 ${conflictCount}건`,error:'저장 오류'}[displaySaveState]
   const mergedSelection=Boolean(cellMerge(editor.cells.get(cellKey(editorSelection.startRow,editorSelection.startColumn))))
+  const selectedRows=editorSelection.endRow-editorSelection.startRow+1,selectedColumns=editorSelection.endColumn-editorSelection.startColumn+1
+  const numberFormatItems:MenuItem[]=[
+    {kind:'item',label:'자동',onSelect:()=>void applyFormat({number_format:null})},
+    {kind:'item',label:'숫자 1,234.56',shortcut:'Ctrl+Shift+1',onSelect:()=>void applyFormat({number_format:'#,##0.00'})},
+    {kind:'item',label:'통화 ₩1,234',shortcut:'Ctrl+Shift+4',onSelect:()=>void applyFormat({number_format:'₩#,##0'})},
+    {kind:'item',label:'백분율 12.34%',shortcut:'Ctrl+Shift+5',onSelect:()=>void applyFormat({number_format:'0.00%'})},
+    {kind:'item',label:'날짜 2026-08-03',shortcut:'Ctrl+Shift+3',onSelect:()=>void applyFormat({number_format:'yyyy-mm-dd'})},
+    {kind:'item',label:'시간 13:45:30',shortcut:'Ctrl+Shift+2',onSelect:()=>void applyFormat({number_format:'hh:mm:ss'})},
+    {kind:'item',label:'지수 1.23E+04',shortcut:'Ctrl+Shift+6',onSelect:()=>void applyFormat({number_format:'0.00E+00'})},
+  ]
+  const menus:WorkbookMenu[]=[
+    {label:'파일',items:[
+      {kind:'item',label:'저장',shortcut:'Ctrl+S',onSelect:()=>void saveWorkbook()},
+      {kind:'item',label:'새 시트 추가',shortcut:'Shift+F11',onSelect:()=>void createSheet()},
+      {kind:'item',label:'시트 복제',onSelect:()=>void duplicateSheet(activeSheet)},
+      {kind:'separator'},
+      {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
+      {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
+      {kind:'separator'},
+      {kind:'item',label:'버전 이력',onSelect:()=>setRightPanel('history')},
+      {kind:'item',label:'워크북 목록으로',onSelect:()=>{window.location.href='/'}},
+    ]},
+    {label:'수정',items:[
+      {kind:'item',label:'실행 취소',shortcut:'Ctrl+Z',disabled:editor.undoStack.length===0,onSelect:()=>void revertOperation('undo')},
+      {kind:'item',label:'다시 실행',shortcut:'Ctrl+Y',disabled:editor.redoStack.length===0,onSelect:()=>void revertOperation('redo')},
+      {kind:'separator'},
+      {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',onSelect:()=>gridShortcut({command:'cut'})},
+      {kind:'item',label:'복사',shortcut:'Ctrl+C',onSelect:()=>gridShortcut({command:'copy'})},
+      {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',onSelect:()=>gridShortcut({command:'paste'})},
+      {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',onSelect:()=>gridShortcut({command:'paste-values'})},
+      {kind:'separator'},
+      {kind:'item',label:'내용 지우기',shortcut:'Delete',onSelect:()=>gridShortcut({command:'clear-contents'})},
+      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
+      {kind:'separator'},
+      {kind:'item',label:'찾기',shortcut:'Ctrl+F',onSelect:()=>openSearch(false)},
+      {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
+      {kind:'item',label:'전체 선택',shortcut:'Ctrl+A',onSelect:()=>gridShortcut({command:'select-all'})},
+      {kind:'item',label:'데이터 영역 선택',shortcut:'Ctrl+Shift+A',onSelect:()=>gridShortcut({command:'select-data-region'})},
+    ]},
+    {label:'보기',items:[
+      {kind:'item',label:'수식 표시',shortcut:'Ctrl+`',checked:showFormulas,onSelect:()=>setShowFormulas(current=>!current)},
+      {kind:'separator'},
+      {kind:'item',label:'확대',onSelect:()=>editor.setZoom(editor.zoom+.1)},
+      {kind:'item',label:'축소',onSelect:()=>editor.setZoom(editor.zoom-.1)},
+      {kind:'item',label:'100%로 보기',onSelect:()=>editor.setZoom(1)},
+      {kind:'separator'},
+      {kind:'item',label:'활성 셀 앞까지 고정',onSelect:()=>void freezeToSelection()},
+      {kind:'item',label:'고정 해제',disabled:(activeSheet.layout?.frozen_rows??0)===0&&(activeSheet.layout?.frozen_columns??0)===0,onSelect:()=>void applyLayout({action:'freeze',frozen_rows:0,frozen_columns:0})},
+      {kind:'item',label:'모든 행 표시',onSelect:()=>void applyLayout({action:'show_all',axis:'row'})},
+      {kind:'item',label:'모든 열 표시',onSelect:()=>void applyLayout({action:'show_all',axis:'column'})},
+      {kind:'separator'},
+      {kind:'item',label:'시트 레이아웃…',onSelect:()=>setLayoutOpen(true)},
+      {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
+    ]},
+    {label:'삽입',items:[
+      {kind:'item',label:`위에 행 ${selectedRows}개 삽입`,onSelect:()=>void applyStructure({axis:'row',action:'insert',index:editorSelection.startRow,count:selectedRows})},
+      {kind:'item',label:`아래에 행 ${selectedRows}개 삽입`,onSelect:()=>void applyStructure({axis:'row',action:'insert',index:editorSelection.endRow+1,count:selectedRows})},
+      {kind:'item',label:`왼쪽에 열 ${selectedColumns}개 삽입`,onSelect:()=>void applyStructure({axis:'column',action:'insert',index:editorSelection.startColumn,count:selectedColumns})},
+      {kind:'item',label:`오른쪽에 열 ${selectedColumns}개 삽입`,onSelect:()=>void applyStructure({axis:'column',action:'insert',index:editorSelection.endColumn+1,count:selectedColumns})},
+      {kind:'item',label:'행과 열 관리…',onSelect:()=>setStructureOpen(true)},
+      {kind:'separator'},
+      {kind:'item',label:'차트…',onSelect:()=>setChartDialog(null)},
+      {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
+      {kind:'item',label:'댓글',shortcut:'Ctrl+Alt+M',onSelect:()=>setRightPanel('comments')},
+      {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
+      {kind:'item',label:'자동 합계',shortcut:'Alt+=',onSelect:()=>gridShortcut({command:'auto-sum'})},
+      {kind:'separator'},
+      {kind:'item',label:'오늘 날짜',shortcut:'Ctrl+;',onSelect:()=>gridShortcut({command:'insert-today'})},
+      {kind:'item',label:'현재 시간',shortcut:'Ctrl+Shift+;',onSelect:()=>gridShortcut({command:'insert-now'})},
+    ]},
+    {label:'서식',items:[
+      {kind:'item',label:'굵게',shortcut:'Ctrl+B',checked:activeCell?.style?.bold===true,onSelect:()=>void applyFormat({bold:activeCell?.style?.bold!==true})},
+      {kind:'item',label:'기울임',shortcut:'Ctrl+I',checked:activeCell?.style?.italic===true,onSelect:()=>void applyFormat({italic:activeCell?.style?.italic!==true})},
+      {kind:'item',label:'밑줄',shortcut:'Ctrl+U',checked:activeCell?.style?.underline===true,onSelect:()=>void applyFormat({underline:activeCell?.style?.underline!==true})},
+      {kind:'item',label:'취소선',shortcut:'Alt+Shift+5',checked:activeCell?.style?.strike===true,onSelect:()=>void applyFormat({strike:activeCell?.style?.strike!==true})},
+      {kind:'submenu',label:'표시 형식',items:numberFormatItems},
+      {kind:'submenu',label:'맞춤',items:[
+        {kind:'item',label:'왼쪽 정렬',shortcut:'Ctrl+Shift+L',onSelect:()=>void applyFormat({horizontal_align:'left'})},
+        {kind:'item',label:'가운데 정렬',shortcut:'Ctrl+Shift+E',onSelect:()=>void applyFormat({horizontal_align:'center'})},
+        {kind:'item',label:'오른쪽 정렬',shortcut:'Ctrl+Shift+R',onSelect:()=>void applyFormat({horizontal_align:'right'})},
+        {kind:'item',label:'위쪽 맞춤',onSelect:()=>void applyFormat({vertical_align:'top'})},
+        {kind:'item',label:'가운데 맞춤',onSelect:()=>void applyFormat({vertical_align:'middle'})},
+        {kind:'item',label:'아래쪽 맞춤',onSelect:()=>void applyFormat({vertical_align:'bottom'})},
+        {kind:'item',label:'자동 줄바꿈',onSelect:()=>void applyFormat({text_mode:'wrap'})},
+        {kind:'item',label:'넘치게 표시',onSelect:()=>void applyFormat({text_mode:'overflow'})},
+        {kind:'item',label:'잘라서 표시',onSelect:()=>void applyFormat({text_mode:'clip'})},
+      ]},
+      {kind:'separator'},
+      {kind:'item',label:mergedSelection?'셀 병합 해제':'셀 병합',onSelect:()=>void changeMerge(!mergedSelection)},
+      {kind:'item',label:'조건부 서식…',onSelect:()=>setConditionalFormatOpen(true)},
+      {kind:'item',label:'서식 세부 설정…',onSelect:()=>setFormatOpen(true)},
+      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
+    ]},
+    {label:'데이터',items:[
+      {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
+      {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
+      {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
+      {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
+      {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
+      {kind:'separator'},
+      {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
+      {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
+      {kind:'separator'},
+      {kind:'item',label:'워크북 검색',shortcut:'Ctrl+F',onSelect:()=>openSearch(false)},
+    ]},
+    {label:'도구',items:[
+      {kind:'item',label:'AI 도우미',checked:rightPanel==='ai',onSelect:()=>setRightPanel(current=>current==='ai'?null:'ai')},
+      {kind:'item',label:'자동화',checked:rightPanel==='automation',onSelect:()=>setRightPanel(current=>current==='automation'?null:'automation')},
+      {kind:'item',label:'차트 패널',checked:rightPanel==='charts',onSelect:()=>setRightPanel(current=>current==='charts'?null:'charts')},
+      {kind:'item',label:'피벗 패널',checked:rightPanel==='pivots',onSelect:()=>setRightPanel(current=>current==='pivots'?null:'pivots')},
+      {kind:'item',label:'댓글',checked:rightPanel==='comments',onSelect:()=>setRightPanel(current=>current==='comments'?null:'comments')},
+      {kind:'item',label:`편집 충돌${conflictCount>0?` (${conflictCount})`:''}`,checked:rightPanel==='conflicts',onSelect:()=>setRightPanel(current=>current==='conflicts'?null:'conflicts')},
+      {kind:'separator'},
+      {kind:'item',label:'개인 환경설정',onSelect:()=>{window.location.href='/preferences'}},
+    ]},
+    {label:'도움말',items:[
+      {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
+      {kind:'label',label:`kanpic ${build?.version??''}`.trim()},
+    ]},
+  ]
   return <div className="editor-shell"><AppHeader build={build} session={session}><div className="editor-title"><a href="/" aria-label="뒤로"><ChevronLeft/></a><div><strong>{workbook.data.title}</strong><small className={conflictCount>0?'interactive':''} role={conflictCount>0?'button':undefined} tabIndex={conflictCount>0?0:undefined} onClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onKeyDown={conflictCount>0?event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setRightPanel('conflicts')}}:undefined}><span className={`save-dot ${displaySaveState}`}/>{saveLabel} · v{serverVersion}</small></div></div></AppHeader>
-    <div className="editor-actions"><div className="menu-strip"><button>파일</button><button>수정</button><button onClick={()=>setLayoutOpen(true)}>보기</button><button onClick={()=>setStructureOpen(true)}>삽입</button><button onClick={()=>setFormatOpen(true)}>서식</button><button onClick={()=>setValidationOpen(true)}>데이터</button><button>도구</button></div><div className="share-actions"><span className={`collaboration-count ${collaborationStatus}`} title={Object.values(collaborators).map(user=>user.actor_id).join(', ')}><i/>{collaborationStatus==='connected'?`${Object.keys(collaborators).length}명 접속`:collaborationStatus==='offline'?'오프라인':'재연결 중'}</span><button className="ghost" onClick={()=>exportWorkbook('xlsx')} title="XLSX로 내보내기"><Download/> XLSX 내보내기</button><button className="ghost" onClick={()=>exportWorkbook('csv')} title="현재 시트를 CSV로 내보내기">CSV</button><button className="primary"><Share2/> 공유</button></div></div>
-    <div className="toolbar"><button aria-label="실행 취소" title="실행 취소" disabled={editor.undoStack.length===0} onClick={()=>revertOperation('undo')}><Undo2/></button><button aria-label="다시 실행" title="다시 실행" disabled={editor.redoStack.length===0} onClick={()=>revertOperation('redo')}><Redo2/></button><button aria-label="워크북 검색" title="워크북 검색 (Ctrl/⌘+F)" onClick={()=>setSearchOpen(true)}><Search/></button><span className="divider"/><select aria-label="글꼴" className="toolbar-select font-family" value={typeof activeCell?.style?.font_family==='string'?activeCell.style.font_family:'Inter'} onChange={event=>void applyFormat({font_family:event.target.value})}><option>Inter</option><option>Pretendard</option><option>Arial</option><option>Georgia</option><option>monospace</option></select><select aria-label="글꼴 크기" className="toolbar-select font-size" value={typeof activeCell?.style?.font_size==='number'?activeCell.style.font_size:12} onChange={event=>void applyFormat({font_size:Number(event.target.value)})}>{[8,9,10,11,12,14,16,18,20,24,28,32].map(size=><option key={size}>{size}</option>)}</select><button aria-label="굵게" title="굵게" className={activeCell?.style?.bold===true?'active':''} onClick={()=>void applyFormat({bold:activeCell?.style?.bold!==true})}><Bold/></button><button aria-label="기울임" title="기울임" className={activeCell?.style?.italic===true?'active':''} onClick={()=>void applyFormat({italic:activeCell?.style?.italic!==true})}><Italic/></button><button aria-label="밑줄" title="밑줄" className={activeCell?.style?.underline===true?'active':''} onClick={()=>void applyFormat({underline:activeCell?.style?.underline!==true})}><Underline/></button><label className="toolbar-color" title="글자색"><span>A</span><input aria-label="글자색" type="color" value={typeof activeCell?.style?.color==='string'?activeCell.style.color:'#1c2733'} onChange={event=>void applyFormat({color:event.target.value})}/></label><label className="toolbar-color background" title="셀 배경색"><span>▰</span><input aria-label="셀 배경색" type="color" value={typeof activeCell?.style?.background==='string'?activeCell.style.background:'#ffffff'} onChange={event=>void applyFormat({background:event.target.value})}/></label><span className="divider"/><button aria-label="왼쪽 정렬" title="왼쪽 정렬" className={activeCell?.style?.horizontal_align==='left'?'active':''} onClick={()=>void applyFormat({horizontal_align:'left'})}><AlignLeft/></button><button aria-label="가운데 정렬" title="가운데 정렬" className={activeCell?.style?.horizontal_align==='center'?'active':''} onClick={()=>void applyFormat({horizontal_align:'center'})}><AlignCenter/></button><button aria-label="오른쪽 정렬" title="오른쪽 정렬" className={activeCell?.style?.horizontal_align==='right'?'active':''} onClick={()=>void applyFormat({horizontal_align:'right'})}><AlignRight/></button><button aria-label={mergedSelection?'병합 해제':'셀 병합'} title={mergedSelection?'병합 해제':'셀 병합'} className={mergedSelection?'active':''} onClick={()=>void changeMerge(!mergedSelection)}>{mergedSelection?'해제':'병합'}</button><button aria-label="범위 정렬" title="범위 정렬" onClick={()=>setSortOpen(true)}><ArrowUpDown/></button><button aria-label="필터 보기" title="필터 보기" className={activeFilter?'active':''} onClick={()=>setFilterOpen(true)}><Filter/></button><button aria-label="데이터 검증" title="데이터 검증" className={(validations.data?.items.length??0)>0?'active':''} onClick={()=>setValidationOpen(true)}><BadgeCheck/></button><button aria-label="조건부 서식" title="조건부 서식" className={(conditionalFormats.data?.items.length??0)>0?'active':''} onClick={()=>setConditionalFormatOpen(true)}><Palette/></button><button><Link2/></button><span className="toolbar-spacer"/><button onClick={()=>editor.setZoom(editor.zoom-.1)}><ZoomOut/></button><span className="zoom-value">{Math.round(editor.zoom*100)}%</span><button onClick={()=>editor.setZoom(editor.zoom+.1)}><ZoomIn/></button><button aria-label="AI 도우미" title="AI 도우미" onClick={()=>setRightPanel(current=>current==='ai'?null:'ai')} className={rightPanel==='ai'?'active':''}><Bot/></button><button aria-label="편집 충돌" title={`편집 충돌 ${conflictCount}건`} onClick={()=>setRightPanel(current=>current==='conflicts'?null:'conflicts')} className={rightPanel==='conflicts'||conflictCount>0?'active':''}><AlertTriangle/></button><button aria-label="버전 이력" title="버전 이력" onClick={()=>setRightPanel(current=>current==='history'?null:'history')} className={rightPanel==='history'?'active':''}><History/></button><button aria-label="댓글" title="댓글" onClick={()=>setRightPanel(current=>current==='comments'?null:'comments')} className={rightPanel==='comments'?'active':''}><MessageSquare/></button><button><MoreHorizontal/></button></div>
-    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input value={formula} readOnly onDoubleClick={()=>{const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source);if(source)editor.select(source.row,source.column);editor.setEditing(true)}} aria-label="수식 입력창"/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onDelete={deleteSheet}/></div>
+    <div className="editor-actions"><WorkbookMenuBar menus={menus}/><div className="share-actions"><span className={`collaboration-count ${collaborationStatus}`} title={Object.values(collaborators).map(user=>user.actor_id).join(', ')}><i/>{collaborationStatus==='connected'?`${Object.keys(collaborators).length}명 접속`:collaborationStatus==='offline'?'오프라인':'재연결 중'}</span><button className="ghost" onClick={()=>exportWorkbook('xlsx')} title="XLSX로 내보내기"><Download/> XLSX 내보내기</button><button className="ghost" onClick={()=>exportWorkbook('csv')} title="현재 시트를 CSV로 내보내기">CSV</button><button className="primary"><Share2/> 공유</button></div></div>
+    <div className="toolbar"><button aria-label="실행 취소" title="실행 취소" disabled={editor.undoStack.length===0} onClick={()=>revertOperation('undo')}><Undo2/></button><button aria-label="다시 실행" title="다시 실행" disabled={editor.redoStack.length===0} onClick={()=>revertOperation('redo')}><Redo2/></button><button aria-label="워크북 검색" title="워크북 검색 (Ctrl/⌘+F)" onClick={()=>setSearchOpen(true)}><Search/></button><span className="divider"/><select aria-label="글꼴" className="toolbar-select font-family" value={typeof activeCell?.style?.font_family==='string'?activeCell.style.font_family:'Inter'} onChange={event=>void applyFormat({font_family:event.target.value})}><option>Inter</option><option>Pretendard</option><option>Arial</option><option>Georgia</option><option>monospace</option></select><select aria-label="글꼴 크기" className="toolbar-select font-size" value={typeof activeCell?.style?.font_size==='number'?activeCell.style.font_size:12} onChange={event=>void applyFormat({font_size:Number(event.target.value)})}>{[8,9,10,11,12,14,16,18,20,24,28,32].map(size=><option key={size}>{size}</option>)}</select><button aria-label="굵게" title="굵게" className={activeCell?.style?.bold===true?'active':''} onClick={()=>void applyFormat({bold:activeCell?.style?.bold!==true})}><Bold/></button><button aria-label="기울임" title="기울임" className={activeCell?.style?.italic===true?'active':''} onClick={()=>void applyFormat({italic:activeCell?.style?.italic!==true})}><Italic/></button><button aria-label="밑줄" title="밑줄" className={activeCell?.style?.underline===true?'active':''} onClick={()=>void applyFormat({underline:activeCell?.style?.underline!==true})}><Underline/></button><label className="toolbar-color" title="글자색"><span>A</span><input aria-label="글자색" type="color" value={typeof activeCell?.style?.color==='string'?activeCell.style.color:'#1c2733'} onChange={event=>void applyFormat({color:event.target.value})}/></label><label className="toolbar-color background" title="셀 배경색"><span>▰</span><input aria-label="셀 배경색" type="color" value={typeof activeCell?.style?.background==='string'?activeCell.style.background:'#ffffff'} onChange={event=>void applyFormat({background:event.target.value})}/></label><span className="divider"/><button aria-label="왼쪽 정렬" title="왼쪽 정렬" className={activeCell?.style?.horizontal_align==='left'?'active':''} onClick={()=>void applyFormat({horizontal_align:'left'})}><AlignLeft/></button><button aria-label="가운데 정렬" title="가운데 정렬" className={activeCell?.style?.horizontal_align==='center'?'active':''} onClick={()=>void applyFormat({horizontal_align:'center'})}><AlignCenter/></button><button aria-label="오른쪽 정렬" title="오른쪽 정렬" className={activeCell?.style?.horizontal_align==='right'?'active':''} onClick={()=>void applyFormat({horizontal_align:'right'})}><AlignRight/></button><button aria-label={mergedSelection?'병합 해제':'셀 병합'} title={mergedSelection?'병합 해제':'셀 병합'} className={mergedSelection?'active':''} onClick={()=>void changeMerge(!mergedSelection)}>{mergedSelection?<TableCellsSplit/>:<TableCellsMerge/>}</button><button aria-label="범위 정렬" title="범위 정렬" onClick={()=>setSortOpen(true)}><ArrowUpDown/></button><button aria-label="필터 보기" title="필터 보기" className={activeFilter?'active':''} onClick={()=>setFilterOpen(true)}><Filter/></button><button aria-label="데이터 검증" title="데이터 검증" className={(validations.data?.items.length??0)>0?'active':''} onClick={()=>setValidationOpen(true)}><BadgeCheck/></button><button aria-label="조건부 서식" title="조건부 서식" className={(conditionalFormats.data?.items.length??0)>0?'active':''} onClick={()=>setConditionalFormatOpen(true)}><Palette/></button><button aria-label="선택 범위 링크 복사" title="선택 범위 링크 복사" onClick={()=>void copySelectionLink()}><Link2/></button><span className="toolbar-spacer"/><button onClick={()=>editor.setZoom(editor.zoom-.1)}><ZoomOut/></button><span className="zoom-value">{Math.round(editor.zoom*100)}%</span><button onClick={()=>editor.setZoom(editor.zoom+.1)}><ZoomIn/></button><button aria-label="AI 도우미" title="AI 도우미" onClick={()=>setRightPanel(current=>current==='ai'?null:'ai')} className={rightPanel==='ai'?'active':''}><Bot/></button><button aria-label="편집 충돌" title={`편집 충돌 ${conflictCount}건`} onClick={()=>setRightPanel(current=>current==='conflicts'?null:'conflicts')} className={rightPanel==='conflicts'||conflictCount>0?'active':''}><AlertTriangle/></button><button aria-label="버전 이력" title="버전 이력" onClick={()=>setRightPanel(current=>current==='history'?null:'history')} className={rightPanel==='history'?'active':''}><History/></button><button aria-label="댓글" title="댓글" onClick={()=>setRightPanel(current=>current==='comments'?null:'comments')} className={rightPanel==='comments'?'active':''}><MessageSquare/></button><button aria-label="추가 도구" title="추가 도구" aria-haspopup="menu" aria-expanded={Boolean(overflowMenu)} onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();setOverflowMenu(current=>current?undefined:{x:Math.max(8,rect.right-252),y:rect.bottom+4})}}><MoreHorizontal/></button></div>
+    {overflowMenu&&<ContextMenu x={overflowMenu.x} y={overflowMenu.y} label="추가 도구 메뉴" onClose={()=>setOverflowMenu(undefined)} items={[
+      {kind:'item',label:'수식 표시',shortcut:'Ctrl+`',checked:showFormulas,onSelect:()=>setShowFormulas(current=>!current)},
+      {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
+      {kind:'separator'},
+      {kind:'item',label:'차트 패널',checked:rightPanel==='charts',onSelect:()=>setRightPanel(current=>current==='charts'?null:'charts')},
+      {kind:'item',label:'피벗 패널',checked:rightPanel==='pivots',onSelect:()=>setRightPanel(current=>current==='pivots'?null:'pivots')},
+      {kind:'item',label:'자동화',checked:rightPanel==='automation',onSelect:()=>setRightPanel(current=>current==='automation'?null:'automation')},
+      {kind:'separator'},
+      {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
+      {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
+    ]}/>}
+    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input value={formula} readOnly onDoubleClick={()=>{const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source);if(source)editor.select(source.row,source.column);editor.setEditing(true)}} aria-label="수식 입력창"/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onDelete={deleteSheet}/></div>
       {rightPanel==='ai'&&<AIPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} baseVersion={serverVersion} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
       {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
       {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
@@ -182,6 +406,6 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}
     {shortcutsOpen&&<WorkbookShortcutsDialog onClose={()=>setShortcutsOpen(false)}/>}
-    <WorkbookSearchDialog open={searchOpen} workbookId={workbookId} version={serverVersion} onClose={()=>setSearchOpen(false)} onNavigate={(item:WorkbookSearchMatch)=>navigateToRange(item.sheet_id,item.address)}/>
+    <WorkbookSearchDialog open={searchOpen} workbookId={workbookId} version={serverVersion} sheetId={activeSheet.id} sheetName={activeSheet.name} replaceMode={replaceMode} onClose={()=>{setSearchOpen(false);setReplaceMode(false)}} onNavigate={(item:WorkbookSearchMatch)=>navigateToRange(item.sheet_id,item.address)} onReplaced={result=>void handleReplaced(result)}/>
   </div>
 }

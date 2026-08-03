@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -2039,4 +2040,61 @@ func requestAs[T any](t *testing.T, server *httptest.Server, actor, method, path
 		}
 	}
 	return result
+}
+
+func TestWorkbookReplaceRESTAndMCPShareContract(t *testing.T) {
+	t.Parallel()
+	definition, found := findMCPTool("spreadsheet.workbook.replace")
+	if !found || definition.Meta["required_scope"] != "range.write" {
+		t.Fatalf("replace MCP contract: %#v", definition)
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPost, "/api/v1/workbooks/book-id/search:replace", nil)); scope != "range.write" {
+		t.Fatalf("replace REST scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "바꾸기"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "replace-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": "구 사명 리포트"}, {"row": 2, "column": 1, "value": "구 사명"}},
+	}, http.StatusOK)
+
+	preview := request[workbook.ReplaceWorkbookResult](t, server, http.MethodPost, "/api/v1/workbooks/"+created.ID+"/search:replace", map[string]any{
+		"query": "구 사명", "replacement": "새 사명", "preview": true,
+	}, http.StatusOK)
+	if !preview.Preview || preview.PlannedCells != 2 || preview.ReplacedCells != 0 || len(preview.Items) != 2 || preview.Items[0].After != "새 사명 리포트" {
+		t.Fatalf("REST replace preview = %#v", preview)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/workbooks/"+created.ID+"/search:replace", map[string]any{"query": "구 사명", "replacement": "새 사명"}, http.StatusBadRequest)
+
+	applied := request[workbook.ReplaceWorkbookResult](t, server, http.MethodPost, "/api/v1/workbooks/"+created.ID+"/search:replace", map[string]any{
+		"query": "구 사명", "replacement": "새 사명", "whole_cell": true, "idempotency_key": "replace-whole",
+	}, http.StatusOK)
+	if applied.ReplacedCells != 1 || len(applied.Sheets) != 1 || applied.Sheets[0].Operation.OperationID == "" {
+		t.Fatalf("REST whole cell replace = %#v", applied)
+	}
+
+	mcp := request[struct {
+		Result struct {
+			Structured workbook.ReplaceWorkbookResult `json:"structuredContent"`
+		} `json:"result"`
+	}](t, server, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 42, "method": "tools/call", "params": map[string]any{
+			"name": "spreadsheet.workbook.replace", "arguments": map[string]any{
+				"workbook_id": created.ID, "query": "구 사명", "replacement": "새 사명", "idempotency_key": "replace-mcp",
+			},
+		},
+	}, http.StatusOK)
+	if mcp.Result.Structured.ReplacedCells != 1 || mcp.Result.Structured.MatchedCells != 1 {
+		t.Fatalf("MCP replace = %#v", mcp.Result.Structured)
+	}
+	remaining := request[workbook.WorkbookSearchResult](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID+"/search?q="+url.QueryEscape("구 사명"), nil, http.StatusOK)
+	if len(remaining.Items) != 0 {
+		t.Fatalf("remaining matches = %#v", remaining)
+	}
+	scoped := request[workbook.WorkbookSearchResult](t, server, http.MethodGet, "/api/v1/workbooks/"+created.ID+"/search?q="+url.QueryEscape("새 사명")+"&whole_cell=true", nil, http.StatusOK)
+	if len(scoped.Items) != 1 || scoped.Items[0].Address != "A2" {
+		t.Fatalf("whole cell search = %#v", scoped)
+	}
 }

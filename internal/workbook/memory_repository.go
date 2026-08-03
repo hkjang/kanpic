@@ -205,9 +205,15 @@ func (r *MemoryRepository) SearchWorkbook(_ context.Context, workbookID string, 
 	}
 	sort.Slice(sheets, func(i, j int) bool { return sheets[i].Position < sheets[j].Position })
 	matches := make([]WorkbookSearchMatch, 0, normalized.Limit+1)
-	query := strings.ToLower(normalized.Query)
+	matcher, err := newSearchMatcher(normalized)
+	if err != nil {
+		return WorkbookSearchResult{}, err
+	}
 	skipped := 0
 	for _, sheet := range sheets {
+		if normalized.SheetID != "" && sheet.ID != normalized.SheetID {
+			continue
+		}
 		cells := make([]Cell, 0, len(state.cells[sheet.ID]))
 		for _, cell := range state.cells[sheet.ID] {
 			cells = append(cells, cell)
@@ -219,7 +225,7 @@ func (r *MemoryRepository) SearchWorkbook(_ context.Context, workbookID string, 
 			return cells[i].Row < cells[j].Row
 		})
 		for _, cell := range cells {
-			fields := matchSearchCell(cell, query)
+			fields := matcher.fields(cell)
 			if len(fields) == 0 {
 				continue
 			}

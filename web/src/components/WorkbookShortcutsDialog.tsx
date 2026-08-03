@@ -8,8 +8,10 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
     {action:'실행 취소',keys:['Ctrl / ⌘ + Z']},
     {action:'다시 실행',keys:['Ctrl / ⌘ + Y','Ctrl / ⌘ + Shift + Z']},
     {action:'워크북 검색',keys:['Ctrl / ⌘ + F','Ctrl / ⌘ + K']},
+    {action:'찾기 및 바꾸기',keys:['Ctrl / ⌘ + H']},
     {action:'단축키 목록',keys:['Ctrl / ⌘ + /']},
     {action:'새 시트 추가',keys:['Shift + F11']},
+    {action:'이전 / 다음 시트로 이동',keys:['Ctrl / ⌘ + PageUp','Ctrl / ⌘ + PageDown']},
     {action:'댓글 패널 열기',keys:['Ctrl / ⌘ + Alt + M']},
   ]},
   {title:'셀 편집과 채우기',shortcuts:[
@@ -21,6 +23,16 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
     {action:'값만 붙여넣기',keys:['Ctrl / ⌘ + Shift + V']},
     {action:'선택 범위에 입력값 채우기',keys:['Ctrl / ⌘ + Enter']},
     {action:'아래 / 오른쪽 채우기',keys:['Ctrl / ⌘ + D','Ctrl / ⌘ + R']},
+    {action:'자동 합계',keys:['Alt + =']},
+    {action:'오늘 날짜 / 현재 시간 입력',keys:['Ctrl / ⌘ + ;','Ctrl / ⌘ + Shift + ;']},
+  ]},
+  {title:'행과 열',shortcuts:[
+    {action:'행·열 삽입 / 삭제 열기',keys:['Ctrl / ⌘ + Alt + =','Ctrl / ⌘ + Alt + -']},
+    {action:'선택 행 / 열 숨기기',keys:['Ctrl / ⌘ + Alt + 9','Ctrl / ⌘ + Alt + 0']},
+    {action:'숨긴 행 / 열 모두 표시',keys:['Ctrl / ⌘ + Shift + 9','Ctrl / ⌘ + Shift + 0']},
+    {action:'머리글 경계 드래그',keys:['행 높이·열 너비 조절']},
+    {action:'머리글 경계 더블클릭',keys:['자동 맞춤']},
+    {action:'컨텍스트 메뉴 열기',keys:['마우스 오른쪽 클릭','Shift + F10']},
   ]},
   {title:'선택과 탐색',shortcuts:[
     {action:'셀 이동 / 범위 확장',keys:['방향키','Shift + 방향키']},
