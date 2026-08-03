@@ -2233,3 +2233,164 @@ func TestWorkbookSharingEnforcesRolesAcrossRESTAndMCP(t *testing.T) {
 	}
 	request[map[string]any](t, server, http.MethodDelete, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
 }
+
+func TestWorkbookManagementRESTAndMCPContracts(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"spreadsheet.workbook.trash", "spreadsheet.workbook.restore", "spreadsheet.workbook.purge", "spreadsheet.workbook.favorite", "spreadsheet.sheet.stats", "spreadsheet.sheet.copy"} {
+		if _, found := findMCPTool(name); !found {
+			t.Fatalf("missing MCP tool %s", name)
+		}
+	}
+	if scope := requiredScope(httptest.NewRequest(http.MethodPut, "/api/v1/workbooks/book/favorite", nil)); scope != "workbook.read" {
+		t.Fatalf("favorite scope = %q", scope)
+	}
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "관리"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	request[workbook.MutationResult](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "management-seed", "cells": []map[string]any{{"row": 2, "column": 2, "value": 7}, {"row": 3, "column": 2, "formula": "=B2*2"}},
+	}, http.StatusOK)
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{"principal_type": "user", "principal_id": "viewer", "role": "viewer"}, http.StatusOK)
+
+	// Sheet statistics describe the data a manager needs to decide what to keep.
+	stats := request[struct {
+		Items []workbook.SheetStats `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/sheet-stats", nil, http.StatusOK)
+	if len(stats.Items) != 1 || stats.Items[0].NonEmptyCells != 2 || stats.Items[0].FormulaCells != 1 || stats.Items[0].MaxRow != 3 {
+		t.Fatalf("sheet stats = %#v", stats.Items)
+	}
+
+	// A viewer may star a shared workbook: favourites are personal state.
+	favorited := requestAs[workbook.Workbook](t, server, "viewer", http.MethodPut, "/api/v1/workbooks/"+book.ID+"/favorite", map[string]any{"favorite": true}, http.StatusOK)
+	if !favorited.Favorite {
+		t.Fatalf("viewer favorite = %#v", favorited)
+	}
+	viewerList := requestAs[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, "viewer", http.MethodGet, "/api/v1/workbooks", nil, http.StatusOK)
+	if len(viewerList.Items) != 1 || !viewerList.Items[0].Favorite {
+		t.Fatalf("viewer listing = %#v", viewerList.Items)
+	}
+	ownerList := request[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks", nil, http.StatusOK)
+	if len(ownerList.Items) != 1 || ownerList.Items[0].Favorite {
+		t.Fatalf("owner listing must not inherit the viewer star: %#v", ownerList.Items)
+	}
+
+	// Copying a sheet needs write access on the target workbook.
+	target := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "대상"}, http.StatusCreated)
+	requestAs[map[string]any](t, server, "viewer", http.MethodPost, "/api/v1/sheets/"+sheetID+"/copy", map[string]any{"target_workbook_id": target.ID}, http.StatusForbidden)
+	copied := request[workbook.Sheet](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/copy", map[string]any{"target_workbook_id": target.ID}, http.StatusCreated)
+	if copied.WorkbookID != target.ID {
+		t.Fatalf("copied sheet = %#v", copied)
+	}
+	targetSheets := request[workbook.Workbook](t, server, http.MethodGet, "/api/v1/workbooks/"+target.ID, nil, http.StatusOK)
+	if len(targetSheets.Sheets) != 2 {
+		t.Fatalf("target sheets = %#v", targetSheets.Sheets)
+	}
+
+	// Hiding a sheet is rejected while it is the only visible one.
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID, map[string]any{"hidden": true}, http.StatusBadRequest)
+
+	// The trash only lists the owner's workbooks and can be restored or purged.
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/workbooks/"+target.ID, nil, http.StatusNoContent)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/workbooks/"+target.ID, nil, http.StatusNotFound)
+	trash := request[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/trash", nil, http.StatusOK)
+	if len(trash.Items) != 1 || trash.Items[0].ID != target.ID || trash.Items[0].DeletedBy != "local-user" {
+		t.Fatalf("trash = %#v", trash.Items)
+	}
+	strangerTrash := requestAs[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, "viewer", http.MethodGet, "/api/v1/workbooks/trash", nil, http.StatusOK)
+	if len(strangerTrash.Items) != 0 {
+		t.Fatalf("stranger trash = %#v", strangerTrash.Items)
+	}
+	requestAs[map[string]any](t, server, "viewer", http.MethodPost, "/api/v1/workbooks/"+target.ID+"/restore", nil, http.StatusNotFound)
+	restored := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks/"+target.ID+"/restore", nil, http.StatusOK)
+	if restored.ID != target.ID || len(restored.Sheets) != 2 {
+		t.Fatalf("restored = %#v", restored)
+	}
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/workbooks/"+target.ID, nil, http.StatusNoContent)
+	request[map[string]any](t, server, http.MethodDelete, "/api/v1/workbooks/"+target.ID+"/purge", nil, http.StatusNoContent)
+	emptied := request[struct {
+		Items []workbook.Workbook `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/trash", nil, http.StatusOK)
+	if len(emptied.Items) != 0 {
+		t.Fatalf("purged trash = %#v", emptied.Items)
+	}
+}
+
+func TestUserDirectoryManagesRolesStatusAndSharing(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "사용자 관리"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+
+	// An administrator can pre-register somebody who has never signed in.
+	created := request[workbook.DirectoryUser](t, server, http.MethodPost, "/api/v1/admin/users", map[string]any{
+		"user_id": "nara.kim", "display_name": "김나라", "email": "nara.kim@corp.example", "note": "재무팀 분석가",
+	}, http.StatusCreated)
+	if created.Status != workbook.UserStatusActive || created.DisplayName != "김나라" {
+		t.Fatalf("created user = %#v", created)
+	}
+
+	// A kanpic role can be granted and immediately drives role-based sharing.
+	request[map[string]any](t, server, http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares", map[string]any{
+		"principal_type": "role", "principal_id": "kanpic-analyst", "role": "editor",
+	}, http.StatusOK)
+	requestAs[map[string]any](t, server, "nara.kim", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
+	granted := request[workbook.DirectoryUser](t, server, http.MethodPost, "/api/v1/admin/users/nara.kim/roles", map[string]any{"role": "kanpic-analyst"}, http.StatusOK)
+	if len(granted.Roles) != 1 || granted.Roles[0] != "kanpic-analyst" {
+		t.Fatalf("granted roles = %#v", granted.Roles)
+	}
+	viaRole := requestAs[workbook.Workbook](t, server, "nara.kim", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusOK)
+	if viaRole.AccessRole != workbook.RoleEditor || viaRole.AccessSource != workbook.AccessSourceRole {
+		t.Fatalf("role based access = %#v", viaRole)
+	}
+	requestAs[workbook.MutationResult](t, server, "nara.kim", http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": 1, "idempotency_key": "role-write", "cells": []map[string]any{{"row": 1, "column": 1, "value": "분석"}},
+	}, http.StatusOK)
+
+	// Suspending the account blocks every request until it is restored.
+	suspended := request[workbook.DirectoryUser](t, server, http.MethodPatch, "/api/v1/admin/users/nara.kim", map[string]any{"status": "suspended"}, http.StatusOK)
+	if suspended.Status != workbook.UserStatusSuspended {
+		t.Fatalf("suspended user = %#v", suspended)
+	}
+	requestAs[map[string]any](t, server, "nara.kim", http.MethodGet, "/api/v1/workbooks", nil, http.StatusForbidden)
+	request[workbook.DirectoryUser](t, server, http.MethodPatch, "/api/v1/admin/users/nara.kim", map[string]any{"status": "active"}, http.StatusOK)
+	requestAs[map[string]any](t, server, "nara.kim", http.MethodGet, "/api/v1/workbooks", nil, http.StatusOK)
+
+	// Revoking the role takes the shared access away again.
+	revoked := request[workbook.DirectoryUser](t, server, http.MethodDelete, "/api/v1/admin/users/nara.kim/roles/kanpic-analyst", nil, http.StatusOK)
+	if len(revoked.Roles) != 0 {
+		t.Fatalf("revoked roles = %#v", revoked.Roles)
+	}
+	requestAs[map[string]any](t, server, "nara.kim", http.MethodGet, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
+
+	// The directory lists everybody the system knows, including the owner.
+	listed := request[struct {
+		Items []workbook.DirectoryUser `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/admin/users", nil, http.StatusOK)
+	found := false
+	for _, user := range listed.Items {
+		if user.UserID == "nara.kim" {
+			found = true
+			if user.Note != "재무팀 분석가" {
+				t.Fatalf("listed user = %#v", user)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("directory listing = %#v", listed.Items)
+	}
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/admin/users/nara.kim", map[string]any{"status": "unknown"}, http.StatusBadRequest)
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/admin/users/nara.kim/roles", map[string]any{"role": "bad role"}, http.StatusBadRequest)
+	request[map[string]any](t, server, http.MethodGet, "/api/v1/admin/users/missing", nil, http.StatusNotFound)
+}

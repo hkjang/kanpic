@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
-import { Building2, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Lock, MoreHorizontal, Pencil, Plus, Share2, Star, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Building2, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, Star, Trash, Trash2, UploadCloud, Users } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { api, newIdempotencyKey } from '../lib/api'
 import type { BuildInfo, Session, ShareRole, Workbook } from '../types'
@@ -23,7 +23,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [importFile,setImportFile]=useState<File>()
   const [preview,setPreview]=useState<{format:string;total_cells:number;sheets:Array<{name:string;rows:number;columns:number;non_empty_cells:number}>;warnings:string[]} >()
   const [importing,setImporting]=useState(false)
-  const [filter,setFilter]=useState<'recent'|'favorite'|'owned'|'shared'>('recent')
+  const [filter,setFilter]=useState<'recent'|'favorite'|'owned'|'shared'|'trash'>('recent')
   const [shareTarget,setShareTarget]=useState<Workbook>()
   const [menuID,setMenuID]=useState<string>()
   const [renameTarget,setRenameTarget]=useState<Workbook>()
@@ -31,6 +31,10 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const workbooks=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks')})
   const create=useMutation({mutationFn:(requestedTitle?:string)=>api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({title:requestedTitle?.trim()||'제목 없는 워크북',workspace_id:'default'})}),onSuccess:(wb)=>{client.invalidateQueries({queryKey:['workbooks']});window.location.href=`/workbooks/${wb.id}`}})
   const update=useMutation({mutationFn:({id,input}:{id:string;input:Record<string,unknown>})=>api<Workbook>(`/api/v1/workbooks/${id}`,{method:'PATCH',body:JSON.stringify(input)}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
+  const favorite=useMutation({mutationFn:({id,value}:{id:string;value:boolean})=>api<Workbook>(`/api/v1/workbooks/${id}/favorite`,{method:'PUT',body:JSON.stringify({favorite:value})}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
+  const trash=useQuery({queryKey:['workbook-trash'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks/trash'),enabled:filter==='trash'})
+  const restore=useMutation({mutationFn:(workbook:Workbook)=>api<Workbook>(`/api/v1/workbooks/${workbook.id}/restore`,{method:'POST'}),onSuccess:()=>{client.invalidateQueries({queryKey:['workbook-trash']});client.invalidateQueries({queryKey:['workbooks']})}})
+  const purge=useMutation({mutationFn:(workbook:Workbook)=>api(`/api/v1/workbooks/${workbook.id}/purge`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['workbook-trash']})})
   const duplicate=useMutation({mutationFn:(workbook:Workbook)=>api<Workbook>(`/api/v1/workbooks/${workbook.id}/duplicate`,{method:'POST',body:JSON.stringify({title:`${workbook.title} 복사본`})}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
   const remove=useMutation({mutationFn:(workbook:Workbook)=>api(`/api/v1/workbooks/${workbook.id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
   const chooseImport=async(file?:File)=>{if(!file)return;setImportFile(file);const form=new FormData();form.append('file',file);const result=await api<{format:string;total_cells:number;sheets:Array<{name:string;rows:number;columns:number;non_empty_cells:number}>;warnings:string[]}>('/api/v1/imports:preview',{method:'POST',body:form});setPreview(result)}
@@ -53,11 +57,19 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
       <button className="template blank" onClick={()=>create.mutate(undefined)}><span><FilePlus2/></span><strong>빈 워크북</strong><small>새로운 데이터 작업 시작</small></button>
       {['프로젝트 현황','월간 매출 분석','업무 요청 관리'].map((name,index)=><button className={`template template-${index}`} key={name} onClick={()=>create.mutate(name)}><span><Grid2X2/></span><strong>{name}</strong><small>kanpic 기본 템플릿</small></button>)}
     </div></section>
-    <section className="recent-section"><div className="section-heading"><h2>최근 워크북</h2><div className="segmented"><button className={filter==='recent'?'active':''} onClick={()=>setFilter('recent')}><Clock3/> 최근</button><button className={filter==='owned'?'active':''} onClick={()=>setFilter('owned')}><Lock/> 내 소유</button><button className={filter==='shared'?'active':''} onClick={()=>setFilter('shared')}><Users/> 나와 공유됨</button><button className={filter==='favorite'?'active':''} onClick={()=>setFilter('favorite')}><Star/> 즐겨찾기</button></div></div>
-      {workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:visibleWorkbooks.length===0?<div className="empty-state"><FilePlus2/><h3>{filter==='favorite'?'즐겨찾기한 워크북이 없습니다':filter==='shared'?'나와 공유된 워크북이 없습니다':filter==='owned'?'내가 소유한 워크북이 없습니다':'첫 워크북을 만들어 보세요'}</h3><p>{filter==='favorite'?'워크북 메뉴에서 즐겨찾기에 추가할 수 있습니다.':filter==='shared'?'동료가 사용자, 부서 또는 역할로 공유하면 여기에 표시됩니다.':'셀 편집 내용은 자동으로 안전하게 저장됩니다.'}</p></div>:<div className="workbook-grid">{visibleWorkbooks.map(workbook=><article className={`workbook-card ${menuID===workbook.id?'menu-open':''}`} key={workbook.id}>
+    <section className="recent-section"><div className="section-heading"><h2>최근 워크북</h2><div className="segmented"><button className={filter==='recent'?'active':''} onClick={()=>setFilter('recent')}><Clock3/> 최근</button><button className={filter==='owned'?'active':''} onClick={()=>setFilter('owned')}><Lock/> 내 소유</button><button className={filter==='shared'?'active':''} onClick={()=>setFilter('shared')}><Users/> 나와 공유됨</button><button className={filter==='favorite'?'active':''} onClick={()=>setFilter('favorite')}><Star/> 즐겨찾기</button><button className={filter==='trash'?'active':''} onClick={()=>setFilter('trash')}><Trash/> 휴지통</button></div></div>
+      {filter==='trash'
+        ?trash.isLoading?<div className="loading-card">휴지통을 불러오는 중…</div>
+          :(trash.data?.items??[]).length===0?<div className="empty-state"><Trash/><h3>휴지통이 비어 있습니다</h3><p>삭제한 워크북은 여기에서 복원하거나 완전히 지울 수 있습니다.</p></div>
+          :<div className="trash-list">{(trash.data?.items??[]).map(item=><article className="trash-row" key={item.id}>
+            <span className="trash-info"><strong>{item.title}</strong><small>{item.deleted_at?`${new Date(item.deleted_at).toLocaleString('ko-KR')} 삭제`:'삭제됨'}{item.deleted_by?` · ${item.deleted_by}`:''}</small></span>
+            <button disabled={restore.isPending} onClick={()=>void restore.mutateAsync(item)}><RotateCcw/> 복원</button>
+            <button className="danger" disabled={purge.isPending} onClick={()=>{if(confirm(`'${item.title}' 워크북을 완전히 삭제할까요? 이 작업은 되돌릴 수 없습니다.`))void purge.mutateAsync(item)}}><Trash2/> 완전 삭제</button>
+          </article>)}</div>
+        :workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:visibleWorkbooks.length===0?<div className="empty-state"><FilePlus2/><h3>{filter==='favorite'?'즐겨찾기한 워크북이 없습니다':filter==='shared'?'나와 공유된 워크북이 없습니다':filter==='owned'?'내가 소유한 워크북이 없습니다':'첫 워크북을 만들어 보세요'}</h3><p>{filter==='favorite'?'워크북 메뉴에서 즐겨찾기에 추가할 수 있습니다.':filter==='shared'?'동료가 사용자, 부서 또는 역할로 공유하면 여기에 표시됩니다.':'셀 편집 내용은 자동으로 안전하게 저장됩니다.'}</p></div>:<div className="workbook-grid">{visibleWorkbooks.map(workbook=><article className={`workbook-card ${menuID===workbook.id?'menu-open':''}`} key={workbook.id}>
         <a href={`/workbooks/${workbook.id}`} className="workbook-preview"><Grid2X2/><span>{workbook.sheets.length} sheets</span>{workbook.favorite&&<Star className="favorite-star" fill="currentColor"/>}</a>
         <div className="workbook-meta"><a href={`/workbooks/${workbook.id}`}><strong>{workbook.title}</strong><small>{new Date(workbook.updated_at).toLocaleString('ko-KR')} 수정{workbook.access_role&&workbook.access_role!=='owner'?` · ${workbook.owner_id} 소유`:''}</small></a>{accessChip(workbook)}<button aria-label={`${workbook.title} 더보기`} aria-expanded={menuID===workbook.id} onClick={()=>setMenuID(current=>current===workbook.id?undefined:workbook.id)}><MoreHorizontal/></button>{menuID===workbook.id&&<div className="workbook-menu" role="menu">
-          <button role="menuitem" onClick={()=>{setMenuID(undefined);update.mutate({id:workbook.id,input:{favorite:!workbook.favorite}})}}><Star fill={workbook.favorite?'currentColor':'none'}/>{workbook.favorite?'즐겨찾기 해제':'즐겨찾기'}</button>
+          <button role="menuitem" onClick={()=>{setMenuID(undefined);favorite.mutate({id:workbook.id,value:!workbook.favorite})}}><Star fill={workbook.favorite?'currentColor':'none'}/>{workbook.favorite?'즐겨찾기 해제':'즐겨찾기'}</button>
           <button role="menuitem" onClick={()=>shareWorkbook(workbook)}><Share2/> 공유</button>
           <button role="menuitem" onClick={()=>openRename(workbook)}><Pencil/> 이름 변경</button>
           <button role="menuitem" onClick={()=>void copyWorkbook(workbook)}><Copy/> 복제</button>

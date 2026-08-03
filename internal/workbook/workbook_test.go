@@ -53,7 +53,7 @@ func TestMemoryWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	if string(cells[0].Value) != "7" || string(cells[1].Value) != "14" {
 		t.Fatalf("copy changed with source: %#v", cells)
 	}
-	if err := repository.DeleteWorkbook(ctx, source.ID); err != nil {
+	if err := repository.DeleteWorkbook(ctx, source.ID, "owner"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.GetWorkbook(ctx, duplicated.ID); err != nil {

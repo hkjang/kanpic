@@ -64,6 +64,12 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.update", "시트 이름, 순서, 색상, 숨김 상태를 변경합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.sheet.delete", "시트를 삭제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.workbook.trash", "삭제된 워크북 목록을 조회합니다.", "workbook.read", map[string]any{"type": "object", "properties": map[string]any{"workspace_id": map[string]any{"type": "string"}}}),
+	tool("spreadsheet.workbook.restore", "삭제된 워크북을 복원합니다.", "workbook.write", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.workbook.purge", "삭제된 워크북을 완전히 제거합니다.", "workbook.write", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.workbook.favorite", "호출자의 개인 즐겨찾기를 설정하거나 해제합니다.", "workbook.read", requiredProps2("workbook_id", "string", "favorite", "boolean")),
+	tool("spreadsheet.sheet.stats", "시트별 데이터 양, 수식 수, 사용 범위와 마지막 변경 시각을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.sheet.copy", "시트를 셀·서식·레이아웃과 함께 다른 워크북으로 복사합니다.", "workbook.write", requiredProps2("sheet_id", "string", "target_workbook_id", "string")),
 	tool("spreadsheet.named_range.list", "워크북의 이름 범위 정의와 revision을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.named_range.get", "이름 범위 정의를 조회합니다.", "workbook.read", requiredProps("named_range_id", "string")),
 	tool("spreadsheet.named_range.create", "수식과 API에서 재사용할 워크북 이름 범위를 멱등 생성합니다.", "formula.write", namedRangeSchema(true)),
@@ -276,7 +282,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		return item, err
 	case "spreadsheet.workbook.delete":
-		return okResult(s.repository.DeleteWorkbook(ctx, stringArg(args, "workbook_id")))
+		return okResult(s.repository.DeleteWorkbook(ctx, stringArg(args, "workbook_id"), actor))
 	case "spreadsheet.share.list":
 		return s.sharingResult(ctx, r, stringArg(args, "workbook_id"))
 	case "spreadsheet.share.grant":
@@ -391,6 +397,45 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.publishCurrentVersion(ctx, workbookID, actor, "")
 		}
 		return okResult(err)
+	case "spreadsheet.workbook.trash":
+		items, err := s.repository.ListDeletedWorkbooks(ctx, stringArg(args, "workspace_id"), s.accessPrincipal(r))
+		return map[string]any{"items": items}, err
+	case "spreadsheet.workbook.restore":
+		workbookID := stringArg(args, "workbook_id")
+		if err := s.assertTrashOwner(ctx, r, workbookID); err != nil {
+			return nil, err
+		}
+		return s.repository.RestoreWorkbook(ctx, workbookID, actor)
+	case "spreadsheet.workbook.purge":
+		workbookID := stringArg(args, "workbook_id")
+		if err := s.assertTrashOwner(ctx, r, workbookID); err != nil {
+			return nil, err
+		}
+		return okResult(s.repository.PurgeWorkbook(ctx, workbookID))
+	case "spreadsheet.workbook.favorite":
+		workbookID := stringArg(args, "workbook_id")
+		favorite, _ := args["favorite"].(bool)
+		if err := s.repository.SetWorkbookFavorite(ctx, workbookID, actor, favorite); err != nil {
+			return nil, err
+		}
+		return map[string]any{"workbook_id": workbookID, "favorite": favorite}, nil
+	case "spreadsheet.sheet.stats":
+		items, err := s.repository.SheetStats(ctx, stringArg(args, "workbook_id"))
+		return map[string]any{"items": items}, err
+	case "spreadsheet.sheet.copy":
+		var input workbook.CopySheetInput
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, err
+		}
+		input.ActorID = actor
+		target, err := s.repository.ResolveWorkbookAccess(ctx, input.TargetWorkbookID, s.accessPrincipal(r))
+		if err != nil {
+			return nil, err
+		}
+		if !target.CanWrite {
+			return nil, fmt.Errorf("%w: 대상 워크북에 대한 편집 권한이 없습니다", workbook.ErrForbidden)
+		}
+		return s.repository.CopySheetToWorkbook(ctx, stringArg(args, "sheet_id"), input)
 	case "spreadsheet.named_range.list":
 		return s.repository.ListNamedRanges(ctx, stringArg(args, "workbook_id"))
 	case "spreadsheet.named_range.get":

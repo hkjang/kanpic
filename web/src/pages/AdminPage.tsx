@@ -4,23 +4,128 @@ import { Activity, ArrowLeft, Building2, Bot, CheckCircle2, ChevronRight, Databa
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
-import type { BuildInfo, Department, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
+import type { BuildInfo, Department, DirectoryUser, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='settings'|'departments'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['departments','logs','keys','system'].includes(value||'')?value as Tab:'settings'}
+type Tab='settings'|'users'|'departments'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['users','departments','logs','keys','system'].includes(value||'')?value as Tab:'settings'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
   const navigate=(next:Tab)=>{history.replaceState(null,'',`/admin?tab=${next}`);setTab(next)}
   return <div className="console-shell"><aside className="console-sidebar"><Brand/><div className="console-label">ADMIN CONSOLE</div><nav>
     <button className={tab==='settings'?'active':''} onClick={()=>navigate('settings')}><Settings2/> 시스템 설정 <ChevronRight/></button>
+    <button className={tab==='users'?'active':''} onClick={()=>navigate('users')}><Users/> 사용자 및 역할 <ChevronRight/></button>
     <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
-  </nav><div className="console-nav-group"><span>관리</span><a><Users/> 사용자 및 역할</a><a><Database/> 워크스페이스</a><a><ShieldCheck/> 보안 정책</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='settings'&&<SettingsPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+  </nav><div className="console-nav-group"><span>바로가기</span><a href="/preferences"><ShieldCheck/> 개인 환경설정</a><a href="/"><Database/> 워크스페이스로</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
+}
+
+/**
+ * Identity comes from the identity provider or the bootstrap login, so the
+ * console manages what kanpic owns: account status, kanpic roles that
+ * role-based sharing can target, notes and active sessions.
+ */
+function UsersPanel(){
+  const client=useQueryClient()
+  const [search,setSearch]=useState(''),[selected,setSelected]=useState<string>(),[role,setRole]=useState('')
+  const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
+  const [message,setMessage]=useState(''),[error,setError]=useState('')
+  const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[]}>('/api/v1/admin/users')})
+  const items=(users.data?.items??[]).filter(user=>{
+    const needle=search.trim().toLowerCase()
+    if(!needle)return true
+    return [user.user_id,user.display_name,user.email,...(user.roles??[]),...(user.departments??[])].filter(Boolean).some(value=>String(value).toLowerCase().includes(needle))
+  })
+  const current=items.find(user=>user.user_id===selected)??(users.data?.items??[]).find(user=>user.user_id===selected)
+  const run=async(action:()=>Promise<unknown>,success:string)=>{
+    setError('');setMessage('')
+    try{await action();await client.invalidateQueries({queryKey:['admin-users']});setMessage(success)}
+    catch(reason){setError(reason instanceof Error?reason.message:'요청을 처리하지 못했습니다.')}
+  }
+  const create=()=>run(async()=>{
+    const created=await api<DirectoryUser>('/api/v1/admin/users',{method:'POST',body:JSON.stringify({...newUser,user_id:newUser.user_id.trim()})})
+    setNewUser({user_id:'',display_name:'',email:''});setSelected(created.user_id)
+  },'사용자를 등록했습니다.')
+  const setStatus=(user:DirectoryUser,status:'active'|'suspended')=>run(
+    ()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}`,{method:'PATCH',body:JSON.stringify({status})}),
+    status==='suspended'?'계정을 정지하고 모든 세션을 종료했습니다.':'계정 정지를 해제했습니다.')
+  const grant=(user:DirectoryUser)=>{
+    const name=role.trim()
+    if(!name)return
+    void run(async()=>{await api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/roles`,{method:'POST',body:JSON.stringify({role:name})});setRole('')},`${name} 역할을 부여했습니다.`)
+  }
+  const revoke=(user:DirectoryUser,name:string)=>run(
+    ()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/roles/${encodeURIComponent(name)}`,{method:'DELETE'}),
+    `${name} 역할을 회수했습니다.`)
+  const signOut=(user:DirectoryUser)=>run(
+    ()=>api<{revoked_sessions:number}>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/sessions`,{method:'DELETE'}),
+    '모든 세션을 종료했습니다.')
+  const note=(user:DirectoryUser)=>{
+    const next=window.prompt('메모',user.note??'')
+    if(next===null)return
+    void run(()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}`,{method:'PATCH',body:JSON.stringify({note:next})}),'메모를 저장했습니다.')
+  }
+  return <section className="console-panel">
+    <header className="panel-header"><div><h1>사용자 및 역할</h1><p>로그인한 사용자는 자동으로 등록됩니다. 계정 정지, kanpic 역할 부여, 세션 종료를 관리하고 역할은 워크북 공유 대상으로 바로 사용할 수 있습니다.</p></div>
+      <div className="panel-actions"><Search/><input aria-label="사용자 검색" placeholder="사용자, 이메일, 역할, 부서 검색" value={search} onChange={event=>setSearch(event.target.value)}/></div>
+    </header>
+    <div className="user-layout">
+      <div className="user-table">
+        <div className="user-row head"><span>사용자</span><span>역할</span><span>부서</span><span>워크북</span><span>마지막 접속</span></div>
+        {users.isLoading?<div className="loading-card">사용자를 불러오는 중…</div>:items.length===0?<div className="empty-state small"><Users/><h3>사용자가 없습니다</h3><p>사용자가 로그인하거나 아래에서 직접 등록하면 표시됩니다.</p></div>:items.map(user=>
+          <button className={`user-row${selected===user.user_id?' active':''}${user.status==='suspended'?' suspended':''}`} key={user.user_id} onClick={()=>setSelected(user.user_id)}>
+            <span className="user-identity"><strong>{user.display_name||user.user_id}</strong><small>{user.email||user.user_id}</small>{user.status==='suspended'&&<em>정지됨</em>}</span>
+            <span className="user-roles">{(user.roles??[]).length===0?<i>—</i>:(user.roles??[]).map(item=><b key={item}>{item}</b>)}</span>
+            <span>{(user.departments??[]).join(', ')||'—'}</span>
+            <span>{user.owned_workbooks.toLocaleString()}</span>
+            <span>{user.last_seen_at?new Date(user.last_seen_at).toLocaleString('ko-KR'):'기록 없음'}</span>
+          </button>)}
+        <div className="user-create">
+          <h3><Plus/> 사용자 등록</h3>
+          <input aria-label="사용자 ID" placeholder="사용자 ID 또는 이메일" value={newUser.user_id} onChange={event=>setNewUser(current=>({...current,user_id:event.target.value}))}/>
+          <input aria-label="표시 이름" placeholder="표시 이름 (선택)" value={newUser.display_name} onChange={event=>setNewUser(current=>({...current,display_name:event.target.value}))}/>
+          <input aria-label="이메일" placeholder="이메일 (선택)" value={newUser.email} onChange={event=>setNewUser(current=>({...current,email:event.target.value}))}/>
+          <button className="primary" disabled={!newUser.user_id.trim()} onClick={create}>등록</button>
+        </div>
+      </div>
+      <div className="user-detail">
+        {!current?<div className="empty-state small"><ShieldCheck/><h3>사용자를 선택하세요</h3><p>역할 부여, 계정 정지와 세션 종료를 실행할 수 있습니다.</p></div>:<>
+          <h2>{current.display_name||current.user_id}</h2>
+          <dl className="user-facts">
+            <div><dt>사용자 ID</dt><dd>{current.user_id}</dd></div>
+            <div><dt>이메일</dt><dd>{current.email||'—'}</dd></div>
+            <div><dt>상태</dt><dd className={current.status==='suspended'?'suspended':'active'}>{current.status==='suspended'?'정지됨':'활성'}</dd></div>
+            <div><dt>소유 워크북</dt><dd>{current.owned_workbooks.toLocaleString()}개</dd></div>
+            <div><dt>부서</dt><dd>{(current.departments??[]).join(', ')||'—'}</dd></div>
+            <div><dt>메모</dt><dd>{current.note||'—'}</dd></div>
+          </dl>
+          <div className="user-roles-editor">
+            <h3>kanpic 역할</h3>
+            <div className="user-role-chips">{(current.roles??[]).length===0?<span className="user-empty">부여된 역할이 없습니다.</span>:(current.roles??[]).map(item=>
+              <span key={item}>{item}<button aria-label={`${item} 역할 회수`} onClick={()=>revoke(current,item)}><XCircle/></button></span>)}</div>
+            <div className="user-role-add">
+              <input aria-label="부여할 역할" placeholder="예: kanpic-analyst" value={role} onChange={event=>setRole(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')grant(current)}}/>
+              <button disabled={!role.trim()} onClick={()=>grant(current)}>역할 부여</button>
+            </div>
+            <small>역할은 워크북 공유 창에서 ‘역할’ 대상으로 선택할 수 있습니다.</small>
+          </div>
+          <div className="user-actions">
+            <button onClick={()=>note(current)}>메모 편집</button>
+            <button onClick={()=>signOut(current)}>모든 세션 종료</button>
+            {current.status==='suspended'
+              ?<button className="primary" onClick={()=>setStatus(current,'active')}><CheckCircle2/> 정지 해제</button>
+              :<button className="danger" onClick={()=>{if(window.confirm(`'${current.user_id}' 계정을 정지하면 즉시 로그아웃되고 모든 요청이 차단됩니다. 계속할까요?`))setStatus(current,'suspended')}}><XCircle/> 계정 정지</button>}
+          </div>
+        </>}
+      </div>
+    </div>
+    {error&&<div className="panel-error" role="alert">{error}</div>}
+    {message&&<div className="panel-message" role="status">{message}</div>}
+  </section>
 }
 
 /**

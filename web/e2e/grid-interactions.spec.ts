@@ -99,7 +99,10 @@ test('keyboard shortcuts insert the current date and an auto sum', async ({ page
   await page.mouse.click(grid.columnCenter(4),grid.rowCenter(2))
   await page.keyboard.press('Control+;')
   await page.waitForTimeout(1200)
-  const today=new Date().toISOString().slice(0,10)
+  // The editor inserts the local date, so the expectation is built the same way.
+  const now=new Date()
+  const pad=(value:number)=>String(value).padStart(2,'0')
+  const today=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`
   const found=await request.get(`/api/v1/workbooks/${workbookId}/search?q=${today}&whole_cell=true`).then(response=>response.json())
   expect(found.items).toHaveLength(1)
 

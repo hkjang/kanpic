@@ -25,6 +25,7 @@ import { PivotDialog } from '../components/PivotDialog'
 import { PivotPanel } from '../components/PivotPanel'
 import { PivotResultDialog } from '../components/PivotResultDialog'
 import { SheetTabs } from '../components/SheetTabs'
+import { CopySheetDialog,SheetManagerDialog } from '../components/SheetManagerDialog'
 import { SortDialog } from '../components/SortDialog'
 import { StructureDialog,type StructureCommand } from '../components/StructureDialog'
 import { VersionPanel } from '../components/VersionPanel'
@@ -53,7 +54,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
   const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
-  const [showFormulas,setShowFormulas]=useState(false),[replaceMode,setReplaceMode]=useState(false),[shareOpen,setShareOpen]=useState(false),[requestingAccess,setRequestingAccess]=useState(false),[accessRequested,setAccessRequested]=useState(false)
+  const [showFormulas,setShowFormulas]=useState(false),[replaceMode,setReplaceMode]=useState(false),[shareOpen,setShareOpen]=useState(false),[sheetManagerOpen,setSheetManagerOpen]=useState(false),[copySheet,setCopySheet]=useState<Sheet>(),[requestingAccess,setRequestingAccess]=useState(false),[accessRequested,setAccessRequested]=useState(false)
   const layoutQueue=useRef<Promise<unknown>>(Promise.resolve()),nameBoxRef=useRef<HTMLInputElement>(null)
   const [overflowMenu,setOverflowMenu]=useState<{x:number;y:number}>()
   const routeNavigation=useRef((()=>{const parameters=new URLSearchParams(window.location.search);return{sheetId:parameters.get('sheet_id')??'',range:parameters.get('range')??'',commentId:parameters.get('comment_id')??''}})()).current,routeNavigationApplied=useRef(false)
@@ -64,7 +65,16 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const updateVersion=useCallback((value:number)=>setServerVersion(current=>Math.max(current,value)),[])
   const handleCollaborationVersion=useCallback((value:number,event:ServerEvent)=>{updateVersion(value);const data=event.data as {structural?:boolean}|undefined;if(data?.structural&&event.client_id!==collaborationClientId())useEditorStore.getState().reset();client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['cell-conflicts',workbookId]});client.invalidateQueries({queryKey:['data-validations']});client.invalidateQueries({queryKey:['conditional-formats']});client.invalidateQueries({queryKey:['named-ranges',workbookId]});client.invalidateQueries({queryKey:['charts',workbookId]});client.invalidateQueries({queryKey:['pivots',workbookId]});client.invalidateQueries({queryKey:['pivot-data']});client.invalidateQueries({queryKey:['filter-views']});client.invalidateQueries({queryKey:['filter-result']})},[client,updateVersion,workbookId])
   const handleCollaborationEvent=useCallback((event:ServerEvent)=>{if(event.type==='comment.changed'){client.invalidateQueries({queryKey:['comments',workbookId]});client.invalidateQueries({queryKey:['mention-notifications']})}if(event.type==='operation.conflict'){client.invalidateQueries({queryKey:['cell-conflicts',workbookId]});setRightPanel('conflicts')}},[client,workbookId])
-  useEffect(()=>{if(workbook.data){setServerVersion(workbook.data.version);setActiveSheet(current=>workbook.data.sheets.find(sheet=>sheet.id===current?.id)??workbook.data.sheets[0])}},[workbook.data])
+  useEffect(()=>{if(workbook.data){
+    setServerVersion(workbook.data.version)
+    // A hidden sheet stays out of the editor, so the selection falls back to the
+    // first visible sheet.
+    setActiveSheet(current=>{
+      const same=workbook.data.sheets.find(sheet=>sheet.id===current?.id)
+      if(same&&!same.hidden)return same
+      return workbook.data.sheets.find(sheet=>!sheet.hidden)??workbook.data.sheets[0]
+    })
+  }},[workbook.data])
   useEffect(()=>{if(routeNavigationApplied.current||!workbook.data)return;routeNavigationApplied.current=true;const sheet=workbook.data.sheets.find(candidate=>candidate.id===routeNavigation.sheetId);if(!sheet)return;const target=parseNavigationRange(routeNavigation.range);if(target)setPendingNavigation({sheetId:sheet.id,range:target});setActiveSheet(sheet)},[routeNavigation,workbook.data])
   useEffect(()=>{editor.reset();if(pendingNavigation&&pendingNavigation.sheetId===activeSheet?.id){const target=pendingNavigation.range;editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true);setPendingNavigation(undefined)}},[activeSheet?.id])
   const selectionAddress=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn?address(editor.activeRow,editor.activeColumn):`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`
@@ -124,6 +134,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const refreshWorkbook=async()=>client.invalidateQueries({queryKey:['workbook',workbookId]})
   const createSheet=async()=>{const sheet=await api<Sheet>(`/api/v1/workbooks/${workbookId}/sheets`,{method:'POST',body:JSON.stringify({name:nextSheetName()})});setActiveSheet(sheet);await refreshWorkbook()}
   const updateSheet=async(sheet:Sheet,input:Record<string,unknown>)=>{const updated=await api<Sheet>(`/api/v1/sheets/${sheet.id}`,{method:'PATCH',body:JSON.stringify(input)});if(activeSheet?.id===sheet.id)setActiveSheet(updated);await refreshWorkbook()}
+  const setSheetHidden=async(sheet:Sheet,hidden:boolean)=>{
+    await updateSheet(sheet,{hidden})
+    if(hidden&&activeSheet?.id===sheet.id){
+      const next=(workbook.data?.sheets??[]).find(candidate=>candidate.id!==sheet.id&&!candidate.hidden)
+      if(next)setActiveSheet(next)
+    }
+  }
   const duplicateSheet=async(sheet:Sheet)=>{const duplicated=await api<Sheet>(`/api/v1/sheets/${sheet.id}/duplicate`,{method:'POST',body:'{}'});setActiveSheet(duplicated);await refreshWorkbook()}
   const deleteSheet=async(sheet:Sheet)=>{const ordered=workbook.data!.sheets;const index=ordered.findIndex(item=>item.id===sheet.id);const fallback=ordered[index===0?1:index-1];await api(`/api/v1/sheets/${sheet.id}`,{method:'DELETE'});if(activeSheet?.id===sheet.id&&fallback)setActiveSheet(fallback);await refreshWorkbook()}
   const revertOperation=async(mode:'undo'|'redo')=>{if(!writable())return;if(!navigator.onLine){alert('Undo와 Redo는 서버에 다시 연결한 후 사용할 수 있습니다.');return}const target=mode==='undo'?editor.takeUndo():editor.takeRedo();if(!target)return;editor.setSaveState('saving');try{const result=await api<MutationResult>(`/api/v1/operations/${target}:undo`,{method:'POST',body:JSON.stringify({idempotency_key:`undo:${target}`,client_id:collaborationClientId()})});updateVersion(result.server_version);if(result.applied_cells>0){if(mode==='undo')editor.completeUndo(result.operation_id);else editor.completeRedo(result.operation_id)}else{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target)}editor.setSaveState(result.conflicts.length?'conflict':'saved',result.conflicts.length)}catch{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target);editor.setSaveState('error')}}
@@ -297,6 +314,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'저장',shortcut:'Ctrl+S',onSelect:()=>void saveWorkbook()},
       {kind:'item',label:'새 시트 추가',shortcut:'Shift+F11',onSelect:()=>void createSheet()},
       {kind:'item',label:'시트 복제',disabled:!canWrite,onSelect:()=>void duplicateSheet(activeSheet)},
+      {kind:'item',label:'모든 시트 관리…',onSelect:()=>setSheetManagerOpen(true)},
+      {kind:'item',label:'다른 워크북으로 시트 복사…',onSelect:()=>setCopySheet(activeSheet)},
       {kind:'separator'},
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
@@ -333,6 +352,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'고정 해제',disabled:(activeSheet.layout?.frozen_rows??0)===0&&(activeSheet.layout?.frozen_columns??0)===0,onSelect:()=>void applyLayout({action:'freeze',frozen_rows:0,frozen_columns:0})},
       {kind:'item',label:'모든 행 표시',onSelect:()=>void applyLayout({action:'show_all',axis:'row'})},
       {kind:'item',label:'모든 열 표시',onSelect:()=>void applyLayout({action:'show_all',axis:'column'})},
+      {kind:'item',label:'현재 시트 숨기기',disabled:!canWrite||(workbook.data.sheets.filter(sheet=>!sheet.hidden).length<2),onSelect:()=>void setSheetHidden(activeSheet,true)},
       {kind:'separator'},
       {kind:'item',label:'시트 레이아웃…',onSelect:()=>setLayoutOpen(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
@@ -418,7 +438,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
     ]}/>}
     <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input value={formula} readOnly onDoubleClick={()=>{const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source);if(source)editor.select(source.row,source.column);editor.setEditing(true)}} aria-label="수식 입력창"/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} readOnly={readOnly} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onDelete={deleteSheet}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} readOnly={readOnly} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel==='ai'&&<AIPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} baseVersion={serverVersion} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
       {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
       {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
@@ -442,6 +462,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}
+    {sheetManagerOpen&&<SheetManagerDialog workbook={workbook.data} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} readOnly={readOnly} onClose={()=>setSheetManagerOpen(false)} onSelect={setActiveSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onMove={(sheet,position)=>updateSheet(sheet,{position})} onHidden={setSheetHidden} onDelete={deleteSheet} onCopyTo={sheet=>{setSheetManagerOpen(false);setCopySheet(sheet)}}/>}
+    {copySheet&&<CopySheetDialog sheet={copySheet} workbookId={workbookId} onClose={()=>setCopySheet(undefined)} onCopied={target=>{
+      setCopySheet(undefined)
+      void client.invalidateQueries({queryKey:['workbooks']})
+      if(target.id===workbookId)void refreshWorkbook()
+      else if(window.confirm(`'${target.title}' 워크북으로 복사했습니다. 지금 이동할까요?`))window.location.href=`/workbooks/${target.id}`
+    }}/>}
     {shareOpen&&<ShareDialog workbook={workbook.data} onClose={()=>setShareOpen(false)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbook',workbookId]})}}/>}
     {shortcutsOpen&&<WorkbookShortcutsDialog onClose={()=>setShortcutsOpen(false)}/>}
     <WorkbookSearchDialog open={searchOpen} workbookId={workbookId} version={serverVersion} sheetId={activeSheet.id} sheetName={activeSheet.name} replaceMode={replaceMode} onClose={()=>{setSearchOpen(false);setReplaceMode(false)}} onNavigate={(item:WorkbookSearchMatch)=>navigateToRange(item.sheet_id,item.address)} onReplaced={result=>void handleReplaced(result)}/>

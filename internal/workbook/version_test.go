@@ -20,12 +20,14 @@ func TestVersionRestoreRecoversWorkbookSheetStructureAndBackup(t *testing.T) {
 	if _, err := repository.UpdateWorkbook(ctx, book.ID, UpdateWorkbookInput{Favorite: &favorite}); err != nil {
 		t.Fatal(err)
 	}
-	firstName, firstColor, hidden := "요약", "#2563eb", true
-	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, UpdateSheetInput{Name: &firstName, Color: &firstColor, Hidden: &hidden}); err != nil {
-		t.Fatal(err)
-	}
+	// A second sheet has to exist before the first one can be hidden: a workbook
+	// always keeps at least one visible sheet.
 	detail, err := repository.CreateSheet(ctx, book.ID, CreateSheetInput{Name: "상세", Color: "#16a34a"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	firstName, firstColor, hidden := "요약", "#2563eb", true
+	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, UpdateSheetInput{Name: &firstName, Color: &firstColor, Hidden: &hidden}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: detail.ID, ActorID: "owner", BaseVersion: 4, IdempotencyKey: "detail-value", Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`42`)}}}); err != nil {

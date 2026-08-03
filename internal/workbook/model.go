@@ -25,6 +25,10 @@ type Workbook struct {
 	AccessRole    ShareRole `json:"access_role,omitempty"`
 	AccessSource  string    `json:"access_source,omitempty"`
 	SharedCount   int       `json:"shared_count,omitempty"`
+
+	// Trash metadata, populated only for deleted workbooks.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	DeletedBy string     `json:"deleted_by,omitempty"`
 }
 
 type Sheet struct {

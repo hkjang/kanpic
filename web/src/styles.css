@@ -79,3 +79,62 @@
 .panel-error{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff0ee;color:#ad4540;font-size:10px}
 .panel-message{margin-top:12px;padding:10px 12px;border-radius:8px;background:#eaf5f3;color:#0b5c55;font-size:10px}
 @media(max-width:900px){.department-layout{grid-template-columns:minmax(0,1fr)}}
+
+/* Workbook trash */
+.trash-list{display:flex;flex-direction:column;gap:8px}
+.trash-row{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--border);border-radius:11px;padding:12px 14px}
+.trash-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.trash-info strong{font-size:12px}
+.trash-info small{font-size:9px;color:#78868e}
+.trash-row button{height:32px;padding:0 12px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:10px;font-weight:600;color:#4d5b64;display:inline-flex;align-items:center;gap:5px}
+.trash-row button svg{width:13px}
+.trash-row button:hover:not(:disabled){border-color:#b7cfcb;color:var(--primary)}
+.trash-row button.danger:hover:not(:disabled){border-color:#e6c4c1;color:#b4443f;background:#fdeeec}
+.trash-row button:disabled{opacity:.5}
+
+/* User directory console */
+.user-layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+.user-table,.user-detail{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px}
+.user-row{display:grid;grid-template-columns:minmax(160px,1.5fr) minmax(120px,1fr) 120px 70px 140px;gap:10px;align-items:center;width:100%;text-align:left;border:0;background:transparent;border-radius:8px;padding:8px 10px;font-size:10px;color:#43525b}
+.user-row.head{font-size:9px;font-weight:700;color:#6b7a83;background:#f8fafb;border-radius:8px;margin-bottom:4px}
+.user-row:not(.head):hover{background:#f4f7f7}
+.user-row.active{background:var(--primary-soft)}
+.user-row.suspended .user-identity strong{color:#a9453f}
+.user-identity{display:flex;flex-direction:column;gap:1px;min-width:0}
+.user-identity strong{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-identity small{font-size:9px;color:#7d8a92;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-identity em{font-style:normal;font-size:8px;font-weight:700;color:#a9453f;background:#fdeeec;border-radius:999px;padding:1px 6px;width:fit-content;margin-top:2px}
+.user-roles{display:flex;flex-wrap:wrap;gap:3px}
+.user-roles b{font-size:8px;font-weight:700;background:#f3ecfb;color:#6f4ca6;border-radius:999px;padding:2px 6px}
+.user-roles i{font-style:normal;color:#9aa5ab}
+.user-create{margin-top:10px;border-top:1px solid #eef1f2;padding-top:10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:6px;align-items:center}
+.user-create h3{grid-column:1/-1;margin:0;font-size:10px;color:#4f5d66;display:flex;align-items:center;gap:5px}
+.user-create h3 svg{width:13px}
+.user-create input{height:32px;border:1px solid #dbe2e5;border-radius:8px;padding:0 9px;font-size:11px}
+.user-create button{height:32px;padding:0 14px;border:0;border-radius:8px;background:var(--primary);color:#fff;font-size:10px;font-weight:600}
+.user-create button:disabled{opacity:.5}
+.user-detail h2{margin:0 0 10px;font-size:13px}
+.user-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 14px}
+.user-facts div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.user-facts dt{font-size:8px;color:#8b979e;text-transform:uppercase;letter-spacing:.03em}
+.user-facts dd{margin:0;font-size:10px;color:#3f4d56;overflow:hidden;text-overflow:ellipsis}
+.user-facts dd.suspended{color:#a9453f;font-weight:700}
+.user-facts dd.active{color:#0b5c55;font-weight:700}
+.user-roles-editor{border-top:1px solid #eef1f2;padding-top:12px}
+.user-roles-editor h3{margin:0 0 8px;font-size:10px;color:#4f5d66}
+.user-role-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.user-role-chips span{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:600;background:#f3ecfb;color:#6f4ca6;border-radius:999px;padding:3px 5px 3px 9px}
+.user-role-chips button{border:0;background:transparent;color:#6f4ca6;display:grid;place-items:center;padding:0}
+.user-role-chips button svg{width:12px}
+.user-empty{font-size:9px;color:#8b979e}
+.user-role-add{display:flex;gap:6px}
+.user-role-add input{flex:1;min-width:0;height:32px;border:1px solid #dbe2e5;border-radius:8px;padding:0 9px;font-size:11px}
+.user-role-add button{height:32px;padding:0 12px;border:1px solid #dbe2e5;background:#fff;border-radius:8px;font-size:10px;font-weight:600;color:#4d5b64}
+.user-roles-editor small{display:block;margin-top:6px;font-size:9px;color:#8b979e}
+.user-actions{display:flex;flex-wrap:wrap;gap:6px;border-top:1px solid #eef1f2;margin-top:12px;padding-top:12px}
+.user-actions button{height:32px;padding:0 12px;border:1px solid #dbe2e5;background:#fff;border-radius:8px;font-size:10px;font-weight:600;color:#4d5b64;display:inline-flex;align-items:center;gap:5px}
+.user-actions button svg{width:13px}
+.user-actions button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.user-actions button.danger{border-color:#e6c4c1;color:#b4443f}
+.user-actions button.danger:hover{background:#fdeeec}
+@media(max-width:1000px){.user-layout{grid-template-columns:minmax(0,1fr)}.user-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 90px}.user-row span:nth-child(4),.user-row span:nth-child(5){display:none}}

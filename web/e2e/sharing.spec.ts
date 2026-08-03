@@ -113,3 +113,42 @@ test('link access grants the whole organization the configured role', async ({ p
   await expect(anyone.page.locator('.access-badge')).toContainText('보기 전용')
   await anyone.context.close()
 })
+
+test('the console grants a kanpic role, shares by role and suspends the account', async ({ page, request, browser }) => {
+  const actor=`e2e-role-${Date.now()}`
+  const workbook=await createWorkbook(request,`역할 공유 ${Date.now()}`)
+  const roleName=`kanpic-e2e-${Date.now()}`
+
+  await page.goto('/admin?tab=users')
+  await page.waitForSelector('.user-table')
+  await page.getByLabel('사용자 ID').fill(actor)
+  await page.getByLabel('표시 이름').fill('역할 테스트')
+  await page.getByRole('button',{name:'등록',exact:true}).click()
+  await expect(page.getByRole('status')).toContainText('사용자를 등록했습니다')
+
+  await page.getByLabel('부여할 역할').fill(roleName)
+  await page.getByRole('button',{name:'역할 부여'}).click()
+  await expect(page.locator('.user-role-chips')).toContainText(roleName)
+
+  // Sharing with that role reaches the user without naming them directly.
+  await request.put(`/api/v1/workbooks/${workbook.id}/shares`,{data:{principal_type:'role',principal_id:roleName,role:'editor'}})
+  const context=await browser.newContext({extraHTTPHeaders:{'X-Kanpic-Actor':actor},viewport:{width:1400,height:900}})
+  const member=await context.newPage()
+  await openEditor(member,workbook.id)
+  await expect(member.locator('.grid-canvas')).toBeVisible()
+  await expect(member.locator('.access-badge')).toContainText('편집자')
+
+  // Suspending the account blocks it everywhere.
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('button',{name:'계정 정지'}).click()
+  await expect(page.getByRole('status')).toContainText('계정을 정지')
+  const blocked=await member.request.get(`/api/v1/workbooks/${workbook.id}`,{headers:{'X-Kanpic-Actor':actor}})
+  expect(blocked.status()).toBe(403)
+  expect(await blocked.text()).toContain('account_suspended')
+
+  await page.getByRole('button',{name:'정지 해제'}).click()
+  await expect(page.getByRole('status')).toContainText('정지를 해제')
+  const restored=await member.request.get(`/api/v1/workbooks/${workbook.id}`,{headers:{'X-Kanpic-Actor':actor}})
+  expect(restored.ok()).toBeTruthy()
+  await context.close()
+})

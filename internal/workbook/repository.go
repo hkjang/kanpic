@@ -43,13 +43,28 @@ type Repository interface {
 	DeleteDepartment(context.Context, string) error
 	AddDepartmentMembers(context.Context, string, DepartmentMembersInput) (Department, error)
 	RemoveDepartmentMember(context.Context, string, string) (Department, error)
+	UserAccessProfile(context.Context, string) (UserAccessProfile, error)
+	EnsureUser(context.Context, string, string, string) error
+	ListUsers(context.Context) ([]DirectoryUser, error)
+	GetUser(context.Context, string) (DirectoryUser, error)
+	UpsertUser(context.Context, UpsertUserInput) (DirectoryUser, error)
+	UpdateUser(context.Context, string, UpdateUserInput) (DirectoryUser, error)
+	GrantUserRole(context.Context, string, string, string) (DirectoryUser, error)
+	RevokeUserRole(context.Context, string, string) (DirectoryUser, error)
+	SetWorkbookFavorite(context.Context, string, string, bool) error
+	WorkbookFavorites(context.Context, string) (map[string]bool, error)
+	ListDeletedWorkbooks(context.Context, string, AccessPrincipal) ([]Workbook, error)
+	RestoreWorkbook(context.Context, string, string) (Workbook, error)
+	PurgeWorkbook(context.Context, string) error
+	SheetStats(context.Context, string) ([]SheetStats, error)
+	CopySheetToWorkbook(context.Context, string, CopySheetInput) (Sheet, error)
 	CreateAccessRequest(context.Context, string, CreateAccessRequestInput) (AccessRequest, error)
 	ListAccessRequests(context.Context, string, bool) ([]AccessRequest, error)
 	DecideAccessRequest(context.Context, string, DecideAccessRequestInput) (AccessRequest, error)
 	GetWorkbook(context.Context, string) (Workbook, error)
 	DuplicateWorkbook(context.Context, string, DuplicateWorkbookInput) (Workbook, error)
 	UpdateWorkbook(context.Context, string, UpdateWorkbookInput) (Workbook, error)
-	DeleteWorkbook(context.Context, string) error
+	DeleteWorkbook(context.Context, string, string) error
 
 	CreateSheet(context.Context, string, CreateSheetInput) (Sheet, error)
 	DuplicateSheet(context.Context, string, DuplicateSheetInput) (Sheet, error)

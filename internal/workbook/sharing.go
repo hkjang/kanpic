@@ -95,13 +95,6 @@ func (role ShareRole) Allows(capability Capability) bool {
 	}
 }
 
-func maxRole(current, candidate ShareRole) ShareRole {
-	if roleRank(candidate) > roleRank(current) {
-		return candidate
-	}
-	return current
-}
-
 // AssignableShareRole rejects owner and unknown values so a share row can never
 // grant management rights.
 func AssignableShareRole(role ShareRole) bool {

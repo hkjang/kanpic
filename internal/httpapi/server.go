@@ -84,6 +84,12 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}", s.updateWorkbook)
 	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}", s.deleteWorkbook)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/duplicate", s.duplicateWorkbook)
+	mux.HandleFunc("GET /api/v1/workbooks/trash", s.listDeletedWorkbooks)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/restore", s.restoreWorkbook)
+	mux.HandleFunc("DELETE /api/v1/workbooks/{workbookId}/purge", s.purgeWorkbook)
+	mux.HandleFunc("PUT /api/v1/workbooks/{workbookId}/favorite", s.setWorkbookFavorite)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sheet-stats", s.sheetStats)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/copy", s.copySheet)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sharing", s.getWorkbookSharing)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}/sharing", s.updateWorkbookSharing)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sharing:transfer-ownership", s.transferWorkbookOwnership)
@@ -92,6 +98,13 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/access-requests", s.listAccessRequests)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/access-requests", s.createAccessRequest)
 	mux.HandleFunc("POST /api/v1/access-requests/{requestAction}", s.decideAccessRequest)
+	mux.HandleFunc("GET /api/v1/admin/users", s.listUsers)
+	mux.HandleFunc("POST /api/v1/admin/users", s.createUser)
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}", s.getUser)
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}", s.updateUser)
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/roles", s.grantUserRole)
+	mux.HandleFunc("DELETE /api/v1/admin/users/{userId}/roles/{role}", s.revokeUserRole)
+	mux.HandleFunc("DELETE /api/v1/admin/users/{userId}/sessions", s.revokeUserSessions)
 	mux.HandleFunc("GET /api/v1/departments", s.listDepartments)
 	mux.HandleFunc("POST /api/v1/departments", s.createDepartment)
 	mux.HandleFunc("GET /api/v1/departments/{departmentId}", s.getDepartment)
@@ -273,6 +286,10 @@ func (s *Server) getWorkbook(w http.ResponseWriter, r *http.Request) {
 	if sharing, err := s.repository.GetWorkbookSharing(r.Context(), item.ID); err == nil {
 		item.SharedCount = len(sharing.Shares)
 	}
+	// Favourites are personal, so the flag always reflects the caller.
+	if favorites, err := s.repository.WorkbookFavorites(r.Context(), actorID(r)); err == nil {
+		item.Favorite = favorites[item.ID]
+	}
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -309,7 +326,7 @@ func (s *Server) updateWorkbook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteWorkbook(w http.ResponseWriter, r *http.Request) {
-	if err := s.repository.DeleteWorkbook(r.Context(), r.PathValue("workbookId")); err != nil {
+	if err := s.repository.DeleteWorkbook(r.Context(), r.PathValue("workbookId"), actorID(r)); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
@@ -798,6 +815,12 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 		}
+		identified, active := s.resolveRequestPrincipal(w, r)
+		if !active {
+			s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
+			return
+		}
+		r = identified
 		guarded, allowed := s.authorizeWorkbookRequest(w, r)
 		if !allowed {
 			s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
@@ -912,6 +935,9 @@ func requiredScope(r *http.Request) string {
 			return "profile.read"
 		}
 		return "profile.write"
+	}
+	if strings.HasSuffix(path, "/favorite") || strings.HasSuffix(path, "/trash") {
+		return "workbook.read"
 	}
 	if strings.Contains(path, "/departments") {
 		if r.Method == http.MethodGet {

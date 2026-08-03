@@ -320,7 +320,12 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	if err != nil {
 		return nil, err
 	}
+	favorites, err := r.WorkbookFavorites(ctx, principal.UserID)
+	if err != nil {
+		return nil, err
+	}
 	for i := range items {
+		items[i].Favorite = favorites[items[i].ID]
 		items[i].Sheets, err = r.listSheets(ctx, r.pool, items[i].ID)
 		if err != nil {
 			return nil, err
@@ -614,7 +619,7 @@ func (r *PostgresRepository) UpdateWorkbook(ctx context.Context, id string, inpu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var current Workbook
-	err = tx.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&current.ID, &current.WorkspaceID, &current.Title, &current.OwnerID, &current.Favorite, &current.Version, &current.CreatedAt, &current.UpdatedAt)
+	err = tx.QueryRow(ctx, `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&current.ID, &current.WorkspaceID, &current.Title, &current.OwnerID, &current.Favorite, &current.Version, &current.CreatedAt, &current.UpdatedAt, &current.LinkAccess, &current.LinkRole, &current.SharingLocked, &current.ViewerCanCopy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workbook{}, ErrNotFound
 	}
@@ -657,8 +662,8 @@ func (r *PostgresRepository) UpdateWorkbook(ctx context.Context, id string, inpu
 	return current, tx.Commit(ctx)
 }
 
-func (r *PostgresRepository) DeleteWorkbook(ctx context.Context, id string) error {
-	command, err := r.pool.Exec(ctx, `UPDATE workbooks SET deleted_at=$2,updated_at=$2 WHERE id=$1 AND deleted_at IS NULL`, id, r.now())
+func (r *PostgresRepository) DeleteWorkbook(ctx context.Context, id, deletedBy string) error {
+	command, err := r.pool.Exec(ctx, `UPDATE workbooks SET deleted_at=$2,updated_at=$2,deleted_by=$3 WHERE id=$1 AND deleted_at IS NULL`, id, r.now(), deletedBy)
 	if err == nil && command.RowsAffected() == 0 {
 		return ErrNotFound
 	}
@@ -976,6 +981,15 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 		properties.Color = *input.Color
 	}
 	if input.Hidden != nil {
+		if *input.Hidden && !properties.Hidden {
+			var visible int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM sheets WHERE workbook_id=$1 AND id<>$2 AND coalesce((properties->>'hidden')::boolean,false)=false`, workbookID, sheetID).Scan(&visible); err != nil {
+				return Sheet{}, err
+			}
+			if visible == 0 {
+				return Sheet{}, fmt.Errorf("%w: at least one sheet must stay visible", ErrInvalid)
+			}
+		}
 		properties.Hidden = *input.Hidden
 	}
 	sheet.Color, sheet.Hidden, sheet.Layout = properties.Color, properties.Hidden, properties.Layout

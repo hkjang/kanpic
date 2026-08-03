@@ -243,6 +243,21 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return err
 }
 
+// RevokeUserSessions signs a user out everywhere, used when an administrator
+// suspends an account or forces a re-login.
+func (s *Service) RevokeUserSessions(ctx context.Context, userID string) error {
+	_, err := s.RevokeUserSessionsCount(ctx, userID)
+	return err
+}
+
+func (s *Service) RevokeUserSessionsCount(ctx context.Context, userID string) (int, error) {
+	command, err := s.pool.Exec(ctx, `DELETE FROM user_sessions WHERE lower(user_id)=lower($1)`, strings.TrimSpace(userID))
+	if err != nil {
+		return 0, err
+	}
+	return int(command.RowsAffected()), nil
+}
+
 func (s *Service) IsAdmin(ctx context.Context, user User) bool {
 	if s.bootstrap.Enabled() && secureEqual(user.ID, s.bootstrap.ID) {
 		for _, role := range user.Roles {

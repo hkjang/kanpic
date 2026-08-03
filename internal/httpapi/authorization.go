@@ -10,6 +10,7 @@ import (
 )
 
 type accessContextKey struct{}
+type principalCacheKey struct{}
 
 // resourceCollections maps the first path segment after /api/v1 to the resource
 // kind the identifier that follows belongs to. Keeping the table here means one
@@ -40,10 +41,19 @@ type authorizationTarget struct {
 	capability workbook.Capability
 }
 
-// accessPrincipal assembles the identity an authorization decision is made for.
-// Sessions carry identity provider roles, API keys carry their owner, and the
-// development actor header keeps open local setups usable.
+// accessPrincipal returns the identity an authorization decision is made for.
+// The middleware resolves it once per request, including kanpic roles from the
+// user directory, so handlers never recompute or re-query it.
 func (s *Server) accessPrincipal(r *http.Request) workbook.AccessPrincipal {
+	if principal, ok := r.Context().Value(principalCacheKey{}).(workbook.AccessPrincipal); ok {
+		return principal
+	}
+	return s.identityPrincipal(r)
+}
+
+// identityPrincipal reads the identity from the session, the API key or the
+// development actor header without consulting the directory.
+func (s *Server) identityPrincipal(r *http.Request) workbook.AccessPrincipal {
 	if user, ok := sessionUser(r); ok {
 		admin := s.auth != nil && s.auth.IsAdmin(r.Context(), user)
 		return workbook.AccessPrincipal{UserID: user.ID, Email: user.Email, Roles: user.Roles, Admin: admin, Authenticated: true}
@@ -64,6 +74,16 @@ func capabilityForRequest(r *http.Request) workbook.Capability {
 	// Asking for access is exactly what a user without access needs to do.
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/access-requests"):
 		return ""
+	// A star is personal state, so anybody who can read may set it.
+	case strings.HasSuffix(path, "/favorite"):
+		return workbook.CapabilityRead
+	// The trash is guarded against the deleted workbook list instead, because a
+	// deleted workbook has no resolvable sharing.
+	case strings.HasSuffix(path, "/restore") || strings.HasSuffix(path, "/purge") || strings.HasSuffix(path, "/trash"):
+		return ""
+	// Copying a sheet reads the source; the target is authorized separately.
+	case strings.HasSuffix(path, "/copy"):
+		return workbook.CapabilityRead
 
 	case strings.Contains(path, "/sharing") || strings.Contains(path, "/shares") || strings.Contains(path, "/access-requests"):
 		if readOnly {
@@ -316,4 +336,57 @@ func (s *Server) authorizeMCPTool(r *http.Request, name string, args map[string]
 		return nil
 	}
 	return nil
+}
+
+// resolveRequestPrincipal merges directory state into the request identity and
+// rejects suspended accounts before any handler runs.
+func (s *Server) resolveRequestPrincipal(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	if !isProtectedPath(r.URL.Path) {
+		return r, true
+	}
+	principal := s.identityPrincipal(r)
+	if strings.TrimSpace(principal.UserID) == "" {
+		return r, true
+	}
+	if user, ok := sessionUser(r); ok {
+		// Everybody who signs in shows up in the directory for administrators.
+		_ = s.repository.EnsureUser(r.Context(), user.ID, user.DisplayName, user.Email)
+	}
+	profile, err := s.repository.UserAccessProfile(r.Context(), principal.UserID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return r, false
+	}
+	if profile.Suspended {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{
+			"code": "account_suspended", "message": "정지된 계정입니다. 관리자에게 문의하세요.",
+		}})
+		return r, false
+	}
+	merged := mergeRoles(principal, profile.Roles)
+	return r.WithContext(context.WithValue(r.Context(), principalCacheKey{}, merged)), true
+}
+
+// mergeRoles combines identity provider roles with kanpic roles, ignoring
+// duplicates so role-based sharing matches either source.
+func mergeRoles(principal workbook.AccessPrincipal, local []string) workbook.AccessPrincipal {
+	if len(local) == 0 {
+		return principal
+	}
+	seen := make(map[string]struct{}, len(principal.Roles)+len(local))
+	merged := make([]string, 0, len(principal.Roles)+len(local))
+	for _, role := range append(append([]string{}, principal.Roles...), local...) {
+		trimmed := strings.TrimSpace(role)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, trimmed)
+	}
+	principal.Roles = merged
+	return principal
 }

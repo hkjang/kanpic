@@ -45,6 +45,8 @@ type snapshot struct {
 
 type workbookState struct {
 	workbook         Workbook
+	deletedAt        *time.Time
+	deletedBy        string
 	sheets           map[string]Sheet
 	cells            map[string]map[cellKey]Cell
 	operations       []operation
@@ -74,6 +76,10 @@ type MemoryRepository struct {
 	departments        map[string]Department
 	departmentMembers  map[string][]string
 	accessRequests     map[string]AccessRequest
+	favorites          map[string]map[string]bool
+	trash              map[string]*workbookState
+	directory          map[string]DirectoryUser
+	userRoles          map[string][]string
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -96,6 +102,10 @@ func NewMemoryRepository() *MemoryRepository {
 		departments:        make(map[string]Department),
 		departmentMembers:  make(map[string][]string),
 		accessRequests:     make(map[string]AccessRequest),
+		favorites:          make(map[string]map[string]bool),
+		trash:              make(map[string]*workbookState),
+		directory:          make(map[string]DirectoryUser),
+		userRoles:          make(map[string][]string),
 	}
 }
 
@@ -279,6 +289,7 @@ func (r *MemoryRepository) ListWorkbooks(_ context.Context, workspaceID string, 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	closure := r.departmentClosureLocked(principal)
+	favorites := r.favorites[strings.ToLower(strings.TrimSpace(principal.UserID))]
 	items := make([]Workbook, 0, len(r.workbooks))
 	for id, state := range r.workbooks {
 		if workspaceID != "" && state.workbook.WorkspaceID != workspaceID {
@@ -293,6 +304,7 @@ func (r *MemoryRepository) ListWorkbooks(_ context.Context, workspaceID string, 
 			continue
 		}
 		item := r.workbookWithSheets(state)
+		item.Favorite = favorites[id]
 		item.AccessRole, item.AccessSource, item.SharedCount = access.Role, access.Source, len(sharing.Shares)
 		items = append(items, item)
 	}
@@ -462,13 +474,16 @@ func (r *MemoryRepository) UpdateWorkbook(_ context.Context, id string, input Up
 	return r.workbookWithSheets(state), nil
 }
 
-func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id string) error {
+func (r *MemoryRepository) DeleteWorkbook(_ context.Context, id, deletedBy string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, ok := r.workbooks[id]
 	if !ok {
 		return ErrNotFound
 	}
+	deleted := r.now()
+	state.deletedAt, state.deletedBy = &deleted, deletedBy
+	r.trash[id] = state
 	for sheetID := range state.sheets {
 		for filterID, view := range r.filters {
 			if view.SheetID == sheetID {
@@ -661,6 +676,9 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 		next.Color = *input.Color
 	}
 	if input.Hidden != nil {
+		if *input.Hidden && !next.Hidden && visibleSheetCount(state.sheets, sheetID) == 0 {
+			return Sheet{}, fmt.Errorf("%w: at least one sheet must stay visible", ErrInvalid)
+		}
 		next.Hidden = *input.Hidden
 	}
 	if input.Position != nil && *input.Position != sheet.Position {
