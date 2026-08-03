@@ -120,15 +120,16 @@ test('the console grants a kanpic role, shares by role and suspends the account'
   const roleName=`kanpic-e2e-${Date.now()}`
 
   await page.goto('/admin?tab=users')
-  await page.waitForSelector('.user-table')
+  await page.waitForSelector('.settings-table')
+  await page.getByRole('button',{name:'사용자 등록'}).click()
   await page.getByLabel('사용자 ID').fill(actor)
   await page.getByLabel('표시 이름').fill('역할 테스트')
   await page.getByRole('button',{name:'등록',exact:true}).click()
   await expect(page.getByRole('status')).toContainText('사용자를 등록했습니다')
 
   await page.getByLabel('부여할 역할').fill(roleName)
-  await page.getByRole('button',{name:'역할 부여'}).click()
-  await expect(page.locator('.user-role-chips')).toContainText(roleName)
+  await page.getByRole('button',{name:'부여',exact:true}).click()
+  await expect(page.locator('.chip-row')).toContainText(roleName)
 
   // Sharing with that role reaches the user without naming them directly.
   await request.put(`/api/v1/workbooks/${workbook.id}/shares`,{data:{principal_type:'role',principal_id:roleName,role:'editor'}})

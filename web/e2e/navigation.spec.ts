@@ -78,7 +78,7 @@ test('the admin console summarises sharing exposure and restricts a workbook', a
 
   await page.goto('/admin?tab=overview')
   await expect(page.getByRole('heading',{name:'개요'})).toBeVisible()
-  await page.getByRole('button',{name:/링크가 있는 모든 사용자에게 공개/}).click()
+  await page.locator('.attention-row',{hasText:'링크가 있는 모든 사용자에게 공개'}).getByRole('button',{name:'목록 보기'}).click()
   await expect(page.getByRole('heading',{name:'워크북 거버넌스'})).toBeVisible()
 
   const row=page.locator('.governance-row',{hasText:workbook.title})
