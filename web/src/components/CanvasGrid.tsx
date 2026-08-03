@@ -6,7 +6,7 @@ import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
 import { dataRegion, looksLikeHeaderRow } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
-import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PastedCell } from '../lib/clipboard'
+import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
@@ -25,6 +25,9 @@ const TOTAL_COLUMNS=MAX_GRID_COLUMNS
 export type GridShortcut=
   | {command:'fill-down'|'fill-right'|'select-all'|'select-row'|'select-column'|'move-first'|'move-last'}
   | {command:'select-data-region'|'clear-contents'|'auto-sum'|'insert-today'|'insert-now'|'copy'|'cut'|'paste'|'paste-values'}
+  | {command:'paste-special';mode:PasteMode}
+  | {command:'insert-text';text:string}
+  | {command:'insert-function';name:string}
   | {command:'move-data-edge';direction:'up'|'down'|'left'|'right';extend:boolean}
   | {command:'move-page';direction:'up'|'down'|'left'|'right';extend:boolean}
 
@@ -47,7 +50,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
@@ -65,7 +68,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const activeValidation=validationForCell(validations,activeRow,activeColumn)
   const activeText=activeCell?.formula || (activeCell?.value == null?'':String(activeCell.value))
 
-  useEffect(()=>{setDraft(activeText)},[activeText,activeRow,activeColumn])
+  // Menu driven inserts move the active cell and seed the editor in one step,
+  // so the pending draft survives the sync that normally mirrors the cell text.
+  const pendingDraft=useRef<{row:number;column:number;text:string}|undefined>(undefined)
+  useEffect(()=>{
+    const pending=pendingDraft.current
+    pendingDraft.current=undefined
+    if(pending&&pending.row===activeRow&&pending.column===activeColumn){setDraft(pending.text);return}
+    setDraft(activeText)
+  },[activeText,activeRow,activeColumn])
   useEffect(()=>{if(rowAxis.isHidden(activeRow)||columnAxis.isHidden(activeColumn))select(rowAxis.firstVisibleAtOrAfter(activeRow),columnAxis.firstVisibleAtOrAfter(activeColumn))},[rowAxis,columnAxis,activeRow,activeColumn,select])
   useEffect(()=>{dragging.current=false;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined)},[sheetId])
   useEffect(()=>{const rejected=(event:Event)=>{const detail=(event as CustomEvent<{message?:string}>).detail;setSaveState('error');setRefreshToken(value=>value+1);alert(detail?.message??'서버가 변경을 거부했습니다. 최신 값을 다시 불러옵니다.')};window.addEventListener('kanpic:outbox-rejected',rejected);return()=>window.removeEventListener('kanpic:outbox-rejected',rejected)},[setSaveState])
@@ -103,14 +114,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     for(const column of columns){const x=columnPosition(column),width=columnAxis.sizeOf(column);if(x+width<HEADER_WIDTH||x>size.width)continue
       const selected=column>=selection.startColumn&&column<=selection.endColumn
       context.fillStyle=selected&&wholeColumns?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(x,0,width,HEADER_HEIGHT)
-      context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,size.height);context.stroke()
+      context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,showGridlines?size.height:HEADER_HEIGHT);context.stroke()
       if(selected){context.fillStyle='#0f766e';context.fillRect(x,HEADER_HEIGHT-2,width,2)}
       context.fillStyle=selected?'#0b5c55':'#52606d';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='center';context.fillText(columnName(column),x+width/2,HEADER_HEIGHT/2)}
     context.font=`${12*zoom}px Inter, Pretendard, sans-serif`
     for(const row of rows){const y=rowPosition(row),height=rowAxis.sizeOf(row);if(y+height<HEADER_HEIGHT||y>size.height)continue
       const selected=row>=selection.startRow&&row<=selection.endRow
       context.fillStyle=selected&&wholeRows?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(0,y,HEADER_WIDTH,height)
-      context.beginPath();context.moveTo(0,Math.round(y)+.5);context.lineTo(size.width,Math.round(y)+.5);context.stroke()
+      context.beginPath();context.moveTo(0,Math.round(y)+.5);context.lineTo(showGridlines?size.width:HEADER_WIDTH,Math.round(y)+.5);context.stroke()
       if(selected){context.fillStyle='#0f766e';context.fillRect(HEADER_WIDTH-2,y,2,height)}
       context.fillStyle=selected?'#0b5c55':'#73808c';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='right';context.fillText(String(row),HEADER_WIDTH-8,y+height/2)}
     context.font=`${12*zoom}px Inter, Pretendard, sans-serif`
@@ -185,7 +196,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle='#0f766e';context.beginPath();context.roundRect(labelX,labelY,labelWidth,18,5);context.fill()
       context.fillStyle='#fff';context.fillText(label,labelX+6,labelY+9)
     }
-  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,resizePreview])
+  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,showGridlines,resizePreview])
 
   const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
 
@@ -396,16 +407,25 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     await queueCells(empty,'paste')
   },[queueCells,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow])
   const cut=(event:React.ClipboardEvent)=>{if(writeClipboard(event))void clearSelection()}
-  const runPaste=useCallback((text:string,internal:string,valuesOnly:boolean)=>{
+  const runPaste=useCallback((text:string,internal:string,mode:PasteMode)=>{
     const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'})
-    worker.onmessage=async(message:MessageEvent<{cells?:PastedCell[];error?:string}>)=>{try{if(message.data.error){setSaveState('error');alert(message.data.error);return}await queueCells(message.data.cells??[],'paste')}finally{worker.terminate()}}
+    worker.onmessage=async(message:MessageEvent<{cells?:PastedCell[];error?:string}>)=>{try{
+      if(message.data.error){setSaveState('error');alert(message.data.error);return}
+      let pasted=message.data.cells??[]
+      // Pasting formatting alone keeps whatever each target cell already holds.
+      if(mode==='format'){
+        if(pasted.length===0){setSaveState('error');alert('서식만 붙여넣기는 kanpic에서 복사한 셀에만 사용할 수 있습니다.');return}
+        pasted=pasted.map(cell=>{const current=cells.get(cellKey(cell.row,cell.column));return {...cell,value:current?.formula?undefined:current?.value,formula:current?.formula}})
+      }
+      await queueCells(pasted,'paste')
+    }finally{worker.terminate()}}
     worker.onerror=()=>{setSaveState('error');worker.terminate();alert('붙여넣기 데이터를 처리하지 못했습니다.')}
-    worker.postMessage({text,internal,startRow:activeRow,startColumn:activeColumn,valuesOnly})
-  },[activeColumn,activeRow,queueCells,setSaveState])
+    worker.postMessage({text,internal,startRow:activeRow,startColumn:activeColumn,mode})
+  },[activeColumn,activeRow,cells,queueCells,setSaveState])
   const paste=(event:React.ClipboardEvent)=>{
     event.preventDefault()
     const valuesOnly=pasteAsValues.current;pasteAsValues.current=false
-    runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly)
+    runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly?'values':'all')
   }
   // Menu-driven clipboard actions cannot rely on a browser clipboard event, so
   // they use the async Clipboard API and keep the last internal copy in memory
@@ -419,12 +439,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(cut)await clearSelection()
     }catch(error){alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.')}
   },[clearSelection,selectionPayload])
-  const pasteFromClipboard=useCallback(async(valuesOnly:boolean)=>{
+  const pasteFromClipboard=useCallback(async(mode:PasteMode)=>{
     try{
       if(!navigator.clipboard?.readText)throw new Error('이 브라우저에서는 Ctrl/⌘+V로 붙여넣어 주세요.')
       const text=await navigator.clipboard.readText()
       const cached=internalClipboard.current
-      runPaste(text,cached&&clipboardText(cached)===text?JSON.stringify(cached):'',valuesOnly)
+      runPaste(text,cached&&clipboardText(cached)===text?JSON.stringify(cached):'',mode)
     }catch(error){alert(error instanceof Error?error.message:'클립보드를 읽지 못했습니다. Ctrl/⌘+V를 사용하세요.')}
   },[runPaste])
   const copySelectionLink=useCallback(async()=>{
@@ -447,15 +467,30 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   },[activeColumn,activeRow,columnAxis,frozenColumns,frozenRows,rowAxis,selectCell,size.height,size.width])
   // Sums the contiguous numbers above the active cell, then to its left, and
   // leaves the formula in the editor so it can be adjusted before committing.
-  const autoSum=useCallback(()=>{
+  /**
+   * Builds an aggregate over the numbers directly above or to the left of the
+   * active cell. A range selection wins over the scan, so choosing cells first
+   * aggregates exactly those cells.
+   */
+  const insertAggregate=useCallback((name:string)=>{
+    const multiple=selection.startRow!==selection.endRow||selection.startColumn!==selection.endColumn
+    if(multiple){
+      const target=selection.endRow+1<=TOTAL_ROWS?{row:selection.endRow+1,column:selection.startColumn}:{row:selection.startRow,column:selection.endColumn+1}
+      const reference=`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
+      const formula=`=${name}(${reference})`
+      pendingDraft.current={row:target.row,column:target.column,text:formula}
+      selectCell(target.row,target.column)
+      setDraft(formula);setEditing(true);return
+    }
     let row=activeRow-1
     while(row>=1&&typeof cells.get(cellKey(row,activeColumn))?.value==='number')row-=1
-    if(row<activeRow-1){setDraft(`=SUM(${address(row+1,activeColumn)}:${address(activeRow-1,activeColumn)})`);setEditing(true);return}
+    if(row<activeRow-1){setDraft(`=${name}(${address(row+1,activeColumn)}:${address(activeRow-1,activeColumn)})`);setEditing(true);return}
     let column=activeColumn-1
     while(column>=1&&typeof cells.get(cellKey(activeRow,column))?.value==='number')column-=1
-    setDraft(column<activeColumn-1?`=SUM(${address(activeRow,column+1)}:${address(activeRow,activeColumn-1)})`:'=SUM()')
+    setDraft(column<activeColumn-1?`=${name}(${address(activeRow,column+1)}:${address(activeRow,activeColumn-1)})`:`=${name}()`)
     setEditing(true)
-  },[activeColumn,activeRow,cells,setEditing])
+  },[activeColumn,activeRow,cells,selectCell,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow,setEditing])
+  const autoSum=useCallback(()=>insertAggregate('SUM'),[insertAggregate])
   useEffect(()=>{const shortcut=(event:Event)=>{
     const detail=(event as CustomEvent<GridShortcut>).detail
     if(!detail)return
@@ -477,10 +512,13 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       case 'insert-now':void commit(`${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`);return
       case 'copy':void copySelection(false);return
       case 'cut':void copySelection(true);return
-      case 'paste':void pasteFromClipboard(false);return
-      case 'paste-values':void pasteFromClipboard(true);return
+      case 'paste':void pasteFromClipboard('all');return
+      case 'paste-values':void pasteFromClipboard('values');return
+      case 'paste-special':void pasteFromClipboard(detail.mode);return
+      case 'insert-text':if(readOnly){readOnlyNotice();return}setDraft(detail.text);setEditing(true);return
+      case 'insert-function':if(readOnly){readOnlyNotice();return}insertAggregate(detail.name);return
     }
-  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,pasteFromClipboard,selectCell,selectSpan])
+  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectCell,selectSpan,setDraft,setEditing])
   // Auto-fit measures the cells already loaded in the client store, which is
   // the same data the canvas paints.
   const autoFitSize=(axis:'row'|'column',start:number,count:number)=>{
@@ -526,8 +564,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const clipboardMenuItems=():MenuItem[]=>[
     {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',icon:<Scissors/>,disabled:readOnly,onSelect:()=>void copySelection(true)},
     {kind:'item',label:'복사',shortcut:'Ctrl+C',icon:<Copy/>,onSelect:()=>void copySelection(false)},
-    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(false)},
-    {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',icon:<Clipboard/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(true)},
+    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard('all')},
+    {kind:'submenu',label:'특수 붙여넣기',icon:<Clipboard/>,disabled:readOnly,items:[
+      {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',onSelect:()=>void pasteFromClipboard('values')},
+      {kind:'item',label:'서식만 붙여넣기',onSelect:()=>void pasteFromClipboard('format')},
+      {kind:'item',label:'행과 열 바꿔 붙여넣기',onSelect:()=>void pasteFromClipboard('transpose')},
+    ]},
   ]
   const cellMenuItems=(range:FillRange):MenuItem[]=>{
     const rows=range.endRow-range.startRow+1,columns=range.endColumn-range.startColumn+1
@@ -590,7 +632,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   }
   const cornerMenuItems=():MenuItem[]=>[
     {kind:'item',label:'전체 선택',shortcut:'Ctrl+A',onSelect:()=>selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1})},
-    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard(false)},
+    {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',icon:<ClipboardPaste/>,disabled:readOnly,onSelect:()=>void pasteFromClipboard('all')},
     {kind:'separator'},
     {kind:'item',label:'모든 행 표시',icon:<Rows3/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'row'})},
     {kind:'item',label:'모든 열 표시',disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis:'column'})},

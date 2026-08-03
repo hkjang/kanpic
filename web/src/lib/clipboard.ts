@@ -113,25 +113,49 @@ function parsedValue(raw:string):unknown{
   return raw
 }
 
-export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number,valuesOnly=false){
+/**
+ * How a paste treats the copied cells. `values` drops formulas, `format` keeps
+ * only the styling and `transpose` swaps rows with columns, matching the paste
+ * special options people expect from a spreadsheet.
+ */
+export type PasteMode='all'|'values'|'format'|'transpose'
+
+export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number,mode:PasteMode|boolean='all'){
+  const resolved:PasteMode=mode===true?'values':mode===false?'all':mode
+  const valuesOnly=resolved==='values',transpose=resolved==='transpose'
   const internal=parseClipboardPayload(internalRaw)
   if(internal){
     if(internal.rows*internal.columns>MAX_PASTE_CELLS)throw new Error(`붙여넣기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
-    return validateGridBounds(internal.cells.map(cell=>({
-      row:startRow+cell.rowOffset,
-      column:startColumn+cell.columnOffset,
-      value:valuesOnly?cell.value:cell.formula?undefined:cell.value,
-      formula:valuesOnly?undefined:cell.formula?shiftFormula(cell.formula,startRow-internal.sourceRow,startColumn-internal.sourceColumn):undefined,
-      style:cell.style,
-    })))
+    return validateGridBounds(internal.cells.map(cell=>{
+      const rowOffset=transpose?cell.columnOffset:cell.rowOffset,columnOffset=transpose?cell.rowOffset:cell.columnOffset
+      if(resolved==='format')return {row:startRow+rowOffset,column:startColumn+columnOffset,style:cell.style}
+      return {
+        row:startRow+rowOffset,
+        column:startColumn+columnOffset,
+        value:valuesOnly?cell.value:cell.formula?undefined:cell.value,
+        // A transposed formula cannot keep its relative references straight, so
+        // it is pasted as text-free value the same way values-only pastes are.
+        formula:valuesOnly||transpose?undefined:cell.formula?shiftFormula(cell.formula,startRow-internal.sourceRow,startColumn-internal.sourceColumn):undefined,
+        style:cell.style,
+      }
+    }))
   }
-  const rows=parseTabularText(text)
+  const parsed=parseTabularText(text)
+  const rows=transpose?transposeRows(parsed):parsed
   const count=rows.reduce((total,row)=>total+row.length,0)
   if(count>MAX_PASTE_CELLS)throw new Error(`붙여넣기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
+  if(resolved==='format')return []
   return validateGridBounds(rows.flatMap((row,rowOffset)=>row.map((raw,columnOffset)=>{
-    const formula=!valuesOnly&&raw.startsWith('=')?raw:undefined
+    const formula=!valuesOnly&&!transpose&&raw.startsWith('=')?raw:undefined
     return {row:startRow+rowOffset,column:startColumn+columnOffset,value:formula?undefined:parsedValue(raw),formula}
   })))
+}
+
+function transposeRows(rows:string[][]){
+  const width=rows.reduce((max,row)=>Math.max(max,row.length),0)
+  const result:string[][]=[]
+  for(let column=0;column<width;column+=1)result.push(rows.map(row=>row[column]??''))
+  return result
 }
 
 function positiveModulo(value:number,divisor:number){return((value%divisor)+divisor)%divisor}

@@ -320,7 +320,7 @@ test('manages workbook favorite, rename, duplicate, and delete from home', async
   await expect(page.getByText(title, { exact:true })).toBeVisible()
 
   await page.getByRole('button', { name:`${title} 더보기` }).click()
-  await page.getByRole('menuitem', { name:'즐겨찾기', exact:true }).click()
+  await page.getByRole('menuitem', { name:'즐겨찾기에 추가' }).click()
   await page.locator('.segmented').getByRole('button', { name:'즐겨찾기' }).click()
   await expect(page.getByText(title, { exact:true })).toBeVisible()
   await page.locator('.segmented').getByRole('button', { name:'최근' }).click()
@@ -343,7 +343,7 @@ test('manages workbook favorite, rename, duplicate, and delete from home', async
 
   await page.getByRole('button', { name:`${renamed} 더보기` }).click()
   page.once('dialog',dialog=>dialog.accept())
-  await page.getByRole('menuitem', { name:'삭제' }).click()
+  await page.getByRole('menuitem', { name:'휴지통으로 이동' }).click()
   await expect(page.getByText(renamed, { exact:true })).toHaveCount(0)
   await expect(page.getByText(copyTitle, { exact:true })).toBeVisible()
   await page.request.delete(`/api/v1/workbooks/${copied.id}`)
@@ -1291,15 +1291,16 @@ test('manages the complete sheet lifecycle without losing copied cells', async (
   expect(copiedCell.items[0]?.value).toBe(9)
 
   await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
-  await page.getByRole('button',{name:'시트 색상 #3b82f6'}).click()
+  await page.getByRole('menuitem',{name:'탭 색상'}).click()
+  await page.getByRole('menuitemcheckbox',{name:'파랑'}).click()
   await expect.poll(async()=>((await currentWorkbook()).sheets as Array<{name:string;color:string}>).find(sheet=>sheet.name==='Raw Data 복사본')?.color).toBe('#3b82f6')
   await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
-  await page.getByRole('button',{name:'왼쪽',exact:true}).click()
+  await page.getByRole('menuitem',{name:'왼쪽으로 이동'}).click()
   await expect.poll(async()=>((await currentWorkbook()).sheets as Array<{name:string;position:number}>).map(sheet=>`${sheet.position}:${sheet.name}`)).toEqual(['0:Sheet1','1:Raw Data 복사본','2:Raw Data'])
 
   await page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'}).click()
   page.once('dialog',dialog=>dialog.accept())
-  await page.getByRole('menuitem',{name:'삭제'}).click()
+  await page.getByRole('menuitem',{name:'시트 삭제'}).click()
   await expect(page.getByRole('button',{name:'Sheet1 시트 메뉴'})).toBeVisible()
   book=await currentWorkbook()
   expect(book.sheets.map((sheet:{name:string;position:number})=>`${sheet.position}:${sheet.name}`)).toEqual(['0:Sheet1','1:Raw Data'])

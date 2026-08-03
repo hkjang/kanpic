@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"kanpic/internal/auth"
+	"kanpic/internal/formula"
 	"strings"
 
 	"kanpic/internal/workbook"
@@ -193,4 +194,10 @@ func (s *Server) revokeUserSessions(w http.ResponseWriter, r *http.Request) {
 		count = revoked
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "revoked_sessions": count})
+}
+
+// listFormulaFunctions publishes the function catalog so the editor can show
+// what the engine supports instead of leaving people to discover #NAME?.
+func (s *Server) listFormulaFunctions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": formula.Catalog()})
 }

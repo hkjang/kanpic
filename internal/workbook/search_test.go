@@ -97,8 +97,10 @@ func TestWorkbookSearchOptionsNarrowMatches(t *testing.T) {
 	if err != nil || len(matchCase.Items) != 1 || matchCase.Items[0].Address != "A1" || matchCase.Items[0].SheetID != first.ID {
 		t.Fatalf("match case search = %#v, %v", matchCase, err)
 	}
+	// Whole cell matching keeps "Seoul", "SEOUL" and the UPPER result while
+	// dropping the "seoul office" cell that only contains the term.
 	wholeCell, err := repository.SearchWorkbook(ctx, book.ID, SearchWorkbookInput{Query: "seoul", WholeCell: true})
-	if err != nil || len(wholeCell.Items) != 2 {
+	if err != nil || len(wholeCell.Items) != 3 {
 		t.Fatalf("whole cell search = %#v, %v", wholeCell, err)
 	}
 	scoped, err := repository.SearchWorkbook(ctx, book.ID, SearchWorkbookInput{Query: "seoul", SheetID: second.ID})

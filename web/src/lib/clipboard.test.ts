@@ -100,3 +100,33 @@ describe('automatic fill',()=>{
     expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:10_001,endColumn:1})).toThrow('원본 선택 범위')
   })
 })
+
+describe('materializePaste modes',()=>{
+  const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:1,rows:2,columns:2,cells:[
+    {rowOffset:0,columnOffset:0,value:'가',style:{bold:true}},
+    {rowOffset:0,columnOffset:1,value:1},
+    {rowOffset:1,columnOffset:0,value:undefined,formula:'=A1'},
+    {rowOffset:1,columnOffset:1,value:2},
+  ]}
+
+  it('keeps only styling when pasting formats',()=>{
+    const cells=materializePaste('',JSON.stringify(payload),3,3,'format')
+    expect(cells).toContainEqual({row:3,column:3,style:{bold:true}})
+    expect(cells.every(cell=>!('value' in cell)&&!('formula' in cell))).toBe(true)
+  })
+
+  it('swaps rows with columns when transposing and drops formulas',()=>{
+    const cells=materializePaste('',JSON.stringify(payload),1,1,'transpose')
+    expect(cells).toContainEqual({row:2,column:1,value:1,formula:undefined,style:undefined})
+    expect(cells.find(cell=>cell.row===1&&cell.column===2)?.formula).toBeUndefined()
+  })
+
+  it('transposes plain text pasted from another application',()=>{
+    const cells=materializePaste('가\t나\n1\t2','',1,1,'transpose')
+    expect(cells.map(cell=>[cell.row,cell.column,cell.value])).toEqual([[1,1,'가'],[1,2,1],[2,1,'나'],[2,2,2]])
+  })
+
+  it('treats the legacy boolean flag as a values-only paste',()=>{
+    expect(materializePaste('',JSON.stringify(payload),1,1,true).every(cell=>cell.formula===undefined)).toBe(true)
+  })
+})

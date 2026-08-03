@@ -18,7 +18,7 @@ function clampPosition(x:number,y:number,height:number){
   return{left,top}
 }
 
-function MenuList({items,onClose,autoFocus}:{items:MenuItem[];onClose:()=>void;autoFocus:boolean}){
+function MenuList({items,onClose,autoFocus,label}:{items:MenuItem[];onClose:()=>void;autoFocus:boolean;label?:string}){
   const [active,setActive]=useState(()=>selectableItems(items)[0]?.index??-1),[openSubmenu,setOpenSubmenu]=useState<number>()
   const list=useRef<HTMLDivElement>(null)
   useEffect(()=>{if(autoFocus)list.current?.focus()},[autoFocus])
@@ -34,7 +34,7 @@ function MenuList({items,onClose,autoFocus}:{items:MenuItem[];onClose:()=>void;a
     if(item.kind!=='item'||item.disabled)return
     onClose();item.onSelect()
   }
-  return <div className="context-menu-list" ref={list} tabIndex={-1} role="menu" onKeyDown={event=>{
+  return <div className="context-menu-list" ref={list} tabIndex={-1} role="menu" aria-label={label} onKeyDown={event=>{
     if(event.key==='ArrowDown'){move(1);event.preventDefault()}
     else if(event.key==='ArrowUp'){move(-1);event.preventDefault()}
     else if(event.key==='Home'){setActive(movable[0]?.index??-1);event.preventDefault()}
@@ -78,7 +78,7 @@ export function ContextMenu({x,y,items,label,onClose}:{x:number;y:number;items:M
     window.addEventListener('blur',close)
     return()=>{window.removeEventListener('mousedown',dismiss);window.removeEventListener('resize',close);window.removeEventListener('blur',close)}
   },[onClose])
-  return <div className="context-menu" ref={container} style={{left:position.left,top:position.top}} aria-label={label} onContextMenu={event=>event.preventDefault()}>
-    <MenuList items={items} onClose={onClose} autoFocus/>
+  return <div className="context-menu" ref={container} style={{left:position.left,top:position.top}} onContextMenu={event=>event.preventDefault()}>
+    <MenuList items={items} onClose={onClose} autoFocus label={label}/>
   </div>
 }

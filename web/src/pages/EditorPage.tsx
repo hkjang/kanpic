@@ -33,12 +33,16 @@ import { StructureDialog,type StructureCommand } from '../components/StructureDi
 import { VersionPanel } from '../components/VersionPanel'
 import { WorkbookSearchDialog } from '../components/WorkbookSearchDialog'
 import { WorkbookShortcutsDialog } from '../components/WorkbookShortcutsDialog'
+import { FunctionListDialog } from '../components/FunctionListDialog'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS } from '../lib/clipboard'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type PastedCell } from '../lib/clipboard'
 import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
+import { dataRegion, looksLikeHeaderRow } from '../lib/dataRegion'
+import { removeDuplicateRows, splitTextToColumns, splitWouldOverwrite, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
@@ -50,12 +54,21 @@ function parseNavigationRange(value:string){const parts=value.trim().replaceAll(
 function spillInRange(cells:Map<string,Cell>,range:{startRow:number;startColumn:number;endRow:number;endColumn:number}){for(let row=range.startRow;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){const cell=cells.get(cellKey(row,column));if(cell?.spill_source)return{cell,coordinate:address(row,column)}}}
 function editableTarget(target:EventTarget|null){return target instanceof HTMLElement&&Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))}
 function gridShortcut(shortcut:GridShortcut){window.dispatchEvent(new CustomEvent<GridShortcut>('kanpic:grid-shortcut',{detail:shortcut}))}
+const TEXT_COLORS:Array<{label:string;value:string|null}>=[
+  {label:'기본',value:null},{label:'검정',value:'#1c2b33'},{label:'회색',value:'#6b7a84'},{label:'빨강',value:'#dc2626'},
+  {label:'주황',value:'#ea580c'},{label:'초록',value:'#15803d'},{label:'파랑',value:'#2563eb'},{label:'보라',value:'#7c3aed'},
+]
+const FILL_COLORS:Array<{label:string;value:string|null}>=[
+  {label:'없음',value:null},{label:'연회색',value:'#f1f5f7'},{label:'연빨강',value:'#fee2e2'},{label:'연주황',value:'#ffedd5'},
+  {label:'연노랑',value:'#fef3c7'},{label:'연초록',value:'#dcfce7'},{label:'연파랑',value:'#dbeafe'},{label:'연보라',value:'#ede9fe'},
+]
 const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
   const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<'ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
+  const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [showFormulas,setShowFormulas]=useState(false),[replaceMode,setReplaceMode]=useState(false),[shareOpen,setShareOpen]=useState(false),[quickOpen,setQuickOpen]=useState(false),[sheetManagerOpen,setSheetManagerOpen]=useState(false),[copySheet,setCopySheet]=useState<Sheet>(),[requestingAccess,setRequestingAccess]=useState(false),[accessRequested,setAccessRequested]=useState(false)
   const layoutQueue=useRef<Promise<unknown>>(Promise.resolve()),nameBoxRef=useRef<HTMLInputElement>(null)
   const [overflowMenu,setOverflowMenu]=useState<{x:number;y:number}>()
@@ -203,6 +216,87 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     editor.select(region.startRow,region.startColumn);editor.select(region.endRow,region.endColumn,true)
     await sortSelection({keys:[{column,direction}],headerRows,caseSensitive:false})
   }
+  // Cleanup and split rewrite whole blocks of cells at once, so they share the
+  // queue the paste path already uses instead of writing cell by cell.
+  const writeCells=async(inputs:PastedCell[])=>{
+    if(!activeSheet||!writable()||inputs.length===0)return
+    if(inputs.length>MAX_PASTE_CELLS){alert(`한 번에 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 변경할 수 있습니다.`);return}
+    const updatedAt=new Date().toISOString()
+    editor.putCells(inputs.map(cell=>({sheet_id:activeSheet.id,...cell,updated_at:updatedAt})))
+    editor.setSaveState(navigator.onLine?'saving':'offline')
+    const id=newIdempotencyKey()
+    await enqueue({id,sheetId:activeSheet.id,endpoint:'paste',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),cells:inputs}})
+    await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
+  }
+  // A one cell selection means the whole surrounding block, the way sheet-wide
+  // cleanup and sorting behave elsewhere.
+  const workingRegion=()=>{
+    const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
+    return single?dataRegion(editor.cells,editorSelection.startRow,editorSelection.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}):editorSelection
+  }
+  const removeDuplicates=async()=>{
+    const region=workingRegion(),headerRows=looksLikeHeaderRow(editor.cells,region)?1:0
+    const preview=removeDuplicateRows(editor.cells,region,headerRows)
+    const label=`${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`
+    if(preview.removed===0){alert(`${label} 범위에 중복된 행이 없습니다.`);return}
+    if(!window.confirm(`${label} 범위에서 중복된 ${preview.removed}개 행을 삭제할까요?${headerRows?' 첫 행은 머리글로 유지합니다.':''}`))return
+    await writeCells(preview.writes)
+  }
+  const trimSpaces=async()=>{
+    const region=workingRegion()
+    const preview=trimWhitespace(editor.cells,region)
+    if(preview.changed===0){alert('제거할 공백이 없습니다.');return}
+    if(!window.confirm(`${preview.changed}개 셀의 앞뒤 공백과 중복 공백을 제거할까요?`))return
+    await writeCells(preview.writes)
+  }
+  const splitColumn=async(delimiter:SplitDelimiter)=>{
+    const region=workingRegion()
+    const preview=splitTextToColumns(editor.cells,region,delimiter)
+    if(preview.columns<2){alert('선택한 열에서 구분할 수 있는 값을 찾지 못했습니다.');return}
+    if(splitWouldOverwrite(editor.cells,region,preview.columns)&&!window.confirm(`오른쪽 ${preview.columns-1}개 열의 기존 데이터를 덮어씁니다. 계속할까요?`))return
+    await writeCells(preview.writes)
+  }
+  const quickSort=async(direction:'asc'|'desc')=>{
+    const region=workingRegion()
+    await sortRegion({command:'sort-region',column:editorSelection.startColumn,direction,region,headerRows:looksLikeHeaderRow(editor.cells,region)?1:0})
+  }
+  // The canvas cannot be printed directly, so printing renders the used range
+  // into a hidden document the browser can paginate.
+  const printSheet=()=>{
+    if(!activeSheet)return
+    const html=printableDocument(editor.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true})
+    const frame=document.createElement('iframe')
+    frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
+    document.body.appendChild(frame)
+    const target=frame.contentWindow?.document
+    if(!target){frame.remove();alert('인쇄 화면을 열지 못했습니다.');return}
+    target.open();target.write(html);target.close()
+    frame.contentWindow?.focus();frame.contentWindow?.print()
+    window.setTimeout(()=>frame.remove(),1000)
+  }
+  const toggleFullscreen=()=>{
+    if(document.fullscreenElement)void document.exitFullscreen().catch(()=>{})
+    else void document.documentElement.requestFullscreen?.().catch(()=>alert('이 브라우저에서는 전체 화면을 사용할 수 없습니다.'))
+  }
+  const createWorkbook=async()=>{const created=await api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({title:'제목 없는 워크북',workspace_id:'default'})});window.location.href=`/workbooks/${created.id}`}
+  const duplicateWorkbook=async()=>{const copy=await api<Workbook>(`/api/v1/workbooks/${workbookId}/duplicate`,{method:'POST',body:JSON.stringify({title:`${workbook.data?.title??'워크북'} 복사본`})});window.location.href=`/workbooks/${copy.id}`}
+  const renameWorkbook=async()=>{
+    const next=window.prompt('워크북 이름',workbook.data?.title??'')
+    if(next===null||!next.trim()||next.trim()===workbook.data?.title)return
+    await api<Workbook>(`/api/v1/workbooks/${workbookId}`,{method:'PATCH',body:JSON.stringify({title:next.trim()})})
+    await refreshWorkbook()
+  }
+  const trashWorkbook=async()=>{
+    if(!window.confirm(`'${workbook.data?.title??''}' 워크북을 휴지통으로 옮길까요? 홈 화면의 휴지통에서 복원할 수 있습니다.`))return
+    await api(`/api/v1/workbooks/${workbookId}`,{method:'DELETE'})
+    window.location.href='/'
+  }
+  const insertLink=()=>{
+    const url=window.prompt('링크 주소','https://')
+    if(!url?.trim())return
+    const label=window.prompt('표시할 텍스트 (선택)','')??''
+    gridShortcut({command:'insert-text',text:label.trim()?`=HYPERLINK("${url.trim()}","${label.trim().replace(/"/g,'""')}")`:`=HYPERLINK("${url.trim()}")`})
+  }
   const handleGridMenu=(command:GridMenuCommand)=>{
     switch(command.command){
       case 'sort-dialog':setSortOpen(true);return
@@ -228,6 +322,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(primary&&event.code==='Slash'){event.preventDefault();setShortcutsOpen(true);return}
     if(primary&&key==='h'){event.preventDefault();openSearch(true);return}
     if(primary&&key==='k'){event.preventDefault();setQuickOpen(true);return}
+    if(primary&&key==='p'){event.preventDefault();printSheet();return}
+    if(event.key==='F11'&&!primary&&!event.shiftKey){event.preventDefault();toggleFullscreen();return}
     if(primary&&key==='f'){event.preventDefault();openSearch(false);return}
     if(primary&&event.code==='Backquote'){event.preventDefault();setShowFormulas(current=>!current);return}
     if(primary&&event.code==='Backslash'){event.preventDefault();void clearFormat();return}
@@ -347,6 +443,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:layout',group:'명령',label:'시트 레이아웃',icon:<Table2/>,keywords:'layout freeze 고정 레이아웃',run:()=>setLayoutOpen(true)},
     {id:'cmd:structure',group:'명령',label:'행과 열 관리',icon:<Table2/>,keywords:'row column 행 열',run:()=>setStructureOpen(true)},
     {id:'cmd:export',group:'명령',label:'XLSX로 내보내기',icon:<Download/>,keywords:'export xlsx 내보내기',run:()=>void exportWorkbook('xlsx')},
+    {id:'cmd:print',group:'명령',label:'인쇄',shortcut:'Ctrl+P',icon:<Download/>,keywords:'print 인쇄 출력',run:()=>printSheet()},
+    {id:'cmd:functions',group:'명령',label:'함수 목록',icon:<Search/>,keywords:'function 함수 수식',run:()=>setFunctionsOpen(true)},
+    {id:'cmd:gridlines',group:'명령',label:showGridlines?'눈금선 숨기기':'눈금선 표시',icon:<Grid2X2/>,keywords:'gridline 눈금선 격자',run:()=>setShowGridlines(current=>!current)},
+    {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
+    {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void removeDuplicates()},
+    {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void trimSpaces()},
+    {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void splitColumn('auto')},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
     ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).slice(0,20).map(item=>({
       id:`workbook:${item.id}`,group:'워크북',label:item.title,
@@ -360,6 +463,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const menus:WorkbookMenu[]=[
     {label:'파일',items:[
       {kind:'item',label:'저장',shortcut:'Ctrl+S',onSelect:()=>void saveWorkbook()},
+      {kind:'submenu',label:'새로 만들기',items:[
+        {kind:'item',label:'워크북',onSelect:()=>void createWorkbook()},
+        {kind:'item',label:'시트',shortcut:'Shift+F11',disabled:!canWrite,onSelect:()=>void createSheet()},
+      ]},
+      {kind:'item',label:'사본 만들기',onSelect:()=>void duplicateWorkbook()},
+      {kind:'item',label:'워크북 이름 변경…',disabled:!canWrite,onSelect:()=>void renameWorkbook()},
+      {kind:'separator'},
       {kind:'item',label:'새 시트 추가',shortcut:'Shift+F11',onSelect:()=>void createSheet()},
       {kind:'item',label:'시트 복제',disabled:!canWrite,onSelect:()=>void duplicateSheet(activeSheet)},
       {kind:'item',label:'모든 시트 관리…',onSelect:()=>setSheetManagerOpen(true)},
@@ -367,10 +477,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'separator'},
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
+      {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>printSheet()},
       {kind:'separator'},
       {kind:'item',label:'공유 설정…',onSelect:()=>setShareOpen(true)},
       {kind:'item',label:'버전 이력',onSelect:()=>setRightPanel('history')},
       {kind:'item',label:'워크북 목록으로',onSelect:()=>{window.location.href='/'}},
+      {kind:'separator'},
+      {kind:'item',label:'휴지통으로 이동',danger:true,disabled:workbook.data.access_role!=='owner',onSelect:()=>void trashWorkbook()},
     ]},
     {label:'수정',items:[
       {kind:'item',label:'실행 취소',shortcut:'Ctrl+Z',disabled:editor.undoStack.length===0,onSelect:()=>void revertOperation('undo')},
@@ -379,7 +492,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',onSelect:()=>gridShortcut({command:'cut'})},
       {kind:'item',label:'복사',shortcut:'Ctrl+C',onSelect:()=>gridShortcut({command:'copy'})},
       {kind:'item',label:'붙여넣기',shortcut:'Ctrl+V',onSelect:()=>gridShortcut({command:'paste'})},
-      {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',onSelect:()=>gridShortcut({command:'paste-values'})},
+      {kind:'submenu',label:'특수 붙여넣기',items:[
+        {kind:'item',label:'값만 붙여넣기',shortcut:'Ctrl+Shift+V',onSelect:()=>gridShortcut({command:'paste-values'})},
+        {kind:'item',label:'서식만 붙여넣기',onSelect:()=>gridShortcut({command:'paste-special',mode:'format'})},
+        {kind:'item',label:'행과 열 바꿔 붙여넣기',onSelect:()=>gridShortcut({command:'paste-special',mode:'transpose'})},
+      ]},
       {kind:'separator'},
       {kind:'item',label:'내용 지우기',shortcut:'Delete',onSelect:()=>gridShortcut({command:'clear-contents'})},
       {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
@@ -391,6 +508,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     ]},
     {label:'보기',items:[
       {kind:'item',label:'수식 표시',shortcut:'Ctrl+`',checked:showFormulas,onSelect:()=>setShowFormulas(current=>!current)},
+      {kind:'item',label:'눈금선 표시',checked:showGridlines,onSelect:()=>setShowGridlines(current=>!current)},
+      {kind:'item',label:'전체 화면',shortcut:'F11',onSelect:()=>toggleFullscreen()},
       {kind:'separator'},
       {kind:'item',label:'확대',onSelect:()=>editor.setZoom(editor.zoom+.1)},
       {kind:'item',label:'축소',onSelect:()=>editor.setZoom(editor.zoom-.1)},
@@ -417,6 +536,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'댓글',shortcut:'Ctrl+Alt+M',disabled:!canComment,onSelect:()=>setRightPanel('comments')},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'item',label:'자동 합계',shortcut:'Alt+=',onSelect:()=>gridShortcut({command:'auto-sum'})},
+      {kind:'submenu',label:'함수',items:[
+        ...['SUM','AVERAGE','COUNT','COUNTA','MAX','MIN','MEDIAN','PRODUCT'].map(name=>({kind:'item',label:name,onSelect:()=>gridShortcut({command:'insert-function',name})} as MenuItem)),
+        {kind:'separator'},
+        {kind:'item',label:'전체 함수 목록…',onSelect:()=>setFunctionsOpen(true)},
+      ]},
+      {kind:'item',label:'링크…',disabled:!canWrite,onSelect:()=>insertLink()},
+      {kind:'item',label:'드롭다운…',disabled:!canWrite,onSelect:()=>setValidationOpen(true)},
       {kind:'separator'},
       {kind:'item',label:'오늘 날짜',shortcut:'Ctrl+;',onSelect:()=>gridShortcut({command:'insert-today'})},
       {kind:'item',label:'현재 시간',shortcut:'Ctrl+Shift+;',onSelect:()=>gridShortcut({command:'insert-now'})},
@@ -439,17 +565,37 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {kind:'item',label:'잘라서 표시',onSelect:()=>void applyFormat({text_mode:'clip'})},
       ]},
       {kind:'separator'},
+      {kind:'submenu',label:'글꼴 크기',items:[8,9,10,11,12,14,18,24,36].map(size=>({kind:'item',label:`${size}`,checked:activeCell?.style?.font_size===size,onSelect:()=>void applyFormat({font_size:size})} as MenuItem))},
+      {kind:'submenu',label:'글꼴',items:['Inter','Pretendard','Malgun Gothic','Times New Roman','Courier New'].map(family=>({kind:'item',label:family,checked:activeCell?.style?.font_family===family,onSelect:()=>void applyFormat({font_family:family})} as MenuItem))},
+      {kind:'submenu',label:'텍스트 색',items:TEXT_COLORS.map(color=>({kind:'item',label:color.label,checked:activeCell?.style?.color===color.value,onSelect:()=>void applyFormat({color:color.value})} as MenuItem))},
+      {kind:'submenu',label:'채우기 색',items:FILL_COLORS.map(color=>({kind:'item',label:color.label,checked:activeCell?.style?.background===color.value,onSelect:()=>void applyFormat({background:color.value})} as MenuItem))},
+      {kind:'submenu',label:'텍스트 회전',items:[{label:'없음',value:0},{label:'위로 45°',value:-45},{label:'아래로 45°',value:45},{label:'위로 90°',value:-90},{label:'아래로 90°',value:90}].map(option=>({kind:'item',label:option.label,checked:(activeCell?.style?.text_rotation??0)===option.value,onSelect:()=>void applyFormat({text_rotation:option.value})} as MenuItem))},
+      {kind:'separator'},
       {kind:'item',label:mergedSelection?'셀 병합 해제':'셀 병합',onSelect:()=>void changeMerge(!mergedSelection)},
       {kind:'item',label:'조건부 서식…',onSelect:()=>setConditionalFormatOpen(true)},
       {kind:'item',label:'서식 세부 설정…',onSelect:()=>setFormatOpen(true)},
       {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
     ]},
     {label:'데이터',items:[
+      {kind:'item',label:'선택 열 기준 정렬 A → Z',disabled:!canWrite,onSelect:()=>void quickSort('asc')},
+      {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
       {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
+      {kind:'separator'},
+      {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
+        {kind:'item',label:'중복 항목 삭제',onSelect:()=>void removeDuplicates()},
+        {kind:'item',label:'공백 제거',onSelect:()=>void trimSpaces()},
+      ]},
+      {kind:'submenu',label:'텍스트를 열로 분할',disabled:!canWrite,items:[
+        {kind:'item',label:'자동 감지',onSelect:()=>void splitColumn('auto')},
+        {kind:'item',label:'쉼표',onSelect:()=>void splitColumn(',')},
+        {kind:'item',label:'세미콜론',onSelect:()=>void splitColumn(';')},
+        {kind:'item',label:'탭',onSelect:()=>void splitColumn('\t')},
+        {kind:'item',label:'공백',onSelect:()=>void splitColumn(' ')},
+      ]},
       {kind:'separator'},
       {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
@@ -467,6 +613,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'개인 환경설정',onSelect:()=>{window.location.href='/preferences'}},
     ]},
     {label:'도움말',items:[
+      {kind:'item',label:'함수 목록',onSelect:()=>setFunctionsOpen(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
       {kind:'label',label:`kanpic ${build?.version??''}`.trim()},
     ]},
@@ -486,14 +633,14 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
     ]}/>}
     <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input value={formula} readOnly onDoubleClick={()=>{const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source);if(source)editor.select(source.row,source.column);editor.setEditing(true)}} aria-label="수식 입력창"/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel==='ai'&&<AIPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} baseVersion={serverVersion} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
       {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
       {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
       {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
       {rightPanel==='conflicts'&&<ConflictPanel workbookId={workbookId} sheets={workbook.data.sheets} currentActor={session?.user?.id??'local-user'} onClose={()=>setRightPanel(null)} onNavigate={navigateToRange} onResolved={handleConflictResolved}/>}
     </div>
-    <ChartOverlay charts={charts.data?.items??[]} version={serverVersion} onEdit={item=>setChartDialog(item)} onUpdate={updateChart}/>
+    <ChartOverlay charts={charts.data?.items??[]} version={serverVersion} onEdit={item=>setChartDialog(item)} onUpdate={updateChart} onDelete={deleteChart} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>
     {rightPanel==='charts'&&<ChartPanel charts={charts.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setChartDialog(null)} onEdit={item=>setChartDialog(item)} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
     {rightPanel==='pivots'&&<PivotPanel pivots={pivots.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setPivotDialog(null)} onEdit={item=>setPivotDialog(item)} onOpen={setPivotResult} onRefresh={refreshPivot} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
     {chartDialog!==undefined&&<ChartDialog chart={chartDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setChartDialog(undefined)} onCreate={createChart} onUpdate={updateChart} onDelete={deleteChart}/>}
@@ -521,6 +668,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     }}/>}
     {shareOpen&&<ShareDialog workbook={workbook.data} onClose={()=>setShareOpen(false)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbook',workbookId]})}}/>}
     {shortcutsOpen&&<WorkbookShortcutsDialog onClose={()=>setShortcutsOpen(false)}/>}
+    {functionsOpen&&<FunctionListDialog onClose={()=>setFunctionsOpen(false)} onInsert={name=>gridShortcut({command:'insert-function',name})}/>}
     <WorkbookSearchDialog open={searchOpen} workbookId={workbookId} version={serverVersion} sheetId={activeSheet.id} sheetName={activeSheet.name} replaceMode={replaceMode} onClose={()=>{setSearchOpen(false);setReplaceMode(false)}} onNavigate={(item:WorkbookSearchMatch)=>navigateToRange(item.sheet_id,item.address)} onReplaced={result=>void handleReplaced(result)}/>
   </div>
 }

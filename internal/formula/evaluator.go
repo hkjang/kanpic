@@ -358,6 +358,16 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		return false, nil
 	}
+	if name == "IFERROR" {
+		if len(n.arguments) != 2 {
+			return nil, argError(name)
+		}
+		value, err := n.arguments[0].eval(cells)
+		if err != nil {
+			return n.arguments[1].eval(cells)
+		}
+		return value, nil
+	}
 	if name == "AND" || name == "OR" {
 		if len(n.arguments) == 0 {
 			return nil, argError(name)
@@ -494,9 +504,11 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 			return nil, formulaError("#VALUE!", "DATE requires numbers")
 		}
 		return time.Date(int(year), time.Month(int(month)), int(day), 0, 0, 0, 0, time.UTC).Format("2006-01-02"), nil
-	default:
-		return nil, formulaError("#NAME?", "unknown function "+name)
 	}
+	if result, handled, err := evaluateLibrary(name, values); handled {
+		return result, err
+	}
+	return nil, formulaError("#NAME?", "unknown function "+name)
 }
 
 type parser struct {

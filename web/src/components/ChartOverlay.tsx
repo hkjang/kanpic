@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Download,ImageDown,Maximize2,Settings2 } from 'lucide-react'
+import { Download,ImageDown,Maximize2,Settings2,Table2,Trash2 } from 'lucide-react'
 import { useEffect,useRef,useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api'
 import type { Chart,ChartData,ChartPosition,ChartSeries } from '../types'
 import './ChartOverlay.css'
+import { ContextMenu,type MenuItem } from './ContextMenu'
 
 const palette=['#0f766e','#5268a6','#d97706','#9333ea','#dc4f4f','#0891b2','#65a30d','#db2777']
 const safeFileName=(value:string)=>value.trim().replace(/[\\/:*?"<>|]+/g,'-')||'kanpic-chart'
@@ -36,16 +37,30 @@ async function downloadChart(svg:SVGSVGElement|null,title:string,format:'svg'|'p
   const url=URL.createObjectURL(blob),image=new Image();image.onload=()=>{const canvas=document.createElement('canvas');canvas.width=1040;canvas.height=560;const context=canvas.getContext('2d');if(context){context.fillStyle='white';context.fillRect(0,0,canvas.width,canvas.height);context.drawImage(image,0,0,canvas.width,canvas.height);canvas.toBlob(output=>{if(output){const outputUrl=URL.createObjectURL(output),link=document.createElement('a');link.href=outputUrl;link.download=`${name}.png`;link.click();URL.revokeObjectURL(outputUrl)}},'image/png')}URL.revokeObjectURL(url)};image.src=url
 }
 
-function ChartCard({chart,version,onEdit,onUpdate}:{chart:Chart;version:number;onEdit:(chart:Chart)=>void;onUpdate:(chart:Chart,input:Record<string,unknown>)=>Promise<Chart>}){
+function ChartCard({chart,version,onEdit,onUpdate,onDelete,onNavigate}:{chart:Chart;version:number;onEdit:(chart:Chart)=>void;onUpdate:(chart:Chart,input:Record<string,unknown>)=>Promise<Chart>;onDelete?:(chart:Chart)=>Promise<void>;onNavigate?:(chart:Chart)=>void}){
   const [position,setPosition]=useState(chart.position),svg=useRef<SVGSVGElement>(null)
+  const [menu,setMenu]=useState<{x:number;y:number}>()
+  const menuItems=():MenuItem[]=>[
+    {kind:'label',label:chart.title||'제목 없는 차트'},
+    {kind:'item',label:'차트 설정…',icon:<Settings2/>,onSelect:()=>onEdit(chart)},
+    ...(onNavigate&&chart.source_sheet_id&&chart.source_range!=='#REF!'?[{kind:'item',label:`원본 데이터로 이동 (${chart.source_range})`,icon:<Table2/>,onSelect:()=>onNavigate(chart)} as MenuItem]:[]),
+    {kind:'separator'},
+    {kind:'item',label:'SVG로 내보내기',icon:<Download/>,onSelect:()=>downloadChart(svg.current,chart.title,'svg')},
+    {kind:'item',label:'PNG로 내보내기',icon:<ImageDown/>,onSelect:()=>downloadChart(svg.current,chart.title,'png')},
+    ...(onDelete?[{kind:'separator'} as MenuItem,{kind:'item',label:'차트 삭제',icon:<Trash2/>,danger:true,onSelect:()=>{
+      if(window.confirm(`'${chart.title||'제목 없는 차트'}' 차트를 삭제할까요?`))void onDelete(chart).catch(error=>alert(error instanceof Error?error.message:'차트를 삭제하지 못했습니다.'))
+    }} as MenuItem]:[]),
+  ]
   const data=useQuery({queryKey:['chart-data',chart.id,version],queryFn:()=>api<ChartData>(`/api/v1/charts/${chart.id}/data`)})
   useEffect(()=>setPosition(chart.position),[chart.position])
   const startGesture=(kind:'move'|'resize',event:React.PointerEvent)=>{event.preventDefault();event.stopPropagation();const startX=event.clientX,startY=event.clientY,start=position;let latest=start;const move=(next:PointerEvent)=>{const dx=next.clientX-startX,dy=next.clientY-startY;latest=kind==='move'?{...start,x:Math.max(0,start.x+dx),y:Math.max(0,start.y+dy)}:{...start,width:Math.max(240,Math.min(1600,start.width+dx)),height:Math.max(160,Math.min(1200,start.height+dy))};setPosition(latest)};const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop);if(JSON.stringify(latest)!==JSON.stringify(chart.position))void onUpdate(chart,{position:latest,expected_revision:chart.revision}).catch(error=>{setPosition(chart.position);alert(error instanceof Error?error.message:'차트 배치를 저장하지 못했습니다.')})};window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true})}
-  return <article className="chart-card" style={{left:position.x,top:position.y,width:position.width,height:position.height}} data-chart-id={chart.id}><header onPointerDown={event=>startGesture('move',event)}><strong>{chart.title||'제목 없는 차트'}</strong><span><button aria-label="SVG로 내보내기" title="SVG로 내보내기" onPointerDown={event=>event.stopPropagation()} onClick={()=>downloadChart(svg.current,chart.title,'svg')}><Download/></button><button aria-label="PNG로 내보내기" title="PNG로 내보내기" onPointerDown={event=>event.stopPropagation()} onClick={()=>downloadChart(svg.current,chart.title,'png')}><ImageDown/></button><button aria-label="차트 설정" title="차트 설정" onPointerDown={event=>event.stopPropagation()} onClick={()=>onEdit(chart)}><Settings2/></button></span></header><div className="chart-card-body">{data.data?<div ref={node=>{svg.current=node?.querySelector('svg')??null}}><ChartPlot data={data.data}/></div>:<span className="chart-loading">차트 데이터를 불러오는 중…</span>}</div><button className="chart-resize" aria-label="차트 크기 조정" onPointerDown={event=>startGesture('resize',event)}><Maximize2/></button></article>
+  return <article className="chart-card" style={{left:position.x,top:position.y,width:position.width,height:position.height}} data-chart-id={chart.id}
+    onContextMenu={event=>{event.preventDefault();event.stopPropagation();setMenu({x:event.clientX,y:event.clientY})}}>
+    {menu&&<ContextMenu x={menu.x} y={menu.y} items={menuItems()} label="차트 메뉴" onClose={()=>setMenu(undefined)}/>}<header onPointerDown={event=>startGesture('move',event)}><strong>{chart.title||'제목 없는 차트'}</strong><span><button aria-label="SVG로 내보내기" title="SVG로 내보내기" onPointerDown={event=>event.stopPropagation()} onClick={()=>downloadChart(svg.current,chart.title,'svg')}><Download/></button><button aria-label="PNG로 내보내기" title="PNG로 내보내기" onPointerDown={event=>event.stopPropagation()} onClick={()=>downloadChart(svg.current,chart.title,'png')}><ImageDown/></button><button aria-label="차트 설정" title="차트 설정" onPointerDown={event=>event.stopPropagation()} onClick={()=>onEdit(chart)}><Settings2/></button></span></header><div className="chart-card-body">{data.data?<div ref={node=>{svg.current=node?.querySelector('svg')??null}}><ChartPlot data={data.data}/></div>:<span className="chart-loading">차트 데이터를 불러오는 중…</span>}</div><button className="chart-resize" aria-label="차트 크기 조정" onPointerDown={event=>startGesture('resize',event)}><Maximize2/></button></article>
 }
 
-export function ChartOverlay({charts,version,onEdit,onUpdate}:{charts:Chart[];version:number;onEdit:(chart:Chart)=>void;onUpdate:(chart:Chart,input:Record<string,unknown>)=>Promise<Chart>}){
+export function ChartOverlay({charts,version,onEdit,onUpdate,onDelete,onNavigate}:{charts:Chart[];version:number;onEdit:(chart:Chart)=>void;onUpdate:(chart:Chart,input:Record<string,unknown>)=>Promise<Chart>;onDelete?:(chart:Chart)=>Promise<void>;onNavigate?:(chart:Chart)=>void}){
   const [target,setTarget]=useState<Element|null>(null)
   useEffect(()=>setTarget(document.querySelector('.sheet-area')),[charts.length])
-  return target?createPortal(<div className="chart-overlay-layer" aria-label="시트 차트 레이어">{charts.map(chart=><ChartCard key={chart.id} chart={chart} version={version} onEdit={onEdit} onUpdate={onUpdate}/>)}</div>,target):null
+  return target?createPortal(<div className="chart-overlay-layer" aria-label="시트 차트 레이어">{charts.map(chart=><ChartCard key={chart.id} chart={chart} version={version} onEdit={onEdit} onUpdate={onUpdate} onDelete={onDelete} onNavigate={onNavigate}/>)}</div>,target):null
 }
