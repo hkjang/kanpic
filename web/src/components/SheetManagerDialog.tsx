@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Eye, EyeOff, Sigma, SquareArrowOutUpRight, Table2, 
 import { api } from '../lib/api'
 import type { Sheet, SheetStats, Workbook } from '../types'
 import './SheetManagerDialog.css'
+import { useDialog } from '../lib/useDialog'
 
 function cellAddress(row:number,column:number){
   if(row<1||column<1)return '없음'
@@ -42,8 +43,9 @@ export function SheetManagerDialog({workbook,sheets,activeSheetId,readOnly=false
     finally{setPending(false)}
   }
   const totals=(stats.data?.items??[]).reduce((sum,item)=>({cells:sum.cells+item.non_empty_cells,formulas:sum.formulas+item.formula_cells}),{cells:0,formulas:0})
+  const dialog=useDialog<HTMLElement>(onClose)
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section className="modal sheet-manager" role="dialog" aria-modal="true" aria-label="시트 관리">
+    <section className="modal sheet-manager" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label="시트 관리">
       <header><div><h2>시트 관리</h2><p>{ordered.length}개 시트 · 데이터 {totals.cells.toLocaleString()}셀 · 수식 {totals.formulas.toLocaleString()}개</p></div><button aria-label="시트 관리 닫기" onClick={onClose}><X/></button></header>
       <div className="sheet-manager-table" role="table">
         <div className="sheet-manager-head" role="row"><span>시트</span><span>데이터</span><span>사용 범위</span><span>마지막 변경</span><span>작업</span></div>
@@ -86,6 +88,7 @@ export function CopySheetDialog({sheet,workbookId,onClose,onCopied}:{sheet:Sheet
   const [target,setTarget]=useState(''),[name,setName]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState('')
   const workbooks=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks')})
   const candidates=(workbooks.data?.items??[]).filter(item=>item.access_role==='owner'||item.access_role==='editor')
+  const copyDialog=useDialog<HTMLElement>(onClose)
   const copy=async()=>{
     const chosen=candidates.find(item=>item.id===target)
     if(!chosen)return
@@ -97,7 +100,7 @@ export function CopySheetDialog({sheet,workbookId,onClose,onCopied}:{sheet:Sheet
     finally{setPending(false)}
   }
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section className="modal copy-sheet-modal" role="dialog" aria-modal="true" aria-label="다른 워크북으로 복사">
+    <section className="modal copy-sheet-modal" ref={copyDialog as React.RefObject<any>} role="dialog" aria-modal="true" aria-label="다른 워크북으로 복사">
       <h2>다른 워크북으로 복사</h2>
       <p>‘{sheet.name}’ 시트를 셀·서식·레이아웃과 함께 복사합니다. 편집 권한이 있는 워크북만 선택할 수 있습니다.</p>
       <label>대상 워크북

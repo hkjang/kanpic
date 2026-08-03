@@ -36,7 +36,10 @@ test('login and profile menus expose the same build version', async ({ page }) =
 })
 
 test('admin console and personal settings are separate surfaces', async ({ page }) => {
+  // The console now opens on the overview and keeps settings on its own tab.
   await page.goto('/admin')
+  await expect(page.getByRole('heading', { name: '개요' })).toBeVisible()
+  await page.goto('/admin?tab=settings')
   await expect(page.getByRole('heading', { name: '시스템 설정' })).toBeVisible()
   await expect(page.getByText('Keycloak OIDC 간편 연결')).toBeVisible()
   await expect(page.getByText('워크북 자동화 실행 정책')).toBeVisible()

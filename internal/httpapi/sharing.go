@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -49,9 +50,56 @@ func (s *Server) getWorkbookSharing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// sharingPolicy reads the organization wide limits an administrator configured.
+func (s *Server) sharingPolicy(ctx context.Context) map[string]string {
+	policy := map[string]string{"max_link_access": workbook.LinkAccessAnyone, "default_link_access": workbook.LinkAccessRestricted}
+	if s.settings == nil {
+		return policy
+	}
+	values, err := s.settings.Values(ctx)
+	if err != nil {
+		return policy
+	}
+	if value, ok := values["sharing.max_link_access"].(string); ok && workbook.ValidLinkAccess(value) {
+		policy["max_link_access"] = value
+	}
+	if value, ok := values["sharing.default_link_access"].(string); ok && workbook.ValidLinkAccess(value) {
+		policy["default_link_access"] = value
+	}
+	return policy
+}
+
+func linkAccessRank(value string) int {
+	switch value {
+	case workbook.LinkAccessOrganization:
+		return 1
+	case workbook.LinkAccessAnyone:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// enforceSharingPolicy keeps a workbook from being opened wider than the
+// administrator allows.
+func (s *Server) enforceSharingPolicy(ctx context.Context, requested *string) error {
+	if requested == nil {
+		return nil
+	}
+	maximum := s.sharingPolicy(ctx)["max_link_access"]
+	if linkAccessRank(*requested) > linkAccessRank(maximum) {
+		return fmt.Errorf("%w: 관리자가 허용한 최대 링크 액세스는 %s 입니다", workbook.ErrInvalid, maximum)
+	}
+	return nil
+}
+
 func (s *Server) updateWorkbookSharing(w http.ResponseWriter, r *http.Request) {
 	var input workbook.UpdateSharingInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := s.enforceSharingPolicy(r.Context(), input.LinkAccess); err != nil {
+		s.writeError(w, r, err)
 		return
 	}
 	input.ActorID = actorID(r)

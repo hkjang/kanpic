@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useDialog } from '../lib/useDialog'
 
 type Shortcut = { action:string; keys:string[] }
 
@@ -7,7 +8,8 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
     {action:'저장',keys:['Ctrl / ⌘ + S']},
     {action:'실행 취소',keys:['Ctrl / ⌘ + Z']},
     {action:'다시 실행',keys:['Ctrl / ⌘ + Y','Ctrl / ⌘ + Shift + Z']},
-    {action:'워크북 검색',keys:['Ctrl / ⌘ + F','Ctrl / ⌘ + K']},
+    {action:'빠른 이동 (시트·워크북·명령)',keys:['Ctrl / ⌘ + K']},
+    {action:'워크북 검색',keys:['Ctrl / ⌘ + F']},
     {action:'찾기 및 바꾸기',keys:['Ctrl / ⌘ + H']},
     {action:'단축키 목록',keys:['Ctrl / ⌘ + /']},
     {action:'새 시트 추가',keys:['Shift + F11']},
@@ -33,6 +35,7 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
     {action:'머리글 경계 드래그',keys:['행 높이·열 너비 조절']},
     {action:'머리글 경계 더블클릭',keys:['자동 맞춤']},
     {action:'컨텍스트 메뉴 열기',keys:['마우스 오른쪽 클릭','Shift + F10']},
+    {action:'대화상자 닫기',keys:['Esc']},
   ]},
   {title:'선택과 탐색',shortcuts:[
     {action:'셀 이동 / 범위 확장',keys:['방향키','Shift + 방향키']},
@@ -52,8 +55,9 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
 
 export function WorkbookShortcutsDialog({onClose}:{onClose:()=>void}){
   useEffect(()=>{const close=(event:KeyboardEvent)=>{if(event.key==='Escape')onClose()};window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close)},[onClose])
+  const dialog=useDialog<HTMLElement>(onClose)
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section className="modal shortcuts-modal" role="dialog" aria-modal="true" aria-label="워크북 단축키">
+    <section className="modal shortcuts-modal" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label="워크북 단축키">
       <h2>Google Sheets 스타일 단축키</h2>
       <p>Windows·ChromeOS에서는 Ctrl, macOS에서는 ⌘를 사용합니다.</p>
       <div className="shortcut-sections">

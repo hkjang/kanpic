@@ -92,6 +92,8 @@ var defaults = []Setting{
 	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
 	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},
 	{Key: "automation.scheduler_poll_seconds", Value: json.RawMessage(`15`), ValueType: "number", Description: "PostgreSQL 스케줄 자동화 확인 주기(초)"},
+	{Key: "sharing.max_link_access", Value: json.RawMessage(`"anyone"`), ValueType: "string", Description: "허용할 최대 링크 액세스 범위 (restricted, organization, anyone)"},
+	{Key: "sharing.default_link_access", Value: json.RawMessage(`"restricted"`), ValueType: "string", Description: "새 워크북의 기본 링크 액세스"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},
 	{Key: "observability.log_retention_days", Value: json.RawMessage(`30`), ValueType: "number", Description: "서버 로그 보존 일수"},
 }

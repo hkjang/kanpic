@@ -4,24 +4,127 @@ import { Activity, ArrowLeft, Building2, Bot, CheckCircle2, ChevronRight, Databa
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
-import type { BuildInfo, Department, DirectoryUser, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
+import type { AdminOverview, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='settings'|'users'|'departments'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['users','departments','logs','keys','system'].includes(value||'')?value as Tab:'settings'}
+type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
   const navigate=(next:Tab)=>{history.replaceState(null,'',`/admin?tab=${next}`);setTab(next)}
   return <div className="console-shell"><aside className="console-sidebar"><Brand/><div className="console-label">ADMIN CONSOLE</div><nav>
+    <button className={tab==='overview'?'active':''} onClick={()=>navigate('overview')}><Activity/> 개요 <ChevronRight/></button>
     <button className={tab==='settings'?'active':''} onClick={()=>navigate('settings')}><Settings2/> 시스템 설정 <ChevronRight/></button>
     <button className={tab==='users'?'active':''} onClick={()=>navigate('users')}><Users/> 사용자 및 역할 <ChevronRight/></button>
+    <button className={tab==='workbooks'?'active':''} onClick={()=>navigate('workbooks')}><Database/> 워크북 거버넌스 <ChevronRight/></button>
     <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
   </nav><div className="console-nav-group"><span>바로가기</span><a href="/preferences"><ShieldCheck/> 개인 환경설정</a><a href="/"><Database/> 워크스페이스로</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
+}
+
+const LINK_ACCESS_LABEL:Record<string,string>={restricted:'제한됨',organization:'조직 전체',anyone:'링크 공개'}
+
+/** The console landing page: scale, sharing exposure and what needs attention. */
+function OverviewPanel({onNavigate}:{onNavigate:(tab:'users'|'departments'|'workbooks'|'settings')=>void}){
+  const overview=useQuery({queryKey:['admin-overview'],queryFn:()=>api<{overview:AdminOverview;policy:Record<string,string>}>('/api/v1/admin/overview')})
+  const data=overview.data?.overview
+  const policy=overview.data?.policy
+  const cards=[
+    {label:'사용자',value:data?.users,hint:`활성 ${data?.active_users??0} · 정지 ${data?.suspended_users??0}`,tab:'users' as const},
+    {label:'부서',value:data?.departments,hint:'공유 대상으로 사용',tab:'departments' as const},
+    {label:'워크북',value:data?.workbooks,hint:`휴지통 ${data?.trashed_workbooks??0}개`,tab:'workbooks' as const},
+    {label:'공유된 워크북',value:data?.shared_workbooks,hint:`공유 항목 ${data?.shares??0}개`,tab:'workbooks' as const},
+  ]
+  const attention=[
+    {label:'링크가 있는 모든 사용자에게 공개',value:data?.anyone_shared??0,tone:'danger',filter:'anyone'},
+    {label:'조직 전체 공개',value:data?.organization_shared??0,tone:'warn',filter:'organization'},
+    {label:'소유자가 없거나 정지된 워크북',value:data?.orphan_workbooks??0,tone:'warn',filter:'orphan'},
+    {label:'대기 중인 액세스 요청',value:data?.pending_access_requests??0,tone:'info',filter:'all'},
+  ]
+  return <section className="console-panel">
+    <header className="panel-header"><div><h1>개요</h1><p>조직의 사용량과 공유 노출 상태를 한눈에 확인합니다. 항목을 클릭하면 해당 관리 화면으로 이동합니다.</p></div></header>
+    {overview.isLoading?<div className="loading-card">요약을 불러오는 중…</div>:<>
+      <div className="overview-cards">{cards.map(card=>
+        <button className="overview-card" key={card.label} onClick={()=>onNavigate(card.tab)}>
+          <span>{card.label}</span><strong>{(card.value??0).toLocaleString()}</strong><small>{card.hint}</small>
+        </button>)}
+      </div>
+      <div className="overview-attention">
+        <h2>점검이 필요한 항목</h2>
+        {attention.map(item=><button className={`overview-row ${item.tone}`} key={item.label} onClick={()=>{history.replaceState(null,'',`/admin?tab=workbooks&filter=${item.filter}`);onNavigate('workbooks')}}>
+          <span>{item.label}</span><strong>{item.value.toLocaleString()}</strong>
+        </button>)}
+      </div>
+      <div className="overview-policy">
+        <h2>공유 정책</h2>
+        <p>허용 최대 링크 액세스 <b>{LINK_ACCESS_LABEL[policy?.max_link_access??'anyone']}</b> · 새 워크북 기본값 <b>{LINK_ACCESS_LABEL[policy?.default_link_access??'restricted']}</b></p>
+        <button onClick={()=>onNavigate('settings')}><Settings2/> 시스템 설정에서 변경</button>
+      </div>
+    </>}
+  </section>
+}
+
+/**
+ * Administrators can see every workbook, not only their own, so over-sharing and
+ * orphaned data can be found and corrected in one place.
+ */
+function WorkbookGovernancePanel(){
+  const client=useQueryClient()
+  const [filter,setFilter]=useState<string>(()=>new URLSearchParams(location.search).get('filter')||'all')
+  const [message,setMessage]=useState(''),[error,setError]=useState('')
+  const workbooks=useQuery({queryKey:['admin-workbooks',filter],queryFn:()=>api<{items:GovernedWorkbook[]}>(`/api/v1/admin/workbooks?filter=${filter}`)})
+  const items=workbooks.data?.items??[]
+  const run=async(action:()=>Promise<unknown>,success:string)=>{
+    setError('');setMessage('')
+    try{await action();await client.invalidateQueries({queryKey:['admin-workbooks']});await client.invalidateQueries({queryKey:['admin-overview']});setMessage(success)}
+    catch(reason){setError(reason instanceof Error?reason.message:'요청을 처리하지 못했습니다.')}
+  }
+  const restrict=(item:GovernedWorkbook)=>{
+    if(!window.confirm(`'${item.title}'의 링크 액세스를 제한됨으로 되돌릴까요? 링크로만 접근하던 사용자는 열 수 없게 됩니다.`))return
+    void run(()=>api(`/api/v1/workbooks/${item.id}/sharing`,{method:'PATCH',body:JSON.stringify({link_access:'restricted'})}),'링크 액세스를 제한했습니다.')
+  }
+  const transfer=(item:GovernedWorkbook)=>{
+    const owner=window.prompt(`'${item.title}'의 새 소유자 사용자 ID 또는 이메일`,'')
+    if(!owner?.trim())return
+    void run(()=>api(`/api/v1/workbooks/${item.id}/sharing:transfer-ownership`,{method:'POST',body:JSON.stringify({new_owner_id:owner.trim(),keep_as_editor:false})}),'소유권을 이전했습니다.')
+  }
+  const trash=(item:GovernedWorkbook)=>{
+    if(!window.confirm(`'${item.title}'을(를) 휴지통으로 옮길까요? 소유자가 복원할 수 있습니다.`))return
+    void run(()=>api(`/api/v1/workbooks/${item.id}`,{method:'DELETE'}),'휴지통으로 옮겼습니다.')
+  }
+  const restore=(item:GovernedWorkbook)=>void run(()=>api(`/api/v1/workbooks/${item.id}/restore`,{method:'POST'}),'워크북을 복원했습니다.')
+  const filters=[{id:'all',label:'전체'},{id:'anyone',label:'링크 공개'},{id:'organization',label:'조직 전체'},{id:'orphan',label:'소유자 문제'},{id:'trashed',label:'휴지통'}]
+  return <section className="console-panel">
+    <header className="panel-header"><div><h1>워크북 거버넌스</h1><p>모든 워크북의 소유자와 공유 범위를 확인하고 과도한 공개를 되돌리거나 소유권을 이전합니다.</p></div>
+      <div className="segmented">{filters.map(item=><button key={item.id} className={filter===item.id?'active':''} onClick={()=>{setFilter(item.id);history.replaceState(null,'',`/admin?tab=workbooks&filter=${item.id}`)}}>{item.label}</button>)}</div>
+    </header>
+    {workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:items.length===0?<div className="empty-state small"><Database/><h3>해당하는 워크북이 없습니다</h3><p>다른 필터를 선택해 보세요.</p></div>:
+      <div className="governance-table">
+        <div className="governance-row head"><span>워크북</span><span>소유자</span><span>공유</span><span>시트</span><span>수정</span><span>조치</span></div>
+        {items.map(item=><div className="governance-row" key={item.id}>
+          <span className="governance-title"><a href={`/workbooks/${item.id}`}>{item.title}</a>{item.pending_access_requests>0&&<em>요청 {item.pending_access_requests}</em>}</span>
+          <span className={item.owner_status==='suspended'||!item.owner_id?'governance-owner problem':'governance-owner'}>{item.owner_name||item.owner_id||'소유자 없음'}{item.owner_status==='suspended'&&' (정지됨)'}</span>
+          <span><b className={`link-chip ${item.link_access}`}>{LINK_ACCESS_LABEL[item.link_access]}</b>{item.share_count>0&&<small>+{item.share_count}</small>}</span>
+          <span>{item.sheet_count}</span>
+          <span>{new Date(item.updated_at).toLocaleDateString('ko-KR')}</span>
+          <span className="governance-actions">
+            {item.deleted_at
+              ?<button onClick={()=>restore(item)}><RotateCcw/> 복원</button>
+              :<>
+                {item.link_access!=='restricted'&&<button onClick={()=>restrict(item)}><ShieldCheck/> 공개 해제</button>}
+                <button onClick={()=>transfer(item)}><Users/> 소유권</button>
+                <button className="danger" onClick={()=>trash(item)}><Trash2/> 휴지통</button>
+              </>}
+          </span>
+        </div>)}
+      </div>}
+    {error&&<div className="panel-error" role="alert">{error}</div>}
+    {message&&<div className="panel-message" role="status">{message}</div>}
+  </section>
 }
 
 /**
@@ -34,7 +137,10 @@ function UsersPanel(){
   const [search,setSearch]=useState(''),[selected,setSelected]=useState<string>(),[role,setRole]=useState('')
   const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
   const [message,setMessage]=useState(''),[error,setError]=useState('')
-  const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[]}>('/api/v1/admin/users')})
+  const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[];admin_roles:string[];default_admin_role:string}>('/api/v1/admin/users')})
+  const adminRoles=users.data?.admin_roles??[]
+  const defaultAdminRole=users.data?.default_admin_role??'kanpic-admin'
+  const isAdmin=(user:DirectoryUser)=>(user.roles??[]).some(role=>adminRoles.some(candidate=>candidate.toLowerCase()===role.toLowerCase()))
   const items=(users.data?.items??[]).filter(user=>{
     const needle=search.trim().toLowerCase()
     if(!needle)return true
@@ -79,7 +185,7 @@ function UsersPanel(){
         {users.isLoading?<div className="loading-card">사용자를 불러오는 중…</div>:items.length===0?<div className="empty-state small"><Users/><h3>사용자가 없습니다</h3><p>사용자가 로그인하거나 아래에서 직접 등록하면 표시됩니다.</p></div>:items.map(user=>
           <button className={`user-row${selected===user.user_id?' active':''}${user.status==='suspended'?' suspended':''}`} key={user.user_id} onClick={()=>setSelected(user.user_id)}>
             <span className="user-identity"><strong>{user.display_name||user.user_id}</strong><small>{user.email||user.user_id}</small>{user.status==='suspended'&&<em>정지됨</em>}</span>
-            <span className="user-roles">{(user.roles??[]).length===0?<i>—</i>:(user.roles??[]).map(item=><b key={item}>{item}</b>)}</span>
+            <span className="user-roles">{isAdmin(user)&&<b className="admin">관리자</b>}{(user.roles??[]).length===0?<i>—</i>:(user.roles??[]).map(item=><b key={item}>{item}</b>)}</span>
             <span>{(user.departments??[]).join(', ')||'—'}</span>
             <span>{user.owned_workbooks.toLocaleString()}</span>
             <span>{user.last_seen_at?new Date(user.last_seen_at).toLocaleString('ko-KR'):'기록 없음'}</span>
@@ -102,6 +208,7 @@ function UsersPanel(){
             <div><dt>소유 워크북</dt><dd>{current.owned_workbooks.toLocaleString()}개</dd></div>
             <div><dt>부서</dt><dd>{(current.departments??[]).join(', ')||'—'}</dd></div>
             <div><dt>메모</dt><dd>{current.note||'—'}</dd></div>
+            <div><dt>관리자</dt><dd className={isAdmin(current)?'active':''}>{isAdmin(current)?'예':'아니오'}</dd></div>
           </dl>
           <div className="user-roles-editor">
             <h3>kanpic 역할</h3>
@@ -111,9 +218,19 @@ function UsersPanel(){
               <input aria-label="부여할 역할" placeholder="예: kanpic-analyst" value={role} onChange={event=>setRole(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')grant(current)}}/>
               <button disabled={!role.trim()} onClick={()=>grant(current)}>역할 부여</button>
             </div>
-            <small>역할은 워크북 공유 창에서 ‘역할’ 대상으로 선택할 수 있습니다.</small>
+            <small>역할은 워크북 공유 창에서 ‘역할’ 대상으로 선택할 수 있습니다. {adminRoles.join(', ')} 역할은 관리자 권한을 부여합니다.</small>
           </div>
           <div className="user-actions">
+            {isAdmin(current)
+              ?<button onClick={()=>{
+                const held=(current.roles??[]).filter(role=>adminRoles.some(candidate=>candidate.toLowerCase()===role.toLowerCase()))
+                if(!window.confirm(`'${current.user_id}' 계정의 관리자 권한(${held.join(', ')})을 회수할까요?`))return
+                void run(async()=>{for(const role of held)await api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(current.user_id)}/roles/${encodeURIComponent(role)}`,{method:'DELETE'})},'관리자 권한을 회수했습니다.')
+              }}><ShieldCheck/> 관리자 해제</button>
+              :<button onClick={()=>{
+                if(!window.confirm(`'${current.user_id}' 계정을 관리자로 지정할까요? 모든 워크북과 시스템 설정에 접근할 수 있게 됩니다.`))return
+                void run(()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(current.user_id)}/roles`,{method:'POST',body:JSON.stringify({role:defaultAdminRole})}),'관리자로 지정했습니다.')
+              }}><ShieldCheck/> 관리자로 지정</button>}
             <button onClick={()=>note(current)}>메모 편집</button>
             <button onClick={()=>signOut(current)}>모든 세션 종료</button>
             {current.status==='suspended'

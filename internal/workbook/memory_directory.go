@@ -208,3 +208,151 @@ func (r *MemoryRepository) RevokeUserRole(ctx context.Context, userID, role stri
 	r.mu.Unlock()
 	return r.GetUser(ctx, id)
 }
+
+func (r *MemoryRepository) LookupUsers(_ context.Context, ids []string) ([]UserSummary, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" && len(wanted) < MaxUserLookupIDs {
+			wanted[strings.ToLower(trimmed)] = struct{}{}
+		}
+	}
+	items := make([]UserSummary, 0, len(wanted))
+	for _, user := range r.directory {
+		_, byID := wanted[strings.ToLower(user.UserID)]
+		_, byEmail := wanted[strings.ToLower(user.Email)]
+		if byID || (user.Email != "" && byEmail) {
+			items = append(items, UserSummary{UserID: user.UserID, DisplayName: user.DisplayName, Email: user.Email})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return strings.ToLower(items[i].UserID) < strings.ToLower(items[j].UserID) })
+	return items, nil
+}
+
+func (r *MemoryRepository) SearchUsers(_ context.Context, query string, limit int) ([]UserSummary, error) {
+	needle := strings.ToLower(strings.TrimSpace(query))
+	if needle == "" {
+		return []UserSummary{}, nil
+	}
+	if limit <= 0 || limit > 25 {
+		limit = 10
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]UserSummary, 0, limit)
+	for _, user := range r.directory {
+		if user.Status == UserStatusSuspended {
+			continue
+		}
+		haystack := strings.ToLower(user.UserID + " " + user.DisplayName + " " + user.Email)
+		if strings.Contains(haystack, needle) {
+			items = append(items, UserSummary{UserID: user.UserID, DisplayName: user.DisplayName, Email: user.Email})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		left := strings.ToLower(items[i].DisplayName + items[i].UserID)
+		right := strings.ToLower(items[j].DisplayName + items[j].UserID)
+		return left < right
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (r *MemoryRepository) AdminOverview(_ context.Context) (AdminOverview, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	overview := AdminOverview{Users: len(r.directory), Departments: len(r.departments), TrashedWorkbooks: len(r.trash)}
+	suspended := make(map[string]struct{}, len(r.directory))
+	for key, user := range r.directory {
+		if user.Status == UserStatusSuspended {
+			overview.SuspendedUsers++
+			suspended[key] = struct{}{}
+			continue
+		}
+		overview.ActiveUsers++
+	}
+	for id, state := range r.workbooks {
+		overview.Workbooks++
+		switch state.workbook.LinkAccess {
+		case LinkAccessOrganization:
+			overview.OrganizationShared++
+		case LinkAccessAnyone:
+			overview.AnyoneShared++
+		}
+		owner := strings.ToLower(strings.TrimSpace(state.workbook.OwnerID))
+		if _, blocked := suspended[owner]; owner == "" || blocked {
+			overview.OrphanWorkbooks++
+		}
+		if len(r.shares[id]) > 0 {
+			overview.SharedWorkbooks++
+			overview.Shares += len(r.shares[id])
+		}
+	}
+	for _, request := range r.accessRequests {
+		if request.Status == AccessRequestPending {
+			overview.PendingRequests++
+		}
+	}
+	return overview, nil
+}
+
+func (r *MemoryRepository) GovernedWorkbooks(_ context.Context, filter string, limit int) ([]GovernedWorkbook, error) {
+	if !ValidGovernanceFilter(filter) {
+		return nil, fmt.Errorf("%w: unknown workbook filter", ErrInvalid)
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	states := make(map[string]*workbookState, len(r.workbooks)+len(r.trash))
+	if filter == GovernanceFilterTrashed {
+		for id, state := range r.trash {
+			states[id] = state
+		}
+	} else {
+		for id, state := range r.workbooks {
+			states[id] = state
+		}
+	}
+	items := make([]GovernedWorkbook, 0, len(states))
+	for id, state := range states {
+		owner := r.directory[strings.ToLower(strings.TrimSpace(state.workbook.OwnerID))]
+		item := GovernedWorkbook{
+			ID: id, Title: state.workbook.Title, OwnerID: state.workbook.OwnerID, OwnerName: owner.DisplayName, OwnerStatus: owner.Status,
+			LinkAccess: state.workbook.LinkAccess, LinkRole: state.workbook.LinkRole, ShareCount: len(r.shares[id]),
+			SheetCount: len(state.sheets), Version: state.workbook.Version, UpdatedAt: state.workbook.UpdatedAt, DeletedAt: state.deletedAt,
+		}
+		if item.LinkAccess == "" {
+			item.LinkAccess = LinkAccessRestricted
+		}
+		for _, request := range r.accessRequests {
+			if request.WorkbookID == id && request.Status == AccessRequestPending {
+				item.PendingAccess++
+			}
+		}
+		switch filter {
+		case GovernanceFilterOrganization:
+			if item.LinkAccess != LinkAccessOrganization {
+				continue
+			}
+		case GovernanceFilterAnyone:
+			if item.LinkAccess != LinkAccessAnyone {
+				continue
+			}
+		case GovernanceFilterOrphan:
+			if strings.TrimSpace(item.OwnerID) != "" && item.OwnerStatus != UserStatusSuspended {
+				continue
+			}
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}

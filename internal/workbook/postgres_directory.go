@@ -206,3 +206,137 @@ func (r *PostgresRepository) RevokeUserRole(ctx context.Context, userID, role st
 	}
 	return r.GetUser(ctx, id)
 }
+
+// LookupUsers resolves identifiers or e-mail addresses to display names so the
+// interface can show a person instead of a raw identifier.
+func (r *PostgresRepository) LookupUsers(ctx context.Context, ids []string) ([]UserSummary, error) {
+	wanted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			wanted = append(wanted, strings.ToLower(trimmed))
+		}
+		if len(wanted) >= MaxUserLookupIDs {
+			break
+		}
+	}
+	if len(wanted) == 0 {
+		return []UserSummary{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT user_id, display_name, email FROM directory_users
+		WHERE lower(user_id) = ANY($1) OR (email <> '' AND lower(email) = ANY($1))`, wanted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]UserSummary, 0, len(wanted))
+	for rows.Next() {
+		var summary UserSummary
+		if err := rows.Scan(&summary.UserID, &summary.DisplayName, &summary.Email); err != nil {
+			return nil, err
+		}
+		items = append(items, summary)
+	}
+	return items, rows.Err()
+}
+
+// SearchUsers powers the share and mention pickers.
+func (r *PostgresRepository) SearchUsers(ctx context.Context, query string, limit int) ([]UserSummary, error) {
+	needle := strings.TrimSpace(query)
+	if needle == "" {
+		return []UserSummary{}, nil
+	}
+	if limit <= 0 || limit > 25 {
+		limit = 10
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT user_id, display_name, email FROM directory_users
+		WHERE status='active' AND (user_id ILIKE '%'||$1||'%' OR display_name ILIKE '%'||$1||'%' OR email ILIKE '%'||$1||'%')
+		ORDER BY lower(coalesce(nullif(display_name,''), user_id))
+		LIMIT $2`, needle, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]UserSummary, 0, limit)
+	for rows.Next() {
+		var summary UserSummary
+		if err := rows.Scan(&summary.UserID, &summary.DisplayName, &summary.Email); err != nil {
+			return nil, err
+		}
+		items = append(items, summary)
+	}
+	return items, rows.Err()
+}
+
+func (r *PostgresRepository) AdminOverview(ctx context.Context) (AdminOverview, error) {
+	var overview AdminOverview
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM directory_users),
+			(SELECT count(*) FROM directory_users WHERE status='active'),
+			(SELECT count(*) FROM directory_users WHERE status='suspended'),
+			(SELECT count(*) FROM departments),
+			(SELECT count(*) FROM workbooks WHERE deleted_at IS NULL),
+			(SELECT count(*) FROM workbooks WHERE deleted_at IS NOT NULL),
+			(SELECT count(DISTINCT workbook_id) FROM workbook_shares),
+			(SELECT count(*) FROM workbooks WHERE deleted_at IS NULL AND link_access='organization'),
+			(SELECT count(*) FROM workbooks WHERE deleted_at IS NULL AND link_access='anyone'),
+			(SELECT count(*) FROM workbooks w WHERE w.deleted_at IS NULL AND (btrim(w.owner_id)='' OR EXISTS(
+				SELECT 1 FROM directory_users u WHERE lower(u.user_id)=lower(w.owner_id) AND u.status='suspended'))),
+			(SELECT count(*) FROM workbook_access_requests WHERE status='pending'),
+			(SELECT count(*) FROM workbook_shares)`).
+		Scan(&overview.Users, &overview.ActiveUsers, &overview.SuspendedUsers, &overview.Departments, &overview.Workbooks,
+			&overview.TrashedWorkbooks, &overview.SharedWorkbooks, &overview.OrganizationShared, &overview.AnyoneShared,
+			&overview.OrphanWorkbooks, &overview.PendingRequests, &overview.Shares)
+	if err != nil {
+		return AdminOverview{}, err
+	}
+	return overview, nil
+}
+
+// GovernedWorkbooks lists workbooks for administrators, including the ones they
+// do not own, so over-sharing and orphaned data can be found and fixed.
+func (r *PostgresRepository) GovernedWorkbooks(ctx context.Context, filter string, limit int) ([]GovernedWorkbook, error) {
+	if !ValidGovernanceFilter(filter) {
+		return nil, fmt.Errorf("%w: unknown workbook filter", ErrInvalid)
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	condition := "w.deleted_at IS NULL"
+	switch filter {
+	case GovernanceFilterOrganization:
+		condition += " AND w.link_access='organization'"
+	case GovernanceFilterAnyone:
+		condition += " AND w.link_access='anyone'"
+	case GovernanceFilterOrphan:
+		condition += " AND (btrim(w.owner_id)='' OR EXISTS(SELECT 1 FROM directory_users u WHERE lower(u.user_id)=lower(w.owner_id) AND u.status='suspended'))"
+	case GovernanceFilterTrashed:
+		condition = "w.deleted_at IS NOT NULL"
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT w.id::text,w.title,w.owner_id,coalesce(u.display_name,''),coalesce(u.status,''),w.link_access,w.link_role,w.version,w.updated_at,w.deleted_at,
+		       (SELECT count(*) FROM workbook_shares s WHERE s.workbook_id=w.id),
+		       (SELECT count(*) FROM sheets sh WHERE sh.workbook_id=w.id),
+		       (SELECT count(*) FROM workbook_access_requests q WHERE q.workbook_id=w.id AND q.status='pending')
+		FROM workbooks w
+		LEFT JOIN directory_users u ON lower(u.user_id)=lower(w.owner_id)
+		WHERE %s
+		ORDER BY w.updated_at DESC
+		LIMIT $1`, condition), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]GovernedWorkbook, 0)
+	for rows.Next() {
+		var item GovernedWorkbook
+		if err := rows.Scan(&item.ID, &item.Title, &item.OwnerID, &item.OwnerName, &item.OwnerStatus, &item.LinkAccess, &item.LinkRole,
+			&item.Version, &item.UpdatedAt, &item.DeletedAt, &item.ShareCount, &item.SheetCount, &item.PendingAccess); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}

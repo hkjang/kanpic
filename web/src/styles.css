@@ -138,3 +138,41 @@
 .user-actions button.danger{border-color:#e6c4c1;color:#b4443f}
 .user-actions button.danger:hover{background:#fdeeec}
 @media(max-width:1000px){.user-layout{grid-template-columns:minmax(0,1fr)}.user-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 90px}.user-row span:nth-child(4),.user-row span:nth-child(5){display:none}}
+.user-roles b.admin{background:var(--primary-soft);color:#0b5c55}
+
+/* Admin overview and workbook governance */
+.overview-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px}
+.overview-card{display:flex;flex-direction:column;gap:3px;align-items:flex-start;background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px;text-align:left}
+.overview-card:hover{border-color:#b7cfcb}
+.overview-card span{font-size:9px;color:#78868e}
+.overview-card strong{font-size:24px;color:#1d2c35;line-height:1.1}
+.overview-card small{font-size:9px;color:#8b979e}
+.overview-attention,.overview-policy{background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px}
+.overview-attention h2,.overview-policy h2{margin:0 0 10px;font-size:12px}
+.overview-row{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border:0;background:#f8fafb;border-radius:9px;padding:10px 12px;margin-bottom:6px;font-size:10px;color:#3f4d56;text-align:left}
+.overview-row:hover{background:#eef3f4}
+.overview-row strong{font-size:14px}
+.overview-row.danger{background:#fdeeec;color:#a9453f}
+.overview-row.warn{background:#fff6e8;color:#8a6320}
+.overview-policy p{margin:0 0 10px;font-size:10px;color:#5c6a72}
+.overview-policy b{color:#1d2c35}
+.overview-policy button{height:32px;padding:0 12px;border:1px solid var(--border);background:#fff;border-radius:8px;font-size:10px;font-weight:600;color:#4d5b64;display:inline-flex;align-items:center;gap:5px}
+.overview-policy button svg{width:13px}
+.governance-table{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px;overflow:auto}
+.governance-row{display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) 130px 60px 90px 220px;gap:10px;align-items:center;padding:8px 10px;font-size:10px;color:#43525b;border-bottom:1px solid #f3f5f6}
+.governance-row.head{font-size:9px;font-weight:700;color:#6b7a83;background:#f8fafb;border-radius:8px;border:0}
+.governance-row span{display:flex;align-items:center;gap:5px;min-width:0}
+.governance-title a{font-size:11px;font-weight:600;color:#243642;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.governance-title a:hover{color:var(--primary);text-decoration:underline}
+.governance-title em{font-style:normal;font-size:8px;font-weight:700;background:#fff4e3;color:#96631c;border-radius:999px;padding:2px 6px}
+.governance-owner{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.governance-owner.problem{color:#a9453f;font-weight:600}
+.link-chip{font-size:8px;font-weight:700;border-radius:999px;padding:2px 7px;background:#eef2f4;color:#5b6a72}
+.link-chip.organization{background:#fff6e8;color:#8a6320}
+.link-chip.anyone{background:#fdeeec;color:#a9453f}
+.governance-actions{justify-content:flex-end;flex-wrap:wrap}
+.governance-actions button{height:26px;padding:0 8px;border:1px solid #e2e8ea;background:#fff;border-radius:7px;font-size:9px;font-weight:600;color:#5d6c75;display:inline-flex;align-items:center;gap:4px}
+.governance-actions button svg{width:12px}
+.governance-actions button:hover{border-color:#b7cfcb;color:var(--primary)}
+.governance-actions button.danger:hover{border-color:#e6c4c1;color:#b4443f;background:#fdeeec}
+@media(max-width:1100px){.governance-row{grid-template-columns:minmax(0,2fr) minmax(0,1fr) 120px 200px}.governance-row span:nth-child(4),.governance-row span:nth-child(5){display:none}}

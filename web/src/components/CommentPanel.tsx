@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, CornerDownRight, MapPin, MessageSquare, Pencil, RotateCcw, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, newIdempotencyKey } from '../lib/api'
+import { useUserDirectory, userInitial, userLabel, userTooltip } from '../state/directory'
 import type { CommentMessage, CommentThread } from '../types'
 import './CommentPanel.css'
 
@@ -27,6 +28,9 @@ export function CommentPanel({workbookId,sheetId,selectionRange,currentActor,foc
     if(!focusThreadId)return items
     return [...items].sort((a,b)=>a.id===focusThreadId?-1:b.id===focusThreadId?1:0)
   },[comments.data?.items,focusThreadId,showResolved])
+  // Comment authors and mentions are shown by name, with the account in the
+  // tooltip, so a long identifier never hides who wrote something.
+  const directory=useUserDirectory(threads.flatMap(thread=>[thread.created_by,...thread.messages.flatMap(message=>[message.author_id,...message.mentions])]))
   useEffect(()=>{if(focusThreadId&&focused.current)focused.current.scrollIntoView?.({block:'nearest'})},[focusThreadId,threads.length])
   const refresh=()=>{client.invalidateQueries({queryKey:['comments',workbookId]});client.invalidateQueries({queryKey:['mention-notifications']})}
   const execute=async(action:()=>Promise<unknown>)=>{setBusy(true);setError('');try{await action();await refresh()}catch(value){setError(value instanceof Error?value.message:'댓글 작업을 완료하지 못했습니다.');await refresh()}finally{setBusy(false)}}
@@ -47,8 +51,8 @@ export function CommentPanel({workbookId,sheetId,selectionRange,currentActor,foc
       {threads.map(thread=><div key={thread.id} ref={thread.id===focusThreadId?focused:undefined} className={`comment-thread ${thread.resolved?'resolved':''} ${thread.id===focusThreadId?'focused':''}`}>
         <div className="comment-thread-head"><button className="comment-location" onClick={()=>onNavigate(thread.sheet_id,thread.range)} disabled={thread.range==='#REF!'}><MapPin/>{thread.sheet_name} · {thread.range}</button><span>{thread.resolved?'해결됨':`${thread.messages.filter(message=>!message.deleted_at).length}개`}</span></div>
         <div className="comment-messages">{thread.messages.map(message=><div className={`comment-message ${message.deleted_at?'deleted':''}`} key={message.id}>
-          <div className="comment-message-meta"><span className="comment-avatar">{message.author_id.slice(0,1).toUpperCase()}</span><strong>{message.author_id}</strong><time>{formatTime(message.updated_at)}</time></div>
-          {message.deleted_at?<p>삭제된 댓글입니다.</p>:editing?.id===message.id?<div className="comment-edit"><textarea aria-label="댓글 수정 내용" value={editing.content} onChange={event=>setEditing({...editing,content:event.target.value})}/><div><button onClick={()=>setEditing(undefined)}>취소</button><button disabled={busy||!editing.content.trim()} onClick={()=>void updateMessage(message)}>저장</button></div></div>:<><p>{message.content}</p>{message.mentions.length>0&&<small className="comment-mentions">{message.mentions.map(value=>`@${value}`).join(' ')}</small>}</>}
+          <div className="comment-message-meta"><span className="comment-avatar" title={userTooltip(message.author_id,directory)}>{userInitial(message.author_id,directory)}</span><strong title={userTooltip(message.author_id,directory)}>{userLabel(message.author_id,directory)}{message.author_id===currentActor?' (나)':''}</strong><time>{formatTime(message.updated_at)}</time></div>
+          {message.deleted_at?<p>삭제된 댓글입니다.</p>:editing?.id===message.id?<div className="comment-edit"><textarea aria-label="댓글 수정 내용" value={editing.content} onChange={event=>setEditing({...editing,content:event.target.value})}/><div><button onClick={()=>setEditing(undefined)}>취소</button><button disabled={busy||!editing.content.trim()} onClick={()=>void updateMessage(message)}>저장</button></div></div>:<><p>{message.content}</p>{message.mentions.length>0&&<small className="comment-mentions">{message.mentions.map(value=>`@${userLabel(value,directory)}`).join(' ')}</small>}</>}
           {!message.deleted_at&&message.author_id===currentActor&&editing?.id!==message.id&&<div className="comment-message-actions"><button aria-label="댓글 수정" onClick={()=>setEditing({id:message.id,content:message.content})}><Pencil/></button><button aria-label="댓글 삭제" onClick={()=>removeMessage(message)}><Trash2/></button></div>}
         </div>)}</div>
         {replyThread===thread.id?<div className="comment-reply"><textarea autoFocus aria-label="답글 내용" value={reply} onChange={event=>setReply(event.target.value)} placeholder="답글 또는 @멘션"/><div><button onClick={()=>{setReplyThread(undefined);setReply('')}}>취소</button><button disabled={busy||!reply.trim()} onClick={()=>void addReply(thread)}><Send/> 답글</button></div></div>:<button className="comment-reply-trigger" onClick={()=>setReplyThread(thread.id)}><CornerDownRight/> 답글</button>}

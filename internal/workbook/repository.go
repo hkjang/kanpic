@@ -46,6 +46,10 @@ type Repository interface {
 	UserAccessProfile(context.Context, string) (UserAccessProfile, error)
 	EnsureUser(context.Context, string, string, string) error
 	ListUsers(context.Context) ([]DirectoryUser, error)
+	LookupUsers(context.Context, []string) ([]UserSummary, error)
+	SearchUsers(context.Context, string, int) ([]UserSummary, error)
+	AdminOverview(context.Context) (AdminOverview, error)
+	GovernedWorkbooks(context.Context, string, int) ([]GovernedWorkbook, error)
 	GetUser(context.Context, string) (DirectoryUser, error)
 	UpsertUser(context.Context, UpsertUserInput) (DirectoryUser, error)
 	UpdateUser(context.Context, string, UpdateUserInput) (DirectoryUser, error)

@@ -98,6 +98,9 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/access-requests", s.listAccessRequests)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/access-requests", s.createAccessRequest)
 	mux.HandleFunc("POST /api/v1/access-requests/{requestAction}", s.decideAccessRequest)
+	mux.HandleFunc("GET /api/v1/users:lookup", s.lookupUsers)
+	mux.HandleFunc("GET /api/v1/admin/overview", s.adminOverview)
+	mux.HandleFunc("GET /api/v1/admin/workbooks", s.governedWorkbooks)
 	mux.HandleFunc("GET /api/v1/admin/users", s.listUsers)
 	mux.HandleFunc("POST /api/v1/admin/users", s.createUser)
 	mux.HandleFunc("GET /api/v1/admin/users/{userId}", s.getUser)
@@ -935,6 +938,9 @@ func requiredScope(r *http.Request) string {
 			return "profile.read"
 		}
 		return "profile.write"
+	}
+	if strings.HasSuffix(path, "users:lookup") {
+		return "workbook.read"
 	}
 	if strings.HasSuffix(path, "/favorite") || strings.HasSuffix(path, "/trash") {
 		return "workbook.read"

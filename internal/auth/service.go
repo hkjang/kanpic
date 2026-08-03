@@ -27,6 +27,11 @@ const SessionCookie = "kanpic_session"
 
 const bootstrapAdminRole = "kanpic-bootstrap-admin"
 
+// DefaultAdminRole always grants administrator rights, so an administrator can
+// promote a colleague from the console even when no identity provider admin
+// role is configured yet.
+const DefaultAdminRole = "kanpic-admin"
+
 var ErrInvalidBootstrapCredentials = errors.New("invalid bootstrap administrator credentials")
 
 type User struct {
@@ -256,6 +261,38 @@ func (s *Service) RevokeUserSessionsCount(ctx context.Context, userID string) (i
 		return 0, err
 	}
 	return int(command.RowsAffected()), nil
+}
+
+// AdminRoles lists every role that grants administrator rights: the configured
+// identity provider roles plus the built-in kanpic role.
+func (s *Service) AdminRoles(ctx context.Context) []string {
+	roles := []string{DefaultAdminRole}
+	config, err := s.Config(ctx)
+	if err != nil {
+		return roles
+	}
+	for _, role := range config.AdminRoles {
+		trimmed := strings.TrimSpace(role)
+		if trimmed == "" || strings.EqualFold(trimmed, DefaultAdminRole) {
+			continue
+		}
+		roles = append(roles, trimmed)
+	}
+	return roles
+}
+
+// HasAdminRole reports whether any of the roles grants administrator rights.
+// Roles may come from the identity provider token or from the kanpic directory.
+func (s *Service) HasAdminRole(ctx context.Context, roles []string) bool {
+	allowed := s.AdminRoles(ctx)
+	for _, role := range roles {
+		for _, candidate := range allowed {
+			if strings.EqualFold(strings.TrimSpace(role), candidate) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) IsAdmin(ctx context.Context, user User) bool {

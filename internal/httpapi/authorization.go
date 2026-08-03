@@ -364,6 +364,11 @@ func (s *Server) resolveRequestPrincipal(w http.ResponseWriter, r *http.Request)
 		return r, false
 	}
 	merged := mergeRoles(principal, profile.Roles)
+	// Roles granted in the console can also carry administrator rights, so the
+	// decision is re-evaluated against the merged role set.
+	if !merged.Admin && s.auth != nil && len(profile.Roles) > 0 {
+		merged.Admin = s.auth.HasAdminRole(r.Context(), merged.Roles)
+	}
 	return r.WithContext(context.WithValue(r.Context(), principalCacheKey{}, merged)), true
 }
 

@@ -44,6 +44,16 @@ type UserAccessProfile struct {
 	Known     bool     `json:"known"`
 }
 
+// UserSummary is the public part of a directory entry: enough to recognise a
+// colleague in a comment, a mention or a presence cursor.
+type UserSummary struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Email       string `json:"email,omitempty"`
+}
+
+const MaxUserLookupIDs = 200
+
 type UpsertUserInput struct {
 	UserID      string `json:"user_id"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -133,4 +143,57 @@ func validateUpdateUser(input UpdateUserInput) (UpdateUserInput, error) {
 		return UpdateUserInput{}, fmt.Errorf("%w: no user changes were provided", ErrInvalid)
 	}
 	return input, nil
+}
+
+// AdminOverview is the console landing summary: how many people and workbooks
+// exist and where the sharing risks are.
+type AdminOverview struct {
+	Users              int `json:"users"`
+	ActiveUsers        int `json:"active_users"`
+	SuspendedUsers     int `json:"suspended_users"`
+	Departments        int `json:"departments"`
+	Workbooks          int `json:"workbooks"`
+	TrashedWorkbooks   int `json:"trashed_workbooks"`
+	SharedWorkbooks    int `json:"shared_workbooks"`
+	OrganizationShared int `json:"organization_shared"`
+	AnyoneShared       int `json:"anyone_shared"`
+	OrphanWorkbooks    int `json:"orphan_workbooks"`
+	PendingRequests    int `json:"pending_access_requests"`
+	Shares             int `json:"shares"`
+}
+
+// GovernedWorkbook is one row of the administrator workbook list: who owns it,
+// how widely it is shared and whether the owner is still active.
+type GovernedWorkbook struct {
+	ID            string     `json:"id"`
+	Title         string     `json:"title"`
+	OwnerID       string     `json:"owner_id"`
+	OwnerName     string     `json:"owner_name,omitempty"`
+	OwnerStatus   string     `json:"owner_status,omitempty"`
+	LinkAccess    string     `json:"link_access"`
+	LinkRole      ShareRole  `json:"link_role"`
+	ShareCount    int        `json:"share_count"`
+	SheetCount    int        `json:"sheet_count"`
+	Version       int64      `json:"version"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	PendingAccess int        `json:"pending_access_requests"`
+}
+
+// WorkbookGovernanceFilter selects which rows an administrator wants to see.
+const (
+	GovernanceFilterAll          = "all"
+	GovernanceFilterOrganization = "organization"
+	GovernanceFilterAnyone       = "anyone"
+	GovernanceFilterOrphan       = "orphan"
+	GovernanceFilterTrashed      = "trashed"
+)
+
+func ValidGovernanceFilter(value string) bool {
+	switch value {
+	case "", GovernanceFilterAll, GovernanceFilterOrganization, GovernanceFilterAnyone, GovernanceFilterOrphan, GovernanceFilterTrashed:
+		return true
+	default:
+		return false
+	}
 }

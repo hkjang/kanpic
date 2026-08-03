@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"kanpic/internal/workbook"
 	"net/http"
 	"strconv"
 	"strings"
@@ -180,6 +181,11 @@ func (s *Server) purgeLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	// A kanpic role granted in the console counts as well as an identity
+	// provider role, so the resolved principal decides first.
+	if principal, ok := r.Context().Value(principalCacheKey{}).(workbook.AccessPrincipal); ok && principal.Admin {
+		return true
+	}
 	// Until OIDC is enabled, the local bootstrap user is an administrator so a
 	// fresh offline installation can be configured. OIDC sessions replace this
 	// header-derived bootstrap identity once enabled.

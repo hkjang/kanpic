@@ -309,6 +309,9 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		input.ActorID = actor
 		workbookID := stringArg(args, "workbook_id")
+		if err := s.enforceSharingPolicy(ctx, input.LinkAccess); err != nil {
+			return nil, err
+		}
 		if _, err := s.repository.UpdateWorkbookSharing(ctx, workbookID, input); err != nil {
 			return nil, err
 		}

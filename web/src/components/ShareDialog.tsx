@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Building2, Check, Globe2, Link2, Lock, Mail, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
 import { api } from '../lib/api'
+import { useUserDirectory, useUserSearch, userLabel, userTooltip } from '../state/directory'
 import type { AccessRequest, Department, LinkAccess, PrincipalType, ShareRole, SharingResponse, Workbook, WorkbookShare } from '../types'
 import './ShareDialog.css'
+import { useDialog } from '../lib/useDialog'
 
 const ROLE_LABELS:Record<ShareRole,string>={viewer:'뷰어',commenter:'댓글 작성자',editor:'편집자',owner:'소유자'}
 const ROLE_HINTS:Record<ShareRole,string>={viewer:'보기와 검색만 가능합니다.',commenter:'댓글을 남길 수 있고 셀은 편집할 수 없습니다.',editor:'셀·서식·구조를 편집할 수 있습니다.',owner:'공유와 소유권까지 관리합니다.'}
@@ -21,7 +23,8 @@ export function principalIcon(type:PrincipalType){
   return <Mail/>
 }
 
-function shareLabel(share:WorkbookShare,departments:Department[]){
+function shareLabel(share:WorkbookShare,departments:Department[],directory?:Map<string,{user_id:string;display_name?:string;email?:string}>){
+  if(share.principal_type==='user')return share.principal_label?.trim()||userLabel(share.principal_id,directory)
   if(share.principal_type==='department'){
     const department=departments.find(item=>item.id===share.principal_id)
     return department?.path||department?.name||share.principal_label||share.principal_id
@@ -70,6 +73,8 @@ export function ShareDialog({workbook,onClose,onChanged}:{workbook:Workbook;onCl
     enabled:canManage,
   })
   const link=useMemo(()=>`${window.location.origin}/workbooks/${workbook.id}`,[workbook.id])
+  const directory=useUserDirectory([sharing?.owner_id,...(sharing?.shares??[]).filter(share=>share.principal_type==='user').map(share=>share.principal_id)])
+  const suggestions=useUserSearch(principalType==='user'?principal:'')
   const departmentOptions=departments.data?.items??[]
 
   const apply=async(action:()=>Promise<SharingResponse>)=>{
@@ -89,7 +94,9 @@ export function ShareDialog({workbook,onClose,onChanged}:{workbook:Workbook;onCl
   const addShare=async()=>{
     const value=principal.trim()
     if(!value)return
-    const label=principalType==='department'?departmentOptions.find(item=>item.id===value)?.name??'':value
+    const label=principalType==='department'
+      ?departmentOptions.find(item=>item.id===value)?.name??''
+      :principalType==='user'?suggestions.find(item=>item.user_id.toLowerCase()===value.toLowerCase())?.display_name??'':value
     const result=await apply(()=>api<SharingResponse>(`/api/v1/workbooks/${workbook.id}/shares`,{method:'PUT',body:JSON.stringify({principal_type:principalType,principal_id:value,principal_label:label,role})}))
     if(result){setPrincipal('');setStatus(`${principalTypeLabel(principalType)} 공유를 저장했습니다.`)}
   }
@@ -118,8 +125,9 @@ export function ShareDialog({workbook,onClose,onChanged}:{workbook:Workbook;onCl
     catch{window.prompt('링크를 복사하세요.',link)}
   }
 
+  const dialog=useDialog<HTMLElement>(onClose)
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section className="modal share-modal" role="dialog" aria-modal="true" aria-label={`${workbook.title} 공유`}>
+    <section className="modal share-modal" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label={`${workbook.title} 공유`}>
       <header className="share-header"><div><h2>공유</h2><p>{workbook.title}</p></div><button aria-label="공유 창 닫기" onClick={onClose}><X/></button></header>
 
       {sharingQuery.isLoading?<div className="share-loading">공유 설정을 불러오는 중…</div>:<>
@@ -137,7 +145,8 @@ export function ShareDialog({workbook,onClose,onChanged}:{workbook:Workbook;onCl
                 <option value="">부서를 선택하세요</option>
                 {departmentOptions.map(item=><option key={item.id} value={item.id}>{item.path||item.name} ({item.member_count}명)</option>)}
               </select>
-              :<input aria-label={principalType==='role'?'역할 이름':'사용자 ID 또는 이메일'} placeholder={principalType==='role'?'예: kanpic-analyst':'이름, 사용자 ID 또는 이메일'} value={principal} onChange={event=>setPrincipal(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();void addShare()}}}/>}
+              :<><input aria-label={principalType==='role'?'역할 이름':'사용자 ID 또는 이메일'} list={principalType==='user'?'share-user-suggestions':undefined} placeholder={principalType==='role'?'예: kanpic-analyst':'이름, 사용자 ID 또는 이메일'} value={principal} onChange={event=>setPrincipal(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();void addShare()}}}/>
+                {principalType==='user'&&<datalist id="share-user-suggestions">{suggestions.map(item=><option key={item.user_id} value={item.user_id}>{item.display_name?`${item.display_name}${item.email?` · ${item.email}`:''}`:item.email??item.user_id}</option>)}</datalist>}</>}
             <select aria-label="부여할 권한" value={role} onChange={event=>setRole(event.target.value as ShareRole)}>
               {ASSIGNABLE.map(item=><option key={item} value={item}>{ROLE_LABELS[item]}</option>)}
             </select>
@@ -151,17 +160,17 @@ export function ShareDialog({workbook,onClose,onChanged}:{workbook:Workbook;onCl
           <ul>
             <li className="share-owner">
               <span className="share-avatar owner">{(sharing?.owner_id??'?').slice(0,1).toUpperCase()}</span>
-              <span className="share-identity"><strong>{sharing?.owner_id}</strong><small>소유자</small></span>
+              <span className="share-identity"><strong title={userTooltip(sharing?.owner_id??'',directory)}>{userLabel(sharing?.owner_id??'',directory)}</strong><small>소유자</small></span>
               <span className="share-role-static">{ROLE_LABELS.owner}</span>
             </li>
             {(sharing?.shares??[]).map(share=><li key={share.id}>
               <span className={`share-avatar ${share.principal_type}`}>{principalIcon(share.principal_type)}</span>
-              <span className="share-identity"><strong>{shareLabel(share,departmentOptions)}</strong><small>{principalTypeLabel(share.principal_type)}</small></span>
+              <span className="share-identity"><strong title={share.principal_type==='user'?userTooltip(share.principal_id,directory):share.principal_id}>{shareLabel(share,departmentOptions,directory)}</strong><small>{principalTypeLabel(share.principal_type)}{share.principal_type==='user'&&share.principal_id!==shareLabel(share,departmentOptions,directory)?` · ${share.principal_id}`:''}</small></span>
               {canManage
-                ?<><select aria-label={`${shareLabel(share,departmentOptions)} 권한`} value={share.role} disabled={busy} onChange={event=>changeRole(share,event.target.value as ShareRole)}>
+                ?<><select aria-label={`${shareLabel(share,departmentOptions,directory)} 권한`} value={share.role} disabled={busy} onChange={event=>changeRole(share,event.target.value as ShareRole)}>
                     {ASSIGNABLE.map(item=><option key={item} value={item}>{ROLE_LABELS[item]}</option>)}
                   </select>
-                  <button className="share-remove" aria-label={`${shareLabel(share,departmentOptions)} 공유 제거`} disabled={busy} onClick={()=>removeShare(share)}><X/></button></>
+                  <button className="share-remove" aria-label={`${shareLabel(share,departmentOptions,directory)} 공유 제거`} disabled={busy} onClick={()=>removeShare(share)}><X/></button></>
                 :<span className="share-role-static">{ROLE_LABELS[share.role]}</span>}
             </li>)}
             {(sharing?.shares??[]).length===0&&<li className="share-empty">아직 개별 공유 대상이 없습니다.</li>}

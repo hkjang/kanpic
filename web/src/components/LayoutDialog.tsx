@@ -2,6 +2,7 @@ import { Columns3,PanelTop,Rows3 } from 'lucide-react'
 import { useState } from 'react'
 import type { MergeRange } from '../lib/merge'
 import type { SheetLayoutMutation,SheetLayout } from '../types'
+import { useDialog } from '../lib/useDialog'
 
 export type LayoutCommand=Omit<SheetLayoutMutation,'expected_revision'|'idempotency_key'|'client_id'>
 
@@ -9,7 +10,8 @@ export function LayoutDialog({range,layout,onClose,onApply}:{range:MergeRange;la
   const [rowHeight,setRowHeight]=useState(27),[columnWidth,setColumnWidth]=useState(108),[frozenRows,setFrozenRows]=useState(layout.frozen_rows??0),[frozenColumns,setFrozenColumns]=useState(layout.frozen_columns??0),[saving,setSaving]=useState(false)
   const rows=range.endRow-range.startRow+1,columns=range.endColumn-range.startColumn+1
   const run=async(command:LayoutCommand)=>{setSaving(true);try{await onApply(command)}finally{setSaving(false)}}
-  return <div className="modal-backdrop"><div className="modal layout-modal" role="dialog" aria-modal="true" aria-label="시트 레이아웃">
+  const dialog=useDialog<HTMLElement>(onClose)
+  return <div className="modal-backdrop"><div className="modal layout-modal" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label="시트 레이아웃">
     <h2>시트 레이아웃</h2><p>선택한 행과 열의 크기·숨김 상태 및 화면 고정 영역을 설정합니다.</p>
     <section className="layout-section"><div className="layout-heading"><Rows3/><span><strong>행 {range.startRow}–{range.endRow}</strong><small>{rows.toLocaleString()}개 행 선택</small></span></div><div className="layout-size"><input aria-label="행 높이" type="number" min={16} max={400} value={rowHeight} onChange={event=>setRowHeight(Number(event.target.value))}/><span>px</span><button disabled={saving||rowHeight<16||rowHeight>400} onClick={()=>void run({action:'resize',axis:'row',start:range.startRow,count:rows,size:rowHeight})}>높이 적용</button><button disabled={saving} onClick={()=>void run({action:'reset_size',axis:'row',start:range.startRow,count:rows})}>기본 높이</button></div><div className="layout-actions"><button disabled={saving} onClick={()=>void run({action:'hide',axis:'row',start:range.startRow,count:rows})}>선택 행 숨기기</button><button disabled={saving} onClick={()=>void run({action:'show',axis:'row',start:range.startRow,count:rows})}>선택 행 표시</button><button disabled={saving} onClick={()=>void run({action:'show_all',axis:'row'})}>모든 행 표시</button></div></section>
     <section className="layout-section"><div className="layout-heading"><Columns3/><span><strong>열 {range.startColumn}–{range.endColumn}</strong><small>{columns.toLocaleString()}개 열 선택</small></span></div><div className="layout-size"><input aria-label="열 너비" type="number" min={32} max={600} value={columnWidth} onChange={event=>setColumnWidth(Number(event.target.value))}/><span>px</span><button disabled={saving||columnWidth<32||columnWidth>600} onClick={()=>void run({action:'resize',axis:'column',start:range.startColumn,count:columns,size:columnWidth})}>너비 적용</button><button disabled={saving} onClick={()=>void run({action:'reset_size',axis:'column',start:range.startColumn,count:columns})}>기본 너비</button></div><div className="layout-actions"><button disabled={saving} onClick={()=>void run({action:'hide',axis:'column',start:range.startColumn,count:columns})}>선택 열 숨기기</button><button disabled={saving} onClick={()=>void run({action:'show',axis:'column',start:range.startColumn,count:columns})}>선택 열 표시</button><button disabled={saving} onClick={()=>void run({action:'show_all',axis:'column'})}>모든 열 표시</button></div></section>

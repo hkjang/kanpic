@@ -5,6 +5,8 @@ import { AppHeader } from '../components/AppHeader'
 import { api, newIdempotencyKey } from '../lib/api'
 import type { BuildInfo, Session, ShareRole, Workbook } from '../types'
 import { ShareDialog } from '../components/ShareDialog'
+import { useUserDirectory, userLabel, userTooltip } from '../state/directory'
+import { useDialog } from '../lib/useDialog'
 
 const ROLE_CHIP:Record<ShareRole,string>={owner:'소유자',editor:'편집자',commenter:'댓글 작성자',viewer:'뷰어'}
 
@@ -15,6 +17,18 @@ function accessChip(workbook:Workbook){
     :null
   const source=workbook.access_source==='department'?<Building2/>:workbook.access_source==='link'?<Users/>:<Share2/>
   return <span className={`workbook-access ${workbook.access_role}`} title={`${ROLE_CHIP[workbook.access_role]} 권한`}>{source} {ROLE_CHIP[workbook.access_role]}</span>
+}
+
+/** Renaming a workbook shares the standard dialog behaviour: Escape, focus trap and focus restore. */
+function RenameWorkbookDialog({title,pending,onTitle,onClose,onSave}:{title:string;pending:boolean;onTitle:(value:string)=>void;onClose:()=>void;onSave:()=>void}){
+  const dialog=useDialog<HTMLElement>(onClose)
+  return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
+    <div className="modal" ref={dialog as React.RefObject<any>} role="dialog" aria-modal="true" aria-label="워크북 이름 변경">
+      <h2>워크북 이름 변경</h2>
+      <label>워크북 이름<input aria-label="워크북 이름" autoFocus value={title} onChange={event=>onTitle(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')onSave()}}/></label>
+      <div className="modal-actions"><button className="secondary" onClick={onClose}>취소</button><button className="primary" aria-label="워크북 이름 저장" disabled={!title.trim()||pending} onClick={onSave}>저장</button></div>
+    </div>
+  </div>
 }
 
 export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
@@ -44,6 +58,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const copyWorkbook=async(workbook:Workbook)=>{setMenuID(undefined);await duplicate.mutateAsync(workbook)}
   const deleteWorkbook=async(workbook:Workbook)=>{setMenuID(undefined);if(!confirm(`'${workbook.title}' 워크북과 모든 시트를 삭제할까요?`))return;await remove.mutateAsync(workbook)}
   const shareWorkbook=(workbook:Workbook)=>{setMenuID(undefined);setShareTarget(workbook)}
+  const directory=useUserDirectory((workbooks.data?.items??[]).map(item=>item.owner_id))
   const visibleWorkbooks=(workbooks.data?.items??[]).filter(workbook=>{
     if(filter==='favorite')return workbook.favorite
     if(filter==='owned')return workbook.access_role==='owner'
@@ -68,7 +83,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
           </article>)}</div>
         :workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:visibleWorkbooks.length===0?<div className="empty-state"><FilePlus2/><h3>{filter==='favorite'?'즐겨찾기한 워크북이 없습니다':filter==='shared'?'나와 공유된 워크북이 없습니다':filter==='owned'?'내가 소유한 워크북이 없습니다':'첫 워크북을 만들어 보세요'}</h3><p>{filter==='favorite'?'워크북 메뉴에서 즐겨찾기에 추가할 수 있습니다.':filter==='shared'?'동료가 사용자, 부서 또는 역할로 공유하면 여기에 표시됩니다.':'셀 편집 내용은 자동으로 안전하게 저장됩니다.'}</p></div>:<div className="workbook-grid">{visibleWorkbooks.map(workbook=><article className={`workbook-card ${menuID===workbook.id?'menu-open':''}`} key={workbook.id}>
         <a href={`/workbooks/${workbook.id}`} className="workbook-preview"><Grid2X2/><span>{workbook.sheets.length} sheets</span>{workbook.favorite&&<Star className="favorite-star" fill="currentColor"/>}</a>
-        <div className="workbook-meta"><a href={`/workbooks/${workbook.id}`}><strong>{workbook.title}</strong><small>{new Date(workbook.updated_at).toLocaleString('ko-KR')} 수정{workbook.access_role&&workbook.access_role!=='owner'?` · ${workbook.owner_id} 소유`:''}</small></a>{accessChip(workbook)}<button aria-label={`${workbook.title} 더보기`} aria-expanded={menuID===workbook.id} onClick={()=>setMenuID(current=>current===workbook.id?undefined:workbook.id)}><MoreHorizontal/></button>{menuID===workbook.id&&<div className="workbook-menu" role="menu">
+        <div className="workbook-meta"><a href={`/workbooks/${workbook.id}`}><strong>{workbook.title}</strong><small>{new Date(workbook.updated_at).toLocaleString('ko-KR')} 수정{workbook.access_role&&workbook.access_role!=='owner'?` · ${userLabel(workbook.owner_id,directory)} 소유`:''}</small></a>{accessChip(workbook)}<button aria-label={`${workbook.title} 더보기`} aria-expanded={menuID===workbook.id} onClick={()=>setMenuID(current=>current===workbook.id?undefined:workbook.id)}><MoreHorizontal/></button>{menuID===workbook.id&&<div className="workbook-menu" role="menu">
           <button role="menuitem" onClick={()=>{setMenuID(undefined);favorite.mutate({id:workbook.id,value:!workbook.favorite})}}><Star fill={workbook.favorite?'currentColor':'none'}/>{workbook.favorite?'즐겨찾기 해제':'즐겨찾기'}</button>
           <button role="menuitem" onClick={()=>shareWorkbook(workbook)}><Share2/> 공유</button>
           <button role="menuitem" onClick={()=>openRename(workbook)}><Pencil/> 이름 변경</button>
@@ -77,7 +92,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
         </div>}</div>
       </article>)}</div>}
     </section>
-    {renameTarget&&<div className="modal-backdrop"><div className="modal"><h2>워크북 이름 변경</h2><label>워크북 이름<input aria-label="워크북 이름" autoFocus value={renameTitle} onChange={event=>setRenameTitle(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')void rename()}}/></label><div className="modal-actions"><button className="secondary" onClick={()=>setRenameTarget(undefined)}>취소</button><button className="primary" aria-label="워크북 이름 저장" disabled={!renameTitle.trim()||update.isPending} onClick={()=>void rename()}>저장</button></div></div></div>}
+    {renameTarget&&<RenameWorkbookDialog title={renameTitle} pending={update.isPending} onTitle={setRenameTitle} onClose={()=>setRenameTarget(undefined)} onSave={()=>void rename()}/>}
     {preview&&importFile&&<div className="modal-backdrop"><div className="modal import-modal"><div className="import-preview-icon"><UploadCloud/></div><h2>{importFile.name}</h2><p>{preview.format.toUpperCase()} · 비어 있지 않은 셀 {preview.total_cells.toLocaleString()}개</p><div className="import-sheet-list">{preview.sheets.map(sheet=><div key={sheet.name}><Grid2X2/><div><strong>{sheet.name}</strong><small>{sheet.rows.toLocaleString()}행 × {sheet.columns.toLocaleString()}열 · {sheet.non_empty_cells.toLocaleString()}개 셀</small></div></div>)}</div>{preview.warnings.length>0&&<div className="import-warnings">{preview.warnings.map(warning=><span key={warning}>{warning}</span>)}</div>}<div className="modal-actions"><button className="secondary" onClick={()=>{setPreview(undefined);setImportFile(undefined)}}>취소</button><button className="primary" disabled={importing} onClick={executeImport}>{importing?'가져오는 중…':'워크북으로 가져오기'}</button></div></div></div>}
     {shareTarget&&<ShareDialog workbook={shareTarget} onClose={()=>setShareTarget(undefined)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbooks']})}}/>}
   </main></div>

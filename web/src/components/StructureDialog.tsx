@@ -1,6 +1,7 @@
 import { Columns3, Rows3 } from 'lucide-react'
 import { useState } from 'react'
 import type { MergeRange } from '../lib/merge'
+import { useDialog } from '../lib/useDialog'
 
 export type StructureCommand = { axis:'row'|'column'; action:'insert'|'delete'; index:number; count:number }
 
@@ -12,7 +13,8 @@ export function StructureDialog({range,onClose,onApply}:{range:MergeRange;onClos
     setSaving(true)
     try{await onApply(command);onClose()}finally{setSaving(false)}
   }
-  return <div className="modal-backdrop"><div className="modal structure-modal" role="dialog" aria-modal="true" aria-label="행과 열 관리">
+  const dialog=useDialog<HTMLElement>(onClose)
+  return <div className="modal-backdrop"><div className="modal structure-modal" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label="행과 열 관리">
     <h2>행과 열 관리</h2><p>선택 범위를 기준으로 구조를 변경합니다. 수식과 이름 범위 등 관련 참조도 함께 갱신됩니다.</p>
     <section className="structure-section"><div><Rows3/><span><strong>행</strong><small>{range.startRow}–{range.endRow}행 선택</small></span></div><div className="structure-actions"><button disabled={saving} onClick={()=>void run({axis:'row',action:'insert',index:range.startRow,count:rows})}>위에 {rows}개 삽입</button><button className="danger" disabled={saving} onClick={()=>void run({axis:'row',action:'delete',index:range.startRow,count:rows})}>선택 행 삭제</button></div></section>
     <section className="structure-section"><div><Columns3/><span><strong>열</strong><small>{range.startColumn}–{range.endColumn}열 선택</small></span></div><div className="structure-actions"><button disabled={saving} onClick={()=>void run({axis:'column',action:'insert',index:range.startColumn,count:columns})}>왼쪽에 {columns}개 삽입</button><button className="danger" disabled={saving} onClick={()=>void run({axis:'column',action:'delete',index:range.startColumn,count:columns})}>선택 열 삭제</button></div></section>

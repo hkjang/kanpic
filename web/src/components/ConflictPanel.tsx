@@ -3,6 +3,7 @@ import { AlertTriangle, Check, MapPin, RefreshCw, RotateCcw } from 'lucide-react
 import { useState } from 'react'
 import { address, api, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
+import { useUserDirectory, userLabel, userTooltip } from '../state/directory'
 import type { CellConflict, CellConflictResolutionResult, CellConflictSnapshot, Sheet } from '../types'
 
 function snapshotKey(snapshot:CellConflictSnapshot){return JSON.stringify({value:snapshot.value,formula:snapshot.formula??'',style:snapshot.style??{},spill_source:snapshot.spill_source??''})}
@@ -46,6 +47,7 @@ export function ConflictPanel({workbookId,sheets,currentActor,onClose,onNavigate
     onError:reason=>setError(reason instanceof Error?reason.message:'충돌을 해소하지 못했습니다.'),
   })
   const items=conflicts.data?.items??[]
+  const directory=useUserDirectory(items.flatMap(item=>[item.actor_id,item.conflicting_actor_id,item.resolved_by]))
   return <aside className="conflict-panel" aria-label="편집 충돌 패널">
     <div className="conflict-panel-head"><span><AlertTriangle/> 편집 충돌</span><button onClick={onClose} aria-label="편집 충돌 닫기">×</button></div>
     <label className="conflict-history-toggle"><input type="checkbox" checked={history} onChange={event=>setHistory(event.target.checked)}/> 해소된 충돌 이력 포함</label>
@@ -62,10 +64,10 @@ export function ConflictPanel({workbookId,sheets,currentActor,onClose,onNavigate
           <div className="conflict-card-head"><button onClick={()=>onNavigate(item.sheet_id,location)}><MapPin/>{sheet?.name??'삭제된 시트'}!{location}</button><span>{resolved?'해소됨':'확인 필요'}</span></div>
           <div className="conflict-meta">v{item.base_version} 기준 · v{item.changed_at_version}에서 충돌 · {new Date(item.created_at).toLocaleString('ko-KR')}</div>
           <Snapshot label="충돌 전 기준" snapshot={item.base_cell}/>
-          <Snapshot label={`먼저 반영된 값${item.conflicting_actor_id?` · ${item.conflicting_actor_id===currentActor?'나':item.conflicting_actor_id}`:''}`} snapshot={item.conflicting_cell} tone="other"/>
+          <Snapshot label={`먼저 반영된 값${item.conflicting_actor_id?` · ${item.conflicting_actor_id===currentActor?'나':userLabel(item.conflicting_actor_id,directory)}`:''}`} snapshot={item.conflicting_cell} tone="other"/>
           <Snapshot label="현재 서버 값" snapshot={item.current_cell} tone="current"/>
           {snapshotKey(item.submitted_cell)!==snapshotKey(item.current_cell)&&<Snapshot label="당시 내 제출 값" snapshot={item.submitted_cell}/>}
-          {resolved?<div className="conflict-resolution"><Check/>{item.resolution==='restore_previous'?'먼저 반영된 값으로 복원':'현재 값 유지'} · {item.resolved_by}</div>:<>
+          {resolved?<div className="conflict-resolution"><Check/>{item.resolution==='restore_previous'?'먼저 반영된 값으로 복원':'현재 값 유지'} · <span title={userTooltip(item.resolved_by??'',directory)}>{userLabel(item.resolved_by??'',directory)}</span></div>:<>
             {!canRestore&&<p className="conflict-stale"><AlertTriangle/>충돌 뒤 값이 다시 변경되어 복원할 수 없습니다. 현재 값을 확인한 뒤 유지하거나 새 편집을 적용하세요.</p>}
             <div className="conflict-actions"><button disabled={resolve.isPending||!canRestore} onClick={()=>resolve.mutate({item,resolution:'restore_previous'})}><RotateCcw/> 먼저 반영된 값 복원</button><button className="primary" disabled={resolve.isPending} onClick={()=>resolve.mutate({item,resolution:'keep_current'})}><Check/> 현재 값 유지</button></div>
           </>}

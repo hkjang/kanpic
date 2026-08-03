@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import type { Cell, Pivot, PivotAggregation, PivotCalculatedField, PivotDimension, PivotFilter, PivotGroup, PivotValueField, Sheet } from '../types'
 import './PivotDialog.css'
+import { useDialog } from '../lib/useDialog'
 
 type Draft={name:string;sourceSheetId:string;sourceRange:string;firstRowHeaders:boolean;rows:PivotDimension[];columns:PivotDimension[];values:PivotValueField[];filters:PivotFilter[];calculatedFields:PivotCalculatedField[];refreshMode:'auto'|'manual'}
 const validCell=(value:string)=>/^[A-Z]+[1-9]\d*$/i.test(value.trim().replaceAll('$',''))
@@ -36,7 +37,8 @@ export function PivotDialog({pivot,activeSheetId,selectionRange,sheets,onClose,o
     const input={sheet_id:pivot?.sheet_id??activeSheetId,source_sheet_id:draft.sourceSheetId,name:draft.name.trim(),source_range:draft.sourceRange.toUpperCase(),first_row_headers:draft.firstRowHeaders,rows:dimensions(draft.rows),columns:dimensions(draft.columns),values,filters:draft.filters,calculated_fields:draft.calculatedFields,refresh_mode:draft.refreshMode};if(pivot)await onUpdate(pivot,{...input,expected_revision:pivot.revision});else await onCreate(input);onClose()
   }catch(error){alert(error instanceof Error?error.message:'피벗을 저장하지 못했습니다.')}finally{setSaving(false)}}
   const remove=async()=>{if(!pivot||!confirm('이 피벗 테이블을 삭제할까요?'))return;setSaving(true);try{await onDelete(pivot);onClose()}catch(error){alert(error instanceof Error?error.message:'피벗을 삭제하지 못했습니다.')}finally{setSaving(false)}}
-  return <div className="modal-backdrop"><div className="modal pivot-dialog" role="dialog" aria-modal="true" aria-label={pivot?'피벗 편집':'피벗 만들기'}>
+  const dialog=useDialog<HTMLElement>(onClose)
+  return <div className="modal-backdrop"><div className="modal pivot-dialog" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label={pivot?'피벗 편집':'피벗 만들기'}>
     <header><div><Calculator/><div><h2>{pivot?'피벗 편집':'피벗 만들기'}</h2><p>원본은 유지하고 관리형 정의와 계산 결과를 별도로 저장합니다.</p></div></div><button aria-label="피벗 대화상자 닫기" onClick={onClose}>×</button></header>
     <section>
       <div className="pivot-fields three"><label>이름<input aria-label="피벗 이름" maxLength={200} value={draft.name} onChange={event=>patch('name',event.target.value)}/></label><label>원본 시트<select aria-label="피벗 원본 시트" value={draft.sourceSheetId} onChange={event=>patch('sourceSheetId',event.target.value)}>{sheets.map(sheet=><option value={sheet.id} key={sheet.id}>{sheet.name}</option>)}</select></label><label>원본 범위<input aria-label="피벗 원본 범위" value={draft.sourceRange} onChange={event=>patch('sourceRange',event.target.value)} placeholder="A1:F100"/></label></div>
