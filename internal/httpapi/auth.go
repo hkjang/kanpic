@@ -78,10 +78,27 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, sessio
 
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	if user, ok := sessionUser(r); ok {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "user": user, "admin": s.auth.IsAdmin(r.Context(), user)})
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "user": user, "admin": s.sessionIsAdmin(r, user)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+}
+
+// sessionIsAdmin answers the same question the request authorization asks, so a
+// role granted in the console shows the administrator console in the profile
+// menu instead of only unlocking the API.
+func (s *Server) sessionIsAdmin(r *http.Request, user auth.User) bool {
+	if s.auth == nil || s.repository == nil {
+		return false
+	}
+	if s.auth.IsAdmin(r.Context(), user) {
+		return true
+	}
+	profile, err := s.repository.UserAccessProfile(r.Context(), user.ID)
+	if err != nil || profile.Suspended || len(profile.Roles) == 0 {
+		return false
+	}
+	return s.auth.HasAdminRole(r.Context(), profile.Roles)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

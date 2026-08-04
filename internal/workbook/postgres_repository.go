@@ -276,8 +276,11 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	}
 	query := `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy
 		FROM workbooks WHERE deleted_at IS NULL`
-	args := []any{identities, roles, departmentIDs}
+	// Administrators see every workbook, so the visibility parameters are only
+	// bound when the clause that reads them is part of the query.
+	args := []any{}
 	if !principal.Admin {
+		args = append(args, identities, roles, departmentIDs)
 		query += ` AND (
 			lower(owner_id) = ANY($1)
 			OR link_access IN ('organization','anyone')

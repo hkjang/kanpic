@@ -62,8 +62,10 @@ func (r *PostgresRepository) WorkbookFavorites(ctx context.Context, userID strin
 func (r *PostgresRepository) ListDeletedWorkbooks(ctx context.Context, workspaceID string, principal AccessPrincipal) ([]Workbook, error) {
 	query := `SELECT id::text,workspace_id,title,owner_id,version,created_at,updated_at,deleted_at,deleted_by
 		FROM workbooks WHERE deleted_at IS NOT NULL`
-	args := []any{principal.identities()}
+	// The owner filter is the only user of $1, so it is bound with the clause.
+	args := []any{}
 	if !principal.Admin {
+		args = append(args, principal.identities())
 		query += ` AND lower(owner_id) = ANY($1)`
 	}
 	if workspaceID != "" {

@@ -52,7 +52,16 @@ function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,u
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
 function parseNavigationRange(value:string){const parts=value.trim().replaceAll('$','').split(':');if(parts.length<1||parts.length>2)return;const first=parseCellAddress(parts[0]),last=parseCellAddress(parts[1]??parts[0]);if(!first||!last)return;return{startRow:Math.min(first.row,last.row),startColumn:Math.min(first.column,last.column),endRow:Math.max(first.row,last.row),endColumn:Math.max(first.column,last.column)}}
 function spillInRange(cells:Map<string,Cell>,range:{startRow:number;startColumn:number;endRow:number;endColumn:number}){for(let row=range.startRow;row<=range.endRow;row+=1)for(let column=range.startColumn;column<=range.endColumn;column+=1){const cell=cells.get(cellKey(row,column));if(cell?.spill_source)return{cell,coordinate:address(row,column)}}}
-function editableTarget(target:EventTarget|null){return target instanceof HTMLElement&&Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))}
+// The grid keeps one input focused so IME composition works from the first
+// keystroke. That input only owns the keyboard while a cell is actually open,
+// so an idle grid still runs the workbook shortcuts.
+function editableTarget(target:EventTarget|null){
+  if(!(target instanceof HTMLElement))return false
+  const editable=target.closest('input, textarea, select, [contenteditable="true"]')
+  if(!editable)return false
+  if(editable.classList.contains('cell-editor'))return !editable.classList.contains('idle')
+  return true
+}
 function gridShortcut(shortcut:GridShortcut){window.dispatchEvent(new CustomEvent<GridShortcut>('kanpic:grid-shortcut',{detail:shortcut}))}
 const TEXT_COLORS:Array<{label:string;value:string|null}>=[
   {label:'기본',value:null},{label:'검정',value:'#1c2b33'},{label:'회색',value:'#6b7a84'},{label:'빨강',value:'#dc2626'},
@@ -139,7 +148,16 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
 	const updatePivot=async(item:Pivot,input:Record<string,unknown>)=>{const updated=await api<Pivot>(`/api/v1/pivots/${item.id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(updated.workbook_version);await refreshPivots();return updated}
 	const deletePivot=async(item:Pivot)=>{await api(`/api/v1/pivots/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshPivots();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
 	const refreshPivot=async(item:Pivot)=>{await api<PivotData>(`/api/v1/pivots/${item.id}/refresh`,{method:'POST',body:'{}'});await refreshPivots()}
-  const navigateToRange=(sheetId:string,value:string)=>{const target=parseNavigationRange(value),sheet=workbook.data?.sheets.find(candidate=>candidate.id===sheetId);if(!target||!sheet)return false;if(activeSheet?.id===sheetId){editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true)}else{setPendingNavigation({sheetId,range:target});setActiveSheet(sheet)}return true}
+  const navigateToRange=(sheetId:string,value:string)=>{
+    const target=parseNavigationRange(value),sheet=workbook.data?.sheets.find(candidate=>candidate.id===sheetId)
+    if(!target||!sheet)return false
+    if(activeSheet?.id===sheetId){editor.select(target.startRow,target.startColumn);editor.select(target.endRow,target.endColumn,true)}
+    else{setPendingNavigation({sheetId,range:target});setActiveSheet(sheet)}
+    // Jumping should leave the keyboard on the grid, unless a dialog is still
+    // open and owns the focus.
+    if(!document.querySelector('[role="dialog"][aria-modal="true"]'))window.setTimeout(()=>gridShortcut({command:'focus-grid'}),0)
+    return true
+  }
   // After a successful jump the name box shows the resolved range and hands
   // focus back to the grid, so the typed name is never left stale.
   const submitNameBox=()=>{
@@ -149,6 +167,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(!target||!parsed||!navigateToRange(target.sheetId,target.reference)){setNameBoxValue(selectionAddress);return}
     setNameBoxValue(parsed.startRow===parsed.endRow&&parsed.startColumn===parsed.endColumn?address(parsed.startRow,parsed.startColumn):`${address(parsed.startRow,parsed.startColumn)}:${address(parsed.endRow,parsed.endColumn)}`)
     nameBoxRef.current?.blur()
+    gridShortcut({command:'focus-grid'})
   }
   const refreshWorkbook=async()=>client.invalidateQueries({queryKey:['workbook',workbookId]})
   const createSheet=async()=>{const sheet=await api<Sheet>(`/api/v1/workbooks/${workbookId}/sheets`,{method:'POST',body:JSON.stringify({name:nextSheetName()})});setActiveSheet(sheet);await refreshWorkbook()}
@@ -632,7 +651,19 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
     ]}/>}
-    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input value={formula} readOnly onDoubleClick={()=>{const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source);if(source)editor.select(source.row,source.column);editor.setEditing(true)}} aria-label="수식 입력창"/></div>
+    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input aria-label="수식 입력창" value={editor.editing?editor.draft:formula} readOnly={readOnly}
+      onFocus={()=>{
+        if(readOnly||editor.editing)return
+        const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source)
+        if(source)editor.select(source.row,source.column)
+        else{editor.setDraft(formula);editor.setEditing(true)}
+      }}
+      onChange={event=>{if(!readOnly){editor.setDraft(event.target.value);editor.setEditing(true)}}}
+      onKeyDown={event=>{
+        if(event.nativeEvent.isComposing)return
+        if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
+        else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
+      }}/></div>
     <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel==='ai'&&<AIPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} baseVersion={serverVersion} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
       {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}

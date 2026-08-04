@@ -58,7 +58,9 @@ test('a viewer sees a read-only editor and cannot write cells', async ({ page, r
   const box=await canvas.boundingBox()
   if(!box)throw new Error('grid canvas is not visible')
   await canvas.dblclick({position:{x:70,y:42}})
-  await expect(viewer.page.locator('input.cell-editor')).toHaveCount(0)
+  // The grid always keeps one hidden input focused for IME support, so the
+  // check is that no cell editor is actually open.
+  await expect(viewer.page.locator('input.cell-editor:not(.idle)')).toHaveCount(0)
   viewer.page.once('dialog',dialog=>dialog.accept())
   await viewer.page.keyboard.press('a')
   const cells=await request.get(`/api/v1/sheets/${workbook.sheets[0].id}/ranges/A1`).then(response=>response.json())

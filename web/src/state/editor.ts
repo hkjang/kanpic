@@ -8,6 +8,8 @@ type EditorState = {
   anchorRow:number
   anchorColumn:number
   editing:boolean
+  /** Text being edited, shared by the grid editor and the formula bar. */
+  draft:string
   zoom:number
   cells:Map<string,Cell>
   saveState:SaveState
@@ -16,6 +18,7 @@ type EditorState = {
   redoStack:string[]
   select:(row:number,column:number,extend?:boolean)=>void
   setEditing:(editing:boolean)=>void
+  setDraft:(draft:string)=>void
   setZoom:(zoom:number)=>void
   putCells:(cells:Cell[])=>void
   replaceRange:(cells:Cell[],startRow:number,startColumn:number,endRow:number,endColumn:number)=>void
@@ -34,9 +37,10 @@ type EditorState = {
 const key=(row:number,column:number)=>`${row}:${column}`
 
 export const useEditorStore=create<EditorState>((set,get)=>({
-  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,zoom:1,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[],
+  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[],
   select:(activeRow,activeColumn,extend=false)=>set((state)=>({activeRow,activeColumn,anchorRow:extend?state.anchorRow:activeRow,anchorColumn:extend?state.anchorColumn:activeColumn,editing:false})),
   setEditing:(editing)=>set({editing}),
+  setDraft:(draft)=>set({draft}),
   setZoom:(zoom)=>set({zoom:Math.max(.5,Math.min(2,zoom))}),
   putCells:(cells)=>set((state)=>{const next=new Map(state.cells);cells.forEach((cell)=>next.set(key(cell.row,cell.column),cell));return{cells:next}}),
   replaceRange:(incoming,startRow,startColumn,endRow,endColumn)=>set((state)=>{const cells=new Map(state.cells);for(const [address,cell] of cells){if(cell.row>=startRow&&cell.row<=endRow&&cell.column>=startColumn&&cell.column<=endColumn)cells.delete(address)}incoming.forEach(cell=>cells.set(key(cell.row,cell.column),cell));return{cells}}),
@@ -49,7 +53,7 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   takeRedo:()=>{const stack=get().redoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({redoStack:stack.slice(0,-1)});return operationId},
   restoreRedo:(operationId)=>set((state)=>({redoStack:[...state.redoStack,operationId].slice(-100)})),
   completeRedo:(redoOperationId)=>set((state)=>({undoStack:[...state.undoStack,redoOperationId].slice(-100)})),
-  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
+  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
 }))
 
 export const cellKey=key

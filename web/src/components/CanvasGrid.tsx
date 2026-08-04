@@ -26,6 +26,8 @@ export type GridShortcut=
   | {command:'fill-down'|'fill-right'|'select-all'|'select-row'|'select-column'|'move-first'|'move-last'}
   | {command:'select-data-region'|'clear-contents'|'auto-sum'|'insert-today'|'insert-now'|'copy'|'cut'|'paste'|'paste-values'}
   | {command:'paste-special';mode:PasteMode}
+  | {command:'focus-grid'}
+  | {command:'commit-draft'}
   | {command:'insert-text';text:string}
   | {command:'insert-function';name:string}
   | {command:'move-data-edge';direction:'up'|'down'|'left'|'right';extend:boolean}
@@ -51,12 +53,12 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
 }
 
 export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
-  const viewport=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
+  const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLInputElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
-  const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[draft,setDraft]=useState(''),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
+  const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const editor=useEditorStore()
-  const {activeRow,activeColumn,anchorRow,anchorColumn,editing,zoom,cells,select,setEditing,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
+  const {activeRow,activeColumn,anchorRow,anchorColumn,editing,draft,zoom,cells,select,setEditing,setDraft,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
   const selection=selectedMergedBounds(cells,selectedBounds(editor))
   const collaborators=useCollaborationStore(state=>state.users)
   const sendCursor=useCollaborationStore(state=>state.sendCursor),sendSelection=useCollaborationStore(state=>state.sendSelection)
@@ -227,11 +229,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(checked.rejected.length){setSaveState('error');alert(`${address(row,column)}: ${checked.rejected[0].message}`);return false}
     if(checked.warnings.length&&!confirm(`${address(row,column)} 값이 데이터 검증 조건을 만족하지 않습니다. 그래도 입력할까요?`))return false
     const cell:Cell={sheet_id:sheetId,...input,updated_at:new Date().toISOString()}
-    putCell(cell);setEditing(false);setSaveState(navigator.onLine?'saving':'offline')
+    putCell(cell);setSaveState(navigator.onLine?'saving':'offline')
     const id=newIdempotencyKey()
     await enqueue({id,sheetId,endpoint:'batch',attempts:0,createdAt:Date.now(),body:{base_version:version,idempotency_key:id,client_id:collaborationClientId(),cells:[input]}})
     await flushOutbox(handleApplied);return true
-  },[sheetId,version,cells,putCell,setEditing,setSaveState,handleApplied,validations,readOnly,readOnlyNotice])
+  },[sheetId,version,cells,putCell,setSaveState,handleApplied,validations,readOnly,readOnlyNotice])
 
   const commit=useCallback(async(raw:string,row=activeRow,column=activeColumn)=>{
     const formula=raw.startsWith('=')?raw:''
@@ -283,17 +285,19 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const selectRange=useCallback((startRow:number,startColumn:number,endRow:number,endColumn:number)=>selectSpan(startRow,startColumn,endRow,endColumn,{row:startRow,column:startColumn}),[selectSpan])
   const populated=useCallback((row:number,column:number)=>{const cell=cells.get(cellKey(row,column));return cell?.value!=null||Boolean(cell?.formula)},[cells])
   const moveDataEdge=useCallback((direction:'up'|'down'|'left'|'right',extend:boolean)=>{const rowStep=direction==='up'?-1:direction==='down'?1:0,columnStep=direction==='left'?-1:direction==='right'?1:0,filled=populated(activeRow,activeColumn);let row=activeRow,column=activeColumn;for(let index=0;index<TOTAL_ROWS+TOTAL_COLUMNS;index+=1){const nextRow=rowStep?rowAxis.nextVisible(row,rowStep):row,nextColumn=columnStep?columnAxis.nextVisible(column,columnStep):column;if(nextRow===row&&nextColumn===column)break;if(populated(nextRow,nextColumn)!==filled)break;row=nextRow;column=nextColumn}selectCell(row,column,extend)},[activeColumn,activeRow,columnAxis,populated,rowAxis,selectCell])
-  // The commit is asynchronous, so only advance the cursor when the user has
-  // not already selected somewhere else while the write was in flight.
+  const commitAndMoveRef=useRef<(rowOffset:number,columnOffset:number)=>void>(()=>{})
+  // Enter and Tab close the editor and move on straight away. Saving a formula
+  // needs a server round trip, and waiting for it used to swallow whatever was
+  // typed in the next cell before the save came back.
   const commitAndMove=(rowOffset:number,columnOffset:number)=>{
-    const row=activeRow,column=activeColumn
-    void commit(draft).then(saved=>{
-      if(!saved)return
-      const current=useEditorStore.getState()
-      if(current.activeRow!==row||current.activeColumn!==column||current.anchorRow!==row||current.anchorColumn!==column)return
-      selectCell(rowOffset===0?row:rowAxis.nextVisible(row,rowOffset>0?1:-1),columnOffset===0?column:columnAxis.nextVisible(column,columnOffset>0?1:-1))
-    })
+    const row=activeRow,column=activeColumn,text=draft
+    setEditing(false)
+    selectCell(rowOffset===0?row:rowAxis.nextVisible(row,rowOffset>0?1:-1),columnOffset===0?column:columnAxis.nextVisible(column,columnOffset>0?1:-1))
+    void commit(text,row,column)
   }
+  // The shortcut listener is registered once, so it reaches the current commit
+  // through a ref instead of a stale closure over the draft.
+  commitAndMoveRef.current=commitAndMove
   const pointerPosition=(event:{clientX:number;clientY:number})=>{const rect=canvas.current!.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}}
   const pointCell=(event:React.PointerEvent<HTMLCanvasElement>)=>{const{x,y}=pointerPosition(event);if(x<HEADER_WIDTH||y<HEADER_HEIGHT)return;return{row:axisIndexAtViewport(rowAxis,y-HEADER_HEIGHT,scroll.top,frozenRows),column:axisIndexAtViewport(columnAxis,x-HEADER_WIDTH,scroll.left,frozenColumns)}}
   const geometry:GridGeometry={rowAxis,columnAxis,scroll,frozenRows,frozenColumns,headerWidth:HEADER_WIDTH,headerHeight:HEADER_HEIGHT}
@@ -310,27 +314,36 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(readOnly)return false;if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=HEADER_WIDTH+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=HEADER_HEIGHT+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
   const applyLayoutCommand=useCallback(async(command:LayoutCommand)=>{if(!onLayout)return;try{await onLayout(command)}catch{/* the editor page reports layout failures */}},[onLayout])
   const applyStructureCommand=useCallback(async(command:StructureCommand)=>{if(!onStructure)return;try{await onStructure(command)}catch{/* the editor page reports structure failures */}},[onStructure])
+  // Selecting another cell must save what is being typed. The selection change
+  // itself clears the editing flag, so the pending text is committed first.
+  const flushEdit=()=>{
+    const state=useEditorStore.getState()
+    if(!state.editing)return
+    setEditing(false)
+    void commit(state.draft,state.activeRow,state.activeColumn)
+  }
   const pointerDown=(event:React.PointerEvent<HTMLCanvasElement>)=>{
     if(event.button!==0)return
     setMenu(undefined)
+    flushEdit()
     const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
     if(target){
       const axis=target.axis==='column'?columnAxis:rowAxis,span=resizeSpan(target),size=Math.round(axis.sizeOf(target.index)/zoom)
       resizeDrag.current={axis:target.axis,index:target.index,origin:target.axis==='column'?event.clientX:event.clientY,start:span.start,count:span.count,size}
       setResizePreview({axis:target.axis,index:target.index,size})
-      event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();viewport.current?.focus();return
+      event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();focusGrid();return
     }
     const region=regionAt(x,y)
-    if(region.kind==='corner'){selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});viewport.current?.focus();return}
+    if(region.kind==='corner'){selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});focusGrid();return}
     if(region.kind==='column'||region.kind==='row'){
       const anchor=event.shiftKey?(region.kind==='column'?anchorColumn:anchorRow):region.index
       headerDrag.current={axis:region.kind,anchor}
       if(region.kind==='column')selectSpan(1,Math.min(anchor,region.index),TOTAL_ROWS,Math.max(anchor,region.index),{row:1,column:region.index})
       else selectSpan(Math.min(anchor,region.index),1,Math.max(anchor,region.index),TOTAL_COLUMNS,{row:region.index,column:1})
-      event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();viewport.current?.focus();return
+      event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();focusGrid();return
     }
-    if(onFillHandle(event)){filling.current=true;fillPreviewRef.current={...selection};setFillPreview({...selection});event.currentTarget.style.cursor='crosshair';event.currentTarget.setPointerCapture(event.pointerId);viewport.current?.focus();event.preventDefault();return}
-    dragging.current=true;event.currentTarget.setPointerCapture(event.pointerId);selectCell(region.row,region.column,event.shiftKey);viewport.current?.focus()
+    if(onFillHandle(event)){filling.current=true;fillPreviewRef.current={...selection};setFillPreview({...selection});event.currentTarget.style.cursor='crosshair';event.currentTarget.setPointerCapture(event.pointerId);focusGrid();event.preventDefault();return}
+    dragging.current=true;event.currentTarget.setPointerCapture(event.pointerId);selectCell(region.row,region.column,event.shiftKey);focusGrid()
   }
   const pointerMove=(event:React.PointerEvent<HTMLCanvasElement>)=>{
     const drag=resizeDrag.current
@@ -368,6 +381,41 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(shouldFill&&target)void fillSelection(target)
   }
   const pointerCancel=(event:React.PointerEvent<HTMLCanvasElement>)=>{resizeDrag.current=null;setResizePreview(undefined);finishGesture(event)}
+  // The cell editor input stays mounted at the active cell even when nobody is
+  // editing. Keeping one focused input is what makes IME composition work from
+  // the very first keystroke and what keeps typing alive after a commit moves
+  // the selection to the next cell.
+  const focusGrid=useCallback(()=>{
+    const input=editorInput.current
+    if(input)input.focus({preventScroll:true})
+    else viewport.current?.focus()
+  },[])
+  // Entering edit mode from a key, a menu or a double click puts the caret at
+  // the end of the existing text. A composition in flight is left untouched so
+  // the first Hangul syllable is not dropped.
+  useEffect(()=>{
+    const input=editorInput.current
+    if(!input||!editing||composing.current)return
+    // Editing can also be driven from the formula bar, which keeps its own caret.
+    const active=document.activeElement
+    if(active&&active!==input&&(active.tagName==='INPUT'||active.tagName==='TEXTAREA'))return
+    input.focus({preventScroll:true})
+    const end=input.value.length
+    input.setSelectionRange(end,end)
+  },[editing])
+  const beginTyping=useCallback((text:string)=>{
+    const input=editorInput.current
+    const reject=()=>{if(input)input.value=''}
+    if(readOnly){reject();readOnlyNotice();return}
+    if(activeCell?.spill_source){
+      reject()
+      const source=parsedAddress(activeCell.spill_source)
+      if(source)selectCell(source.row,source.column)
+      alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)
+      return
+    }
+    setDraft(text);setEditing(true)
+  },[activeCell,activeColumn,activeRow,readOnly,readOnlyNotice,selectCell,setDraft,setEditing])
   const editActiveCell=useCallback(()=>{if(readOnly){readOnlyNotice();return}if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing,readOnly,readOnlyNotice])
   const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;const primary=event.ctrlKey||event.metaKey
     if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
@@ -396,9 +444,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       event.preventDefault()
     }
     else if(event.key==='Backspace'||event.key==='Delete'){if(readOnly){readOnlyNotice();event.preventDefault();return}const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)void commit('');else void clearSelection();event.preventDefault()}
-    else if(event.key.length===1&&!event.metaKey&&!event.ctrlKey&&!event.altKey){if(readOnly){readOnlyNotice();event.preventDefault();return}if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source)selectCell(source.row,source.column);alert(`${address(activeRow,activeColumn)}은(는) ${activeCell.spill_source} 배열 수식의 결과입니다. 원본 수식 셀에서 입력하세요.`)}else{setDraft(event.key);setEditing(true)}event.preventDefault()}}
+  }
   const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();internalClipboard.current=payload;event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
-  const copy=(event:React.ClipboardEvent)=>{writeClipboard(event)}
+  const copy=(event:React.ClipboardEvent)=>{if(editing)return;writeClipboard(event)}
   const clearSelection=useCallback(async()=>{
     const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1)
     if(count>MAX_PASTE_CELLS){alert(`잘라내기와 삭제는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}
@@ -406,7 +454,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     for(let row=selection.startRow;row<=selection.endRow;row+=1)for(let column=selection.startColumn;column<=selection.endColumn;column+=1)empty.push({row,column})
     await queueCells(empty,'paste')
   },[queueCells,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow])
-  const cut=(event:React.ClipboardEvent)=>{if(writeClipboard(event))void clearSelection()}
+  const cut=(event:React.ClipboardEvent)=>{if(editing)return;if(writeClipboard(event))void clearSelection()}
   const runPaste=useCallback((text:string,internal:string,mode:PasteMode)=>{
     const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'})
     worker.onmessage=async(message:MessageEvent<{cells?:PastedCell[];error?:string}>)=>{try{
@@ -423,6 +471,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     worker.postMessage({text,internal,startRow:activeRow,startColumn:activeColumn,mode})
   },[activeColumn,activeRow,cells,queueCells,setSaveState])
   const paste=(event:React.ClipboardEvent)=>{
+    // While a cell is open the paste belongs to the text being edited.
+    if(editing)return
     event.preventDefault()
     const valuesOnly=pasteAsValues.current;pasteAsValues.current=false
     runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly?'values':'all')
@@ -515,10 +565,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       case 'paste':void pasteFromClipboard('all');return
       case 'paste-values':void pasteFromClipboard('values');return
       case 'paste-special':void pasteFromClipboard(detail.mode);return
+      case 'focus-grid':focusGrid();return
+      case 'commit-draft':if(useEditorStore.getState().editing){focusGrid();commitAndMoveRef.current(1,0)}return
       case 'insert-text':if(readOnly){readOnlyNotice();return}setDraft(detail.text);setEditing(true);return
       case 'insert-function':if(readOnly){readOnlyNotice();return}insertAggregate(detail.name);return
     }
-  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectCell,selectSpan,setDraft,setEditing])
+  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,focusGrid,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectCell,selectSpan,setDraft,setEditing])
   // Auto-fit measures the cells already loaded in the client store, which is
   // the same data the canvas paints.
   const autoFitSize=(axis:'row'|'column',start:number,count:number)=>{
@@ -643,7 +695,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const openContextMenu=(event:React.MouseEvent<HTMLCanvasElement>)=>{
     event.preventDefault()
     const{x,y}=pointerPosition(event),region=regionAt(x,y)
-    viewport.current?.focus()
+    focusGrid()
     if(region.kind==='corner'){selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});setMenu({x:event.clientX,y:event.clientY,items:cornerMenuItems(),label:'시트 전체 메뉴'});return}
     if(region.kind==='column'){
       const inside=wholeColumnsSelected&&region.index>=selection.startColumn&&region.index<=selection.endColumn
@@ -665,12 +717,31 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
   const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=HEADER_WIDTH+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=HEADER_HEIGHT+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
+  const textEditing=editing&&!dropdown
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
-  return <div className="grid-viewport" ref={viewport} tabIndex={0} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
+  return <div className="grid-viewport" ref={viewport} tabIndex={0} onFocus={event=>{if(event.target===event.currentTarget)focusGrid()}} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
     <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={doubleClick} onContextMenu={openContextMenu}/></div>
-    {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>{setMenu(undefined);viewport.current?.focus()}}/>}
+    {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>{setMenu(undefined);focusGrid()}}/>}
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
-    {editing&&dropdown?<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>void saveCell(option.value,'',activeRow,activeColumn)}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>setEditing(false)}>취소</button></div>:editing&&<input autoFocus className="cell-editor" style={{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}} value={draft} onChange={(event)=>setDraft(event.target.value)} onBlur={()=>void commit(draft)} onKeyDown={(event)=>{const primary=event.ctrlKey||event.metaKey;if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true}else if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}else if(event.key==='Tab'){event.preventDefault();commitAndMove(0,event.shiftKey?-1:1)}else if(event.key==='Escape'){setEditing(false);setDraft(activeText)}}}/>}
+    {editing&&dropdown&&<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>{setEditing(false);focusGrid();void saveCell(option.value,'',activeRow,activeColumn)}}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>{setEditing(false);focusGrid()}}>취소</button></div>}
+    <input ref={editorInput} className={`cell-editor${textEditing?'':' idle'}`} aria-label={`${selectionAddress} 셀 입력`}
+      style={textEditing?{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}:{left:inputLeft,top:inputTop}}
+      value={textEditing?draft:''}
+      onCompositionStart={()=>{composing.current=true}}
+      onCompositionEnd={()=>{composing.current=false}}
+      onChange={(event)=>{if(textEditing)setDraft(event.target.value);else beginTyping(event.target.value)}}
+      onBlur={()=>{if(textEditing){setEditing(false);void commit(draft)}}}
+      onKeyDown={(event)=>{
+        if(!textEditing)return
+        const primary=event.ctrlKey||event.metaKey
+        if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
+        // A key that ends an IME composition must not also commit the cell.
+        if(composing.current||event.nativeEvent.isComposing)return
+        if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}
+        else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}
+        else if(event.key==='Tab'){event.preventDefault();commitAndMove(0,event.shiftKey?-1:1)}
+        else if(event.key==='Escape'){event.preventDefault();setEditing(false);setDraft(activeText)}
+      }}/>
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }
