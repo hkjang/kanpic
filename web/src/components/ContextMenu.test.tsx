@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ContextMenu, type MenuItem } from './ContextMenu'
+import { ContextMenu, submenuPosition, type MenuItem } from './ContextMenu'
 
 afterEach(()=>{cleanup();vi.restoreAllMocks()})
 
@@ -51,5 +51,28 @@ describe('ContextMenu',()=>{
     expect(close).toHaveBeenCalledTimes(1)
     fireEvent.mouseDown(document.body)
     expect(close).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('submenuPosition',()=>{
+  const anchor=(left:number,top:number)=>({left,top,right:left+240,bottom:top+26,width:240,height:26,x:left,y:top,toJSON:()=>''}) as DOMRect
+  const viewport={width:1280,height:800}
+
+  it('opens to the right of the row that owns it',()=>{
+    expect(submenuPosition(anchor(300,200),{width:220,height:180},viewport)).toEqual({left:536,top:195})
+  })
+
+  it('flips to the left when the right side has no room',()=>{
+    expect(submenuPosition(anchor(1000,200),{width:220,height:180},viewport).left).toBe(1004-220)
+  })
+
+  it('lifts a tall submenu so it stays inside the viewport',()=>{
+    expect(submenuPosition(anchor(300,700),{width:220,height:400},viewport).top).toBe(392)
+  })
+
+  it('never leaves the top or left edge',()=>{
+    const position=submenuPosition(anchor(4,2),{width:900,height:900},viewport)
+    expect(position.left).toBeGreaterThanOrEqual(8)
+    expect(position.top).toBeGreaterThanOrEqual(8)
   })
 })

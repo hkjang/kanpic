@@ -62,7 +62,11 @@ func main() {
 	aiService := ai.NewService(pool, settingRepository, repository, logger)
 	automationService := automation.NewService(pool, settingRepository, repository, logger)
 	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger)
-	address := ":8080"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	address := ":" + port
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
 	runtimeContext, stopRuntime := context.WithCancel(context.Background())
 	defer stopRuntime()

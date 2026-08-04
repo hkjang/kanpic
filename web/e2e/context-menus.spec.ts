@@ -214,3 +214,85 @@ test('the quick start gallery creates a workbook that already calculates', async
   expect(at(8,7)?.value).toBe(39_490_000)
   expect(at(4,7)?.style?.number_format).toBe('₩#,##0')
 })
+
+test('a chart can be dragged to a new place and the move is saved', async ({ page, request }) => {
+  const workbook=await seedWorkbook(request,`차트 이동 ${Date.now()}`,[{row:1,column:1,value:'항목'},{row:1,column:2,value:'값'},{row:2,column:1,value:'임대료'},{row:2,column:2,value:1200}])
+  await request.post(`/api/v1/workbooks/${workbook.id}/charts`,{data:{
+    idempotency_key:`chart-move-${Date.now()}`,sheet_id:workbook.sheets[0].id,source_sheet_id:workbook.sheets[0].id,
+    type:'bar',title:'이동 차트',source_range:'A1:B2',position:{x:40,y:40,width:320,height:220},
+  }})
+  await openEditor(page,workbook.id)
+
+  const header=page.locator('.chart-card header').first()
+  const box=await header.boundingBox()
+  if(!box)throw new Error('chart header is not visible')
+  // Pointer coordinates are fractional on scaled displays, which used to make
+  // the PATCH fail with invalid_json and snap the chart back.
+  await page.mouse.move(box.x+40,box.y+8)
+  await page.mouse.down()
+  await page.mouse.move(box.x+40+120.5,box.y+8+60.25,{steps:6})
+  await page.mouse.up()
+
+  await expect.poll(async()=>{
+    const charts=await request.get(`/api/v1/workbooks/${workbook.id}/charts?sheet_id=${workbook.sheets[0].id}`).then(response=>response.json())
+    return charts.items[0]?.position?.x
+  },{timeout:10_000}).toBeGreaterThan(100)
+  const charts=await request.get(`/api/v1/workbooks/${workbook.id}/charts?sheet_id=${workbook.sheets[0].id}`).then(response=>response.json())
+  expect(charts.items[0].position.y).toBeGreaterThan(80)
+})
+
+test('a submenu opens beside its parent instead of scrolling inside it', async ({ page, request }) => {
+  const workbook=await seedWorkbook(request,`하위 메뉴 ${Date.now()}`)
+  await openEditor(page,workbook.id)
+  await page.getByRole('menuitem',{name:'서식'}).click()
+  await page.getByRole('menuitem',{name:'글꼴 크기'}).hover()
+  const submenu=page.locator('.context-submenu')
+  await expect(submenu).toBeVisible()
+
+  const parent=await page.locator('.context-menu').boundingBox()
+  const child=await submenu.boundingBox()
+  if(!parent||!child)throw new Error('menus are not visible')
+  // The submenu sits outside the parent, so reaching it never needs a scroll.
+  expect(child.x+8).toBeGreaterThanOrEqual(parent.x+parent.width-8)
+  expect(await submenu.locator('.context-menu-list').evaluate(element=>element.scrollHeight>element.clientHeight)).toBe(false)
+
+  // Keyboard navigation walks into the submenu and back out again.
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.locator('.context-submenu')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+})
+
+test('the toolbar formats a range as a table and draws borders', async ({ page, request }) => {
+  const workbook=await seedWorkbook(request,`테이블 서식 ${Date.now()}`,[
+    {row:1,column:1,value:'제품'},{row:1,column:2,value:'매출'},
+    {row:2,column:1,value:'구독'},{row:2,column:2,value:1200},
+    {row:3,column:1,value:'컨설팅'},{row:3,column:2,value:800},
+    {row:4,column:1,value:'교육'},{row:4,column:2,value:300},
+  ])
+  const sheet=workbook.sheets[0].id
+  await openEditor(page,workbook.id)
+  const styleAt=async(row:number,column:number)=>{
+    const range=await request.get(`/api/v1/sheets/${sheet}/ranges/A1:C6`).then(response=>response.json())
+    return (range.items??[]).find((cell:{row:number;column:number})=>cell.row===row&&cell.column===column)?.style
+  }
+
+  await page.locator('.name-box').fill('A1:B4')
+  await page.keyboard.press('Enter')
+  await page.getByRole('button',{name:'테이블 서식'}).click()
+  await page.getByRole('menuitemcheckbox',{name:'청록'}).click()
+  await expect.poll(async()=>(await styleAt(1,1))?.background,{timeout:10_000}).toBe('#0f766e')
+  expect((await styleAt(1,1))?.color).toBe('#ffffff')
+  // The second body row is banded and the data itself is untouched.
+  expect((await styleAt(3,1))?.background).toBe('#f2f8f7')
+  const range=await request.get(`/api/v1/sheets/${sheet}/ranges/A1:C6`).then(response=>response.json())
+  expect((range.items??[]).find((cell:{row:number;column:number})=>cell.row===2&&cell.column===2)?.value).toBe(1200)
+
+  await page.getByRole('button',{name:'테두리'}).click()
+  await page.getByRole('menuitem',{name:'바깥쪽 테두리'}).click()
+  await expect.poll(async()=>((await styleAt(1,1))?.borders as Record<string,{color:string}>|undefined)?.top?.color,{timeout:10_000}).toBe('#94a3b8')
+
+  await page.getByRole('button',{name:'테이블 서식'}).click()
+  await page.getByRole('menuitem',{name:'테이블 서식 지우기'}).click()
+  await expect.poll(async()=>(await styleAt(1,1))?.background,{timeout:10_000}).toBeUndefined()
+})

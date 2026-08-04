@@ -30,6 +30,32 @@ type ChartPosition struct {
 	Height int `json:"height"`
 }
 
+// UnmarshalJSON rounds fractional coordinates. Pointer positions in a browser
+// are fractional on zoomed or high density displays, and a dragged chart must
+// not fail to save because of it.
+func (p *ChartPosition) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		X      *float64 `json:"x"`
+		Y      *float64 `json:"y"`
+		Width  *float64 `json:"width"`
+		Height *float64 `json:"height"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	round := func(value *float64, target *int) {
+		if value == nil {
+			return
+		}
+		*target = int(math.Round(*value))
+	}
+	round(raw.X, &p.X)
+	round(raw.Y, &p.Y)
+	round(raw.Width, &p.Width)
+	round(raw.Height, &p.Height)
+	return nil
+}
+
 type Chart struct {
 	ID                string        `json:"id"`
 	WorkbookID        string        `json:"workbook_id"`

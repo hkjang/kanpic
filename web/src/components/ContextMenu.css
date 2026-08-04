@@ -14,5 +14,6 @@
 .context-menu-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .context-menu-row kbd{font-size:8px;color:#7f8c93;background:#f5f7f8;border:1px solid #e3e8ea;border-radius:4px;padding:2px 5px}
 .context-menu-arrow{width:13px;height:13px;color:#7f8c93}
-.context-submenu{position:absolute;left:calc(100% - 4px);top:-4px;width:236px;background:#fff;border:1px solid #d7dfe1;border-radius:9px;box-shadow:0 16px 40px #10252d2e;padding:5px;z-index:2}
-@media(max-width:640px){.context-submenu{left:auto;right:calc(100% - 4px)}}
+.context-submenu{position:fixed;left:0;top:0;z-index:210;min-width:190px;width:max-content;max-width:min(330px,92vw);background:#fff;border:1px solid #d7dfe1;border-radius:9px;box-shadow:0 16px 40px #10252d2e;padding:5px}
+.context-submenu .context-menu-list{max-height:min(70vh,520px)}
+.context-submenu .context-menu-text{white-space:nowrap}
