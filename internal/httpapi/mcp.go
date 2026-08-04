@@ -42,7 +42,8 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.workbook.get", "워크북 메타데이터와 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.search", "워크북 전체의 셀 값과 수식을 대소문자·전체 셀·정규식·시트 범위 옵션으로 검색하고 시트·A1 주소를 반환합니다.", "workbook.read", workbookSearchSchema()),
 	tool("spreadsheet.workbook.replace", "검색 조건과 동일한 셀의 값 또는 수식을 미리보기하거나 시트별 원자적·실행 취소 가능한 작업으로 바꿉니다.", "range.write", workbookReplaceSchema()),
-	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다.", "workbook.write", requiredProps("title", "string")),
+	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다. template_id를 주면 템플릿 내용으로 채웁니다.", "workbook.write", workbookCreateSchema()),
+	tool("spreadsheet.template.list", "바로 사용할 수 있는 워크북 템플릿 목록을 반환합니다.", "workbook.read", map[string]any{"type": "object"}),
 	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.delete", "워크북을 삭제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
@@ -263,11 +264,30 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			s.collab.PublishOperation(sheet.Operation.WorkbookID, sheet.SheetID, actor, input.ClientID, sheet.Cells, sheet.Operation)
 		}
 		return result, nil
+	case "spreadsheet.template.list":
+		return map[string]any{"items": workbook.TemplateCatalog()}, nil
 	case "spreadsheet.workbook.create":
 		var input workbook.CreateWorkbookInput
 		decodeMCP(args, &input)
 		input.OwnerID = actor
-		return s.repository.CreateWorkbook(ctx, input)
+		templateID := strings.TrimSpace(stringArg(args, "template_id"))
+		template, hasTemplate := workbook.Template{}, false
+		if templateID != "" {
+			if template, hasTemplate = workbook.TemplateByID(templateID); !hasTemplate {
+				return nil, fmt.Errorf("%w: 알 수 없는 템플릿입니다", workbook.ErrInvalid)
+			}
+			if strings.TrimSpace(input.Title) == "" {
+				input.Title = template.Name
+			}
+		}
+		created, err := s.repository.CreateWorkbook(ctx, input)
+		if err != nil || !hasTemplate {
+			return created, err
+		}
+		if err := workbook.ApplyTemplate(ctx, s.repository, created, template, actor); err != nil {
+			return nil, err
+		}
+		return s.repository.GetWorkbook(ctx, created.ID)
 	case "spreadsheet.workbook.duplicate":
 		var input workbook.DuplicateWorkbookInput
 		decodeMCP(args, &input)
@@ -1263,6 +1283,14 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+
+func workbookCreateSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"title":        map[string]any{"type": "string"},
+		"workspace_id": map[string]any{"type": "string"},
+		"template_id":  map[string]any{"type": "string"},
+	}}
 }
 
 func shareGrantSchema() map[string]any {

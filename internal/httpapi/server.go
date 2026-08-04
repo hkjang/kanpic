@@ -100,6 +100,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("POST /api/v1/access-requests/{requestAction}", s.decideAccessRequest)
 	mux.HandleFunc("GET /api/v1/users:lookup", s.lookupUsers)
 	mux.HandleFunc("GET /api/v1/formula/functions", s.listFormulaFunctions)
+	mux.HandleFunc("GET /api/v1/templates", s.listTemplates)
 	mux.HandleFunc("GET /api/v1/admin/overview", s.adminOverview)
 	mux.HandleFunc("GET /api/v1/admin/workbooks", s.governedWorkbooks)
 	mux.HandleFunc("GET /api/v1/admin/users", s.listUsers)
@@ -254,19 +255,48 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) createWorkbook(w http.ResponseWriter, r *http.Request) {
-	var input workbook.CreateWorkbookInput
+	var input struct {
+		workbook.CreateWorkbookInput
+		TemplateID string `json:"template_id,omitempty"`
+	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
 	if input.OwnerID == "" {
 		input.OwnerID = actorID(r)
 	}
-	created, err := s.repository.CreateWorkbook(r.Context(), input)
+	template, hasTemplate := workbook.Template{}, false
+	if strings.TrimSpace(input.TemplateID) != "" {
+		template, hasTemplate = workbook.TemplateByID(input.TemplateID)
+		if !hasTemplate {
+			s.writeError(w, r, fmt.Errorf("%w: 알 수 없는 템플릿입니다", workbook.ErrInvalid))
+			return
+		}
+		if strings.TrimSpace(input.Title) == "" {
+			input.Title = template.Name
+		}
+	}
+	created, err := s.repository.CreateWorkbook(r.Context(), input.CreateWorkbookInput)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	if hasTemplate {
+		if err := workbook.ApplyTemplate(r.Context(), s.repository, created, template, actorID(r)); err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		// The template writes cells, sheets and layout, so the workbook is read
+		// back to return the version and sheets the client should start from.
+		if filled, err := s.repository.GetWorkbook(r.Context(), created.ID); err == nil {
+			created = filled
+		}
+	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": workbook.TemplateCatalog()})
 }
 
 func (s *Server) listWorkbooks(w http.ResponseWriter, r *http.Request) {
@@ -940,7 +970,7 @@ func requiredScope(r *http.Request) string {
 		}
 		return "profile.write"
 	}
-	if strings.HasSuffix(path, "users:lookup") || strings.HasSuffix(path, "/formula/functions") {
+	if strings.HasSuffix(path, "users:lookup") || strings.HasSuffix(path, "/formula/functions") || strings.HasSuffix(path, "/templates") {
 		return "workbook.read"
 	}
 	if strings.HasSuffix(path, "/favorite") || strings.HasSuffix(path, "/trash") {

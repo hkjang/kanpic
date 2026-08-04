@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.23.1
+VERSION=v0.24.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -51,6 +51,8 @@ cd web && npm ci && npm test && npm run build
 CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 시트 간 참조와 이름 범위를 포함한 수식을 사용할 수 있고, 행·열 삽입/삭제 시 수식·병합·이름 범위·검증·필터·댓글 참조가 함께 이동하며 변경 직전 복구 버전이 자동 생성됩니다. 행 높이·열 너비·행/열 숨김·고정 영역도 PostgreSQL에 버전 관리되며 공동 편집자에게 동기화됩니다. 표시 형식, 가로·세로 정렬, 텍스트 넘침·자르기·자동 줄바꿈, 회전 및 범위 테두리는 값과 수식을 보존하는 원자적 서식 작업으로 저장되며 실행 취소할 수 있습니다. XLSX Import/Export는 이 공통 서식 모델을 사용해 글꼴·색상·채우기·정렬·줄바꿈·표시 형식·테두리를 왕복 변환합니다. `Ctrl/⌘+F` 또는 `Ctrl/⌘+K`로 서버에 저장된 워크북 전체의 값·수식을 검색하고 다른 시트의 결과 셀로 바로 이동할 수 있습니다. 대소문자 구분, 셀 전체 일치, 정규식, 수식 제외와 현재 시트 범위를 조합할 수 있고 `Ctrl/⌘+H`의 찾기 및 바꾸기는 변경 대상 셀 수를 미리 확인한 뒤 시트별 원자적·실행 취소 가능한 작업으로 반영합니다. 같은 기능은 REST `GET /api/v1/workbooks/{workbookId}/search`, `POST /api/v1/workbooks/{workbookId}/search:replace`와 MCP `spreadsheet.workbook.search`, `spreadsheet.workbook.replace`로 제공됩니다.
 
 `Ctrl/⌘+K`는 **빠른 이동**을 엽니다. 현재 워크북의 시트, 이름 범위, `C7`·`A1:D9` 같은 셀 주소, 편집 권한이 있는 다른 워크북, 그리고 공유·시트 관리·찾기 및 바꾸기·수식 보기 같은 편집기 명령을 한 목록에서 검색해 실행합니다. 모든 대화상자는 `Esc`로 닫히고 `Tab` 포커스가 창 안에서 순환하며, 닫으면 열었던 버튼으로 포커스가 돌아갑니다. 댓글·멘션 알림·편집 충돌·버전 이력·접속자 커서·공유 목록은 계정 ID 대신 디렉터리의 표시 이름을 보여 주고, 정확한 계정은 툴팁에서 확인합니다.
+
+홈 화면의 **빠른 시작** 은 빈 워크북과 추천 템플릿을, **템플릿 갤러리** 는 재무·회계, 영업·마케팅, 프로젝트, 인사, 운영·재고, 개인 업무 6개 분류의 템플릿 30종을 제공합니다. 템플릿은 서버 카탈로그에서 만들어지므로 표 머리글, 예시 데이터, 계산되는 수식, 통화·백분율 서식, 열 너비, 머리글 고정이 그대로 적용됩니다. REST는 `GET /api/v1/templates`와 `POST /api/v1/workbooks`의 `template_id`를, 에이전트는 `spreadsheet.template.list`와 `spreadsheet.workbook.create`의 `template_id`를 사용합니다.
 
 시트 관리는 탭 오른쪽의 목록 버튼이나 파일 메뉴의 **모든 시트 관리…** 에서 한 화면에 모입니다. 시트별 데이터 셀 수, 수식 수, 사용 범위와 마지막 변경 시각을 확인하고 이름 변경·순서 이동·숨기기·다른 워크북으로 복사·삭제를 실행할 수 있습니다. 탭은 드래그로 순서를 바꾸고, 숨긴 시트는 **숨긴 시트 N** 버튼에서 다시 표시하며, 표시된 시트가 하나뿐이면 숨기기를 거부합니다. 삭제한 워크북은 홈 화면 **휴지통** 에서 복원하거나 완전히 삭제할 수 있고 즐겨찾기는 사용자별로 보관되므로 같은 워크북을 공유받은 사람마다 다르게 표시됩니다. REST는 `GET /api/v1/workbooks/{workbookId}/sheet-stats`, `POST /api/v1/sheets/{sheetId}/copy`, `GET /api/v1/workbooks/trash`, `POST /api/v1/workbooks/{workbookId}/restore`, `DELETE /api/v1/workbooks/{workbookId}/purge`, `PUT /api/v1/workbooks/{workbookId}/favorite`를 제공하고 같은 계약이 `spreadsheet.sheet.stats|copy`, `spreadsheet.workbook.trash|restore|purge|favorite` MCP 도구로 노출됩니다.
 

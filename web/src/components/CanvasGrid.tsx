@@ -4,8 +4,9 @@ import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
-import { dataRegion, looksLikeHeaderRow } from '../lib/dataRegion'
+import { dataRegion, looksLikeHeaderRow, populatedCell } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
+import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
@@ -143,8 +144,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const vertical=style.vertical_align==='top'||style.vertical_align==='bottom'||style.vertical_align==='middle'?style.vertical_align:'middle'
       const textY=vertical==='top'?y+Math.max(4,fontSize*zoom/2+3):vertical==='bottom'?y+height-Math.max(4,fontSize*zoom/2+3):y+height/2
       const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,width-12),textMode=style.text_mode==='wrap'||style.wrap===true?'wrap':style.text_mode==='clip'?'clip':'overflow'
-      context.save();if(textMode!=='overflow'||rotation!==0){context.beginPath();context.rect(x+1,y+1,Math.max(0,width-2),Math.max(0,height-2));context.clip()}
-      if(textMode==='wrap'&&rotation===0){const lines=wrapText(text,maxTextWidth,value=>context.measureText(value).width),lineHeight=Math.max(fontSize*zoom*1.25,12*zoom),visibleLines=Math.max(1,Math.floor((height-6)/lineHeight)),shown=lines.slice(0,visibleLines),blockHeight=shown.length*lineHeight,startY=vertical==='top'?y+3+lineHeight/2:vertical==='bottom'?y+height-3-blockHeight+lineHeight/2:y+(height-blockHeight)/2+lineHeight/2;shown.forEach((line,index)=>context.fillText(line,textX,startY+index*lineHeight,maxTextWidth))}else{context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(text,0,0,maxTextWidth);if(text&&(style.underline===true||style.strike===true)){const measured=Math.min(context.measureText(text).width,maxTextWidth),start=alignment==='right'?-measured:alignment==='center'?-measured/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+measured,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+measured,0);context.stroke()}}}
+      // Overflowing text spills across empty neighbours and is cut off at the
+      // first cell that holds something, instead of being condensed to fit.
+      const room=textMode==='overflow'&&rotation===0
+        ?spillRoom({row:cell.row,column:cell.column,alignment,maxColumn:TOTAL_COLUMNS,sizeOf:column=>columnAxis.sizeOf(column),populated:(candidateRow,candidateColumn)=>populatedCell(cells,candidateRow,candidateColumn)})
+        :{left:0,right:0}
+      const drawWidth=textMode==='overflow'&&rotation===0?maxTextWidth+room.left+room.right:maxTextWidth
+      context.save();context.beginPath();context.rect(x-room.left+1,y+1,Math.max(0,width-2+room.left+room.right),Math.max(0,height-2));context.clip()
+      if(textMode==='wrap'&&rotation===0){const lines=wrapText(text,maxTextWidth,value=>context.measureText(value).width),lineHeight=Math.max(fontSize*zoom*1.25,12*zoom),visibleLines=Math.max(1,Math.floor((height-6)/lineHeight)),shown=lines.slice(0,visibleLines),blockHeight=shown.length*lineHeight,startY=vertical==='top'?y+3+lineHeight/2:vertical==='bottom'?y+height-3-blockHeight+lineHeight/2:y+(height-blockHeight)/2+lineHeight/2;shown.forEach((line,index)=>context.fillText(line,textX,startY+index*lineHeight,maxTextWidth))}else{context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(text,0,0,drawWidth);if(text&&(style.underline===true||style.strike===true)){const measured=Math.min(context.measureText(text).width,drawWidth),start=alignment==='right'?-measured:alignment==='center'?-measured/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+measured,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+measured,0);context.stroke()}}}
       context.restore();if(style.borders&&typeof style.borders==='object')paintCellBorders(context,style.borders as CellBorders,x,y,width,height,zoom)
       if(validation?.rule_type==='list'&&validation.show_dropdown&&validation.display_style!=='plain'){context.fillStyle='#52606d';context.beginPath();context.moveTo(x+width-13,y+height/2-2);context.lineTo(x+width-7,y+height/2-2);context.lineTo(x+width-10,y+height/2+2);context.closePath();context.fill()}
       if(validation){const checked=validateClientValue(validation,cell.value);if(!checked.valid&&!checked.deferred){context.fillStyle='#dc2626';context.beginPath();context.moveTo(x+width-9,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+9);context.closePath();context.fill()}}

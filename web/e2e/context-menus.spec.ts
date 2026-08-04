@@ -183,3 +183,34 @@ test('the view menu toggles gridlines and the file menu renames the workbook', a
   await page.getByRole('menuitem',{name:'워크북 이름 변경…'}).click()
   await expect.poll(async()=>(await request.get(`/api/v1/workbooks/${workbook.id}`).then(response=>response.json())).title,{timeout:10_000}).toBe(`${title} 변경`)
 })
+
+test('the quick start gallery creates a workbook that already calculates', async ({ page, request }) => {
+  const catalog=await request.get('/api/v1/templates').then(response=>response.json())
+  expect(catalog.items.length).toBeGreaterThanOrEqual(30)
+
+  await page.goto('/')
+  await page.getByRole('button',{name:/템플릿 갤러리/}).click()
+  const gallery=page.getByRole('dialog',{name:'템플릿 갤러리'})
+  await expect(gallery.locator('.template-card')).toHaveCount(catalog.items.length)
+
+  // Category and search narrow the list the same way.
+  await gallery.getByRole('tab',{name:'재무·회계'}).click()
+  await expect(gallery.locator('.template-card',{hasText:'재고 관리'})).toHaveCount(0)
+  await gallery.getByRole('textbox',{name:'템플릿 검색'}).fill('거래명세서')
+  await expect(gallery.locator('.template-card')).toHaveCount(1)
+
+  await gallery.locator('.template-card',{hasText:'거래명세서'}).getByRole('button',{name:'사용하기'}).click()
+  await page.waitForURL(/\/workbooks\//)
+  await page.waitForSelector('.grid-canvas')
+  const workbookId=page.url().split('/workbooks/')[1]
+  const workbook=await request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
+  expect(workbook.title).toBe('거래명세서')
+  expect(workbook.sheets[0].layout.frozen_rows).toBe(3)
+
+  // The template ships with working formulas, so the totals are already there.
+  const range=await request.get(`/api/v1/sheets/${workbook.sheets[0].id}/ranges/A1:G12`).then(response=>response.json())
+  const at=(row:number,column:number)=>(range.items??[]).find((cell:{row:number;column:number})=>cell.row===row&&cell.column===column)
+  expect(at(4,7)?.value).toBe(19_800_000)
+  expect(at(8,7)?.value).toBe(39_490_000)
+  expect(at(4,7)?.style?.number_format).toBe('₩#,##0')
+})

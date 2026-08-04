@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
-import { Building2, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Building2, ChevronRight, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { api, newIdempotencyKey } from '../lib/api'
 import type { BuildInfo, Session, ShareRole, Workbook } from '../types'
@@ -8,6 +8,7 @@ import { ShareDialog } from '../components/ShareDialog'
 import { useUserDirectory, userLabel, userTooltip } from '../state/directory'
 import { useDialog } from '../lib/useDialog'
 import { ContextMenu,type MenuItem } from '../components/ContextMenu'
+import { TemplateGallery,useTemplates,type WorkbookTemplate } from '../components/TemplateGallery'
 
 const ROLE_CHIP:Record<ShareRole,string>={owner:'소유자',editor:'편집자',commenter:'댓글 작성자',viewer:'뷰어'}
 
@@ -44,7 +45,17 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [renameTarget,setRenameTarget]=useState<Workbook>()
   const [renameTitle,setRenameTitle]=useState('')
   const workbooks=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks')})
-  const create=useMutation({mutationFn:(requestedTitle?:string)=>api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({title:requestedTitle?.trim()||'제목 없는 워크북',workspace_id:'default'})}),onSuccess:(wb)=>{client.invalidateQueries({queryKey:['workbooks']});window.location.href=`/workbooks/${wb.id}`}})
+  const create=useMutation({
+    mutationFn:(input?:{title?:string;templateId?:string})=>api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({
+      title:input?.title?.trim()||(input?.templateId?undefined:'제목 없는 워크북'),workspace_id:'default',template_id:input?.templateId,
+    })}),
+    onSuccess:(wb)=>{client.invalidateQueries({queryKey:['workbooks']});window.location.href=`/workbooks/${wb.id}`},
+    onError:(error)=>alert(error instanceof Error?error.message:'워크북을 만들지 못했습니다.'),
+  })
+  const [galleryOpen,setGalleryOpen]=useState(false)
+  const templates=useTemplates()
+  const featured=['monthly-sales','project-status','invoice'].map(id=>templates.find(item=>item.id===id)).filter(Boolean) as WorkbookTemplate[]
+  const useTemplate=(template:WorkbookTemplate)=>create.mutate({templateId:template.id})
   const update=useMutation({mutationFn:({id,input}:{id:string;input:Record<string,unknown>})=>api<Workbook>(`/api/v1/workbooks/${id}`,{method:'PATCH',body:JSON.stringify(input)}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
   const favorite=useMutation({mutationFn:({id,value}:{id:string;value:boolean})=>api<Workbook>(`/api/v1/workbooks/${id}/favorite`,{method:'PUT',body:JSON.stringify({favorite:value})}),onSuccess:()=>client.invalidateQueries({queryKey:['workbooks']})})
   const trash=useQuery({queryKey:['workbook-trash'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks/trash'),enabled:filter==='trash'})
@@ -88,9 +99,10 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
 
   return <div className="page-shell"><AppHeader build={build} session={session}/><main className="home-content">
     <section className="home-title"><div><span className="eyebrow">WORKSPACE</span><h1>좋은 아침이에요.</h1><p>오늘도 데이터에서 더 나은 답을 만들어 보세요.</p></div><div className="home-title-actions"><input ref={inputRef} type="file" hidden accept=".csv,.tsv,.xlsx" onChange={event=>chooseImport(event.target.files?.[0])}/><button className="secondary" onClick={()=>inputRef.current?.click()}><FileUp size={18}/> 파일 가져오기</button><button className="primary" onClick={()=>create.mutate(undefined)}><Plus size={18}/> 새 워크북</button></div></section>
-    <section className="quick-start"><div className="section-heading"><h2>빠른 시작</h2></div><div className="template-row">
+    <section className="quick-start"><div className="section-heading"><h2>빠른 시작</h2><button className="link-button" onClick={()=>setGalleryOpen(true)}>템플릿 갤러리{templates.length>0?` (${templates.length})`:''} <ChevronRight size={14}/></button></div><div className="template-row">
       <button className="template blank" onClick={()=>create.mutate(undefined)}><span><FilePlus2/></span><strong>빈 워크북</strong><small>새로운 데이터 작업 시작</small></button>
-      {['프로젝트 현황','월간 매출 분석','업무 요청 관리'].map((name,index)=><button className={`template template-${index}`} key={name} onClick={()=>create.mutate(name)}><span><Grid2X2/></span><strong>{name}</strong><small>kanpic 기본 템플릿</small></button>)}
+      {featured.map((template,index)=><button className={`template template-${index}`} key={template.id} disabled={create.isPending} onClick={()=>useTemplate(template)}><span><Grid2X2/></span><strong>{template.name}</strong><small>{template.summary}</small></button>)}
+      {featured.length===0&&['월간 매출 분석','프로젝트 현황','거래명세서'].map((name,index)=><button className={`template template-${index}`} key={name} disabled><span><Grid2X2/></span><strong>{name}</strong><small>템플릿을 불러오는 중…</small></button>)}
     </div></section>
     <section className="recent-section" onContextMenu={event=>{
       if(!(event.target as HTMLElement).closest('.workbook-card')){
@@ -117,6 +129,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
     </section>
     {renameTarget&&<RenameWorkbookDialog title={renameTitle} pending={update.isPending} onTitle={setRenameTitle} onClose={()=>setRenameTarget(undefined)} onSave={()=>void rename()}/>}
     {preview&&importFile&&<div className="modal-backdrop"><div className="modal import-modal"><div className="import-preview-icon"><UploadCloud/></div><h2>{importFile.name}</h2><p>{preview.format.toUpperCase()} · 비어 있지 않은 셀 {preview.total_cells.toLocaleString()}개</p><div className="import-sheet-list">{preview.sheets.map(sheet=><div key={sheet.name}><Grid2X2/><div><strong>{sheet.name}</strong><small>{sheet.rows.toLocaleString()}행 × {sheet.columns.toLocaleString()}열 · {sheet.non_empty_cells.toLocaleString()}개 셀</small></div></div>)}</div>{preview.warnings.length>0&&<div className="import-warnings">{preview.warnings.map(warning=><span key={warning}>{warning}</span>)}</div>}<div className="modal-actions"><button className="secondary" onClick={()=>{setPreview(undefined);setImportFile(undefined)}}>취소</button><button className="primary" disabled={importing} onClick={executeImport}>{importing?'가져오는 중…':'워크북으로 가져오기'}</button></div></div></div>}
+    {galleryOpen&&<TemplateGallery onClose={()=>setGalleryOpen(false)} onCreate={useTemplate} pending={create.isPending?create.variables?.templateId:undefined}/>}
     {cardMenu&&<ContextMenu x={cardMenu.x} y={cardMenu.y} items={cardMenu.items} label={cardMenu.label} onClose={()=>setCardMenu(undefined)}/>}
     {shareTarget&&<ShareDialog workbook={shareTarget} onClose={()=>setShareTarget(undefined)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbooks']})}}/>}
   </main></div>
