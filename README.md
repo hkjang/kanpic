@@ -84,3 +84,8 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 
 - **도입 & 구축 문의 이메일**: [gagagiga@naver.com](mailto:gagagiga@naver.com)
 - **GitHub Pages 홍보 페이지**: [https://hkjang.github.io/kanpic/](https://hkjang.github.io/kanpic/)
+
+## 라이선스 (License)
+
+이 프로젝트는 [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE) 라이선스로 제공됩니다.
+
