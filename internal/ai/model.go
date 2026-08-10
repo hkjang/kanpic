@@ -100,6 +100,7 @@ type Action struct {
 	UpdatedAt              time.Time                `json:"updated_at"`
 	Events                 []Event                  `json:"events,omitempty"`
 	Duplicate              bool                     `json:"duplicate,omitempty"`
+	Usage                  *Usage                   `json:"usage,omitempty"`
 	approvalIdempotencyKey string
 	undoIdempotencyKey     string
 }
@@ -138,6 +139,20 @@ type Config struct {
 	Timeout       time.Duration `json:"-"`
 	MaxInputCells int           `json:"max_input_cells"`
 	MaxChanges    int           `json:"max_changes"`
+	// MaxOutputTokens caps the reply. Zero means the budget is derived from the
+	// model's own context length so a plan is never cut short needlessly.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+}
+
+// Usage reports what one gateway call actually cost, so the wait and the size
+// of a request stop being a mystery.
+type Usage struct {
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	MaxTokens        int    `json:"max_tokens,omitempty"`
+	ContextWindow    int    `json:"context_window,omitempty"`
+	Attempts         int    `json:"attempts,omitempty"`
+	Model            string `json:"model,omitempty"`
 }
 
 type Orchestrator interface {

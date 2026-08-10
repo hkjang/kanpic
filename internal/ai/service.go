@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,13 +30,20 @@ type Service struct {
 	logger     *slog.Logger
 	httpClient *http.Client
 	now        func() time.Time
+	limitsMu   sync.RWMutex
+	limits     map[string]cachedLimits
+}
+
+type cachedLimits struct {
+	limits  ModelLimits
+	expires time.Time
 }
 
 func NewService(pool *pgxpool.Pool, settings settingsProvider, workbooks workbook.Repository, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{pool: pool, settings: settings, workbooks: workbooks, logger: logger, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{pool: pool, settings: settings, workbooks: workbooks, logger: logger, now: func() time.Time { return time.Now().UTC() }, limits: map[string]cachedLimits{}}
 }
 
 // SetHTTPClient replaces the gateway transport. It is primarily useful for a
@@ -104,7 +112,8 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 	}
 	planContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
-	generated, err := requestGatewayPlan(planContext, client, config, input, selected, cells)
+	limits := s.modelLimits(planContext, client, config)
+	generated, usage, err := requestGatewayPlan(planContext, client, config, input, selected, cells, limits)
 	if err != nil {
 		s.logger.Warn("AI plan gateway failed", "actor_id", input.ActorID, "workbook_id", input.WorkbookID, "error", err)
 		return Action{}, err
@@ -124,7 +133,7 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		ID: identity.New(), WorkbookID: input.WorkbookID, SheetID: input.SheetID,
 		ActorID: input.ActorID, ClientID: input.ClientID, IdempotencyKey: input.IdempotencyKey,
 		Mode: input.Mode, Range: input.Range, Request: input.Request, Status: status,
-		BaseVersion: book.Version, Model: config.Model, Summary: trimLength(generated.Summary, 2000),
+		BaseVersion: book.Version, Model: planModel(config, limits, usage), Summary: trimLength(generated.Summary, 2000),
 		Explanation: trimLength(generated.Explanation, 12000), Changes: changes, Findings: findings,
 		InputCellCount: rows * columns, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -147,7 +156,7 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		duplicate.Duplicate = err == nil
 		return duplicate, err
 	}
-	payload, _ := json.Marshal(map[string]any{"mode": action.Mode, "range": action.Range, "request": action.Request, "changes": len(action.Changes), "findings": len(action.Findings), "input_cell_count": action.InputCellCount})
+	payload, _ := json.Marshal(map[string]any{"mode": action.Mode, "range": action.Range, "request": action.Request, "changes": len(action.Changes), "findings": len(action.Findings), "input_cell_count": action.InputCellCount, "usage": usage})
 	if err := insertEvent(ctx, tx, action.ID, action.ActorID, eventType, action.Model, "range.read", payload, now); err != nil {
 		return Action{}, err
 	}
@@ -158,6 +167,8 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		return Action{}, err
 	}
 	action.Events = []Event{{ActorID: action.ActorID, EventType: eventType, Model: action.Model, ToolName: "range.read", Payload: payload, CreatedAt: now}}
+	spent := usage
+	action.Usage = &spent
 	s.logger.Info("AI action planned", "action_id", action.ID, "actor_id", action.ActorID, "workbook_id", action.WorkbookID, "model", action.Model, "changes", len(action.Changes), "findings", len(action.Findings))
 	return action, nil
 }
@@ -194,7 +205,47 @@ func (s *Service) Preview(ctx context.Context, input PlanInput) (PromptPreview, 
 	if err != nil {
 		return PromptPreview{}, err
 	}
-	return BuildPrompt(config, input, selected, cells), nil
+	client := s.httpClient
+	if client == nil {
+		if client, err = gatewayHTTPClient(config); err != nil {
+			return PromptPreview{}, err
+		}
+	}
+	limitsContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+	return BuildPrompt(config, input, selected, cells, s.modelLimits(limitsContext, client, config)), nil
+}
+
+// planModel prefers the model the gateway actually reports over the configured
+// name, which matters when the name was left blank on purpose.
+func planModel(config Config, limits ModelLimits, usage Usage) string {
+	for _, candidate := range []string{usage.Model, limits.Model, config.Model} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return "unknown"
+}
+
+// modelLimits caches what the gateway publishes about the model. The context
+// length rarely changes, and a plan should not pay for an extra round trip.
+func (s *Service) modelLimits(ctx context.Context, client *http.Client, config Config) ModelLimits {
+	key := config.GatewayURL + "|" + config.Model
+	s.limitsMu.RLock()
+	cached, ok := s.limits[key]
+	s.limitsMu.RUnlock()
+	if ok && s.now().Before(cached.expires) {
+		return cached.limits
+	}
+	limits, err := fetchModelLimits(ctx, client, config)
+	if err != nil {
+		s.logger.Debug("AI model limits unavailable", "error", err)
+		limits = ModelLimits{Model: config.Model}
+	}
+	s.limitsMu.Lock()
+	s.limits[key] = cachedLimits{limits: limits, expires: s.now().Add(10 * time.Minute)}
+	s.limitsMu.Unlock()
+	return limits
 }
 
 func (s *Service) Get(ctx context.Context, actionID, actorID string) (Action, error) {

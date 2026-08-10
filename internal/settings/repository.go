@@ -88,6 +88,7 @@ var defaults = []Setting{
 	{Key: "ai.timeout_seconds", Value: json.RawMessage(`30`), ValueType: "number", Description: "AI Gateway 요청 제한 시간(초)"},
 	{Key: "ai.max_input_cells", Value: json.RawMessage(`200`), ValueType: "number", Description: "AI에 전달할 선택 범위 최대 셀 수"},
 	{Key: "ai.max_changes", Value: json.RawMessage(`100`), ValueType: "number", Description: "AI 계획 한 건의 최대 변경 셀 수"},
+	{Key: "ai.max_output_tokens", Value: json.RawMessage(`0`), ValueType: "number", Description: "AI 응답 최대 토큰 수. 0이면 모델의 컨텍스트 길이에서 자동 계산"},
 	{Key: "automation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "워크북 자동화 실행 사용"},
 	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
 	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},

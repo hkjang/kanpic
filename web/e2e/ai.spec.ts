@@ -5,22 +5,26 @@ import { createServer } from 'node:http'
 // global, and Playwright runs separate files in parallel workers, so splitting
 // them would let one test switch AI off underneath another.
 let aiGatewayPort=0
+const requestedBudgets:number[]=[]
 const aiGateway=createServer((request,response)=>{
   if(request.method==='GET'&&request.url==='/v1/models'){
-    response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data:[{id:'e2e-offline-model'}]}));return
+    // A vLLM style server publishes the context length, which is what the
+    // reply budget is derived from.
+    response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({data:[{id:'e2e-offline-model',max_model_len:16384}]}));return
   }
   if(request.method==='POST'&&request.url==='/v1/chat/completions'){
     let body=''
     request.on('data',chunk=>{body+=String(chunk)})
     request.on('end',()=>{
-      const completion=JSON.parse(body) as {messages:Array<{role:string;content:string}>}
+      const completion=JSON.parse(body) as {messages:Array<{role:string;content:string}>;max_tokens:number}
       const context=JSON.parse(completion.messages.at(-1)?.content||'{}') as {mode?:string}
+      requestedBudgets.push((completion as unknown as {max_tokens:number}).max_tokens)
       const plan=context.mode==='anomaly'
         ?{summary:'이상치 한 건',explanation:'A1은 표본이 적어 검토가 필요합니다.',findings:[{row:1,column:1,severity:'warning',title:'검토 값',description:'비교 표본이 적어 수동 검토가 필요합니다.'}],changes:[]}
         :context.mode==='clean'
           ?{summary:'숫자 형식 정제',explanation:'A1을 문자열 숫자로 표준화합니다.',findings:[],changes:[{row:1,column:1,value:'5'}]}
           :{summary:'A1을 두 배로 계산',explanation:'B1에 A1의 두 배 수식을 제안합니다.',findings:[],changes:[{row:1,column:2,formula:'=A1*2'}]}
-      response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify(plan)}}]}))
+      response.writeHead(200,{'Content-Type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify(plan)},finish_reason:'stop'}],usage:{prompt_tokens:640,completion_tokens:96}}))
     })
     return
   }
@@ -149,6 +153,11 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     expect(before.items).toHaveLength(0)
     await panel.getByRole('button',{name:/검토한 계획 승인/}).click()
     await expect(panel.getByText('승인한 변경이 적용되었습니다.')).toBeVisible()
+    // The reply budget comes from the model's published context length instead
+    // of a fixed guess, and the token cost is reported back.
+    expect(requestedBudgets[0]).toBeGreaterThan(8_192)
+    expect(requestedBudgets[0]).toBeLessThan(16_384)
+    await expect(panel.getByText(/응답 96토큰/)).toBeVisible()
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items[0]?.formula}).toBe('=A1*2')
     const actions=await page.request.get(`/api/v1/workbooks/${workbookId}/ai/actions`).then(response=>response.json())
     expect(actions.items).toHaveLength(1)

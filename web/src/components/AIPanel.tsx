@@ -3,7 +3,7 @@ import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCir
 import { FormEvent, useEffect, useState } from 'react'
 import { api, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
-import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview } from '../types'
+import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview, AIUsage } from '../types'
 
 type Props={workbookId:string;sheetId:string;selectionRange:string;baseVersion:number;onClose:()=>void;onExecuted:(result:AIExecutionResult)=>void}
 type Mode=AIAction['mode']
@@ -128,7 +128,8 @@ function PromptDisclosure({open,onToggle,preview,loading,error,disabled}:{open:b
       {!disabled&&loading&&<p className="ai-note"><RefreshCw className="spin"/> 보낼 내용을 계산하는 중…</p>}
       {!disabled&&error&&<p className="ai-note error">보낼 내용을 불러오지 못했습니다.</p>}
       {!disabled&&preview&&<>
-        <div className="ai-prompt-meta"><span>모델 {preview.model}</span><span>셀 {preview.cell_count.toLocaleString()}개</span><span>temperature {preview.temperature}</span><span>max_tokens {preview.max_tokens.toLocaleString()}</span></div>
+        <div className="ai-prompt-meta"><span>모델 {preview.model}</span><span>셀 {preview.cell_count.toLocaleString()}개</span><span>temperature {preview.temperature}</span><span>max_tokens {preview.max_tokens.toLocaleString()}</span>{preview.context_window?<span>컨텍스트 {preview.context_window.toLocaleString()}</span>:null}{preview.estimated_prompt_tokens?<span>입력 추정 {preview.estimated_prompt_tokens.toLocaleString()}</span>:null}</div>
+        <p className="ai-note">{preview.context_window?`모델의 컨텍스트 ${preview.context_window.toLocaleString()}토큰에서 입력 추정치를 빼고 응답 상한을 자동으로 잡았습니다.`:'게이트웨이가 컨텍스트 길이를 알려 주지 않아 보수적인 상한을 사용합니다. 응답이 잘리면 자동으로 더 크게 다시 요청합니다.'}</p>
         <div className="ai-prompt-block"><header>시스템 프롬프트<button aria-label="시스템 프롬프트 복사" onClick={()=>void copy(preview.system_prompt)}><Clipboard/></button></header><pre>{preview.system_prompt}</pre></div>
         <div className="ai-prompt-block"><header>전달되는 데이터<button aria-label="전달 데이터 복사" onClick={()=>void copy(preview.user_content)}><Clipboard/></button></header><pre>{preview.user_content}</pre></div>
         <p className="ai-note">값이 비어 있는 셀과 선택 범위 밖의 데이터는 전송하지 않습니다.</p>
@@ -159,13 +160,15 @@ function UsageGuide({config,onClose}:{config?:AIConfig;onClose:()=>void}){
 function ActionPreview({action,onApprove,onUndo,pending,onNew,onRetry}:{action:AIAction;onApprove:()=>void;onUndo:()=>void;pending:boolean;onNew:()=>void;onRetry:()=>void}){
   const readOnly=action.mode==='explain'||action.mode==='summarize'||action.mode==='anomaly'
   const findings=action.findings??[]
+  // Usage arrives with a fresh plan and is kept in the audit event afterwards.
+  const usage=action.usage??(action.events??[]).map(event=>event.payload?.usage as AIUsage|undefined).find(Boolean)
   return <div className="ai-action-preview">
     <div className="ai-action-title"><div><span>{modeLabel[action.mode]}</span><strong>{action.summary}</strong></div><em className={`ai-status ${action.status}`}>{statusLabel(action.status,action.mode)}</em></div>
     <p className="ai-action-request">요청: {action.request}</p>
     <p>{action.explanation}</p>
     {findings.length>0&&<div className="ai-finding-list">{findings.map((finding,index)=><article className={finding.severity} key={`${finding.address||'range'}:${index}`}><header><span>{finding.address||'전체 범위'}</span><em>{severityLabel(finding.severity)}</em></header><strong>{finding.title}</strong><p>{finding.description}</p>{finding.address&&<code>현재: {snapshotText(finding.cell??{})}</code>}</article>)}</div>}
     {action.changes.length>0&&<div className="ai-change-list">{action.changes.map(change=><article key={`${change.row}:${change.column}`}><strong>{change.address}</strong><div><small>현재</small><code>{snapshotText(change.before)}</code></div><span>→</span><div><small>제안</small><code>{snapshotText(change.after)}</code></div></article>)}</div>}
-    <div className="ai-plan-meta"><span>기준 버전 v{action.base_version}</span>{action.changes.length>0&&<span>{action.changes.length}셀 변경</span>}{findings.length>0&&<span>{findings.length}개 발견</span>}<span>{action.model}</span></div>
+    <div className="ai-plan-meta"><span>기준 버전 v{action.base_version}</span>{action.changes.length>0&&<span>{action.changes.length}셀 변경</span>}{findings.length>0&&<span>{findings.length}개 발견</span>}<span>{action.model}</span>{usage?.prompt_tokens?<span>입력 {usage.prompt_tokens.toLocaleString()}토큰</span>:null}{usage?.completion_tokens?<span>응답 {usage.completion_tokens.toLocaleString()}토큰</span>:null}{usage&&(usage.attempts??1)>1?<span>재시도 {(usage.attempts??1)-1}회</span>:null}</div>
     {action.status==='failed'&&<div className="ai-error"><AlertTriangle/>{action.error_message||'작업이 실패했습니다.'}</div>}
     {action.status==='planned'&&!readOnly&&<div className="ai-approval"><p><ShieldCheck/> 위 변경만 하나의 원자적 작업으로 적용됩니다.</p><button className="primary" onClick={onApprove} disabled={pending}><Check/> 검토한 계획 승인</button></div>}
     {(action.status==='completed'||(action.status==='planned'&&readOnly))&&<div className="ai-explanation-done"><Check/> 읽기 전용 분석이 완료됐으며 워크북 변경은 없습니다.</div>}
