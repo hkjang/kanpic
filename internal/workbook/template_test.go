@@ -13,8 +13,19 @@ import (
 func TestTemplateCatalogIsWellFormed(t *testing.T) {
 	t.Parallel()
 	catalog := TemplateCatalog()
-	if len(catalog) < 30 {
-		t.Fatalf("catalog has %d templates, want at least 30", len(catalog))
+	if len(catalog) < 60 {
+		t.Fatalf("catalog has %d templates, want at least 60", len(catalog))
+	}
+	// Every category should carry more than a single template, otherwise the
+	// gallery filter shows a chip that leads to one card.
+	counts := map[string]int{}
+	for _, summary := range catalog {
+		counts[summary.Category]++
+	}
+	for category, count := range counts {
+		if count < 2 {
+			t.Errorf("category %q has only %d template", category, count)
+		}
 	}
 	known := map[string]struct{}{}
 	for _, doc := range formula.Catalog() {

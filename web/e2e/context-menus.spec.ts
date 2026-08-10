@@ -186,7 +186,7 @@ test('the view menu toggles gridlines and the file menu renames the workbook', a
 
 test('the quick start gallery creates a workbook that already calculates', async ({ page, request }) => {
   const catalog=await request.get('/api/v1/templates').then(response=>response.json())
-  expect(catalog.items.length).toBeGreaterThanOrEqual(30)
+  expect(catalog.items.length).toBeGreaterThanOrEqual(60)
 
   await page.goto('/')
   await page.getByRole('button',{name:/템플릿 갤러리/}).click()
@@ -196,6 +196,10 @@ test('the quick start gallery creates a workbook that already calculates', async
   // Category and search narrow the list the same way.
   await gallery.getByRole('tab',{name:'재무·회계'}).click()
   await expect(gallery.locator('.template-card',{hasText:'재고 관리'})).toHaveCount(0)
+  // The finance oriented categories are reachable from the same filter row.
+  await gallery.getByRole('tab',{name:'부동산'}).click()
+  await expect(gallery.locator('.template-card',{hasText:'주택담보대출 상환 스케줄'})).toHaveCount(1)
+  await gallery.getByRole('tab',{name:'전체'}).click()
   await gallery.getByRole('textbox',{name:'템플릿 검색'}).fill('거래명세서')
   await expect(gallery.locator('.template-card')).toHaveCount(1)
 
