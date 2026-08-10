@@ -71,6 +71,8 @@ func main() {
 	runtimeContext, stopRuntime := context.WithCancel(context.Background())
 	defer stopRuntime()
 	go automationService.RunScheduler(runtimeContext)
+	// Applies ai.history_retention_days without an operator having to prune.
+	go aiService.RunRetention(runtimeContext)
 
 	go func() {
 		logger.Info("kanpic API started", "address", address, "storage", "postgres")

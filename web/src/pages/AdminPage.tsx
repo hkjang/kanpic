@@ -5,10 +5,10 @@ import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
 import { useDialog } from '../lib/useDialog'
-import type { AdminOverview, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
+import type { AdminOverview, AIAction, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
+type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'ai'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','ai','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
@@ -19,11 +19,12 @@ export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
     <button className={tab==='users'?'active':''} onClick={()=>navigate('users')}><Users/> 사용자 및 역할 <ChevronRight/></button>
     <button className={tab==='workbooks'?'active':''} onClick={()=>navigate('workbooks')}><Database/> 워크북 거버넌스 <ChevronRight/></button>
     <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
+    <button className={tab==='ai'?'active':''} onClick={()=>navigate('ai')}><Bot/> AI 호출 이력 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
   </nav><div className="console-nav-group"><span>바로가기</span><a href="/preferences"><ShieldCheck/> 개인 환경설정</a><a href="/"><Database/> 워크스페이스로</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='ai'&&<AIHistoryPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
 }
 
@@ -229,6 +230,101 @@ function UsersPanel(){
       <label>표시 이름<input aria-label="표시 이름" placeholder="선택" value={newUser.display_name} onChange={event=>setNewUser(current=>({...current,display_name:event.target.value}))}/></label>
       <label>이메일<input aria-label="이메일" placeholder="선택" value={newUser.email} onChange={event=>setNewUser(current=>({...current,email:event.target.value}))}/></label>
       <div className="modal-actions"><button className="secondary" onClick={()=>setShowAdd(false)}>취소</button><button className="primary" disabled={!newUser.user_id.trim()} onClick={create}>등록</button></div>
+    </AdminModal>}
+  </main>
+}
+
+
+const AI_MODE_LABEL:Record<string,string>={formula:'수식 생성',explain:'수식 설명',fix:'오류 수정',summarize:'범위 요약',anomaly:'이상치 탐지',clean:'데이터 정제'}
+const AI_STATUS_LABEL:Record<string,string>={planned:'승인 대기',completed:'분석 완료',applying:'적용 중',applied:'적용됨',undoing:'취소 중',undone:'취소됨',failed:'실패'}
+
+/**
+ * Every AI call in the organization: who asked, what it changed, what it cost
+ * and how long it is kept. The list, the CSV export and the purge all use the
+ * same filters so what is exported or deleted is what is on screen.
+ */
+function AIHistoryPanel(){
+  const client=useQueryClient()
+  const [status,setStatus]=useState(''),[mode,setMode]=useState(''),[actor,setActor]=useState(''),[query,setQuery]=useState(''),[since,setSince]=useState(''),[until,setUntil]=useState('')
+  const [detail,setDetail]=useState<AIAction>()
+  const [purgeBefore,setPurgeBefore]=useState('')
+  const [result,setResult]=useState('')
+  const parameters=new URLSearchParams({status,mode,actor,q:query,since,until,limit:'100'})
+  const history=useQuery({queryKey:['ai-history',parameters.toString()],queryFn:()=>api<AIHistoryPage>(`/api/v1/admin/ai/actions?${parameters}`)})
+  // There is no single setting route, so the value comes from the same list the
+  // settings screen reads.
+  const settings=useQuery({queryKey:['settings'],queryFn:()=>api<{items:SystemSetting[]}>('/api/v1/admin/settings')})
+  const retentionDays=Number((settings.data?.items??[]).find(item=>item.key==='ai.history_retention_days')?.value??0)
+  const summary=history.data?.summary
+  const saveRetention=useMutation({
+    mutationFn:(days:number)=>api<SystemSetting>('/api/v1/admin/settings/ai.history_retention_days',{method:'PUT',body:JSON.stringify({key:'ai.history_retention_days',value:days,value_type:'number'})}),
+    onSuccess:async()=>{setResult('보존 기간을 저장했습니다.');await client.invalidateQueries({queryKey:['settings']})},
+  })
+  const purge=useMutation({
+    mutationFn:(before:string)=>api<{removed:number}>(`/api/v1/admin/ai/actions?before=${encodeURIComponent(before)}`,{method:'DELETE'}),
+    onSuccess:async data=>{setResult(`${data.removed.toLocaleString()}건을 삭제했습니다.`);await client.invalidateQueries({queryKey:['ai-history']})},
+    onError:error=>setResult(error instanceof Error?error.message:'이력을 삭제하지 못했습니다.'),
+  })
+  const openDetail=async(item:AIHistoryItem)=>setDetail(await api<AIAction>(`/api/v1/admin/ai/actions/${item.id}`))
+  return <main className="console-content">
+    <div className="content-title"><div><span className="eyebrow">AI GOVERNANCE</span><h1>AI 호출 이력</h1><p>조직 전체의 AI 요청과 승인, 토큰 사용량을 확인하고 보존 기간을 관리합니다.</p></div>
+      <div className="title-actions"><a className="secondary button-link" href={`/api/v1/admin/ai/actions?${parameters}&format=csv`}><FileClock/> CSV 내보내기</a><button className="secondary" onClick={()=>history.refetch()}><RefreshCw/> 새로고침</button></div></div>
+    {result&&<div className="result-banner"><CheckCircle2/><pre>{result}</pre><button onClick={()=>setResult('')}>×</button></div>}
+    <div className="metric-row">
+      <div><small>전체 요청</small><strong>{(summary?.total??0).toLocaleString()}</strong></div>
+      <div><small>적용됨 · 실패</small><strong>{(summary?.by_status?.applied??0).toLocaleString()} · <span className={summary?.by_status?.failed?'error-text':''}>{(summary?.by_status?.failed??0).toLocaleString()}</span></strong></div>
+      <div><small>토큰 (입력 + 응답)</small><strong>{((summary?.prompt_tokens??0)+(summary?.completion_tokens??0)).toLocaleString()}</strong></div>
+    </div>
+    <section className="admin-card">
+      <div className="log-filters">
+        <div><Search/><input aria-label="요청 검색" value={query} onChange={event=>setQuery(event.target.value)} placeholder="요청 문장, 요약 검색"/></div>
+        <div><Users/><input aria-label="사용자 검색" value={actor} onChange={event=>setActor(event.target.value)} placeholder="사용자"/></div>
+        <select aria-label="상태" value={status} onChange={event=>setStatus(event.target.value)}><option value="">전체 상태</option>{Object.entries(AI_STATUS_LABEL).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select>
+        <select aria-label="작업 유형" value={mode} onChange={event=>setMode(event.target.value)}><option value="">전체 유형</option>{Object.entries(AI_MODE_LABEL).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select>
+        <input aria-label="시작일" type="date" value={since} onChange={event=>setSince(event.target.value)}/>
+        <input aria-label="종료일" type="date" value={until} onChange={event=>setUntil(event.target.value)}/>
+      </div>
+      <div className="log-table">
+        <div className="ai-history-row head"><span>시각</span><span>사용자</span><span>워크북</span><span>유형</span><span>상태</span><span>변경</span><span>토큰</span><span>모델</span></div>
+        {history.isLoading&&<div className="ai-history-empty">이력을 불러오는 중…</div>}
+        {!history.isLoading&&(history.data?.items.length??0)===0&&<div className="ai-history-empty">조건에 맞는 AI 호출이 없습니다.</div>}
+        {history.data?.items.map(item=><button className="ai-history-row" key={item.id} onClick={()=>void openDetail(item)}>
+          <time>{new Date(item.created_at).toLocaleString('ko-KR')}</time>
+          <span>{item.actor_id}</span>
+          <span title={item.request}>{item.workbook_title||item.workbook_id.slice(0,8)}</span>
+          <span>{AI_MODE_LABEL[item.mode]??item.mode}</span>
+          <em className={`ai-status ${item.status}`}>{AI_STATUS_LABEL[item.status]??item.status}</em>
+          <span>{item.change_count>0?`${item.change_count}셀`:item.finding_count>0?`${item.finding_count}건`:'—'}</span>
+          <span>{(item.prompt_tokens+item.completion_tokens).toLocaleString()}{item.attempts>1?` · 재시도 ${item.attempts-1}`:''}</span>
+          <code>{item.model}</code>
+        </button>)}
+      </div>
+    </section>
+    <section className="admin-card">
+      <div className="card-heading"><span className="card-icon"><Trash2/></span><div><h2>이력 보존</h2><p>보존 기간이 지난 완료·실패 이력을 매시간 자동으로 삭제합니다. 승인 대기 중인 요청은 지우지 않습니다.</p></div></div>
+      <div className="settings-form-grid">
+        <label><span>보존 기간 (일)</span><input aria-label="보존 기간" key={retentionDays} type="number" min={0} max={3650} defaultValue={retentionDays} onBlur={event=>{const days=Number(event.target.value);if(days!==retentionDays)saveRetention.mutate(days)}}/><small>0이면 계속 보관합니다. 현재 {retentionDays>0?`${retentionDays}일`:'무기한'} 보관 중입니다.</small></label>
+        <label><span>지정 시점 이전 삭제</span><input aria-label="삭제 기준일" type="date" value={purgeBefore} onChange={event=>setPurgeBefore(event.target.value)}/><small>가장 오래된 기록: {summary?.oldest_at?new Date(summary.oldest_at).toLocaleDateString('ko-KR'):'없음'}</small></label>
+      </div>
+      <div className="card-actions"><button className="secondary" disabled={!purgeBefore||purge.isPending} onClick={()=>{if(window.confirm(`${purgeBefore} 이전의 완료·실패 이력을 삭제할까요?`))purge.mutate(purgeBefore)}}><Trash2/> 선택 시점 이전 삭제</button></div>
+    </section>
+    {(summary?.top_actors?.length??0)>0&&<section className="admin-card">
+      <div className="card-heading"><span className="card-icon"><Users/></span><div><h2>사용자별 사용량</h2><p>현재 필터 기준 상위 사용자입니다.</p></div></div>
+      <div className="settings-table">
+        <div className="settings-row head"><div>사용자</div><div>요청</div><div>토큰</div><div></div><div></div></div>
+        {summary?.top_actors.map(item=><div className="settings-row" key={item.actor_id}><div><strong>{item.actor_id}</strong></div><div>{item.count.toLocaleString()}건</div><div>{item.tokens.toLocaleString()}</div><div></div><div></div></div>)}
+      </div>
+    </section>}
+    {detail&&<AdminModal label="AI 호출 상세" onClose={()=>setDetail(undefined)}>
+      <h2>{AI_MODE_LABEL[detail.mode]??detail.mode} · {detail.range}</h2>
+      <p className="field-hint">{detail.actor_id} · {new Date(detail.created_at).toLocaleString('ko-KR')} · {detail.model}</p>
+      <div className="ai-detail-block"><strong>요청</strong><p>{detail.request}</p></div>
+      {detail.summary&&<div className="ai-detail-block"><strong>요약</strong><p>{detail.summary}</p></div>}
+      {detail.explanation&&<div className="ai-detail-block"><strong>설명</strong><p>{detail.explanation}</p></div>}
+      {detail.error_message&&<div className="ai-detail-block error"><strong>오류</strong><p>{detail.error_message}</p></div>}
+      {detail.changes.length>0&&<div className="ai-detail-block"><strong>변경 {detail.changes.length}셀</strong><ul>{detail.changes.slice(0,20).map(change=><li key={change.address}>{change.address}: {String(change.after.formula??change.after.value??'(비움)')}</li>)}</ul></div>}
+      {(detail.events?.length??0)>0&&<div className="ai-detail-block"><strong>이벤트</strong><ul>{detail.events?.map(event=><li key={event.id}>{new Date(event.created_at).toLocaleString('ko-KR')} · {event.event_type}{event.tool_name?` · ${event.tool_name}`:''}</li>)}</ul></div>}
+      <div className="modal-actions"><a className="secondary button-link" href={`/workbooks/${detail.workbook_id}`} target="_blank" rel="noopener">워크북 열기</a><button className="primary" onClick={()=>setDetail(undefined)}>닫기</button></div>
     </AdminModal>}
   </main>
 }

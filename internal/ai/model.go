@@ -163,6 +163,10 @@ type Orchestrator interface {
 	List(context.Context, string, string, int) ([]Action, error)
 	Approve(context.Context, string, ApprovalInput) (ExecutionResult, error)
 	Undo(context.Context, string, ApprovalInput) (ExecutionResult, error)
+	History(context.Context, HistoryFilter) (HistoryPage, error)
+	AdminGet(context.Context, string) (Action, error)
+	PurgeHistory(context.Context, time.Time, string) (int64, error)
+	RetentionDays(context.Context) int
 }
 
 func IsReadOnlyMode(mode string) bool {

@@ -19,7 +19,9 @@ const aiGateway=createServer((request,response)=>{
       const completion=JSON.parse(body) as {messages:Array<{role:string;content:string}>;max_tokens:number}
       const context=JSON.parse(completion.messages.at(-1)?.content||'{}') as {mode?:string}
       requestedBudgets.push((completion as unknown as {max_tokens:number}).max_tokens)
-      const plan=context.mode==='anomaly'
+      const plan=context.mode==='summarize'
+        ?{summary:'범위 요약 완료',explanation:'선택 범위의 값이 적습니다.',findings:[],changes:[]}
+        :context.mode==='anomaly'
         ?{summary:'이상치 한 건',explanation:'A1은 표본이 적어 검토가 필요합니다.',findings:[{row:1,column:1,severity:'warning',title:'검토 값',description:'비교 표본이 적어 수동 검토가 필요합니다.'}],changes:[]}
         :context.mode==='clean'
           ?{summary:'숫자 형식 정제',explanation:'A1을 문자열 숫자로 표준화합니다.',findings:[],changes:[{row:1,column:1,value:'5'}]}
@@ -39,8 +41,8 @@ test.afterAll(async()=>{await new Promise<void>(resolve=>aiGateway.close(()=>res
 const put=(request:APIRequestContext,key:string,value:unknown,value_type:'string'|'number'|'boolean')=>
   request.put(`/api/v1/admin/settings/${key}`,{data:{key,value,value_type}})
 
-async function enableAI(request:APIRequestContext,maxInputCells:number){
-  await put(request,'ai.gateway_url','http://127.0.0.1:9/v1','string')
+async function enableAI(request:APIRequestContext,maxInputCells:number,gatewayURL='http://127.0.0.1:9/v1'){
+  await put(request,'ai.gateway_url',gatewayURL,'string')
   await put(request,'ai.model','corp-llm-8b','string')
   await put(request,'ai.max_input_cells',maxInputCells,'number')
   await put(request,'ai.enabled',true,'boolean')
@@ -196,4 +198,50 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)
     await page.request.post(`/api/v1/admin/settings/versions/${restoreRevision}:restore`,{data:{}})
   }
+})
+
+test('the console lists AI history, exports it and prunes it', async ({ page, request }) => {
+  // This test needs a gateway that answers, so it uses the one this file runs.
+  await enableAI(request,200,`http://${process.env.KANPIC_E2E_GATEWAY_HOST||'127.0.0.1'}:${aiGatewayPort}/v1`)
+  const workbook=await request.post('/api/v1/workbooks',{
+    headers:{'X-Kanpic-Actor':'history.owner@corp.example'},data:{title:`AI 이력 ${Date.now()}`},
+  }).then(response=>response.json())
+  await request.patch(`/api/v1/sheets/${workbook.sheets[0].id}/cells:batch`,{
+    headers:{'X-Kanpic-Actor':'history.owner@corp.example'},
+    data:{base_version:workbook.version,idempotency_key:`hist-${Date.now()}`,cells:[{row:1,column:1,value:5}]},
+  })
+  // The gateway in this file answers plans, so a real action lands in history.
+  const planned=await request.post('/api/v1/ai/actions:plan',{
+    headers:{'X-Kanpic-Actor':'history.owner@corp.example'},
+    data:{workbook_id:workbook.id,sheet_id:workbook.sheets[0].id,range:'A1:B1',mode:'summarize',request:'콘솔 이력 확인용 요약',base_version:workbook.version+1,idempotency_key:`console-${Date.now()}`},
+  })
+  expect(planned.status()).toBe(201)
+
+  await page.goto('/admin?tab=ai')
+  await expect(page.getByRole('heading',{name:'AI 호출 이력'})).toBeVisible()
+  const row=page.locator('.ai-history-row',{hasText:'history.owner@corp.example'}).first()
+  await expect(row).toBeVisible()
+  await expect(row).toContainText('범위 요약')
+
+  // The detail dialog shows the request and the event trail.
+  await row.click()
+  const detail=page.getByRole('dialog',{name:'AI 호출 상세'})
+  await expect(detail).toContainText('콘솔 이력 확인용 요약')
+  await expect(detail).toContainText('이벤트')
+  await page.keyboard.press('Escape')
+
+  // A filter that excludes the row empties the table.
+  await page.getByRole('combobox',{name:'상태'}).selectOption('failed')
+  await expect(page.getByText('조건에 맞는 AI 호출이 없습니다.')).toBeVisible()
+  await page.getByRole('combobox',{name:'상태'}).selectOption('')
+
+  const csv=await request.get('/api/v1/admin/ai/actions?format=csv')
+  expect(csv.headers()['content-type']).toContain('text/csv')
+  expect(await csv.text()).toContain('history.owner@corp.example')
+
+  // Pruning removes finished actions before the chosen day.
+  const purged=await request.delete('/api/v1/admin/ai/actions?before=2099-01-01').then(response=>response.json())
+  expect(purged.removed).toBeGreaterThanOrEqual(1)
+  await page.reload()
+  await expect(page.locator('.ai-history-row',{hasText:'history.owner@corp.example'})).toHaveCount(0)
 })

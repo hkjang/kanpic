@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"kanpic/internal/ai"
 	"kanpic/internal/workbook"
@@ -191,5 +193,103 @@ func (s *Server) writeAIError(w http.ResponseWriter, r *http.Request, err error)
 	default:
 		s.logger.Error("AI action failed", "error", err, "path", r.URL.Path)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "ai_action_failed", "message": "AI 작업을 처리하지 못했습니다."}})
+	}
+}
+
+// adminAIHistory lists AI calls across the organization with the totals an
+// administrator needs, and exports the same rows as CSV for an audit trail.
+func (s *Server) adminAIHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	query := r.URL.Query()
+	filter := ai.HistoryFilter{
+		Actor:      query.Get("actor"),
+		WorkbookID: query.Get("workbook_id"),
+		Mode:       query.Get("mode"),
+		Status:     query.Get("status"),
+		Query:      query.Get("q"),
+	}
+	filter.Limit, _ = strconv.Atoi(query.Get("limit"))
+	filter.Offset, _ = strconv.Atoi(query.Get("offset"))
+	if since, err := parseHistoryTime(query.Get("since")); err == nil {
+		filter.Since = since
+	}
+	if until, err := parseHistoryTime(query.Get("until")); err == nil {
+		filter.Until = until
+	}
+	if query.Get("format") == "csv" {
+		filter.Limit = ai.HistoryPageLimit
+	}
+	page, err := s.ai.History(r.Context(), filter)
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	page.Summary.RetentionDays = s.ai.RetentionDays(r.Context())
+	if query.Get("format") == "csv" {
+		writeAIHistoryCSV(w, page)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) adminAIAction(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	action, err := s.ai.AdminGet(r.Context(), r.PathValue("actionId"))
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, action)
+}
+
+// adminPurgeAIHistory removes finished actions older than the given day.
+func (s *Server) adminPurgeAIHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	before, err := parseHistoryTime(r.URL.Query().Get("before"))
+	if err != nil {
+		s.writeAIError(w, r, fmt.Errorf("%w: before는 YYYY-MM-DD 형식이어야 합니다", ai.ErrInvalid))
+		return
+	}
+	removed, err := s.ai.PurgeHistory(r.Context(), before, actorID(r))
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"removed": removed, "before": before})
+}
+
+func parseHistoryTime(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, fmt.Errorf("empty")
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time")
+}
+
+func writeAIHistoryCSV(w http.ResponseWriter, page ai.HistoryPage) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="ai-history.csv"`)
+	// A byte order mark keeps Excel from mangling the Korean columns.
+	_, _ = w.Write([]byte("\xef\xbb\xbf"))
+	writer := csv.NewWriter(w)
+	defer writer.Flush()
+	_ = writer.Write([]string{"시각", "사용자", "워크북", "모드", "범위", "상태", "모델", "요청", "변경셀", "발견", "입력셀", "입력토큰", "응답토큰", "시도", "오류"})
+	for _, item := range page.Items {
+		_ = writer.Write([]string{
+			item.CreatedAt.Format(time.RFC3339), item.ActorID, item.WorkbookTitle, item.Mode, item.Range, item.Status, item.Model, item.Request,
+			strconv.Itoa(item.ChangeCount), strconv.Itoa(item.FindingCount), strconv.Itoa(item.InputCellCount),
+			strconv.Itoa(item.PromptTokens), strconv.Itoa(item.CompletionTokens), strconv.Itoa(item.Attempts), item.ErrorMessage,
+		})
 	}
 }

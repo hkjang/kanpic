@@ -227,6 +227,9 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	}
 	if aiService != nil {
 		mux.HandleFunc("GET /api/v1/ai/config", s.aiConfig)
+		mux.HandleFunc("GET /api/v1/admin/ai/actions", s.adminAIHistory)
+		mux.HandleFunc("GET /api/v1/admin/ai/actions/{actionId}", s.adminAIAction)
+		mux.HandleFunc("DELETE /api/v1/admin/ai/actions", s.adminPurgeAIHistory)
 		mux.HandleFunc("POST /api/v1/ai/actions:plan", s.planAIAction)
 		mux.HandleFunc("POST /api/v1/ai/prompt:preview", s.previewAIPrompt)
 		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/ai/actions", s.listAIActions)

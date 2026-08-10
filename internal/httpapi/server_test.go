@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
@@ -31,6 +32,20 @@ func (f *fakeAIOrchestrator) Plan(_ context.Context, input ai.PlanInput) (ai.Act
 	f.action = ai.Action{ID: "ai-action", WorkbookID: input.WorkbookID, SheetID: input.SheetID, ActorID: input.ActorID, ClientID: input.ClientID, Mode: input.Mode, Range: input.Range, Request: input.Request, Status: ai.StatusPlanned, BaseVersion: input.BaseVersion, Model: "offline-test", Summary: "formula preview", Changes: []ai.ProposedChange{{Row: 1, Column: 2, Address: "B1", After: ai.CellSnapshot{Formula: "=A1*2"}}}, Revision: 1}
 	return f.action, nil
 }
+func (f *fakeAIOrchestrator) History(_ context.Context, filter ai.HistoryFilter) (ai.HistoryPage, error) {
+	item := ai.HistoryItem{ID: "ai-action", ActorID: "alice", Mode: ai.ModeFormula, Status: ai.StatusApplied, Model: "offline-test", PromptTokens: 640, CompletionTokens: 96, ChangeCount: 1}
+	if filter.Status != "" && filter.Status != item.Status {
+		return ai.HistoryPage{Items: []ai.HistoryItem{}, Summary: ai.HistorySummary{ByStatus: map[string]int{}, ByMode: map[string]int{}}}, nil
+	}
+	return ai.HistoryPage{Items: []ai.HistoryItem{item}, Summary: ai.HistorySummary{Total: 1, PromptTokens: 640, CompletionTokens: 96, ByStatus: map[string]int{ai.StatusApplied: 1}, ByMode: map[string]int{ai.ModeFormula: 1}}}, nil
+}
+func (f *fakeAIOrchestrator) AdminGet(_ context.Context, _ string) (ai.Action, error) {
+	return f.action, nil
+}
+func (f *fakeAIOrchestrator) PurgeHistory(_ context.Context, _ time.Time, _ string) (int64, error) {
+	return 3, nil
+}
+func (f *fakeAIOrchestrator) RetentionDays(context.Context) int { return 30 }
 func (f *fakeAIOrchestrator) Preview(_ context.Context, input ai.PlanInput) (ai.PromptPreview, error) {
 	return ai.PromptPreview{Model: "offline-test", SystemPrompt: "system", UserContent: `{"mode":"` + input.Mode + `"}`, CellCount: 2, MaxTokens: 1024}, nil
 }
