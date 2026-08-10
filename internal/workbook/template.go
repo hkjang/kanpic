@@ -58,9 +58,14 @@ func (t Template) summary() TemplateSummary {
 }
 
 // TemplateCatalog lists every template in gallery order.
+// allTemplates is the gallery: the business catalog followed by the formula
+// cookbook, which is kept in its own file because it is organised by function
+// family rather than by the job being done.
+func allTemplates() []Template { return append(append([]Template(nil), templates...), formulaTemplates...) }
+
 func TemplateCatalog() []TemplateSummary {
-	items := make([]TemplateSummary, 0, len(templates))
-	for _, template := range templates {
+	items := make([]TemplateSummary, 0, len(templates)+len(formulaTemplates))
+	for _, template := range allTemplates() {
 		items = append(items, template.summary())
 	}
 	return items
@@ -68,7 +73,7 @@ func TemplateCatalog() []TemplateSummary {
 
 // TemplateByID finds one template, reporting whether it exists.
 func TemplateByID(id string) (Template, bool) {
-	for _, template := range templates {
+	for _, template := range allTemplates() {
 		if strings.EqualFold(template.ID, strings.TrimSpace(id)) {
 			return template, true
 		}

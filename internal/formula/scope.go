@@ -9,6 +9,19 @@ type Scope struct {
 	CurrentSheet string
 	Sheets       map[string]string
 	NamedRanges  map[string]NamedRange
+	// Extent bounds whole-column references such as A:A to the rows a sheet
+	// actually uses, keyed by stable sheet identifier. Without it a single
+	// A:A would name a million cells.
+	Extent map[string]SheetExtent
+	// Anchor is the address of the cell being parsed, which is what ROW() and
+	// COLUMN() report when they are called without an argument.
+	Anchor string
+}
+
+// SheetExtent is the largest row and column a sheet has content in.
+type SheetExtent struct {
+	Rows    int
+	Columns int
 }
 
 // NamedRange points a workbook-level name at a stable sheet identifier and
@@ -84,6 +97,20 @@ func (s Scope) resolveCell(qualifier, address string) (string, error) {
 		}
 	}
 	return CellKey(sheetID, address), nil
+}
+
+// extentOf reports how far a sheet's content reaches. A sheet with no content
+// still spans one cell so an unbounded reference stays a valid, empty range
+// rather than an error.
+func (s Scope) extentOf(sheetID string) SheetExtent {
+	extent := s.Extent[strings.ToUpper(strings.TrimSpace(sheetID))]
+	if extent.Rows < 1 {
+		extent.Rows = 1
+	}
+	if extent.Columns < 1 {
+		extent.Columns = 1
+	}
+	return extent
 }
 
 func (s Scope) resolveNamedRange(name string) (NamedRange, error) {

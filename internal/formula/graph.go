@@ -57,6 +57,13 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 		return GraphResult{}, nil
 	}
 
+	// Unbounded references reach as far as the sheet's content. The addresses
+	// being changed count too: clearing the last row of a table must still
+	// reach the SUM(A:A) that used to include it.
+	scoped := *e
+	scoped.scope.Extent = measureExtent(keysOf(values), changed)
+	e = &scoped
+
 	nodes := make(map[string]node)
 	dependencies := make(map[string][]string)
 	parseErrors := make(map[string]*Error)
@@ -70,7 +77,7 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 			return GraphResult{}, fmt.Errorf("formula graph exceeds %d formulas", MaxGraphFormulas)
 		}
 		currentSheet, _, _ := SplitCellKey(address)
-		parser, err := e.newParser(cell.Formula, currentSheet)
+		parser, err := e.newParser(cell.Formula, currentSheet, address)
 		if err != nil {
 			parseErrors[address] = formulaError("#ERROR!", err.Error())
 			continue

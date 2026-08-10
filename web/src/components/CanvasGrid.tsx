@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
+import { applySuggestion } from '../lib/formulaSuggest'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
 import { dataRegion, looksLikeHeaderRow, populatedCell } from '../lib/dataRegion'
@@ -56,6 +58,8 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
 export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLInputElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
+  const functionCatalog=useFunctionCatalog()
+  const [caret,setCaret]=useState(0),[suggestion,setSuggestion]=useState(0)
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const editor=useEditorStore()
@@ -725,6 +729,17 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=HEADER_WIDTH+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=HEADER_HEIGHT+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
   const textEditing=editing&&!dropdown
+  const hint=textEditing?formulaHint(functionCatalog,draft,caret):undefined
+  // Accepting a suggestion rewrites the draft and puts the caret inside the
+  // brackets, so typing can continue with the arguments.
+  const chooseSuggestion=(name:string)=>{
+    if(!hint)return
+    const next=applySuggestion(draft,hint.context,name)
+    setDraft(next.text)
+    setCaret(next.caret)
+    setSuggestion(0)
+    requestAnimationFrame(()=>editorInput.current?.setSelectionRange(next.caret,next.caret))
+  }
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onFocus={event=>{if(event.target===event.currentTarget)focusGrid()}} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
     <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={doubleClick} onContextMenu={openContextMenu}/></div>
@@ -736,7 +751,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       value={textEditing?draft:''}
       onCompositionStart={()=>{composing.current=true}}
       onCompositionEnd={()=>{composing.current=false}}
-      onChange={(event)=>{if(textEditing)setDraft(event.target.value);else beginTyping(event.target.value)}}
+      onChange={(event)=>{setCaret(event.target.selectionStart??event.target.value.length);setSuggestion(0);if(textEditing)setDraft(event.target.value);else beginTyping(event.target.value)}}
+      onSelect={(event)=>setCaret(event.currentTarget.selectionStart??0)}
       onBlur={()=>{if(textEditing){setEditing(false);void commit(draft)}}}
       onKeyDown={(event)=>{
         if(!textEditing)return
@@ -744,11 +760,19 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
         // A key that ends an IME composition must not also commit the cell.
         if(composing.current||event.nativeEvent.isComposing)return
+        const suggestions=hint?.matches??[]
+        if(suggestions.length>0){
+          if(event.key==='ArrowDown'){event.preventDefault();setSuggestion((suggestion+1)%suggestions.length);return}
+          if(event.key==='ArrowUp'){event.preventDefault();setSuggestion((suggestion-1+suggestions.length)%suggestions.length);return}
+          if(event.key==='Tab'||(event.key==='Enter'&&!primary)){event.preventDefault();chooseSuggestion(suggestions[suggestion].name);return}
+          if(event.key==='Escape'){event.preventDefault();setSuggestion(-1);return}
+        }
         if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}
         else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}
         else if(event.key==='Tab'){event.preventDefault();commitAndMove(0,event.shiftKey?-1:1)}
         else if(event.key==='Escape'){event.preventDefault();setEditing(false);setDraft(activeText)}
       }}/>
+    {textEditing&&hint&&suggestion>=0&&<FormulaAutocomplete hint={hint} active={suggestion} left={inputLeft} top={inputTop+inputHeight+1} onChoose={chooseSuggestion}/>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

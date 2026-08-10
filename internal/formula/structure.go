@@ -93,6 +93,24 @@ func TransformStructuralReferences(input string, change StructuralChange) string
 				}
 			}
 		}
+		if input[index] >= '0' && input[index] <= '9' {
+			// A bare number here is either a literal or the start of a 2:5 row
+			// band; the digits of a cell address are consumed with its column.
+			if strings.EqualFold(change.CurrentSheet, change.TargetSheet) {
+				if end, replacement, band := structuralBandAt(input, index, change, true); band {
+					result.WriteString(replacement)
+					index = end
+					continue
+				}
+			}
+			end := index
+			for end < len(input) && ((input[end] >= '0' && input[end] <= '9') || input[end] == '.') {
+				end++
+			}
+			result.WriteString(input[index:end])
+			index = end
+			continue
+		}
 		character, size := utf8.DecodeRuneInString(input[index:])
 		if formulaIdentifierStart(character) {
 			tokenEnd := formulaIdentifierEnd(input, index)
@@ -170,6 +188,9 @@ func quotedQualifier(input string, start int) (int, string, bool) {
 }
 
 func structuralReferenceAt(input string, start int, change StructuralChange, affected bool) (int, string, bool) {
+	if end, replacement, band := structuralBandAt(input, start, change, affected); band {
+		return end, replacement, true
+	}
 	first, end, ok := parseStructuralCell(input, start)
 	if !ok || formulaIdentifierEnd(input, end) != end {
 		return start, "", false
@@ -201,6 +222,95 @@ func structuralReferenceAt(input string, start int, change StructuralChange, aff
 		replacement += ":" + renderStructuralCell(transformed[1])
 	}
 	return referenceEnd, replacement, true
+}
+
+// structuralBandAt transforms the unbounded forms A:A, A:C and 2:5. A column
+// band only moves when columns move, and a row band only when rows move, so
+// SUM(A:A) keeps meaning "this column" however many rows are inserted.
+func structuralBandAt(input string, start int, change StructuralChange, affected bool) (int, string, bool) {
+	first, end, absolute, kind := parseStructuralBand(input, start)
+	if kind == 0 {
+		return start, "", false
+	}
+	colon := skipFormulaSpaces(input, end)
+	if colon >= len(input) || input[colon] != ':' {
+		return start, "", false
+	}
+	second, referenceEnd, secondAbsolute, secondKind := parseStructuralBand(input, skipFormulaSpaces(input, colon+1))
+	if secondKind != kind || formulaIdentifierEnd(input, referenceEnd) != referenceEnd {
+		return start, "", false
+	}
+	axis := "column"
+	if kind == structuralRowBand {
+		axis = "row"
+	}
+	if !affected || change.Axis != axis {
+		return referenceEnd, input[start:referenceEnd], true
+	}
+	low, high := first, second
+	if low > high {
+		low, high = high, low
+	}
+	transformedLow, transformedHigh, exists := transformStructuralInterval(low, high, change)
+	if !exists {
+		return referenceEnd, "#REF!", true
+	}
+	if first > second {
+		transformedLow, transformedHigh = transformedHigh, transformedLow
+	}
+	return referenceEnd, renderStructuralBand(transformedLow, absolute, kind) + ":" + renderStructuralBand(transformedHigh, secondAbsolute, kind), true
+}
+
+const (
+	structuralColumnBand = 1
+	structuralRowBand    = 2
+)
+
+// parseStructuralBand reads one half of an unbounded reference: a bare column
+// name or a bare row number, optionally made absolute with $.
+func parseStructuralBand(input string, start int) (int, int, bool, int) {
+	index := start
+	dollar := false
+	if index < len(input) && input[index] == '$' {
+		dollar = true
+		index++
+	}
+	letters := index
+	column := 0
+	for index < len(input) && ((input[index] >= 'A' && input[index] <= 'Z') || (input[index] >= 'a' && input[index] <= 'z')) {
+		column = column*26 + int(unicode.ToUpper(rune(input[index]))-'A'+1)
+		index++
+	}
+	if index > letters {
+		// Letters followed by digits are an ordinary cell, not a column band.
+		if index-letters > 3 || column > MaxColumns || (index < len(input) && input[index] >= '0' && input[index] <= '9') {
+			return 0, start, false, 0
+		}
+		return column, index, dollar, structuralColumnBand
+	}
+	digits := index
+	for index < len(input) && input[index] >= '0' && input[index] <= '9' {
+		index++
+	}
+	if index == digits {
+		return 0, start, false, 0
+	}
+	row, err := strconv.Atoi(input[digits:index])
+	if err != nil || row < 1 || row > MaxRows {
+		return 0, start, false, 0
+	}
+	return row, index, dollar, structuralRowBand
+}
+
+func renderStructuralBand(position int, absolute bool, kind int) string {
+	prefix := ""
+	if absolute {
+		prefix = "$"
+	}
+	if kind == structuralRowBand {
+		return prefix + strconv.Itoa(position)
+	}
+	return prefix + columnName(position)
 }
 
 func parseStructuralCell(input string, start int) (structuralCell, int, bool) {

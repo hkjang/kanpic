@@ -45,7 +45,7 @@ func NewScopedWithNames(currentSheet string, sheets map[string]string, namedRang
 }
 
 func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
-	parser, err := e.newParser(input, e.scope.CurrentSheet)
+	parser, err := e.newParser(input, e.scope.CurrentSheet, "")
 	if err != nil {
 		return []string{}, formulaError("#ERROR!", err.Error())
 	}
@@ -65,7 +65,10 @@ func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
 }
 
 func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
-	parser, err := e.newParser(input, e.scope.CurrentSheet)
+	scoped := *e
+	scoped.scope.Extent = measureExtent(keysOf(cells))
+	e = &scoped
+	parser, err := e.newParser(input, e.scope.CurrentSheet, "")
 	if err != nil {
 		return Result{Dependencies: []string{}, Error: formulaError("#ERROR!", err.Error())}
 	}
@@ -390,6 +393,9 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		return expected, nil
 	}
+	if result, handled, err := n.evaluateLazy(name, cells); handled {
+		return result, err
+	}
 	evaluated := make([]any, 0, len(n.arguments))
 	for _, argument := range n.arguments {
 		value, err := argument.eval(cells)
@@ -397,6 +403,21 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 			return nil, err
 		}
 		evaluated = append(evaluated, value)
+	}
+	if result, handled, err := evaluateConditionalExtra(name, evaluated); handled {
+		return result, err
+	}
+	if result, handled, err := evaluateArray(name, evaluated); handled {
+		return result, err
+	}
+	if result, handled, err := evaluateCashflow(name, evaluated); handled {
+		return result, err
+	}
+	if result, handled, err := evaluatePairedStatistics(name, evaluated); handled {
+		return result, err
+	}
+	if result, handled, err := evaluateTextArray(name, evaluated); handled {
+		return result, err
 	}
 	switch name {
 	case "SUMIF", "SUMIFS", "COUNTIF", "COUNTIFS":
@@ -416,6 +437,13 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	case "SUM", "AVERAGE", "MIN", "MAX":
 		numbers := numericValues(values)
 		if len(numbers) == 0 {
+			// Dates are stored as text here, so the earliest and latest date in
+			// a column would otherwise come back as zero.
+			if name == "MIN" || name == "MAX" {
+				if moment, ok := extremeDate(values, name == "MIN"); ok {
+					return moment, nil
+				}
+			}
 			return float64(0), nil
 		}
 		result := numbers[0]
@@ -508,7 +536,99 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	if result, handled, err := evaluateLibrary(name, values); handled {
 		return result, err
 	}
+	for _, group := range []func(string, []any) (any, bool, error){
+		evaluateMath, evaluateStatistics, evaluateFinance, evaluateText, evaluateDate, evaluateInformation,
+	} {
+		if result, handled, err := group(name, values); handled {
+			return result, err
+		}
+	}
 	return nil, formulaError("#NAME?", "unknown function "+name)
+}
+
+// evaluateLazy handles the functions that must decide whether to evaluate an
+// argument at all: the conditionals, and the error tests that only mean
+// something when a failing argument is caught rather than propagated.
+func (n functionNode) evaluateLazy(name string, cells map[string]any) (any, bool, error) {
+	switch name {
+	case "IFS":
+		if len(n.arguments) < 2 || len(n.arguments)%2 != 0 {
+			return nil, true, argError(name)
+		}
+		for index := 0; index < len(n.arguments); index += 2 {
+			condition, err := n.arguments[index].eval(cells)
+			if err != nil {
+				return nil, true, err
+			}
+			if truthy(condition) {
+				value, evalErr := n.arguments[index+1].eval(cells)
+				return value, true, evalErr
+			}
+		}
+		return nil, true, formulaError("#N/A", "IFS found no true condition")
+	case "SWITCH":
+		if len(n.arguments) < 3 {
+			return nil, true, argError(name)
+		}
+		subject, err := n.arguments[0].eval(cells)
+		if err != nil {
+			return nil, true, err
+		}
+		index := 1
+		for ; index+1 < len(n.arguments); index += 2 {
+			candidate, caseErr := n.arguments[index].eval(cells)
+			if caseErr != nil {
+				return nil, true, caseErr
+			}
+			if compare(subject, candidate) == 0 {
+				value, evalErr := n.arguments[index+1].eval(cells)
+				return value, true, evalErr
+			}
+		}
+		if index < len(n.arguments) {
+			value, evalErr := n.arguments[index].eval(cells)
+			return value, true, evalErr
+		}
+		return nil, true, formulaError("#N/A", "SWITCH found no matching case")
+	case "IFNA":
+		if len(n.arguments) != 2 {
+			return nil, true, argError(name)
+		}
+		value, err := n.arguments[0].eval(cells)
+		if typed, ok := err.(*Error); ok && typed.Code == "#N/A" {
+			fallback, fallbackErr := n.arguments[1].eval(cells)
+			return fallback, true, fallbackErr
+		}
+		return value, true, err
+	case "ISERROR", "ISERR", "ISNA", "ISFORMULA":
+		if len(n.arguments) != 1 {
+			return nil, true, argError(name)
+		}
+		if name == "ISFORMULA" {
+			// The evaluator sees values, not the formulas behind them.
+			return nil, true, formulaError("#N/A", "ISFORMULA is not supported")
+		}
+		value, err := n.arguments[0].eval(cells)
+		typed, isFormulaError := err.(*Error)
+		if !isFormulaError {
+			if err != nil {
+				return true, true, nil
+			}
+			// A stored error code reaches here as ordinary text.
+			if code, ok := value.(string); ok && isFormulaErrorCode(code) {
+				return name != "ISNA" || code == "#N/A", true, nil
+			}
+			return false, true, nil
+		}
+		switch name {
+		case "ISNA":
+			return typed.Code == "#N/A", true, nil
+		case "ISERR":
+			return typed.Code != "#N/A", true, nil
+		}
+		return true, true, nil
+	}
+	return nil, false, nil
 }
 
 type parser struct {
@@ -518,7 +638,42 @@ type parser struct {
 	scope        Scope
 }
 
-func (e *Evaluator) newParser(input, currentSheet string) (*parser, error) {
+// measureExtent finds how far each sheet's content reaches so unbounded
+// references such as A:A cover the rows in use rather than the whole grid.
+func measureExtent(addresses ...[]string) map[string]SheetExtent {
+	extent := make(map[string]SheetExtent)
+	for _, group := range addresses {
+		for _, address := range group {
+			sheetID, cell, valid := SplitCellKey(address)
+			if !valid {
+				continue
+			}
+			selected, err := cellrange.Parse(cell)
+			if err != nil {
+				continue
+			}
+			current := extent[sheetID]
+			if selected.End.Row > current.Rows {
+				current.Rows = selected.End.Row
+			}
+			if selected.End.Column > current.Columns {
+				current.Columns = selected.End.Column
+			}
+			extent[sheetID] = current
+		}
+	}
+	return extent
+}
+
+func keysOf(values map[string]any) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	return result
+}
+
+func (e *Evaluator) newParser(input, currentSheet, anchor string) (*parser, error) {
 	tokens, err := lex(input)
 	if err != nil {
 		return nil, err
@@ -527,6 +682,7 @@ func (e *Evaluator) newParser(input, currentSheet string) (*parser, error) {
 	if currentSheet != "" {
 		scope.CurrentSheet = strings.ToUpper(strings.TrimSpace(currentSheet))
 	}
+	scope.Anchor = anchor
 	return &parser{tokens: tokens, dependencies: make(map[string]struct{}), scope: scope}, nil
 }
 func (p *parser) parse() (node, error) {
@@ -577,6 +733,12 @@ func (p *parser) primary() (node, error) {
 	p.position++
 	switch current.kind {
 	case tokenNumber:
+		// 2:5 names whole rows; anywhere else a number is just a number.
+		if p.current().kind == tokenColon && p.tokens[p.position+1].kind == tokenNumber {
+			if row, err := strconv.Atoi(current.text); err == nil && row >= 1 && row <= MaxRows {
+				return p.rowBand("", row)
+			}
+		}
 		value, err := strconv.ParseFloat(current.text, 64)
 		return literalNode{value}, err
 	case tokenString:
@@ -600,6 +762,14 @@ func (p *parser) primary() (node, error) {
 		if p.current().kind == tokenBang {
 			p.position++
 			start := p.current()
+			if start.kind == tokenNumber && p.tokens[p.position+1].kind == tokenColon {
+				row, err := strconv.Atoi(start.text)
+				if err != nil || row < 1 || row > MaxRows {
+					return nil, fmt.Errorf("%q is not a row number", start.text)
+				}
+				p.position++
+				return p.rowBand(current.text, row)
+			}
 			if start.kind != tokenIdentifier {
 				return nil, fmt.Errorf("sheet qualifier must be followed by a cell reference")
 			}
@@ -627,6 +797,12 @@ func (p *parser) primary() (node, error) {
 				return nil, fmt.Errorf("missing closing parenthesis")
 			}
 			p.position++
+			if resolved, handled, err := p.referenceFunction(name, arguments); handled {
+				return resolved, err
+			}
+			if name == "TRUE" || name == "FALSE" {
+				return literalNode{name == "TRUE"}, nil
+			}
 			return functionNode{name, arguments}, nil
 		}
 		if name == "TRUE" {
@@ -634,6 +810,9 @@ func (p *parser) primary() (node, error) {
 		}
 		if name == "FALSE" {
 			return literalNode{false}, nil
+		}
+		if _, columnOnly := columnOnlyReference(name); columnOnly && p.current().kind == tokenColon {
+			return p.cellReference("", current.text)
 		}
 		if !isReference(name) {
 			return p.namedRange(current.text)
@@ -670,16 +849,23 @@ func (p *parser) namedRange(name string) (node, error) {
 	return rangeNode{rows: selected.End.Row - selected.Start.Row + 1, columns: selected.End.Column - selected.Start.Column + 1, addresses: addresses}, nil
 }
 
+// cellReference parses everything that starts with an A1-style token: a single
+// cell, an ordinary range, and the unbounded forms Google Sheets users rely on
+// to keep a formula correct as a table grows — A:A, A:C and A2:A.
 func (p *parser) cellReference(qualifier, startText string) (node, error) {
 	start := normalizeCellAddress(startText)
-	if !isReference(start) {
+	startColumn, startIsColumn := columnOnlyReference(start)
+	if !startIsColumn && !isReference(start) {
 		return nil, fmt.Errorf("%q is not a cell reference", startText)
 	}
-	startKey, err := p.scope.resolveCell(qualifier, start)
-	if err != nil {
-		return nil, err
-	}
 	if p.current().kind != tokenColon {
+		if startIsColumn {
+			return nil, fmt.Errorf("%q is not a cell reference", startText)
+		}
+		startKey, err := p.scope.resolveCell(qualifier, start)
+		if err != nil {
+			return nil, err
+		}
 		p.dependencies[startKey] = struct{}{}
 		return referenceNode{startKey}, nil
 	}
@@ -690,26 +876,126 @@ func (p *parser) cellReference(qualifier, startText string) (node, error) {
 	}
 	p.position++
 	endAddress := normalizeCellAddress(end.text)
-	selected, parseErr := cellrange.Parse(start + ":" + endAddress)
-	if parseErr != nil {
-		return nil, parseErr
+	endColumn, endIsColumn := columnOnlyReference(endAddress)
+	if !endIsColumn && !isReference(endAddress) {
+		return nil, fmt.Errorf("%q is not a cell reference", end.text)
 	}
-	count := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
+	if !startIsColumn && !endIsColumn {
+		selected, parseErr := cellrange.Parse(start + ":" + endAddress)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		return p.buildRange(qualifier, selected.Start.Row, selected.Start.Column, selected.End.Row, selected.End.Column)
+	}
+	// At least one side names a column only, so the range runs to the end of
+	// the sheet's content on the row axis.
+	firstColumn, lastColumn := startColumn, endColumn
+	firstRow, lastRow := 1, p.extent(qualifier).Rows
+	if !startIsColumn {
+		selected, parseErr := cellrange.Parse(start)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		firstColumn, firstRow = selected.Start.Column, selected.Start.Row
+	}
+	if !endIsColumn {
+		selected, parseErr := cellrange.Parse(endAddress)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		lastColumn, lastRow = selected.End.Column, selected.End.Row
+	}
+	if lastRow < firstRow {
+		lastRow = firstRow
+	}
+	if lastColumn < firstColumn {
+		firstColumn, lastColumn = lastColumn, firstColumn
+	}
+	return p.buildRange(qualifier, firstRow, firstColumn, lastRow, lastColumn)
+}
+
+// rowBand parses the 2:5 form, which spans every used column of the sheet.
+func (p *parser) rowBand(qualifier string, firstRow int) (node, error) {
+	p.position++
+	end := p.current()
+	if end.kind != tokenNumber {
+		return nil, fmt.Errorf("row range end must be a row number")
+	}
+	p.position++
+	lastRow, err := strconv.Atoi(end.text)
+	if err != nil || lastRow < 1 || lastRow > MaxRows {
+		return nil, fmt.Errorf("%q is not a row number", end.text)
+	}
+	if lastRow < firstRow {
+		firstRow, lastRow = lastRow, firstRow
+	}
+	return p.buildRange(qualifier, firstRow, 1, lastRow, p.extent(qualifier).Columns)
+}
+
+func (p *parser) extent(qualifier string) SheetExtent {
+	sheetID, err := p.sheetFor(qualifier)
+	if err != nil {
+		return SheetExtent{Rows: 1, Columns: 1}
+	}
+	return p.scope.extentOf(sheetID)
+}
+
+// sheetFor resolves a formula's sheet qualifier to the stable identifier the
+// cell keys are built from.
+func (p *parser) sheetFor(qualifier string) (string, error) {
+	if qualifier == "" {
+		return p.scope.CurrentSheet, nil
+	}
+	if p.scope.Sheets == nil {
+		return normalizeSheetName(qualifier), nil
+	}
+	sheetID, found := p.scope.Sheets[normalizeSheetName(qualifier)]
+	if !found {
+		return "", formulaError("#REF!", "unknown sheet "+qualifier)
+	}
+	return sheetID, nil
+}
+
+func (p *parser) buildRange(qualifier string, firstRow, firstColumn, lastRow, lastColumn int) (node, error) {
+	sheetID, err := p.sheetFor(qualifier)
+	if err != nil {
+		return nil, err
+	}
+	return p.buildRangeAt(sheetID, firstRow, firstColumn, lastRow, lastColumn)
+}
+
+func (p *parser) buildRangeAt(sheetID string, firstRow, firstColumn, lastRow, lastColumn int) (node, error) {
+	count := int64(lastRow-firstRow+1) * int64(lastColumn-firstColumn+1)
 	if count > 100_000 {
 		return nil, formulaError("#VALUE!", "range is too large")
 	}
 	addresses := make([]string, 0, count)
-	for row := selected.Start.Row; row <= selected.End.Row; row++ {
-		for column := selected.Start.Column; column <= selected.End.Column; column++ {
-			key, resolveErr := p.scope.resolveCell(qualifier, cellrange.Address(row, column))
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
+	for row := firstRow; row <= lastRow; row++ {
+		for column := firstColumn; column <= lastColumn; column++ {
+			key := CellKey(sheetID, cellrange.Address(row, column))
 			p.dependencies[key] = struct{}{}
 			addresses = append(addresses, key)
 		}
 	}
-	return rangeNode{rows: selected.End.Row - selected.Start.Row + 1, columns: selected.End.Column - selected.Start.Column + 1, addresses: addresses}, nil
+	if count == 1 {
+		return referenceNode{addresses[0]}, nil
+	}
+	return rangeNode{rows: lastRow - firstRow + 1, columns: lastColumn - firstColumn + 1, addresses: addresses}, nil
+}
+
+// columnOnlyReference recognises the column half of an unbounded reference.
+func columnOnlyReference(value string) (int, bool) {
+	if value == "" || len(value) > 3 {
+		return 0, false
+	}
+	column := 0
+	for index := 0; index < len(value); index++ {
+		if value[index] < 'A' || value[index] > 'Z' {
+			return 0, false
+		}
+		column = column*26 + int(value[index]-'A'+1)
+	}
+	return column, column >= 1 && column <= MaxColumns
 }
 func (p *parser) current() token { return p.tokens[p.position] }
 func operatorPrecedence(operator string) int {

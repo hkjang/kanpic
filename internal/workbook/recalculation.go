@@ -98,6 +98,12 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 			if forceAll && cell.Formula != "" {
 				changed[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
 			}
+			// INDIRECT, OFFSET and the clock and random functions do not depend
+			// only on the cells they name, so they are recalculated on every
+			// mutation rather than only when a dependency changes.
+			if cell.Formula != "" && formula.IsVolatile(cell.Formula) {
+				changed[scopedCellKey{sheetID: sheetID, cellKey: key}] = struct{}{}
+			}
 		}
 	}
 
