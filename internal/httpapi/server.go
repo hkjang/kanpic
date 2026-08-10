@@ -20,6 +20,7 @@ import (
 	"kanpic/internal/collaboration"
 	"kanpic/internal/formula"
 	"kanpic/internal/importexport"
+	"kanpic/internal/mail"
 	"kanpic/internal/observability"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
@@ -42,6 +43,7 @@ type Server struct {
 	collab      *collaboration.Hub
 	ai          ai.Orchestrator
 	automations automation.ServiceAPI
+	mail        *mail.Service
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -56,11 +58,23 @@ func NewPlatformWithAI(repository workbook.Repository, settingRepository *settin
 	return NewPlatformWithServices(repository, settingRepository, keys, authService, logs, aiService, nil, logger)
 }
 
-func NewPlatformWithServices(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, automationService automation.ServiceAPI, logger *slog.Logger) http.Handler {
+// PlatformOption configures optional services without changing the signature
+// every caller already uses.
+type PlatformOption func(*Server)
+
+// WithMail wires the notification mailer.
+func WithMail(service *mail.Service) PlatformOption {
+	return func(s *Server) { s.mail = service }
+}
+
+func NewPlatformWithServices(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, automationService automation.ServiceAPI, logger *slog.Logger, options ...PlatformOption) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService, automations: automationService}
+	for _, option := range options {
+		option(s)
+	}
 	if automationService != nil {
 		s.collab.SetMutationListener(func(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor, _ string) {
 			s.triggerCellAutomationsContext(ctx, result, cells, actor)
@@ -230,6 +244,8 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		mux.HandleFunc("GET /api/v1/admin/ai/actions", s.adminAIHistory)
 		mux.HandleFunc("GET /api/v1/admin/ai/actions/{actionId}", s.adminAIAction)
 		mux.HandleFunc("DELETE /api/v1/admin/ai/actions", s.adminPurgeAIHistory)
+		mux.HandleFunc("GET /api/v1/admin/mail/deliveries", s.adminMailDeliveries)
+		mux.HandleFunc("POST /api/v1/admin/mail:test", s.adminSendTestMail)
 		mux.HandleFunc("POST /api/v1/ai/actions:plan", s.planAIAction)
 		mux.HandleFunc("POST /api/v1/ai/prompt:preview", s.previewAIPrompt)
 		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/ai/actions", s.listAIActions)

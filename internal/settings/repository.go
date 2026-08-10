@@ -15,6 +15,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"kanpic/internal/mail"
 )
 
 type Setting struct {
@@ -90,6 +92,21 @@ var defaults = []Setting{
 	{Key: "ai.max_changes", Value: json.RawMessage(`100`), ValueType: "number", Description: "AI 계획 한 건의 최대 변경 셀 수"},
 	{Key: "ai.max_output_tokens", Value: json.RawMessage(`0`), ValueType: "number", Description: "AI 응답 최대 토큰 수. 0이면 모델의 컨텍스트 길이에서 자동 계산"},
 	{Key: "ai.history_retention_days", Value: json.RawMessage(`0`), ValueType: "number", Description: "AI 호출 이력 보존 기간(일). 0이면 계속 보관"},
+	{Key: "mail.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "이벤트 알림 메일 발송 사용"},
+	{Key: "mail.smtp_host", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 SMTP 서버 주소"},
+	{Key: "mail.smtp_port", Value: json.RawMessage(`25`), ValueType: "number", Description: "SMTP 포트. 25는 사내 릴레이, 587은 STARTTLS, 465는 TLS"},
+	{Key: "mail.security", Value: json.RawMessage(`"auto"`), ValueType: "string", Description: "전송 보안: auto, none, starttls, tls"},
+	{Key: "mail.username", Value: json.RawMessage(`""`), ValueType: "string", Description: "SMTP 사용자 이름. 비우면 인증 없이 발송"},
+	{Key: "mail.password", Value: json.RawMessage(`""`), ValueType: "string", Description: "SMTP 비밀번호", Secret: true},
+	{Key: "mail.from_address", Value: json.RawMessage(`""`), ValueType: "string", Description: "보내는 사람 주소. 비우면 kanpic@SMTP호스트"},
+	{Key: "mail.from_name", Value: json.RawMessage(`"kanpic"`), ValueType: "string", Description: "보내는 사람 이름"},
+	{Key: "mail.base_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "메일 본문 링크에 사용할 kanpic 주소"},
+	{Key: "mail.skip_tls_verify", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "사설 인증서 SMTP의 인증서 검증 생략"},
+	{Key: "mail.timeout_seconds", Value: json.RawMessage(`10`), ValueType: "number", Description: "SMTP 연결 제한 시간(초)"},
+	{Key: "mail.notify_share", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "워크북 공유 시 메일 발송"},
+	{Key: "mail.notify_comment", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글과 답글 작성 시 메일 발송"},
+	{Key: "mail.notify_mention", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글 멘션 시 메일 발송"},
+	{Key: "mail.notify_access_request", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "액세스 요청과 처리 결과 메일 발송"},
 	{Key: "automation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "워크북 자동화 실행 사용"},
 	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
 	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},
@@ -225,6 +242,11 @@ func (r *Repository) Validate(ctx context.Context) (ValidationResult, error) {
 			}
 		}
 	}
+	if enabled, ok := boolValue(values["mail.enabled"]); ok && enabled {
+		if host, ok := stringValue(values["mail.smtp_host"]); !ok || strings.TrimSpace(host) == "" {
+			issues = append(issues, ValidationIssue{Key: "mail.smtp_host", Severity: "error", Message: "메일 발송을 사용할 때 필수입니다."})
+		}
+	}
 	if enabled, ok := boolValue(values["ai.enabled"]); ok && enabled {
 		for _, key := range []string{"ai.gateway_url", "ai.model"} {
 			if value, ok := stringValue(values[key]); !ok || strings.TrimSpace(value) == "" {
@@ -267,6 +289,11 @@ func (r *Repository) Test(ctx context.Context) ([]TestResult, error) {
 		started = time.Now()
 		testErr := testAIGateway(ctx, values)
 		results = append(results, TestResult{Name: "사내 LLM Gateway", Success: testErr == nil, Message: resultMessage(testErr, "OpenAI 호환 models 연결 성공"), DurationMS: time.Since(started).Milliseconds()})
+	}
+	if enabled, _ := values["mail.enabled"].(bool); enabled {
+		started = time.Now()
+		testErr := testSMTP(ctx, values)
+		results = append(results, TestResult{Name: "사내 SMTP", Success: testErr == nil, Message: resultMessage(testErr, "SMTP 연결과 인사 성공"), DurationMS: time.Since(started).Milliseconds()})
 	}
 	if enabled, _ := values["automation.enabled"].(bool); enabled {
 		started = time.Now()
@@ -557,4 +584,13 @@ func SortedKeys(values map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// testSMTP opens a connection and greets the relay without sending anything.
+func testSMTP(ctx context.Context, values map[string]any) error {
+	config, err := mail.ConfigFromValues(values)
+	if err != nil {
+		return err
+	}
+	return mail.Verify(ctx, config)
 }

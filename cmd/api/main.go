@@ -17,6 +17,7 @@ import (
 	"kanpic/internal/automation"
 	"kanpic/internal/database"
 	"kanpic/internal/httpapi"
+	"kanpic/internal/mail"
 	"kanpic/internal/observability"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
@@ -61,7 +62,8 @@ func main() {
 	authService := auth.New(pool, settingRepository, bootstrap)
 	aiService := ai.NewService(pool, settingRepository, repository, logger)
 	automationService := automation.NewService(pool, settingRepository, repository, logger)
-	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger)
+	mailService := mail.NewService(pool, settingRepository, httpapi.NewMailDirectory(repository), logger)
+	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger, httpapi.WithMail(mailService))
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

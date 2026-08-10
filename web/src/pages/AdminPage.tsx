@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Activity, ArrowLeft, Building2, Bot, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
+import { Activity, ArrowLeft, Building2, Bot, Mail, Send, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
 import { useDialog } from '../lib/useDialog'
-import type { AdminOverview, AIAction, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
+import type { AdminOverview, AIAction, MailDeliveryPage, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'ai'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','ai','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
+type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'ai'|'mail'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','ai','mail','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
@@ -20,11 +20,12 @@ export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
     <button className={tab==='workbooks'?'active':''} onClick={()=>navigate('workbooks')}><Database/> 워크북 거버넌스 <ChevronRight/></button>
     <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
     <button className={tab==='ai'?'active':''} onClick={()=>navigate('ai')}><Bot/> AI 호출 이력 <ChevronRight/></button>
+    <button className={tab==='mail'?'active':''} onClick={()=>navigate('mail')}><Mail/> 알림 메일 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
   </nav><div className="console-nav-group"><span>바로가기</span><a href="/preferences"><ShieldCheck/> 개인 환경설정</a><a href="/"><Database/> 워크스페이스로</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='ai'&&<AIHistoryPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='ai'&&<AIHistoryPanel/>}{tab==='mail'&&<MailPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
 }
 
@@ -326,6 +327,109 @@ function AIHistoryPanel(){
       {(detail.events?.length??0)>0&&<div className="ai-detail-block"><strong>이벤트</strong><ul>{detail.events?.map(event=><li key={event.id}>{new Date(event.created_at).toLocaleString('ko-KR')} · {event.event_type}{event.tool_name?` · ${event.tool_name}`:''}</li>)}</ul></div>}
       <div className="modal-actions"><a className="secondary button-link" href={`/workbooks/${detail.workbook_id}`} target="_blank" rel="noopener">워크북 열기</a><button className="primary" onClick={()=>setDetail(undefined)}>닫기</button></div>
     </AdminModal>}
+  </main>
+}
+
+
+const MAIL_EVENT_LABEL:Record<string,string>={'share.granted':'워크북 공유','comment.created':'댓글','comment.mention':'멘션','access_request.created':'액세스 요청','access_request.decided':'요청 처리','test':'테스트'}
+const MAIL_STATUS_LABEL:Record<string,string>={queued:'발송 중',sent:'발송됨',failed:'실패',skipped:'건너뜀'}
+const MAIL_FIELDS:Array<{key:string;label:string;hint:string;type?:string}>=[
+  {key:'mail.smtp_host',label:'SMTP 서버',hint:'예: smtp.corp.local'},
+  {key:'mail.smtp_port',label:'포트',hint:'사내 릴레이 25 · STARTTLS 587 · TLS 465',type:'number'},
+  {key:'mail.security',label:'전송 보안',hint:'auto면 서버가 지원할 때만 STARTTLS를 사용합니다'},
+  {key:'mail.from_address',label:'보내는 주소',hint:'비우면 kanpic@SMTP서버'},
+  {key:'mail.from_name',label:'보내는 이름',hint:'메일 클라이언트에 표시됩니다'},
+  {key:'mail.base_url',label:'kanpic 주소',hint:'메일 본문 링크에 사용합니다'},
+  {key:'mail.username',label:'사용자 이름',hint:'비우면 인증 없이 발송합니다'},
+  {key:'mail.password',label:'비밀번호',hint:'저장 후에는 다시 표시되지 않습니다',type:'password'},
+]
+const MAIL_TOGGLES:Array<{key:string;label:string}>=[
+  {key:'mail.enabled',label:'알림 메일 사용'},
+  {key:'mail.notify_share',label:'워크북 공유'},
+  {key:'mail.notify_comment',label:'댓글과 답글'},
+  {key:'mail.notify_mention',label:'멘션'},
+  {key:'mail.notify_access_request',label:'액세스 요청'},
+  {key:'mail.skip_tls_verify',label:'사설 인증서 검증 생략'},
+]
+
+/**
+ * SMTP setup, a live connection test and the delivery log in one screen. The
+ * fields write to the same settings store as the system settings page, so this
+ * is a friendlier front door rather than a second source of truth.
+ */
+function MailPanel(){
+  const client=useQueryClient()
+  const [result,setResult]=useState('')
+  const [recipient,setRecipient]=useState('')
+  const [status,setStatus]=useState('')
+  const settings=useQuery({queryKey:['settings'],queryFn:()=>api<{items:SystemSetting[]}>('/api/v1/admin/settings')})
+  const deliveries=useQuery({queryKey:['mail-deliveries',status],queryFn:()=>api<MailDeliveryPage>(`/api/v1/admin/mail/deliveries?status=${status}&limit=100`),refetchInterval:15000})
+  const valueOf=(key:string)=>(settings.data?.items??[]).find(item=>item.key===key)?.value
+  const save=useMutation({
+    mutationFn:({key,value,type}:{key:string;value:unknown;type:'string'|'number'|'boolean'})=>api<SystemSetting>(`/api/v1/admin/settings/${key}`,{method:'PUT',body:JSON.stringify({key,value,value_type:type})}),
+    onSuccess:async()=>{setResult('설정을 저장했습니다.');await client.invalidateQueries({queryKey:['settings']})},
+    onError:error=>setResult(error instanceof Error?error.message:'설정을 저장하지 못했습니다.'),
+  })
+  const test=useMutation({
+    mutationFn:()=>api<{items:Array<{name:string;success:boolean;message:string}>}>('/api/v1/admin/settings:test',{method:'POST',body:'{}'}),
+    onSuccess:data=>{const smtp=data.items.find(item=>item.name==='사내 SMTP');setResult(smtp?`${smtp.success?'연결 성공':'연결 실패'} · ${smtp.message}`:'메일 발송이 꺼져 있어 연결을 확인하지 않았습니다.')},
+    onError:error=>setResult(error instanceof Error?error.message:'연결을 확인하지 못했습니다.'),
+  })
+  const sendTest=useMutation({
+    mutationFn:()=>api<{sent:boolean}>('/api/v1/admin/mail:test',{method:'POST',body:JSON.stringify({recipient:recipient.trim()})}),
+    onSuccess:async()=>{setResult(`${recipient} 주소로 테스트 메일을 보냈습니다.`);await client.invalidateQueries({queryKey:['mail-deliveries']})},
+    onError:async error=>{setResult(error instanceof Error?error.message:'테스트 메일을 보내지 못했습니다.');await client.invalidateQueries({queryKey:['mail-deliveries']})},
+  })
+  const summary=deliveries.data?.summary
+  return <main className="console-content">
+    <div className="content-title"><div><span className="eyebrow">NOTIFICATIONS</span><h1>알림 메일</h1><p>사내 SMTP를 연결하고 공유·댓글·액세스 요청 알림 발송을 관리합니다.</p></div>
+      <div className="title-actions"><button className="secondary" onClick={()=>test.mutate()}><ShieldCheck/> 연결 확인</button><button className="secondary" onClick={()=>deliveries.refetch()}><RefreshCw/> 새로고침</button></div></div>
+    {result&&<div className="result-banner"><CheckCircle2/><pre>{result}</pre><button onClick={()=>setResult('')}>×</button></div>}
+    <div className="metric-row">
+      <div><small>발송 성공</small><strong>{(summary?.status?.sent??0).toLocaleString()}</strong></div>
+      <div><small>실패</small><strong className={summary?.status?.failed?'error-text':''}>{(summary?.status?.failed??0).toLocaleString()}</strong></div>
+      <div><small>상태</small><strong>{valueOf('mail.enabled')===true?'사용 중':'꺼짐'}</strong></div>
+    </div>
+    <section className="admin-card">
+      <div className="card-heading"><span className="card-icon"><Mail/></span><div><h2>SMTP 연결</h2><p>사용자 이름을 비우면 인증 없이 발송합니다. 사내 릴레이는 보통 포트 25에 인증이 필요 없습니다.</p></div>{valueOf('mail.enabled')===true?<span className="enabled-badge">사용</span>:<span className="disabled-badge">중지</span>}</div>
+      <div className="settings-form-grid">
+        {MAIL_FIELDS.map(field=><label key={field.key}><span>{field.label}</span>
+          <input aria-label={field.label} key={String(valueOf(field.key))} type={field.type??'text'} defaultValue={field.type==='password'?'':String(valueOf(field.key)??'')}
+            onBlur={event=>{
+              const raw=event.target.value
+              if(field.type==='password'&&raw==='')return
+              const value=field.type==='number'?Number(raw):raw
+              if(value!==valueOf(field.key))save.mutate({key:field.key,value,type:field.type==='number'?'number':'string'})
+            }}/>
+          <small>{field.hint}</small></label>)}
+      </div>
+      <div className="mail-toggles">
+        {MAIL_TOGGLES.map(toggle=><label key={toggle.key} className="mail-toggle">
+          <input aria-label={toggle.label} type="checkbox" checked={valueOf(toggle.key)===true} onChange={event=>save.mutate({key:toggle.key,value:event.target.checked,type:'boolean'})}/>
+          <span>{toggle.label}</span>
+        </label>)}
+      </div>
+      <div className="card-actions">
+        <input aria-label="테스트 수신 주소" className="mail-test-input" placeholder="테스트 받을 주소" value={recipient} onChange={event=>setRecipient(event.target.value)}/>
+        <button className="primary" disabled={!recipient.includes('@')||sendTest.isPending} onClick={()=>sendTest.mutate()}><Send/> 테스트 메일 보내기</button>
+      </div>
+    </section>
+    <section className="admin-card">
+      <div className="card-heading compact"><div><h2>발송 이력</h2><p>최근 100건입니다. 실패한 메일은 오류 메시지와 함께 남습니다.</p></div>
+        <select aria-label="발송 상태" value={status} onChange={event=>setStatus(event.target.value)}><option value="">전체 상태</option>{Object.entries(MAIL_STATUS_LABEL).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></div>
+      <div className="log-table">
+        <div className="mail-row head"><span>시각</span><span>이벤트</span><span>수신자</span><span>제목</span><span>상태</span><span>비고</span></div>
+        {(deliveries.data?.items.length??0)===0&&<div className="ai-history-empty">발송 이력이 없습니다.</div>}
+        {deliveries.data?.items.map(item=><div className="mail-row" key={item.id}>
+          <time>{new Date(item.created_at).toLocaleString('ko-KR')}</time>
+          <span>{MAIL_EVENT_LABEL[item.event]??item.event}</span>
+          <span>{item.recipient}</span>
+          <span title={item.subject}>{item.subject}</span>
+          <em className={`ai-status ${item.status==='sent'?'applied':item.status==='failed'?'failed':''}`}>{MAIL_STATUS_LABEL[item.status]??item.status}</em>
+          <small className={item.error_message?'error-text':''}>{item.error_message||(item.attempts>1?`재시도 ${item.attempts-1}회`:'')}</small>
+        </div>)}
+      </div>
+    </section>
   </main>
 }
 

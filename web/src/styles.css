@@ -16,6 +16,15 @@ button.ai-history-row:hover{background:#f6f9f9}
 .ai-history-row .ai-status.applied,.ai-history-row .ai-status.completed,.ai-history-row .ai-status.undone{background:#eaf7f2;color:#147557}
 .ai-history-row .ai-status.failed{background:#fff0ef;color:#ad433b}
 .ai-history-empty{padding:26px;text-align:center;color:#8b979d;font-size:10px}
+.mail-row{min-width:900px;display:grid;grid-template-columns:145px 110px 190px minmax(200px,1fr) 90px 190px;gap:10px;padding:9px 13px;border-top:1px solid #edf0f2;align-items:center;font-size:9px}
+.mail-row.head{background:#f8f9fa;border-top:0;color:#78858d;font-weight:600}
+.mail-row time{color:#687680}
+.mail-row span,.mail-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-row .ai-status{font-style:normal;font-size:8px;padding:3px 6px;border-radius:9px;background:#fff3dc;color:#a36408;justify-self:start}
+.mail-toggles{display:flex;flex-wrap:wrap;gap:9px 18px;padding:0 20px 16px}
+.mail-toggle{display:flex;align-items:center;gap:6px;font-size:10px;color:#4c5c66}
+.mail-toggle input{width:14px;height:14px}
+.mail-test-input{flex:1;max-width:280px;height:31px;border:1px solid #dbe1e4;border-radius:6px;padding:0 9px;font-size:10px;margin-right:auto}
 .title-actions{display:flex;gap:7px;align-items:center}
 .button-link{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:10px;color:#4c5c66;background:white}
 .button-link:hover{border-color:#9bc5c1;color:var(--primary)}

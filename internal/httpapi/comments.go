@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kanpic/internal/mail"
 	"kanpic/internal/workbook"
 )
 
@@ -38,6 +39,7 @@ func (s *Server) createCommentThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishComment(thread, actorID(r), "created")
+	s.notifyCommentMail(r, thread, false)
 	writeJSON(w, http.StatusCreated, thread)
 }
 
@@ -61,6 +63,7 @@ func (s *Server) createCommentReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishComment(thread, actorID(r), "replied")
+	s.notifyCommentMail(r, thread, true)
 	writeJSON(w, http.StatusCreated, thread)
 }
 
@@ -154,6 +157,44 @@ func (s *Server) markMentionNotificationRead(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// notifyCommentMail tells the workbook audience about a new message and the
+// mentioned people separately, so a mention is never buried in a thread mail.
+func (s *Server) notifyCommentMail(r *http.Request, thread workbook.CommentThread, reply bool) {
+	if s.mail == nil {
+		return
+	}
+	message := thread.Messages[len(thread.Messages)-1]
+	actor := actorID(r)
+	label := s.actorLabel(r.Context(), actor)
+	book, audience := s.workbookAudience(r.Context(), thread.WorkbookID)
+	for _, participant := range thread.Messages {
+		audience = append(audience, participant.AuthorID)
+	}
+	mentioned := message.Mentions
+	audience = removeAll(audience, mentioned)
+	s.notifyMail(r.Context(), mail.CommentPosted(label, book.Title, thread.WorkbookID, thread.Range, message.Content, reply), actor, audience)
+	s.notifyMail(r.Context(), mail.Mentioned(label, book.Title, thread.WorkbookID, thread.Range, message.Content), actor, mentioned)
+}
+
+// removeAll drops the recipients that are handled by another mail.
+func removeAll(values, excluded []string) []string {
+	if len(excluded) == 0 {
+		return values
+	}
+	skip := make(map[string]struct{}, len(excluded))
+	for _, value := range excluded {
+		skip[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
+	}
+	kept := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, found := skip[strings.ToLower(strings.TrimSpace(value))]; found {
+			continue
+		}
+		kept = append(kept, value)
+	}
+	return kept
 }
 
 func (s *Server) publishComment(thread workbook.CommentThread, actor, action string) {

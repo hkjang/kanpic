@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"kanpic/internal/mail"
 	"kanpic/internal/workbook"
 )
 
@@ -128,6 +129,13 @@ func (s *Server) putWorkbookShare(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// Only a person can be mailed; department and role shares reach people
+	// through their membership, which the directory does not enumerate here.
+	if input.PrincipalType == workbook.PrincipalUser {
+		if book, err := s.repository.GetWorkbook(r.Context(), workbookID); err == nil {
+			s.notifyMail(r.Context(), mail.ShareGranted(s.actorLabel(r.Context(), actorID(r)), book.Title, workbookID, string(input.Role)), actorID(r), []string{input.PrincipalID})
+		}
+	}
 	response, err := s.sharingWithAccess(r, workbookID)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -202,6 +210,10 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 		input.RequesterName = user.DisplayName
 	}
 	request, err := s.repository.CreateAccessRequest(r.Context(), r.PathValue("workbookId"), input)
+	if err == nil {
+		book, audience := s.workbookAudience(r.Context(), r.PathValue("workbookId"))
+		s.notifyMail(r.Context(), mail.AccessRequested(s.actorLabel(r.Context(), input.RequesterID), book.Title, book.ID, string(input.RequestedRole), input.Message), input.RequesterID, audience)
+	}
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -233,6 +245,13 @@ func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishCurrentVersion(r.Context(), request.WorkbookID, actorID(r), "")
+	title := request.WorkbookTitle
+	if title == "" {
+		if book, err := s.repository.GetWorkbook(r.Context(), request.WorkbookID); err == nil {
+			title = book.Title
+		}
+	}
+	s.notifyMail(r.Context(), mail.AccessDecided(title, request.WorkbookID, request.Status, string(request.RequestedRole)), actorID(r), []string{request.RequesterID})
 	writeJSON(w, http.StatusOK, request)
 }
 
