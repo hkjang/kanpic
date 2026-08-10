@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,27 @@ import (
 	"kanpic/internal/workbook"
 )
 
+// requireWorkbookAccess guards the endpoints that name their workbook in the
+// request body. The routing middleware reads the workbook from the URL, so
+// these routes would otherwise reach any workbook by id.
+func (s *Server) requireWorkbookAccess(w http.ResponseWriter, r *http.Request, workbookID string, capability workbook.Capability) bool {
+	id := strings.TrimSpace(workbookID)
+	if id == "" {
+		s.writeError(w, r, fmt.Errorf("%w: workbook_id is required", workbook.ErrInvalid))
+		return false
+	}
+	access, err := s.repository.ResolveWorkbookAccess(r.Context(), id, s.accessPrincipal(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return false
+	}
+	if !access.Role.Allows(capability) {
+		s.writeError(w, r, fmt.Errorf("%w: 이 워크북에 대한 %s 권한이 없습니다", workbook.ErrForbidden, capability))
+		return false
+	}
+	return true
+}
+
 func (s *Server) aiConfig(w http.ResponseWriter, r *http.Request) {
 	config, err := s.ai.PublicConfig(r.Context())
 	if err != nil {
@@ -17,6 +39,32 @@ func (s *Server) aiConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, config)
+}
+
+// previewAIPrompt shows the request that would be sent for the current
+// selection. It reads cells, so it needs the same scopes as planning, but it
+// never contacts the gateway and works while AI is switched off.
+func (s *Server) previewAIPrompt(w http.ResponseWriter, r *http.Request) {
+	if !requireAPIScopes(w, r, "range.read") {
+		return
+	}
+	var input ai.PlanInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !s.requireWorkbookAccess(w, r, input.WorkbookID, workbook.CapabilityRead) {
+		return
+	}
+	input.ActorID = actorID(r)
+	if strings.TrimSpace(input.IdempotencyKey) == "" {
+		input.IdempotencyKey = "preview"
+	}
+	preview, err := s.ai.Preview(r.Context(), input)
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
 }
 
 func (s *Server) planAIAction(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +77,9 @@ func (s *Server) planAIAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if headerKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); headerKey != "" {
 		input.IdempotencyKey = headerKey
+	}
+	if !s.requireWorkbookAccess(w, r, input.WorkbookID, workbook.CapabilityRead) {
+		return
 	}
 	input.ActorID = actorID(r)
 	action, err := s.ai.Plan(r.Context(), input)

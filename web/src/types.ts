@@ -57,6 +57,7 @@ export type CellConflict = { id:string; workbook_id:string; sheet_id:string; ope
 export type MutationResult = { operation_id: string; workbook_id: string; sheet_id: string; base_version: number; server_version: number; applied_cells: number; recalculated_cells: Array<{sheet_id?:string;row:number;column:number}>; formula_errors: Array<{sheet_id?:string;row:number;column:number;code:string;message:string}>; validation_warnings:ValidationViolation[]; duplicate: boolean; conflicts: CellConflict[]; backup_version_id?:string; structural_axis?:'row'|'column'; structural_action?:'insert'|'delete'; structural_index?:number; structural_count?:number }
 export type CellConflictResolutionResult = { conflict:CellConflict; operation:MutationResult }
 export type AIConfig = { enabled:boolean; model:string; max_input_cells:number; max_changes:number }
+export type AIPromptPreview = { model:string; endpoint?:string; system_prompt:string; user_content:string; cell_count:number; temperature:number; max_tokens:number }
 export type AICellSnapshot = { value?:unknown; formula?:string; style?:Record<string,unknown>; spill_source?:string }
 export type AIProposedChange = { row:number; column:number; address:string; before:AICellSnapshot; after:AICellSnapshot }
 export type AIFinding = { row?:number; column?:number; address?:string; severity:'info'|'warning'|'critical'; title:string; description:string; cell?:AICellSnapshot }

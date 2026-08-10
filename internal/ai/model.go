@@ -143,6 +143,7 @@ type Config struct {
 type Orchestrator interface {
 	PublicConfig(context.Context) (Config, error)
 	Plan(context.Context, PlanInput) (Action, error)
+	Preview(context.Context, PlanInput) (PromptPreview, error)
 	Get(context.Context, string, string) (Action, error)
 	List(context.Context, string, string, int) ([]Action, error)
 	Approve(context.Context, string, ApprovalInput) (ExecutionResult, error)

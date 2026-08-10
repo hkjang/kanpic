@@ -31,6 +31,9 @@ func (f *fakeAIOrchestrator) Plan(_ context.Context, input ai.PlanInput) (ai.Act
 	f.action = ai.Action{ID: "ai-action", WorkbookID: input.WorkbookID, SheetID: input.SheetID, ActorID: input.ActorID, ClientID: input.ClientID, Mode: input.Mode, Range: input.Range, Request: input.Request, Status: ai.StatusPlanned, BaseVersion: input.BaseVersion, Model: "offline-test", Summary: "formula preview", Changes: []ai.ProposedChange{{Row: 1, Column: 2, Address: "B1", After: ai.CellSnapshot{Formula: "=A1*2"}}}, Revision: 1}
 	return f.action, nil
 }
+func (f *fakeAIOrchestrator) Preview(_ context.Context, input ai.PlanInput) (ai.PromptPreview, error) {
+	return ai.PromptPreview{Model: "offline-test", SystemPrompt: "system", UserContent: `{"mode":"` + input.Mode + `"}`, CellCount: 2, MaxTokens: 1024}, nil
+}
 func (f *fakeAIOrchestrator) Get(_ context.Context, _, _ string) (ai.Action, error) {
 	return f.action, nil
 }

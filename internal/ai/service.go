@@ -162,6 +162,41 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 	return action, nil
 }
 
+// Preview reports what the gateway request would contain without sending it,
+// so people can read the prompt and the exact cells before they share them.
+// It works while AI is switched off, which is how an administrator can review
+// the wording before enabling the feature.
+func (s *Service) Preview(ctx context.Context, input PlanInput) (PromptPreview, error) {
+	input = normalizePlanInput(input)
+	if err := validatePlanInput(input); err != nil {
+		return PromptPreview{}, err
+	}
+	config, err := readConfig(ctx, s.settings)
+	if err != nil {
+		return PromptPreview{}, err
+	}
+	book, err := s.workbooks.GetWorkbook(ctx, input.WorkbookID)
+	if err != nil {
+		return PromptPreview{}, err
+	}
+	if !sheetBelongsToWorkbook(book, input.SheetID) {
+		return PromptPreview{}, workbook.ErrNotFound
+	}
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return PromptPreview{}, fmt.Errorf("%w: range is invalid", ErrInvalid)
+	}
+	rows, columns := selected.End.Row-selected.Start.Row+1, selected.End.Column-selected.Start.Column+1
+	if rows < 1 || columns < 1 || rows > config.MaxInputCells || columns > config.MaxInputCells || rows > config.MaxInputCells/columns {
+		return PromptPreview{}, fmt.Errorf("%w: selected range exceeds ai.max_input_cells (%d)", ErrInvalid, config.MaxInputCells)
+	}
+	cells, err := s.workbooks.ReadRange(ctx, input.SheetID, selected)
+	if err != nil {
+		return PromptPreview{}, err
+	}
+	return BuildPrompt(config, input, selected, cells), nil
+}
+
 func (s *Service) Get(ctx context.Context, actionID, actorID string) (Action, error) {
 	action, err := scanAction(s.pool.QueryRow(ctx, `SELECT `+actionColumns+` FROM ai_actions WHERE id=$1 AND actor_id=$2`, actionID, actorID))
 	if errors.Is(err, pgx.ErrNoRows) {
