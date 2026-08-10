@@ -21,6 +21,14 @@ button.ai-history-row:hover{background:#f6f9f9}
 .mail-row time{color:#687680}
 .mail-row span,.mail-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mail-row .ai-status{font-style:normal;font-size:8px;padding:3px 6px;border-radius:9px;background:#fff3dc;color:#a36408;justify-self:start}
+.tracking-providers{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px;padding:16px 20px 4px}
+.tracking-providers button{border:1px solid #dde5e6;background:white;border-radius:8px;padding:10px;text-align:left;display:flex;flex-direction:column;gap:3px}
+.tracking-providers button strong{font-size:11px;color:#33454e}
+.tracking-providers button em{font-style:normal;font-size:8px;color:#8b979d;line-height:1.5}
+.tracking-providers button.active{border-color:var(--primary);background:var(--primary-soft)}
+.tracking-providers button.active strong{color:var(--primary)}
+.tracking-preview{margin:0;padding:14px 20px 18px;font-size:9px;line-height:1.7;white-space:pre-wrap;word-break:break-all;color:#44545d}
+.settings-form-grid textarea{font-family:ui-monospace,Menlo,monospace;font-size:9px}
 .mail-toggles{display:flex;flex-wrap:wrap;gap:9px 18px;padding:0 20px 16px}
 .mail-toggle{display:flex;align-items:center;gap:6px;font-size:10px;color:#4c5c66}
 .mail-toggle input{width:14px;height:14px}

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"kanpic/internal/analytics"
 	"kanpic/internal/mail"
 )
 
@@ -107,6 +108,15 @@ var defaults = []Setting{
 	{Key: "mail.notify_comment", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글과 답글 작성 시 메일 발송"},
 	{Key: "mail.notify_mention", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글 멘션 시 메일 발송"},
 	{Key: "mail.notify_access_request", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "액세스 요청과 처리 결과 메일 발송"},
+	{Key: "analytics.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "방문자 추적 코드 삽입 사용"},
+	{Key: "analytics.provider", Value: json.RawMessage(`"none"`), ValueType: "string", Description: "추적 도구: none, ga4, gtm, matomo, custom"},
+	{Key: "analytics.measurement_id", Value: json.RawMessage(`""`), ValueType: "string", Description: "GA4 측정 ID(G-) 또는 GTM 컨테이너 ID(GTM-)"},
+	{Key: "analytics.matomo_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "Matomo 서버 주소"},
+	{Key: "analytics.matomo_site_id", Value: json.RawMessage(`""`), ValueType: "string", Description: "Matomo 사이트 ID"},
+	{Key: "analytics.custom_snippet", Value: json.RawMessage(`""`), ValueType: "string", Description: "직접 입력하는 추적 코드. script 태그를 포함한 HTML"},
+	{Key: "analytics.allowed_hosts", Value: json.RawMessage(`""`), ValueType: "string", Description: "추적 코드가 접속할 추가 도메인. 쉼표로 구분"},
+	{Key: "analytics.include_admin", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "관리자·개인 설정 화면에도 추적 코드 삽입"},
+	{Key: "analytics.placement", Value: json.RawMessage(`"head"`), ValueType: "string", Description: "삽입 위치: head 또는 body"},
 	{Key: "automation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "워크북 자동화 실행 사용"},
 	{Key: "automation.max_cells_per_run", Value: json.RawMessage(`1000`), ValueType: "number", Description: "자동화 실행 한 건의 최대 변경 셀 수"},
 	{Key: "automation.max_runs_per_hour", Value: json.RawMessage(`100`), ValueType: "number", Description: "워크북별 시간당 자동화 실행 한도"},
@@ -240,6 +250,11 @@ func (r *Repository) Validate(ctx context.Context) (ValidationResult, error) {
 			if value, ok := stringValue(values[key]); !ok || strings.TrimSpace(value) == "" {
 				issues = append(issues, ValidationIssue{Key: key, Severity: "error", Message: "OIDC를 사용할 때 필수입니다."})
 			}
+		}
+	}
+	if enabled, ok := boolValue(values["analytics.enabled"]); ok && enabled {
+		if issue := validateAnalytics(values); issue != "" {
+			issues = append(issues, ValidationIssue{Key: "analytics.provider", Severity: "error", Message: issue})
 		}
 	}
 	if enabled, ok := boolValue(values["mail.enabled"]); ok && enabled {
@@ -593,4 +608,20 @@ func testSMTP(ctx context.Context, values map[string]any) error {
 		return err
 	}
 	return mail.Verify(ctx, config)
+}
+
+// validateAnalytics reuses the analytics rules so the settings screen reports
+// a missing measurement id before a page is served without tracking.
+func validateAnalytics(items map[string]Setting) string {
+	values := make(map[string]any, len(items))
+	for key, item := range items {
+		var decoded any
+		if err := json.Unmarshal(item.Value, &decoded); err == nil {
+			values[key] = decoded
+		}
+	}
+	if err := analytics.ReadConfig(values).Validate(); err != nil {
+		return err.Error()
+	}
+	return ""
 }

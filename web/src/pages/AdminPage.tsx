@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Activity, ArrowLeft, Building2, Bot, Mail, Send, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
+import { Activity, ArrowLeft, Building2, Bot, LineChart, Mail, Send, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
 import { useDialog } from '../lib/useDialog'
 import type { AdminOverview, AIAction, MailDeliveryPage, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
-type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'ai'|'mail'|'logs'|'keys'|'system'
-const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','ai','mail','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
+type Tab='overview'|'settings'|'users'|'departments'|'workbooks'|'ai'|'mail'|'analytics'|'logs'|'keys'|'system'
+const tabFromURL=():Tab=>{const value=new URLSearchParams(location.search).get('tab');return ['settings','users','departments','workbooks','ai','mail','analytics','logs','keys','system'].includes(value||'')?value as Tab:'overview'}
 
 export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [tab,setTab]=useState<Tab>(tabFromURL())
@@ -21,11 +21,12 @@ export function AdminPage({build,session}:{build?:BuildInfo;session?:Session}) {
     <button className={tab==='departments'?'active':''} onClick={()=>navigate('departments')}><Building2/> 부서 및 공유 <ChevronRight/></button>
     <button className={tab==='ai'?'active':''} onClick={()=>navigate('ai')}><Bot/> AI 호출 이력 <ChevronRight/></button>
     <button className={tab==='mail'?'active':''} onClick={()=>navigate('mail')}><Mail/> 알림 메일 <ChevronRight/></button>
+    <button className={tab==='analytics'?'active':''} onClick={()=>navigate('analytics')}><LineChart/> 방문자 추적 <ChevronRight/></button>
     <button className={tab==='logs'?'active':''} onClick={()=>navigate('logs')}><Activity/> 서버 로그 <ChevronRight/></button>
     <button className={tab==='keys'?'active':''} onClick={()=>navigate('keys')}><KeyRound/> API 키 현황 <ChevronRight/></button>
     <button className={tab==='system'?'active':''} onClick={()=>navigate('system')}><ServerCog/> 시스템 상태 <ChevronRight/></button>
   </nav><div className="console-nav-group"><span>바로가기</span><a href="/preferences"><ShieldCheck/> 개인 환경설정</a><a href="/"><Database/> 워크스페이스로</a></div><a className="back-link" href="/"><ArrowLeft/> 워크스페이스로</a></aside>
-    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='ai'&&<AIHistoryPanel/>}{tab==='mail'&&<MailPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
+    <div className="console-main"><header className="console-header"><div><span className="status-pill"><i/> 시스템 정상</span></div><ProfileMenu build={build} session={session}/></header>{tab==='overview'&&<OverviewPanel onNavigate={navigate}/>}{tab==='settings'&&<SettingsPanel/>}{tab==='users'&&<UsersPanel/>}{tab==='departments'&&<DepartmentsPanel/>}{tab==='workbooks'&&<WorkbookGovernancePanel/>}{tab==='ai'&&<AIHistoryPanel/>}{tab==='mail'&&<MailPanel/>}{tab==='analytics'&&<AnalyticsPanel/>}{tab==='logs'&&<LogsPanel/>}{tab==='keys'&&<AdminKeysPanel/>}{tab==='system'&&<SystemPanel build={build}/>}</div>
   </div>
 }
 
@@ -365,11 +366,7 @@ function MailPanel(){
   const settings=useQuery({queryKey:['settings'],queryFn:()=>api<{items:SystemSetting[]}>('/api/v1/admin/settings')})
   const deliveries=useQuery({queryKey:['mail-deliveries',status],queryFn:()=>api<MailDeliveryPage>(`/api/v1/admin/mail/deliveries?status=${status}&limit=100`),refetchInterval:15000})
   const valueOf=(key:string)=>(settings.data?.items??[]).find(item=>item.key===key)?.value
-  const save=useMutation({
-    mutationFn:({key,value,type}:{key:string;value:unknown;type:'string'|'number'|'boolean'})=>api<SystemSetting>(`/api/v1/admin/settings/${key}`,{method:'PUT',body:JSON.stringify({key,value,value_type:type})}),
-    onSuccess:async()=>{setResult('설정을 저장했습니다.');await client.invalidateQueries({queryKey:['settings']})},
-    onError:error=>setResult(error instanceof Error?error.message:'설정을 저장하지 못했습니다.'),
-  })
+  const save=useSettingSaver(setResult)
   const test=useMutation({
     mutationFn:()=>api<{items:Array<{name:string;success:boolean;message:string}>}>('/api/v1/admin/settings:test',{method:'POST',body:'{}'}),
     onSuccess:data=>{const smtp=data.items.find(item=>item.name==='사내 SMTP');setResult(smtp?`${smtp.success?'연결 성공':'연결 실패'} · ${smtp.message}`:'메일 발송이 꺼져 있어 연결을 확인하지 않았습니다.')},
@@ -429,6 +426,116 @@ function MailPanel(){
           <small className={item.error_message?'error-text':''}>{item.error_message||(item.attempts>1?`재시도 ${item.attempts-1}회`:'')}</small>
         </div>)}
       </div>
+    </section>
+  </main>
+}
+
+
+/**
+ * Saves one system setting and updates the cached list immediately, so a toggle
+ * flips under the pointer instead of after a server round trip.
+ */
+function useSettingSaver(onDone:(message:string)=>void){
+  const client=useQueryClient()
+  return useMutation({
+    mutationFn:({key,value,type}:{key:string;value:unknown;type:'string'|'number'|'boolean'})=>
+      api<SystemSetting>(`/api/v1/admin/settings/${key}`,{method:'PUT',body:JSON.stringify({key,value,value_type:type})}),
+    onMutate:async({key,value})=>{
+      await client.cancelQueries({queryKey:['settings']})
+      const previous=client.getQueryData<{items:SystemSetting[]}>(['settings'])
+      client.setQueryData<{items:SystemSetting[]}>(['settings'],current=>current&&({
+        items:current.items.map(item=>item.key===key?{...item,value}:item),
+      }))
+      return {previous}
+    },
+    onError:(error,_input,context)=>{
+      if(context?.previous)client.setQueryData(['settings'],context.previous)
+      onDone(error instanceof Error?error.message:'설정을 저장하지 못했습니다.')
+    },
+    onSuccess:()=>onDone('저장했습니다.'),
+    onSettled:()=>client.invalidateQueries({queryKey:['settings']}),
+  })
+}
+
+const TRACKING_PROVIDERS:Array<{id:string;label:string;hint:string}>=[
+  {id:'none',label:'사용 안 함',hint:'추적 코드를 넣지 않습니다.'},
+  {id:'ga4',label:'Google Analytics 4',hint:'측정 ID(G-)만 입력하면 로더와 설정 코드를 자동으로 만듭니다.'},
+  {id:'gtm',label:'Google Tag Manager',hint:'컨테이너 ID(GTM-)를 입력하면 컨테이너 로더를 넣습니다.'},
+  {id:'matomo',label:'Matomo (사내 설치)',hint:'서버 주소와 사이트 ID로 자체 호스팅 추적을 사용합니다.'},
+  {id:'custom',label:'직접 입력',hint:'사내 분석 도구의 script 태그를 그대로 붙여 넣습니다.'},
+]
+
+/**
+ * Visitor tracking is a snippet plus the policy it needs. This screen keeps the
+ * two together: pick a provider, fill in the identifier, and the preview shows
+ * exactly what will be inserted into every page.
+ */
+function AnalyticsPanel(){
+  const client=useQueryClient()
+  const [result,setResult]=useState('')
+  const settings=useQuery({queryKey:['settings'],queryFn:()=>api<{items:SystemSetting[]}>('/api/v1/admin/settings')})
+  const valueOf=(key:string)=>(settings.data?.items??[]).find(item=>item.key===key)?.value
+  const provider=String(valueOf('analytics.provider')??'none')
+  const enabled=valueOf('analytics.enabled')===true
+  const save=useSettingSaver(message=>setResult(message==='저장했습니다.'?'저장했습니다. 새로 여는 페이지부터 적용됩니다.':message))
+  const validate=useMutation({
+    mutationFn:()=>api<{issues:Array<{key:string;message:string}>}>('/api/v1/admin/settings:validate',{method:'POST',body:'{}'}),
+    onSuccess:data=>{
+      const issue=(data.issues??[]).find(item=>item.key.startsWith('analytics.'))
+      setResult(issue?`설정 확인 필요 · ${issue.message}`:'설정에 문제가 없습니다.')
+    },
+    onError:error=>setResult(error instanceof Error?error.message:'설정을 확인하지 못했습니다.'),
+  })
+  const measurement=String(valueOf('analytics.measurement_id')??'')
+  const matomoURL=String(valueOf('analytics.matomo_url')??'')
+  const matomoSite=String(valueOf('analytics.matomo_site_id')??'')
+  const custom=String(valueOf('analytics.custom_snippet')??'')
+  const preview=provider==='ga4'&&measurement
+    ?`<script async src="https://www.googletagmanager.com/gtag/js?id=${measurement}"></script>\n<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${measurement}');</script>`
+    :provider==='gtm'&&measurement?`<script>(function(w,d,s,l,i){…})(window,document,'script','dataLayer','${measurement}');</script>`
+    :provider==='matomo'&&matomoURL&&matomoSite?`<script>var _paq=window._paq=window._paq||[];_paq.push(['trackPageView']);…_paq.push(['setSiteId','${matomoSite}']);…u="${matomoURL.replace(/\/$/,'')}/"…</script>`
+    :provider==='custom'?custom:''
+  return <main className="console-content">
+    <div className="content-title"><div><span className="eyebrow">ANALYTICS</span><h1>방문자 추적</h1><p>방문자 데이터 수집용 추적 코드를 모든 사용자 화면에 삽입합니다.</p></div>
+      <div className="title-actions"><button className="secondary" onClick={()=>validate.mutate()}><ShieldCheck/> 설정 확인</button></div></div>
+    {result&&<div className="result-banner"><CheckCircle2/><pre>{result}</pre><button onClick={()=>setResult('')}>×</button></div>}
+    <section className="admin-card">
+      <div className="card-heading"><span className="card-icon"><LineChart/></span><div><h2>추적 도구</h2><p>도구를 고르고 식별자만 넣으면 코드와 보안 정책이 자동으로 구성됩니다.</p></div>{enabled?<span className="enabled-badge">삽입 중</span>:<span className="disabled-badge">중지</span>}</div>
+      <div className="tracking-providers" role="radiogroup" aria-label="추적 도구">
+        {TRACKING_PROVIDERS.map(item=><button type="button" key={item.id} role="radio" aria-checked={provider===item.id} className={provider===item.id?'active':''}
+          onClick={()=>save.mutate({key:'analytics.provider',value:item.id,type:'string'})}>
+          <strong>{item.label}</strong><em>{item.hint}</em>
+        </button>)}
+      </div>
+      <div className="settings-form-grid">
+        {(provider==='ga4'||provider==='gtm')&&<label className="wide"><span>{provider==='ga4'?'측정 ID':'컨테이너 ID'}</span>
+          <input aria-label="측정 ID" key={measurement} defaultValue={measurement} placeholder={provider==='ga4'?'G-XXXXXXXXXX':'GTM-XXXXXXX'}
+            onBlur={event=>{if(event.target.value!==measurement)save.mutate({key:'analytics.measurement_id',value:event.target.value.trim(),type:'string'})}}/>
+          <small>Google 계정에서 발급한 식별자입니다.</small></label>}
+        {provider==='matomo'&&<>
+          <label><span>Matomo 주소</span><input aria-label="Matomo 주소" key={matomoURL} defaultValue={matomoURL} placeholder="https://matomo.corp.local"
+            onBlur={event=>{if(event.target.value!==matomoURL)save.mutate({key:'analytics.matomo_url',value:event.target.value.trim(),type:'string'})}}/><small>사내에 설치한 Matomo 주소</small></label>
+          <label><span>사이트 ID</span><input aria-label="사이트 ID" key={matomoSite} defaultValue={matomoSite} placeholder="1"
+            onBlur={event=>{if(event.target.value!==matomoSite)save.mutate({key:'analytics.matomo_site_id',value:event.target.value.trim(),type:'string'})}}/><small>Matomo에서 발급한 번호</small></label>
+        </>}
+        {provider==='custom'&&<label className="wide"><span>추적 코드</span>
+          <textarea aria-label="추적 코드" key={custom.length} defaultValue={custom} rows={6} placeholder={'<script src="https://stats.corp.local/t.js"></script>'}
+            onBlur={event=>{if(event.target.value!==custom)save.mutate({key:'analytics.custom_snippet',value:event.target.value,type:'string'})}}/>
+          <small>script 태그를 포함한 HTML을 그대로 넣습니다. 최대 8KB이며 nonce는 자동으로 붙습니다.</small></label>}
+        {provider!=='none'&&<label className="wide"><span>추가 허용 도메인</span>
+          <input aria-label="추가 허용 도메인" key={String(valueOf('analytics.allowed_hosts'))} defaultValue={String(valueOf('analytics.allowed_hosts')??'')} placeholder="https://stats.corp.local, https://cdn.corp.local"
+            onBlur={event=>{if(event.target.value!==String(valueOf('analytics.allowed_hosts')??''))save.mutate({key:'analytics.allowed_hosts',value:event.target.value.trim(),type:'string'})}}/>
+          <small>직접 입력한 코드가 접속하는 도메인입니다. 콘텐츠 보안 정책에 함께 허용됩니다.</small></label>}
+      </div>
+      <div className="mail-toggles">
+        <label className="mail-toggle"><input aria-label="추적 코드 삽입" type="checkbox" checked={enabled} onChange={event=>save.mutate({key:'analytics.enabled',value:event.target.checked,type:'boolean'})}/><span>추적 코드 삽입</span></label>
+        <label className="mail-toggle"><input aria-label="관리자 화면 포함" type="checkbox" checked={valueOf('analytics.include_admin')===true} onChange={event=>save.mutate({key:'analytics.include_admin',value:event.target.checked,type:'boolean'})}/><span>관리자·개인 설정 화면 포함</span></label>
+        <label className="mail-toggle"><input aria-label="body 끝에 삽입" type="checkbox" checked={valueOf('analytics.placement')==='body'} onChange={event=>save.mutate({key:'analytics.placement',value:event.target.checked?'body':'head',type:'string'})}/><span>body 끝에 삽입 (기본은 head)</span></label>
+      </div>
+    </section>
+    <section className="admin-card">
+      <div className="card-heading compact"><div><h2>삽입될 코드</h2><p>페이지마다 nonce가 새로 부여되며, 필요한 도메인은 보안 정책에 자동으로 추가됩니다.</p></div></div>
+      <pre className="tracking-preview">{preview||'추적 도구를 선택하고 식별자를 입력하면 여기에 표시됩니다.'}</pre>
     </section>
   </main>
 }

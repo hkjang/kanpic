@@ -214,6 +214,40 @@ POST /api/v1/admin/mail:test   {"recipient":"admin@corp.example"}
 
 ---
 
+## 방문자 추적 (Analytics)
+
+콘솔의 **방문자 추적** 화면에서 웹사이트 방문자 데이터를 수집하는 자바스크립트를 넣습니다. 제공자를 고르고 식별자만 입력하면 삽입할 코드와 그 코드가 필요로 하는 콘텐츠 보안 정책(CSP)이 함께 만들어지므로, 정책을 따로 손볼 필요가 없습니다.
+
+| 키 | 기본값 | 설명 |
+| --- | --- | --- |
+| `analytics.enabled` | `false` | 추적 코드 삽입 사용 |
+| `analytics.provider` | `none` | `none`, `ga4`, `gtm`, `matomo`, `custom` |
+| `analytics.measurement_id` | 빈 값 | GA4 측정 ID(`G-`) 또는 GTM 컨테이너 ID(`GTM-`) |
+| `analytics.matomo_url` | 빈 값 | 자체 호스팅 Matomo 주소 |
+| `analytics.matomo_site_id` | 빈 값 | Matomo 사이트 ID |
+| `analytics.custom_snippet` | 빈 값 | 직접 입력하는 `<script>` 코드. 최대 8KB |
+| `analytics.allowed_hosts` | 빈 값 | 직접 입력한 코드가 접속하는 도메인. 쉼표로 구분 |
+| `analytics.include_admin` | `false` | 관리자·개인 설정 화면에도 삽입 |
+| `analytics.placement` | `head` | `head` 또는 `body` 끝에 삽입 |
+
+- **Google Analytics 4**와 **Google Tag Manager**는 ID만 넣으면 로더와 초기화 코드를 만들고 `googletagmanager.com`·`google-analytics.com`을 정책에 함께 허용합니다.
+- **Matomo**는 서버 주소에서 원본(origin)을 뽑아 스크립트·수집 요청·이미지 전송을 허용하므로 폐쇄망 자체 호스팅에 그대로 쓸 수 있습니다.
+- **직접 입력**은 사내 분석 도구의 태그를 그대로 붙여 넣는 방식입니다. 코드가 다른 도메인에 접속한다면 **추가 허용 도메인**에 적습니다.
+- 화면 아래 **미리보기**는 실제로 삽입될 코드를 그대로 보여 주고, **설정 확인**은 빠진 값이 있으면 어떤 키가 문제인지 알려 줍니다.
+
+### 보안 정책과의 관계
+
+kanpic은 `script-src 'self'` 기반의 엄격한 CSP를 보내며 `unsafe-inline`을 쓰지 않습니다. 추적 코드는 **요청마다 새로 만드는 nonce**를 붙여 삽입하고 같은 nonce를 응답 헤더의 `script-src`에 넣기 때문에, 정책을 느슨하게 만들지 않고도 인라인 코드가 실행됩니다. 페이지 응답은 `Cache-Control: no-store`이므로 nonce가 재사용되지 않습니다.
+
+- 붙여 넣은 코드에 이미 `nonce` 속성이 있으면 건드리지 않고, 없는 `<script>` 태그에만 nonce를 붙입니다.
+- 관리자 콘솔(`/admin`)과 개인 설정(`/preferences`)은 기본적으로 추적하지 않습니다. 콘솔 이용까지 집계하려면 **관리자 화면 포함**을 켭니다.
+- `analytics.enabled`가 꺼져 있으면 코드도, 추가 허용 도메인도 응답에 나타나지 않습니다. 제공자 설정은 그대로 남아 있으므로 스위치만으로 껐다 켤 수 있습니다.
+- 설정 변경은 저장 즉시 적용되며, 이미 열려 있는 화면은 새로 고침한 뒤부터 반영됩니다.
+
+수집 도구가 브라우저 밖으로 데이터를 보내는 만큼, 개인정보 처리방침과 사내 규정에 맞는 도구인지 확인한 뒤 사용하십시오. 폐쇄망에서는 Matomo 자체 호스팅이나 사내 수집기를 **직접 입력**으로 연결하는 방식을 권장합니다.
+
+---
+
 ### AI 호출 이력
 
 콘솔의 **AI 호출 이력** 화면은 조직 전체의 AI 요청을 한 곳에서 보여 줍니다. 사용자, 워크북, 작업 유형, 상태, 기간, 요청 문장으로 걸러 보고 행을 누르면 요청·요약·설명·변경 셀·이벤트 타임라인을 확인합니다. 상단 카드에는 전체 요청 수, 적용·실패 건수, 입력과 응답 토큰 합계가 표시되고 아래에는 현재 필터 기준 사용량 상위 사용자가 나옵니다.

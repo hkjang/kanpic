@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kanpic/internal/ai"
+	"kanpic/internal/analytics"
 	"kanpic/internal/apikey"
 	"kanpic/internal/auth"
 	"kanpic/internal/automation"
@@ -264,7 +265,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	}
 	mux.HandleFunc("POST /mcp", s.mcp)
 	if directory := staticDirectory(); directory != "" {
-		static := spaHandler(directory)
+		static := s.spaHandler(directory)
 		mux.Handle("GET /", static)
 	}
 	return s.middleware(mux)
@@ -803,6 +804,29 @@ func (s *Server) workbookIDForSheet(ctx context.Context, sheetID string) string 
 	return ""
 }
 
+// pagePolicy keeps the strict page policy and adds only what the configured
+// tracking snippet needs, including a nonce for its inline code.
+func (s *Server) pagePolicy(ctx context.Context, path, nonce string) string {
+	return s.policyFor(s.analyticsConfig(ctx), path, nonce)
+}
+
+func (s *Server) policyFor(config analytics.Config, path, nonce string) string {
+	scripts := []string{"'self'"}
+	connects := []string{"'self'", "ws:", "wss:"}
+	images := []string{"'self'", "data:"}
+	if config.Active(path) {
+		extraScripts, extraConnects, extraImages := config.PolicySources()
+		scripts = append(scripts, "'nonce-"+nonce+"'")
+		scripts = append(scripts, extraScripts...)
+		connects = append(connects, extraConnects...)
+		images = append(images, extraImages...)
+	}
+	return "default-src 'self'; script-src " + strings.Join(scripts, " ") +
+		"; style-src 'self'; img-src " + strings.Join(images, " ") +
+		"; connect-src " + strings.Join(connects, " ") +
+		"; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -815,7 +839,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 		} else {
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+			nonce := identity.New()
+			r = r.WithContext(context.WithValue(r.Context(), nonceKey{}, nonce))
+			w.Header().Set("Content-Security-Policy", s.pagePolicy(r.Context(), r.URL.Path, nonce))
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method == http.MethodOptions {
@@ -1134,7 +1160,67 @@ func staticDirectory() string {
 	return ""
 }
 
-func spaHandler(directory string) http.Handler {
+// nonceKey carries the per-request script nonce from the middleware to the
+// page handler so the policy header and the injected snippet agree.
+type nonceKey struct{}
+
+func requestNonce(r *http.Request) string {
+	value, _ := r.Context().Value(nonceKey{}).(string)
+	return value
+}
+
+// analyticsConfig reads the tracking settings. Failures are treated as "no
+// tracking" so a settings outage never breaks the page.
+func (s *Server) analyticsConfig(ctx context.Context) analytics.Config {
+	if s.settings == nil {
+		return analytics.Config{}
+	}
+	values, err := s.settings.Values(ctx)
+	if err != nil {
+		return analytics.Config{}
+	}
+	return analytics.ReadConfig(values)
+}
+
+// serveIndex injects the tracking snippet into the single page shell. The file
+// is small and served with no-store, so it is read and rewritten per request
+// rather than cached in a second place.
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request, directory string) {
+	s.serveIndexWith(w, r, directory, s.analyticsConfig(r.Context()))
+}
+
+func (s *Server) serveIndexWith(w http.ResponseWriter, r *http.Request, directory string, config analytics.Config) {
+	path := filepath.Join(directory, "index.html")
+	page, err := os.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if config.Active(r.URL.Path) {
+		if snippet := config.Snippet(requestNonce(r)); snippet != "" {
+			page = injectSnippet(page, snippet, config.Placement)
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(page)))
+}
+
+// injectSnippet places the markup just before the closing tag it belongs to,
+// falling back to the end of the document when the tag is missing.
+func injectSnippet(page []byte, snippet, placement string) []byte {
+	marker := "</head>"
+	if placement == "body" {
+		marker = "</body>"
+	}
+	text := string(page)
+	index := strings.LastIndex(strings.ToLower(text), marker)
+	if index < 0 {
+		return []byte(text + "\n" + snippet + "\n")
+	}
+	return []byte(text[:index] + snippet + "\n" + text[index:])
+}
+
+func (s *Server) spaHandler(directory string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := strings.TrimPrefix(filepath.Clean("/"+r.URL.Path), string(filepath.Separator))
 		candidate := filepath.Join(directory, clean)
@@ -1146,6 +1232,6 @@ func spaHandler(directory string) http.Handler {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFile(w, r, filepath.Join(directory, "index.html"))
+		s.serveIndex(w, r, directory)
 	})
 }
