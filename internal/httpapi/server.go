@@ -45,6 +45,7 @@ type Server struct {
 	ai          ai.Orchestrator
 	automations automation.ServiceAPI
 	mail        *mail.Service
+	violations  *analytics.Recorder
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -72,7 +73,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService, automations: automationService}
+	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService, automations: automationService, violations: analytics.NewRecorder()}
 	for _, option := range options {
 		option(s)
 	}
@@ -115,6 +116,10 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("POST /api/v1/access-requests/{requestAction}", s.decideAccessRequest)
 	mux.HandleFunc("GET /api/v1/users:lookup", s.lookupUsers)
 	mux.HandleFunc("GET /api/v1/formula/functions", s.listFormulaFunctions)
+	mux.HandleFunc("POST "+cspReportPath, s.receiveCSPReport)
+	mux.HandleFunc("GET /api/v1/admin/analytics/violations", s.listAnalyticsViolations)
+	mux.HandleFunc("DELETE /api/v1/admin/analytics/violations", s.clearAnalyticsViolations)
+	mux.HandleFunc("POST /api/v1/admin/analytics/violations:allow", s.allowAnalyticsHost)
 	mux.HandleFunc("GET /api/v1/templates", s.listTemplates)
 	mux.HandleFunc("GET /api/v1/admin/overview", s.adminOverview)
 	mux.HandleFunc("GET /api/v1/admin/workbooks", s.governedWorkbooks)
@@ -821,10 +826,16 @@ func (s *Server) policyFor(config analytics.Config, path, nonce string) string {
 		connects = append(connects, extraConnects...)
 		images = append(images, extraImages...)
 	}
-	return "default-src 'self'; script-src " + strings.Join(scripts, " ") +
+	policy := "default-src 'self'; script-src " + strings.Join(scripts, " ") +
 		"; style-src 'self'; img-src " + strings.Join(images, " ") +
 		"; connect-src " + strings.Join(connects, " ") +
 		"; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	if config.Active(path) {
+		// While tracking is on, ask the browser to say what it refused. That
+		// report is what turns a console error into a one-click fix.
+		policy += "; report-uri " + cspReportPath
+	}
+	return policy
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {

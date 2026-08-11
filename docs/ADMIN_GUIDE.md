@@ -226,13 +226,14 @@ POST /api/v1/admin/mail:test   {"recipient":"admin@corp.example"}
 | `analytics.matomo_url` | 빈 값 | 자체 호스팅 Matomo 주소 |
 | `analytics.matomo_site_id` | 빈 값 | Matomo 사이트 ID |
 | `analytics.custom_snippet` | 빈 값 | 직접 입력하는 `<script>` 코드. 최대 8KB |
-| `analytics.allowed_hosts` | 빈 값 | 직접 입력한 코드가 접속하는 도메인. 쉼표로 구분 |
+| `analytics.allowed_hosts` | 빈 값 | 코드에서 찾지 못한 도메인을 직접 추가. 쉼표로 구분 |
 | `analytics.include_admin` | `false` | 관리자·개인 설정 화면에도 삽입 |
 | `analytics.placement` | `head` | `head` 또는 `body` 끝에 삽입 |
 
 - **Google Analytics 4**와 **Google Tag Manager**는 ID만 넣으면 로더와 초기화 코드를 만들고 `googletagmanager.com`·`google-analytics.com`을 정책에 함께 허용합니다.
 - **Matomo**는 서버 주소에서 원본(origin)을 뽑아 스크립트·수집 요청·이미지 전송을 허용하므로 폐쇄망 자체 호스팅에 그대로 쓸 수 있습니다.
-- **직접 입력**은 사내 분석 도구의 태그를 그대로 붙여 넣는 방식입니다. 코드가 다른 도메인에 접속한다면 **추가 허용 도메인**에 적습니다.
+- **직접 입력**은 사내 분석 도구의 태그를 그대로 붙여 넣는 방식입니다. **붙여 넣은 코드에 적힌 주소는 자동으로 허용됩니다.** 스크립트를 내려받는 주소, 수집 엔드포인트, 픽셀 주소를 코드에서 찾아 정책에 넣으므로 대부분 추가 설정이 필요 없습니다. 화면의 미리보기 아래에 찾아낸 도메인이 표시됩니다.
+- 주소를 코드 안에서 조립하는 도구라면 찾아낼 수 없습니다. 이때는 아래 **차단된 요청** 목록에서 한 번에 허용하거나 **추가 허용 도메인**에 직접 적습니다.
 - 화면 아래 **미리보기**는 실제로 삽입될 코드를 그대로 보여 주고, **설정 확인**은 빠진 값이 있으면 어떤 키가 문제인지 알려 줍니다.
 
 ### 보안 정책과의 관계
@@ -242,6 +243,21 @@ kanpic은 `script-src 'self'` 기반의 엄격한 CSP를 보내며 `unsafe-inlin
 - 붙여 넣은 코드에 이미 `nonce` 속성이 있으면 건드리지 않고, 없는 `<script>` 태그에만 nonce를 붙입니다.
 - 관리자 콘솔(`/admin`)과 개인 설정(`/preferences`)은 기본적으로 추적하지 않습니다. 콘솔 이용까지 집계하려면 **관리자 화면 포함**을 켭니다.
 - `analytics.enabled`가 꺼져 있으면 코드도, 추가 허용 도메인도 응답에 나타나지 않습니다. 제공자 설정은 그대로 남아 있으므로 스위치만으로 껐다 켤 수 있습니다.
+
+### 차단된 요청 확인과 허용
+
+추적이 켜져 있는 동안에는 정책에 `report-uri`가 함께 나가므로, 브라우저가 무엇을 막았는지 서버로 알려 줍니다. 콘솔의 **차단된 요청** 카드에서 막힌 주소·지시문·횟수·마지막 시각을 확인하고 **이 도메인 허용**을 누르면 `analytics.allowed_hosts`에 추가되어 스크립트·수집 요청·이미지 전송이 함께 열립니다.
+
+- 브라우저 콘솔에 `violates the following Content Security Policy directive` 오류가 보이는데 수집이 되지 않는다면 여기부터 확인하십시오.
+- 보고는 인증 없이 받는 경로(`POST /api/v1/analytics/csp-report`)로 들어오고, 서버는 **메모리에 최근 100개 출처만** 같은 주소끼리 묶어 보관합니다. 데이터베이스에 남기지 않으므로 재시작하면 비워지고, 인스턴스가 여러 대면 각자 자기 것만 보여 줍니다.
+- 이미 허용된 주소는 **허용됨**으로 표시됩니다. **기록 비우기** 로 목록을 지운 뒤 페이지를 다시 열어 보면 남은 문제만 다시 나타납니다.
+- 확장 프로그램이나 `data:` 같이 허용할 수 없는 항목은 기록하지 않습니다.
+
+```http
+GET    /api/v1/admin/analytics/violations
+DELETE /api/v1/admin/analytics/violations
+POST   /api/v1/admin/analytics/violations:allow   {"origin":"https://collector.corp.example"}
+```
 - 설정 변경은 저장 즉시 적용되며, 이미 열려 있는 화면은 새로 고침한 뒤부터 반영됩니다.
 
 수집 도구가 브라우저 밖으로 데이터를 보내는 만큼, 개인정보 처리방침과 사내 규정에 맞는 도구인지 확인한 뒤 사용하십시오. 폐쇄망에서는 Matomo 자체 호스팅이나 사내 수집기를 **직접 입력**으로 연결하는 방식을 권장합니다.

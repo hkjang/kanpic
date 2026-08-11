@@ -172,6 +172,13 @@ func (c Config) PolicySources() (scripts []string, connects []string, images []s
 			images = append(images, origin)
 		}
 	}
+	// A pasted snippet names the addresses it loads and reports to, so those
+	// origins are allowed without anybody having to read a policy error first.
+	for _, origin := range SnippetOrigins(c.CustomSnippet) {
+		scripts = append(scripts, origin)
+		connects = append(connects, origin)
+		images = append(images, origin)
+	}
 	for _, host := range strings.FieldsFunc(c.AllowedHosts, func(letter rune) bool { return letter == ',' || letter == ' ' || letter == '\n' }) {
 		trimmed := strings.TrimSpace(host)
 		if trimmed == "" {
@@ -182,6 +189,48 @@ func (c Config) PolicySources() (scripts []string, connects []string, images []s
 		images = append(images, trimmed)
 	}
 	return scripts, connects, images
+}
+
+// SnippetOrigins lists every http(s) origin written into a tracking snippet:
+// the script it loads, the endpoint it posts to, the pixel it requests. A
+// tracker almost always writes its own address somewhere in its loader, so
+// reading them here is what keeps a pasted snippet working without the
+// administrator translating a policy error into a host name.
+func SnippetOrigins(snippet string) []string {
+	origins := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	for index := 0; index < len(snippet); {
+		start := strings.Index(strings.ToLower(snippet[index:]), "http")
+		if start < 0 {
+			break
+		}
+		start += index
+		end := start
+		for end < len(snippet) && !isURLBoundary(snippet[end]) {
+			end++
+		}
+		index = end
+		origin := originOf(snippet[start:end])
+		if origin == "" || !strings.HasPrefix(strings.ToLower(origin), "http") {
+			continue
+		}
+		if _, duplicate := seen[origin]; duplicate {
+			continue
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+	return origins
+}
+
+// isURLBoundary reports the characters that cannot appear in a URL written
+// inside HTML or JavaScript, which is where each address ends.
+func isURLBoundary(letter byte) bool {
+	switch letter {
+	case '"', '\'', '`', '<', '>', ' ', '\t', '\n', '\r', ')', ',', ';', '\\', '+':
+		return true
+	}
+	return false
 }
 
 func originOf(raw string) string {

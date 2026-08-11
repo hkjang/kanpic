@@ -457,6 +457,8 @@ function useSettingSaver(onDone:(message:string)=>void){
   })
 }
 
+type TrackingViolation={origin:string;directive:string;page:string;count:number;first_seen:string;last_seen:string;allowed:boolean}
+
 const TRACKING_PROVIDERS:Array<{id:string;label:string;hint:string}>=[
   {id:'none',label:'사용 안 함',hint:'추적 코드를 넣지 않습니다.'},
   {id:'ga4',label:'Google Analytics 4',hint:'측정 ID(G-)만 입력하면 로더와 설정 코드를 자동으로 만듭니다.'},
@@ -490,6 +492,9 @@ function AnalyticsPanel(){
   const matomoURL=String(valueOf('analytics.matomo_url')??'')
   const matomoSite=String(valueOf('analytics.matomo_site_id')??'')
   const custom=String(valueOf('analytics.custom_snippet')??'')
+  // The same addresses the server derives from the snippet, shown so it is
+  // clear which domains were opened without being typed in.
+  const detectedHosts=Array.from(new Set((custom.match(/https?:\/\/[^"'`<>\s),;\\+]+/g)??[]).map(found=>{try{return new URL(found).origin}catch{return ''}}).filter(Boolean)))
   const preview=provider==='ga4'&&measurement
     ?`<script async src="https://www.googletagmanager.com/gtag/js?id=${measurement}"></script>\n<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${measurement}');</script>`
     :provider==='gtm'&&measurement?`<script>(function(w,d,s,l,i){…})(window,document,'script','dataLayer','${measurement}');</script>`
@@ -534,10 +539,44 @@ function AnalyticsPanel(){
       </div>
     </section>
     <section className="admin-card">
-      <div className="card-heading compact"><div><h2>삽입될 코드</h2><p>페이지마다 nonce가 새로 부여되며, 필요한 도메인은 보안 정책에 자동으로 추가됩니다.</p></div></div>
+      <div className="card-heading compact"><div><h2>삽입될 코드</h2><p>페이지마다 nonce가 새로 부여되며, 코드에 적힌 도메인은 보안 정책에 자동으로 추가됩니다.</p></div></div>
       <pre className="tracking-preview">{preview||'추적 도구를 선택하고 식별자를 입력하면 여기에 표시됩니다.'}</pre>
+      {detectedHosts.length>0&&<p className="tracking-detected">코드에서 찾은 도메인: {detectedHosts.map(host=><code key={host}>{host}</code>)}</p>}
     </section>
+    <BlockedRequests onAllowed={message=>setResult(message)}/>
   </main>
+}
+
+/**
+ * Browsers report what the security policy refused. Showing those reports with
+ * an allow button turns a console error nobody sees into a one-click fix.
+ */
+function BlockedRequests({onAllowed}:{onAllowed:(message:string)=>void}){
+  const client=useQueryClient()
+  const violations=useQuery({queryKey:['analytics-violations'],queryFn:()=>api<{items:TrackingViolation[]}>('/api/v1/admin/analytics/violations'),refetchInterval:20000})
+  const refresh=async()=>{await client.invalidateQueries({queryKey:['analytics-violations']});await client.invalidateQueries({queryKey:['settings']})}
+  const allow=useMutation({
+    mutationFn:(origin:string)=>api('/api/v1/admin/analytics/violations:allow',{method:'POST',body:JSON.stringify({origin})}),
+    onSuccess:async(_data,origin)=>{onAllowed(`${origin} 도메인을 허용했습니다. 새로 여는 페이지부터 적용됩니다.`);await refresh()},
+    onError:error=>onAllowed(error instanceof Error?error.message:'도메인을 허용하지 못했습니다.'),
+  })
+  const clear=useMutation({mutationFn:()=>api('/api/v1/admin/analytics/violations',{method:'DELETE'}),onSuccess:refresh})
+  const items=violations.data?.items??[]
+  const blocked=items.filter(item=>!item.allowed)
+  return <section className="admin-card">
+    <div className="card-heading compact">
+      <div><h2>차단된 요청</h2><p>추적 코드가 접속하려다 보안 정책에 막힌 주소입니다. 브라우저가 보내온 보고를 그대로 보여 줍니다.</p></div>
+      <div className="title-actions"><button className="secondary" onClick={()=>clear.mutate()} disabled={items.length===0}>기록 비우기</button></div>
+    </div>
+    {items.length===0&&<p className="empty-hint">차단된 요청이 없습니다. 추적 코드를 넣은 뒤에도 값이 수집되지 않으면 이 목록을 확인하세요.</p>}
+    {items.map(item=><div className="violation-row" key={`${item.directive} ${item.origin}`}>
+      <div><strong>{item.origin}</strong><small>{item.directive} · {item.count.toLocaleString()}회 · {new Date(item.last_seen).toLocaleString('ko-KR')}</small></div>
+      {item.allowed
+        ?<span className="violation-allowed">허용됨</span>
+        :<button className="secondary" onClick={()=>allow.mutate(item.origin)} disabled={allow.isPending}>이 도메인 허용</button>}
+    </div>)}
+    {blocked.length>0&&<p className="empty-hint">허용하면 <code>analytics.allowed_hosts</code>에 추가되어 스크립트·수집 요청·이미지 전송이 모두 열립니다.</p>}
+  </section>
 }
 
 /** Small modal wrapper that reuses the shared dialog behaviour in the console. */

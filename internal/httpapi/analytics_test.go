@@ -72,3 +72,47 @@ func TestServeIndexInjectsTrackingWithAMatchingNonce(t *testing.T) {
 		t.Fatalf("console policy=%s", policy)
 	}
 }
+
+// The whole point of the report endpoint is that a blocked address becomes
+// something an administrator can fix from the console.
+func TestBlockedRequestsAreReportedAndCanBeAllowed(t *testing.T) {
+	t.Parallel()
+	server := &Server{violations: analytics.NewRecorder()}
+	body := `{"csp-report":{"blocked-uri":"https://momento.corp.example/collect/v1/events","effective-directive":"connect-src","document-uri":"https://sheet.corp.example/workbooks/1"}}`
+	recorder := httptest.NewRecorder()
+	server.receiveCSPReport(recorder, httptest.NewRequest(http.MethodPost, cspReportPath, strings.NewReader(body)))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("report status=%d", recorder.Code)
+	}
+	items := server.violations.List(analytics.Config{})
+	if len(items) != 1 || items[0].Origin != "https://momento.corp.example" || items[0].Directive != "connect-src" {
+		t.Fatalf("items=%#v", items)
+	}
+	// A report that is not JSON is accepted and ignored rather than answered
+	// with an error the page would log again.
+	broken := httptest.NewRecorder()
+	server.receiveCSPReport(broken, httptest.NewRequest(http.MethodPost, cspReportPath, strings.NewReader("not json")))
+	if broken.Code != http.StatusNoContent || len(server.violations.List(analytics.Config{})) != 1 {
+		t.Fatalf("status=%d items=%#v", broken.Code, server.violations.List(analytics.Config{}))
+	}
+}
+
+// A tracking page asks the browser to report; an untracked one does not.
+func TestReportingIsRequestedOnlyWhileTrackingIsOn(t *testing.T) {
+	t.Parallel()
+	server := &Server{}
+	tracked := analytics.ReadConfig(map[string]any{"analytics.enabled": true, "analytics.provider": "custom",
+		"analytics.custom_snippet": `<script src="https://momento.corp.example/tracker.js"></script>`})
+	policy := server.policyFor(tracked, "/", "n0nce")
+	if !strings.Contains(policy, "report-uri "+cspReportPath) {
+		t.Fatalf("policy=%s", policy)
+	}
+	// The snippet's own address is allowed for scripts and for the data it
+	// sends back, which is what stops the console error in the first place.
+	if !strings.Contains(policy, "connect-src 'self' ws: wss: https://momento.corp.example") {
+		t.Fatalf("policy=%s", policy)
+	}
+	if strings.Contains(server.policyFor(analytics.Config{}, "/", "n0nce"), "report-uri") {
+		t.Fatal("an untracked page should not ask for reports")
+	}
+}

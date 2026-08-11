@@ -124,3 +124,39 @@ func contains(values []string, wanted string) bool {
 	}
 	return false
 }
+
+// A pasted snippet names the addresses it uses, so the policy should allow
+// them without anybody translating a console error into a host name first.
+func TestCustomSnippetAllowsTheAddressesItUses(t *testing.T) {
+	t.Parallel()
+	snippet := `<script src="https://momento.corp.example/tracker.js"></script>
+<script>window.__t={endpoint:"https://momento.corp.example/collect/v1/events",pixel:'https://pixel.corp.example/p.gif?id=1'};
+fetch(window.__t.endpoint,{method:'POST'})</script>`
+	scripts, connects, images := config(map[string]any{"analytics.provider": "custom", "analytics.custom_snippet": snippet}).PolicySources()
+	for _, sources := range [][]string{scripts, connects, images} {
+		if !contains(sources, "https://momento.corp.example") || !contains(sources, "https://pixel.corp.example") {
+			t.Fatalf("sources=%v", sources)
+		}
+	}
+	// The origin appears once however many times the snippet writes it.
+	count := 0
+	for _, source := range connects {
+		if source == "https://momento.corp.example" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("origin repeated %d times in %v", count, connects)
+	}
+}
+
+func TestSnippetOriginsIgnoresTextThatIsNotAnAddress(t *testing.T) {
+	t.Parallel()
+	if origins := SnippetOrigins(`<script>var note="http";var path="/collect";</script>`); len(origins) != 0 {
+		t.Fatalf("origins=%v", origins)
+	}
+	// A relative address belongs to this site and needs no policy entry.
+	if origins := SnippetOrigins(`<script src="/local/tracker.js"></script>`); len(origins) != 0 {
+		t.Fatalf("origins=%v", origins)
+	}
+}
