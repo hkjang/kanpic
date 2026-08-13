@@ -66,6 +66,63 @@ func (f *fakeAIOrchestrator) Undo(_ context.Context, _ string, _ ai.ApprovalInpu
 	return ai.ExecutionResult{Action: f.action, Operation: result}, nil
 }
 
+type fakeWorkbookAgent struct {
+	fakeAIOrchestrator
+	run       ai.AgentRun
+	lastInput ai.AgentMessageInput
+}
+
+func (f *fakeWorkbookAgent) SendMessage(_ context.Context, input ai.AgentMessageInput) (ai.AgentRun, error) {
+	f.lastInput = input
+	f.action = ai.Action{
+		ID: "agent-run", WorkbookID: input.WorkbookID, SheetID: input.SheetID, ActorID: input.ActorID,
+		Mode: ai.ModeFormula, Range: input.Selection, Request: input.Message, Status: ai.StatusPlanned,
+		BaseVersion: input.BaseVersion, Model: "offline-test", Summary: "formula plan", Risk: ai.RiskMedium,
+		Changes: []ai.ProposedChange{{Row: 1, Column: 2, Address: "B1", After: ai.CellSnapshot{Formula: "=A1*2"}}}, Revision: 1,
+	}
+	f.run = ai.AgentRun{
+		ID: "agent-run", ConversationID: "conversation", ChangeSetID: "change-set", WorkbookID: input.WorkbookID,
+		SheetID: input.SheetID, Selection: input.Selection, Intent: "formula_generation", State: ai.AgentWaitingApproval,
+		Goal: "formula plan", Risk: ai.RiskMedium, Context: workbook.AgentContext{WorkbookID: input.WorkbookID, WorkbookVersion: input.BaseVersion, Selection: input.Selection},
+		Plan:   ai.AgentPlan{ID: "plan", RunID: "agent-run", Goal: "formula plan", Risk: ai.RiskMedium, Status: "waiting_approval", Steps: []ai.PlanStep{{ID: "step", Position: 1, ToolName: "formula.set", Description: "수식 적용", Status: "waiting_approval", Risk: ai.RiskMedium}}},
+		Action: f.action, Messages: []ai.ConversationMessage{{ID: "message", ConversationID: "conversation", AgentRunID: "agent-run", Role: "user", Content: input.Message}},
+	}
+	return f.run, nil
+}
+
+func (f *fakeWorkbookAgent) GetRun(_ context.Context, _, _ string) (ai.AgentRun, error) {
+	return f.run, nil
+}
+
+func (f *fakeWorkbookAgent) GetRunPlan(_ context.Context, _, _ string) (ai.AgentPlan, error) {
+	return f.run.Plan, nil
+}
+
+func (f *fakeWorkbookAgent) ListRuns(_ context.Context, _, _ string, _ int) ([]ai.AgentRun, error) {
+	return []ai.AgentRun{f.run}, nil
+}
+
+func (f *fakeWorkbookAgent) RunForChangeSet(_ context.Context, _, _ string) (ai.AgentRun, error) {
+	return f.run, nil
+}
+
+func (f *fakeWorkbookAgent) ApproveRun(_ context.Context, _ string, _ ai.ApprovalInput) (ai.AgentExecutionResult, error) {
+	f.run.State, f.run.Action.Status, f.run.Action.Revision = ai.AgentCompleted, ai.StatusApplied, 2
+	operation := workbook.MutationResult{OperationID: "agent-operation", WorkbookID: f.run.WorkbookID, SheetID: f.run.SheetID, BaseVersion: f.run.Action.BaseVersion, ServerVersion: f.run.Action.BaseVersion + 1, AppliedCells: 1}
+	return ai.AgentExecutionResult{Run: f.run, Operation: &operation, Changes: []workbook.CellInput{{Row: 1, Column: 2, Formula: "=A1*2"}}}, nil
+}
+
+func (f *fakeWorkbookAgent) CancelRun(_ context.Context, _ string, _ ai.ApprovalInput) (ai.AgentRun, error) {
+	f.run.State, f.run.Action.Status, f.run.Action.Revision = ai.AgentCancelled, ai.StatusCancelled, f.run.Action.Revision+1
+	return f.run, nil
+}
+
+func (f *fakeWorkbookAgent) RollbackChangeSet(_ context.Context, _ string, _ ai.ApprovalInput) (ai.AgentExecutionResult, error) {
+	f.run.State, f.run.Action.Status, f.run.Action.Revision = ai.AgentCompleted, ai.StatusUndone, f.run.Action.Revision+1
+	operation := workbook.MutationResult{OperationID: "agent-undo", WorkbookID: f.run.WorkbookID, SheetID: f.run.SheetID, ServerVersion: f.run.Action.BaseVersion + 2, AppliedCells: 1}
+	return ai.AgentExecutionResult{Run: f.run, Operation: &operation}, nil
+}
+
 type fakeAutomationService struct {
 	item              automation.Automation
 	run               automation.Run
@@ -780,6 +837,66 @@ func TestAIActionRESTAndMCPShareSafeExecutionContract(t *testing.T) {
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 72, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.ai.action.undo", "arguments": map[string]any{"action_id": plan.ID, "idempotency_key": "undo", "expected_revision": 2}}}, http.StatusOK)
 	if mcpUndo.Result.Structured.Action.Status != ai.StatusUndone || mcpUndo.Result.Structured.Operation.OperationID != "ai-undo" {
 		t.Fatalf("MCP AI undo=%#v", mcpUndo)
+	}
+}
+
+func TestWorkbookAgentRESTContractAcceptsDocumentedPathsAndMinimalMessage(t *testing.T) {
+	t.Parallel()
+	for _, expectation := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/workbooks/book/agent/messages"},
+		{http.MethodGet, "/api/v1/agent/runs/run"},
+		{http.MethodGet, "/api/v1/agent/runs/run/plan"},
+		{http.MethodPost, "/api/v1/agent/runs/run/approve"},
+		{http.MethodPost, "/api/v1/agent/runs/run/cancel"},
+		{http.MethodPost, "/api/v1/changesets/change/rollback"},
+	} {
+		if scope := requiredScope(httptest.NewRequest(expectation.method, expectation.path, nil)); scope != "ai.use" {
+			t.Fatalf("%s %s scope=%q", expectation.method, expectation.path, scope)
+		}
+	}
+
+	repository := workbook.NewMemoryRepository()
+	agent := &fakeWorkbookAgent{}
+	server := httptest.NewServer(NewPlatformWithAI(repository, nil, nil, nil, nil, agent, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "Workbook Agent API"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	contextView := request[workbook.AgentContext](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/agent/context?sheet_id="+sheetID+"&selection=A1:B2", nil, http.StatusOK)
+	if contextView.WorkbookID != book.ID || contextView.Selection != "A1:B2" || contextView.SelectedRange.CellCount != 4 {
+		t.Fatalf("agent context=%#v", contextView)
+	}
+
+	run := request[ai.AgentRun](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/agent/messages", map[string]any{
+		"sheetId": sheetID, "selection": "A1:B2", "message": "B열에 수식을 채워줘",
+	}, http.StatusCreated)
+	if run.ID != "agent-run" || run.State != ai.AgentWaitingApproval || agent.lastInput.BaseVersion != book.Version || agent.lastInput.IdempotencyKey == "" {
+		t.Fatalf("agent message run=%#v input=%#v", run, agent.lastInput)
+	}
+	got := request[ai.AgentRun](t, server, http.MethodGet, "/api/v1/agent/runs/"+run.ID, nil, http.StatusOK)
+	plan := request[ai.AgentPlan](t, server, http.MethodGet, "/api/v1/agent/runs/"+run.ID+"/plan", nil, http.StatusOK)
+	listed := request[struct {
+		Items []ai.AgentRun `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/agent/runs", nil, http.StatusOK)
+	if got.ID != run.ID || plan.RunID != run.ID || len(listed.Items) != 1 {
+		t.Fatalf("agent queries got=%#v plan=%#v list=%#v", got, plan, listed.Items)
+	}
+	applied := request[ai.AgentExecutionResult](t, server, http.MethodPost, "/api/v1/agent/runs/"+run.ID+"/approve", map[string]any{"idempotency_key": "apply", "expected_revision": 1}, http.StatusOK)
+	if applied.Run.Action.Status != ai.StatusApplied || applied.Operation == nil || applied.Operation.OperationID != "agent-operation" {
+		t.Fatalf("agent approve=%#v", applied)
+	}
+	rolledBack := request[ai.AgentExecutionResult](t, server, http.MethodPost, "/api/v1/changesets/"+run.ChangeSetID+"/rollback", map[string]any{"idempotency_key": "rollback", "expected_revision": 2}, http.StatusOK)
+	if rolledBack.Run.Action.Status != ai.StatusUndone || rolledBack.Operation == nil || rolledBack.Operation.OperationID != "agent-undo" {
+		t.Fatalf("agent rollback=%#v", rolledBack)
+	}
+
+	// The legacy colon form remains callable during migration.
+	agent.run.Action.Status, agent.run.Action.Revision = ai.StatusPlanned, 1
+	cancelled := request[ai.AgentRun](t, server, http.MethodPost, "/api/v1/agent/runs/"+run.ID+":cancel", map[string]any{"idempotency_key": "cancel", "expected_revision": 1}, http.StatusOK)
+	if cancelled.State != ai.AgentCancelled {
+		t.Fatalf("agent cancel=%#v", cancelled)
 	}
 }
 

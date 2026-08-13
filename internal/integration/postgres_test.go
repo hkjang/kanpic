@@ -56,7 +56,7 @@ func TestPostgresDurabilityFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), wb.ID)
+	defer repository.DeleteWorkbook(context.Background(), wb.ID, "integration-cleanup")
 	sheetID := wb.Sheets[0].ID
 	first, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "test-user", ClientID: "integration", BaseVersion: 1, IdempotencyKey: "first", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`10`)}}})
 	if err != nil || first.ServerVersion != 2 {
@@ -154,7 +154,7 @@ func TestPostgresCellConflictPersistsAndResolutionIsVersioned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	_, err = repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "alice", ClientID: "a", BaseVersion: 1, IdempotencyKey: "pg-conflict-first", Cells: []workbook.CellInput{{Row: 3, Column: 2, Value: json.RawMessage(`"first"`), Style: json.RawMessage(`{"bold":true}`)}}})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestPostgresWorkbookSearchUsesCellBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	second, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "검색 결과"})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestPostgresChartsPersistRefreshAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheet := book.Sheets[0]
 	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: "chart-user", BaseVersion: book.Version, IdempotencyKey: "pg-chart-seed", Cells: []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
@@ -331,7 +331,7 @@ func TestPostgresChartsPersistRefreshAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID)
+	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID, "integration-cleanup")
 	copiedCharts, err := repository.ListCharts(ctx, copiedBook.ID, "")
 	if err != nil || len(copiedCharts) != 1 || copiedCharts[0].SheetID != copiedCharts[0].SourceSheetID || copiedCharts[0].SheetID == sheet.ID {
 		t.Fatalf("PostgreSQL copied charts = %#v, %v", copiedCharts, err)
@@ -355,7 +355,7 @@ func TestPostgresPivotsPersistRefreshDrilldownAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	placement := book.Sheets[0]
 	source, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Data"})
 	if err != nil {
@@ -428,7 +428,7 @@ func TestPostgresPivotsPersistRefreshDrilldownAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID)
+	defer repository.DeleteWorkbook(context.Background(), copiedBook.ID, "integration-cleanup")
 	copiedPivots, err := repository.ListPivots(ctx, copiedBook.ID, "")
 	if err != nil || len(copiedPivots) != 1 || copiedPivots[0].WorkbookID != copiedBook.ID || copiedPivots[0].SheetID == placement.ID || copiedPivots[0].SourceSheetID == source.ID {
 		t.Fatalf("PostgreSQL copied pivots = %#v, %v", copiedPivots, err)
@@ -453,7 +453,7 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	bobRecipient := fmt.Sprintf("bob-%s@example.com", book.ID)
 	danaRecipient := fmt.Sprintf("dana-%s@example.com", book.ID)
 	erinRecipient := fmt.Sprintf("erin-%s@example.com", book.ID)
@@ -516,7 +516,7 @@ func TestPostgresCommentsPersistMentionsAndFollowStructure(t *testing.T) {
 	if err != nil || removed.Range != "#REF!" || removed.Revision != 6 {
 		t.Fatalf("PostgreSQL deleted comment anchor = %#v, %v", removed, err)
 	}
-	if err := repository.DeleteWorkbook(ctx, book.ID); err != nil {
+	if err := repository.DeleteWorkbook(ctx, book.ID, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	if hidden, err := repository.ListMentionNotifications(ctx, []string{erinRecipient}, false, 50); err != nil || len(hidden) != 0 {
@@ -544,7 +544,7 @@ func TestPostgresRangeFormattingPreservesContentAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "format-user", BaseVersion: 1, IdempotencyKey: "postgres-format-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`5`)}, {Row: 2, Column: 1, Formula: "=A1*2"}}}); err != nil {
 		t.Fatal(err)
@@ -613,7 +613,7 @@ func TestPostgresMergedRangePersistsAndUndoRestoresContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "merge-user", BaseVersion: 1, IdempotencyKey: "postgres-merge-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"title"`), Style: json.RawMessage(`{"bold":true}`)}, {Row: 2, Column: 2, Value: json.RawMessage(`9`)}}}); err != nil {
 		t.Fatal(err)
@@ -672,7 +672,7 @@ func TestPostgresRangeSortMovesFormulasStylesAndUndoRestoresRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed := []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`"Name"`)},
@@ -766,7 +766,7 @@ func TestPostgresFilterViewsPersistActorIsolationActivationAndLatestEvaluation(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed := []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`"Name"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"Amount"`)},
@@ -870,7 +870,7 @@ func TestPostgresDataValidationPersistsAndEnforcesEveryWritePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	created, err := repository.CreateDataValidation(ctx, sheetID, "alice", workbook.CreateDataValidationInput{IdempotencyKey: "validation-create", Range: "A1:A3", RuleType: "list", Options: []workbook.ValidationOption{{Value: json.RawMessage(`"open"`), Color: "#dcfce7"}, {Value: json.RawMessage(`"closed"`), Color: "#fee2e2"}}})
 	if err != nil || created.Revision != 1 || created.WorkbookVersion != 2 {
@@ -954,7 +954,7 @@ func TestPostgresConditionalFormatsPersistEvaluateTransformCopyAndRestore(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheet := book.Sheets[0]
 	seeded, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: "format-user", BaseVersion: book.Version, IdempotencyKey: "conditional-seed", Cells: []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`10`)},
@@ -1010,7 +1010,7 @@ func TestPostgresConditionalFormatsPersistEvaluateTransformCopyAndRestore(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), workbookCopy.ID)
+	defer repository.DeleteWorkbook(context.Background(), workbookCopy.ID, "integration-cleanup")
 	workbookCopyRules, err := repository.ListConditionalFormats(ctx, workbookCopy.Sheets[0].ID)
 	if err != nil || len(workbookCopyRules) != 1 || workbookCopyRules[0].Range != "A1:A4" || workbookCopyRules[0].WorkbookID != workbookCopy.ID {
 		t.Fatalf("copied workbook conditional formats=%#v err=%v", workbookCopyRules, err)
@@ -1051,7 +1051,7 @@ func TestPostgresArrayFormulaSpillPersistsRestoresAndUndoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed := []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`"a"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`30`)},
@@ -1117,7 +1117,7 @@ func TestPostgresCrossSheetFormulaRecalculatesPersistsAndConflicts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), wb.ID)
+	defer repository.DeleteWorkbook(context.Background(), wb.ID, "integration-cleanup")
 	inputSheet := wb.Sheets[0]
 	reportSheet, err := repository.CreateSheet(ctx, wb.ID, workbook.CreateSheetInput{Name: "Sales Report"})
 	if err != nil {
@@ -1190,7 +1190,7 @@ func TestPostgresNamedRangeLifecycleAndVersionRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "named-user", BaseVersion: 1, IdempotencyKey: "pg-named-seed", Cells: []workbook.CellInput{
 		{Row: 1, Column: 1, Value: json.RawMessage(`12`)}, {Row: 2, Column: 1, Value: json.RawMessage(`18`)}, {Row: 1, Column: 2, Formula: "=SUM(Sales_Data)"},
@@ -1236,7 +1236,7 @@ func TestPostgresNamedRangeLifecycleAndVersionRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), copy.ID)
+	defer repository.DeleteWorkbook(context.Background(), copy.ID, "integration-cleanup")
 	copyRanges, err := repository.ListNamedRanges(ctx, copy.ID)
 	if err != nil || len(copyRanges) != 1 || copyRanges[0].SheetID == sheetID {
 		t.Fatalf("PostgreSQL copied named ranges = %#v, error=%v", copyRanges, err)
@@ -1270,7 +1270,7 @@ func TestPostgresStructureMutationMovesDefinitionsAndRestoresBrokenNames(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	inputSheet := book.Sheets[0]
 	reportSheet, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Report"})
 	if err != nil {
@@ -1378,7 +1378,7 @@ func TestPostgresSheetLayoutPersistsAndFollowsStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheet := book.Sheets[0]
 	resized, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheet.ID, ActorID: "layout-user", ClientID: "browser", ExpectedRevision: 1, IdempotencyKey: "pg-layout-resize", Action: "resize", Axis: "column", Start: 2, Count: 2, Size: 180})
 	if err != nil || resized.ServerVersion != 2 || resized.Layout.Revision != 2 {
@@ -1434,7 +1434,7 @@ func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), wb.ID)
+	defer repository.DeleteWorkbook(context.Background(), wb.ID, "integration-cleanup")
 	inputSheet := wb.Sheets[0]
 	reportSheet, err := repository.CreateSheet(ctx, wb.ID, workbook.CreateSheetInput{Name: "Report"})
 	if err != nil {
@@ -1471,7 +1471,7 @@ func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), source.ID)
+	defer repository.DeleteWorkbook(context.Background(), source.ID, "integration-cleanup")
 	detail, err := repository.CreateSheet(ctx, source.ID, workbook.CreateSheetInput{Name: "detail", Color: "#2563eb"})
 	if err != nil {
 		t.Fatal(err)
@@ -1487,7 +1487,7 @@ func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), duplicated.ID)
+	defer repository.DeleteWorkbook(context.Background(), duplicated.ID, "integration-cleanup")
 	if duplicated.ID == source.ID || duplicated.Title != "postgres original 복사본" || duplicated.OwnerID != "owner-b" || duplicated.Version != 1 || len(duplicated.Sheets) != 2 || duplicated.Sheets[1].ID == detail.ID || duplicated.Sheets[1].Color != "#2563eb" || !duplicated.Sheets[1].Hidden {
 		t.Fatalf("duplicated workbook: %#v", duplicated)
 	}
@@ -1507,7 +1507,7 @@ func TestPostgresWorkbookDuplicateIsIndependentAndPreservesData(t *testing.T) {
 	if err != nil || string(cells[0].Value) != "7" || string(cells[1].Value) != "14" {
 		t.Fatalf("copy changed with source: %#v, %v", cells, err)
 	}
-	if err := repository.DeleteWorkbook(ctx, source.ID); err != nil {
+	if err := repository.DeleteWorkbook(ctx, source.ID, "owner-a"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.GetWorkbook(ctx, duplicated.ID); err != nil {
@@ -1532,17 +1532,17 @@ func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	detail, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "detail", Color: "#16a34a"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	favorite := true
 	if _, err := repository.UpdateWorkbook(ctx, book.ID, workbook.UpdateWorkbookInput{Favorite: &favorite}); err != nil {
 		t.Fatal(err)
 	}
 	firstName, color, hidden := "summary", "#2563eb", true
 	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, workbook.UpdateSheetInput{Name: &firstName, Color: &color, Hidden: &hidden}); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "detail", Color: "#16a34a"})
-	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: detail.ID, ActorID: "version-user", ClientID: "integration", BaseVersion: 4, IdempotencyKey: "version-detail", Cells: []workbook.CellInput{{Row: 2, Column: 2, Value: json.RawMessage(`42`)}}}); err != nil {
@@ -1612,7 +1612,7 @@ func TestPostgresSheetLifecyclePreservesDataAndPositions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	source, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Data", Color: "#2563eb"})
 	if err != nil {
 		t.Fatal(err)
@@ -1695,7 +1695,7 @@ func TestPostgresAtomicImportExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), created.ID)
+	defer repository.DeleteWorkbook(context.Background(), created.ID, "integration-cleanup")
 	duplicate, err := service.Import(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -1839,7 +1839,7 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: "browser", BaseVersion: 1, IdempotencyKey: "ai-seed", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`5`)}}})
 	if err != nil {
@@ -1849,6 +1849,11 @@ func TestPostgresAIPlanApprovalUndoAndAudit(t *testing.T) {
 	var gatewayCalls int
 	gatewayMode := kanpicai.ModeFormula
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"offline-test","context_length":16384}]}`))
+			return
+		}
 		gatewayCalls++
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer internal-key" {
 			t.Errorf("gateway request path/auth=%s/%s", r.URL.Path, r.Header.Get("Authorization"))
@@ -2013,7 +2018,7 @@ func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	sheetID := book.Sheets[0].ID
 	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{
 		SheetID: sheetID, ActorID: actor, ClientID: "browser", BaseVersion: 1, IdempotencyKey: "automation-seed",
@@ -2149,7 +2154,7 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	config := staticAISettings{
 		"automation.enabled":                true,
 		"automation.max_cells_per_run":      float64(1000),
@@ -2182,7 +2187,7 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, deletedItem.ID, firstDue); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.DeleteWorkbook(ctx, deletedBook.ID); err != nil {
+	if err := repository.DeleteWorkbook(ctx, deletedBook.ID, actor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, firstDue); err != nil {
@@ -2280,7 +2285,7 @@ func TestPostgresWebhookAutomationStoresOnlyPayloadMetadataAndDeduplicates(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repository.DeleteWorkbook(context.Background(), book.ID)
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
 	keys := apikey.New(pool)
 	key, err := keys.Create(ctx, actor, apikey.CreateInput{Name: "webhook integration", Scopes: []string{"automation.webhook.invoke"}})
 	if err != nil {
@@ -2335,4 +2340,196 @@ func TestPostgresWebhookAutomationStoresOnlyPayloadMetadataAndDeduplicates(t *te
 	if !errors.Is(err, automation.ErrInvalid) {
 		t.Fatalf("webhook missing key error=%v", err)
 	}
+}
+
+func TestPostgresWorkbookAgentPlansExecutesValidatesAndRollsBackChangeSet(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 통합", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"8월"`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-test","context_length":16384}]}`))
+			return
+		}
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Messages) < 2 || !strings.Contains(body.Messages[1].Content, `"workbook_title": "Workbook Agent 통합"`) || !strings.Contains(body.Messages[1].Content, `"semantic_type": "revenue"`) {
+			t.Errorf("gateway did not receive structured workbook context: %#v", body.Messages)
+		}
+		plan := `{"summary":"매출 요약과 차트 생성","explanation":"B2에 합계 수식을 넣고 선택 범위로 차트를 만듭니다.","findings":[],"changes":[{"row":2,"column":2,"formula":"=100+20"}],"tool_calls":[{"name":"create_chart","arguments":{"type":"bar","title":"월별 매출","source_range":"A1:B2"}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 300, "completion_tokens": 100}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	messageInput := kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B2", Message: "분석하고 월별 매출 차트까지 만들어줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "agent-message", ClientID: "browser", ActorID: actor}
+	run, err := service.SendMessage(ctx, messageInput)
+	if err != nil || run.State != kanpicai.AgentWaitingApproval || run.Risk != kanpicai.RiskHigh || run.ChangeSetID == "" || len(run.Plan.Steps) < 4 || len(run.Action.ToolCalls) != 1 || len(run.Action.Changes) != 1 {
+		t.Fatalf("planned agent run=%#v, %v", run, err)
+	}
+	if len(run.Messages) != 2 || run.Messages[0].Role != "user" || run.Messages[1].Role != "assistant" {
+		t.Fatalf("conversation messages=%#v", run.Messages)
+	}
+	duplicateRun, err := service.SendMessage(ctx, messageInput)
+	if err != nil || duplicateRun.ID != run.ID || duplicateRun.ConversationID != run.ConversationID || len(duplicateRun.Messages) != 2 {
+		t.Fatalf("duplicate agent message=%#v, %v", duplicateRun, err)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed || executed.Operation == nil || executed.Operation.AppliedCells != 1 {
+		t.Fatalf("executed agent run=%#v, %v", executed, err)
+	}
+	cells, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "B2"))
+	if err != nil || len(cells) != 1 || cells[0].Formula != "=100+20" {
+		t.Fatalf("agent formula cells=%#v, %v", cells, err)
+	}
+	charts, err := repository.ListCharts(ctx, book.ID, sheet.ID)
+	if err != nil || len(charts) != 1 || charts[0].SourceRange != "A1:B2" {
+		t.Fatalf("agent chart=%#v, %v", charts, err)
+	}
+	var plans, steps, toolCalls, operations, audits int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM agent_plans WHERE run_id=$1),(SELECT count(*) FROM agent_steps s JOIN agent_plans p ON p.id=s.plan_id WHERE p.run_id=$1),(SELECT count(*) FROM agent_tool_calls WHERE run_id=$1),(SELECT count(*) FROM change_operations o JOIN change_sets c ON c.id=o.change_set_id WHERE c.run_id=$1),(SELECT count(*) FROM agent_audit_logs WHERE run_id=$1)`, run.ID).Scan(&plans, &steps, &toolCalls, &operations, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if plans != 1 || steps < 4 || toolCalls < steps || operations != 2 || audits < 2 {
+		t.Fatalf("agent audit plan=%d steps=%d tools=%d operations=%d audits=%d", plans, steps, toolCalls, operations, audits)
+	}
+	currentBook, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackMessage := kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B2", Message: "지난번 작업 취소해줘", BaseVersion: currentBook.Version, IdempotencyKey: "agent-rollback-message", ClientID: "browser", ActorID: actor}
+	rolledBackRun, err := service.SendMessage(ctx, rollbackMessage)
+	if err != nil || rolledBackRun.Action.Status != kanpicai.StatusUndone || len(rolledBackRun.Messages) != 4 || rolledBackRun.Messages[3].Content != "최근 Workbook Agent ChangeSet을 전체 원복했습니다." {
+		t.Fatalf("message rollback run=%#v, %v", rolledBackRun, err)
+	}
+	duplicateRollback, err := service.SendMessage(ctx, rollbackMessage)
+	if err != nil || duplicateRollback.ID != run.ID || len(duplicateRollback.Messages) != 4 {
+		t.Fatalf("duplicate message rollback=%#v, %v", duplicateRollback, err)
+	}
+	cells, _ = repository.ReadRange(ctx, sheet.ID, mustRange(t, "B2"))
+	charts, _ = repository.ListCharts(ctx, book.ID, sheet.ID)
+	if len(cells) != 0 || len(charts) != 0 {
+		t.Fatalf("rollback left cells=%#v charts=%#v", cells, charts)
+	}
+}
+
+func TestPostgresWorkbookAgentCreatesAndRollsBackReportSheetFormulaAndChart(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-report-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 보고서", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	source := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: source.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "report-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"8월"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`120`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-report-test","context_length":16384}]}`))
+			return
+		}
+		plan := `{"summary":"경영 보고서 생성","explanation":"새 시트에 요약 수식과 차트를 만듭니다.","findings":[],"changes":[],"tool_calls":[{"name":"create_report_sheet","arguments":{"name":"경영 보고","cells":[{"row":1,"column":1,"value":"월"},{"row":1,"column":2,"value":"매출"},{"row":2,"column":1,"value":"8월"},{"row":2,"column":2,"formula":"=100+20"}],"chart":{"type":"bar","title":"월별 매출","source_range":"A1:B2"}}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 320, "completion_tokens": 120}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-report-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: source.ID, Selection: "A1:B2", Message: "신규 시트에 수식과 차트가 있는 경영 보고서를 만들어줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "report-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || run.State != kanpicai.AgentWaitingApproval || len(run.Action.Changes) != 0 || len(run.Action.ToolCalls) != 1 || run.Action.ToolCalls[0].Name != "create_report_sheet" {
+		t.Fatalf("report agent plan=%#v, %v", run, err)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "report-agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed || executed.Operation != nil {
+		t.Fatalf("report agent execution=%#v, %v", executed, err)
+	}
+	updated, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil || len(updated.Sheets) != 2 || updated.Sheets[1].Name != "경영 보고" {
+		t.Fatalf("report workbook=%#v, %v", updated, err)
+	}
+	reportSheet := updated.Sheets[1]
+	cells, err := repository.ReadRange(ctx, reportSheet.ID, mustRange(t, "A1:B2"))
+	if err != nil || len(cells) != 4 || cells[3].Formula != "=100+20" || string(cells[3].Value) != "120" {
+		t.Fatalf("report cells=%#v, %v", cells, err)
+	}
+	charts, err := repository.ListCharts(ctx, book.ID, reportSheet.ID)
+	if err != nil || len(charts) != 1 || charts[0].SourceRange != "A1:B2" {
+		t.Fatalf("report charts=%#v, %v", charts, err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, run.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "report-agent-rollback", ExpectedRevision: executed.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("report rollback=%#v, %v", rolledBack, err)
+	}
+	updated, err = repository.GetWorkbook(ctx, book.ID)
+	if err != nil || len(updated.Sheets) != 1 || updated.Sheets[0].ID != source.ID {
+		t.Fatalf("report rollback workbook=%#v, %v", updated, err)
+	}
+	var changeSetStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM change_sets WHERE id=$1`, run.ChangeSetID).Scan(&changeSetStatus); err != nil || changeSetStatus != "rolled_back" {
+		t.Fatalf("report changeset status=%q, %v", changeSetStatus, err)
+	}
+}
+
+func mustRange(t *testing.T, value string) cellrange.Range {
+	t.Helper()
+	selected, err := cellrange.Parse(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selected
 }

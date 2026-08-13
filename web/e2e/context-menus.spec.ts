@@ -267,6 +267,27 @@ test('a submenu opens beside its parent instead of scrolling inside it', async (
   await page.keyboard.press('Escape')
 })
 
+test('a cell context menu opens Workbook Agent with a scoped request', async ({ page, request }) => {
+  const workbook=await seedWorkbook(request,`Agent 셀 메뉴 ${Date.now()}`,[{row:1,column:1,value:'매출'},{row:2,column:1,value:1200}])
+  await request.put('/api/v1/admin/settings/ai.enabled',{data:{key:'ai.enabled',value:true,value_type:'boolean'}})
+  try{
+    await openEditor(page,workbook.id)
+    const canvas=page.locator('.grid-canvas'),box=await canvas.boundingBox()
+    if(!box)throw new Error('grid canvas is not visible')
+    await canvas.click({button:'right',position:{x:80,y:45}})
+    const menu=page.getByRole('menu',{name:'셀 메뉴'})
+    await menu.getByRole('menuitem',{name:'Workbook Agent'}).hover()
+    const submenu=page.locator('.context-submenu')
+    await expect(submenu.getByRole('menuitem',{name:'선택 범위 분석'})).toBeVisible()
+    await submenu.getByRole('menuitem',{name:'선택 범위 분석'}).click()
+    const panel=page.getByRole('complementary',{name:'AI 도우미 패널'})
+    await expect(panel.getByText('Workbook Agent',{exact:true})).toBeVisible()
+    await expect(panel.getByRole('textbox',{name:'AI 요청'})).toHaveValue('선택 범위의 핵심 지표와 패턴을 분석해줘')
+  }finally{
+    await request.put('/api/v1/admin/settings/ai.enabled',{data:{key:'ai.enabled',value:false,value_type:'boolean'}})
+  }
+})
+
 test('the toolbar formats a range as a table and draws borders', async ({ page, request }) => {
   const workbook=await seedWorkbook(request,`테이블 서식 ${Date.now()}`,[
     {row:1,column:1,value:'제품'},{row:1,column:2,value:'매출'},

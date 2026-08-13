@@ -39,6 +39,7 @@ test('the sheet manager reports data, hides a sheet and reorders tabs', async ({
   // Reordering from the manager moves the sheet in the strip too.
   await page.getByRole('button',{name:'모든 시트 관리'}).click()
   await page.getByRole('button',{name:'보관 왼쪽으로 이동'}).click()
+  await expect(page.locator('.sheet-manager-open')).toHaveText(['Sheet1','보관','보조'])
   await page.getByRole('button',{name:'시트 관리 닫기'}).click()
   const order=await page.locator('.sheet-tab-main span').allInnerTexts()
   expect(order).toEqual(['Sheet1','보관','보조'])

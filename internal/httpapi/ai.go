@@ -58,6 +58,12 @@ func (s *Server) previewAIPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.ActorID = actorID(r)
+	contextView, err := workbook.BuildAgentContext(r.Context(), s.repository, input.WorkbookID, input.SheetID, input.Range)
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	input.Context = &contextView
 	if strings.TrimSpace(input.IdempotencyKey) == "" {
 		input.IdempotencyKey = "preview"
 	}

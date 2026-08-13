@@ -31,7 +31,7 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.waitForURL(/\/workbooks\//)
   await expect(page.locator('canvas.grid-canvas')).toBeVisible()
   await expect(page.locator('.formula-bar')).toBeVisible()
-  await expect(page.getByText('AI 도우미')).toBeVisible()
+  await expect(page.getByText('Workbook Agent', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
 })
 

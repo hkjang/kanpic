@@ -25,6 +25,9 @@ const (
 	ModeSummarize = "summarize"
 	ModeAnomaly   = "anomaly"
 	ModeClean     = "clean"
+	ModeFormat    = "format"
+	ModeChart     = "chart"
+	ModeAgent     = "agent"
 
 	StatusPlanned   = "planned"
 	StatusCompleted = "completed"
@@ -33,6 +36,7 @@ const (
 	StatusUndoing   = "undoing"
 	StatusUndone    = "undone"
 	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
 )
 
 type CellSnapshot struct {
@@ -101,20 +105,27 @@ type Action struct {
 	Events                 []Event                  `json:"events,omitempty"`
 	Duplicate              bool                     `json:"duplicate,omitempty"`
 	Usage                  *Usage                   `json:"usage,omitempty"`
+	ConversationID         string                   `json:"conversation_id,omitempty"`
+	Risk                   string                   `json:"risk"`
+	Plan                   []PlanStep               `json:"plan"`
+	ToolCalls              []ToolCall               `json:"tool_calls"`
+	Validation             ValidationResult         `json:"validation"`
 	approvalIdempotencyKey string
 	undoIdempotencyKey     string
 }
 
 type PlanInput struct {
-	WorkbookID     string `json:"workbook_id"`
-	SheetID        string `json:"sheet_id"`
-	Range          string `json:"range"`
-	Request        string `json:"request"`
-	Mode           string `json:"mode"`
-	BaseVersion    int64  `json:"base_version"`
-	IdempotencyKey string `json:"idempotency_key"`
-	ClientID       string `json:"client_id,omitempty"`
-	ActorID        string `json:"-"`
+	WorkbookID     string                 `json:"workbook_id"`
+	SheetID        string                 `json:"sheet_id"`
+	Range          string                 `json:"range"`
+	Request        string                 `json:"request"`
+	Mode           string                 `json:"mode"`
+	BaseVersion    int64                  `json:"base_version"`
+	IdempotencyKey string                 `json:"idempotency_key"`
+	ClientID       string                 `json:"client_id,omitempty"`
+	ActorID        string                 `json:"-"`
+	ConversationID string                 `json:"conversation_id,omitempty"`
+	Context        *workbook.AgentContext `json:"-"`
 }
 
 type ApprovalInput struct {
@@ -169,13 +180,30 @@ type Orchestrator interface {
 	RetentionDays(context.Context) int
 }
 
+// WorkbookAgent is the richer, conversation-oriented API implemented by the
+// production service. Keeping it separate from Orchestrator preserves the
+// existing embeddable AI action interface for integrations and tests.
+type WorkbookAgent interface {
+	SendMessage(context.Context, AgentMessageInput) (AgentRun, error)
+	GetRun(context.Context, string, string) (AgentRun, error)
+	GetRunPlan(context.Context, string, string) (AgentPlan, error)
+	ListRuns(context.Context, string, string, int) ([]AgentRun, error)
+	RunForChangeSet(context.Context, string, string) (AgentRun, error)
+	ApproveRun(context.Context, string, ApprovalInput) (AgentExecutionResult, error)
+	CancelRun(context.Context, string, ApprovalInput) (AgentRun, error)
+	RollbackChangeSet(context.Context, string, ApprovalInput) (AgentExecutionResult, error)
+}
+
 func IsReadOnlyMode(mode string) bool {
 	return mode == ModeExplain || mode == ModeSummarize || mode == ModeAnomaly
 }
 
 func RequiredApprovalScope(mode string) string {
-	if mode == ModeClean {
+	if mode == ModeClean || mode == ModeFormat || mode == ModeAgent {
 		return "range.write"
+	}
+	if mode == ModeChart {
+		return "chart.write"
 	}
 	return "formula.write"
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
@@ -39,6 +39,7 @@ export type GridShortcut=
 /** Menu actions the editor page owns because they open dialogs or panels. */
 export type GridMenuCommand=
   | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'}
+  | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
   | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
 
@@ -662,6 +663,18 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         {kind:'item',label:'피벗 테이블 만들기…',icon:<Table2/>,onSelect:()=>onMenuCommand?.({command:'pivot'})},
         {kind:'item',label:'댓글 추가',icon:<MessageSquarePlus/>,onSelect:()=>onMenuCommand?.({command:'comment'})},
       ]},
+	  {kind:'submenu',label:'Workbook Agent',icon:<Bot/>,disabled:!onMenuCommand,items:[
+		{kind:'item',label:'Agent에게 질문',onSelect:()=>onMenuCommand?.({command:'agent',mode:'agent',request:''})},
+		{kind:'item',label:'선택 범위 분석',onSelect:()=>onMenuCommand?.({command:'agent',mode:'summarize',request:'선택 범위의 핵심 지표와 패턴을 분석해줘'})},
+		{kind:'separator'},
+		{kind:'item',label:'수식 생성',onSelect:()=>onMenuCommand?.({command:'agent',mode:'formula',request:'선택 범위에 필요한 수식을 만들어줘'})},
+		{kind:'item',label:'수식 설명',onSelect:()=>onMenuCommand?.({command:'agent',mode:'explain',request:'선택한 수식의 계산 방식과 참조를 설명해줘'})},
+		{kind:'item',label:'수식 오류 수정',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'fix',request:'선택 범위의 잘못된 수식을 찾아 고쳐줘'})},
+		{kind:'item',label:'데이터 정리',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'clean',request:'선택 범위의 중복과 형식 불일치를 정리해줘'})},
+		{kind:'item',label:'표 서식 적용',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'format',request:'선택 범위를 읽기 쉬운 표 서식으로 정리해줘'})},
+		{kind:'item',label:'차트 생성',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'chart',request:'선택 범위에 적합한 차트를 만들어줘'})},
+		{kind:'item',label:'패턴 자동 채우기',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'formula',request:'선택 범위의 패턴을 분석해 전체 행에 수식을 채워줘'})},
+	  ]},
       {kind:'separator'},
       {kind:'item',label:'셀 링크 복사',icon:<Link2/>,onSelect:()=>void copySelectionLink()},
     ]

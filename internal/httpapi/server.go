@@ -257,6 +257,20 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/ai/actions", s.listAIActions)
 		mux.HandleFunc("GET /api/v1/ai/actions/{actionId}", s.getAIAction)
 		mux.HandleFunc("POST /api/v1/ai/actions/{actionAction}", s.executeAIAction)
+		if _, ok := aiService.(ai.WorkbookAgent); ok {
+			mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/agent/context", s.getAgentContext)
+			mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/agent/messages", s.sendAgentMessage)
+			mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/agent/runs", s.listAgentRuns)
+			mux.HandleFunc("GET /api/v1/agent/runs/{runId}", s.getAgentRun)
+			mux.HandleFunc("GET /api/v1/agent/runs/{runId}/plan", s.getAgentPlan)
+			mux.HandleFunc("POST /api/v1/agent/runs/{runId}/approve", s.approveAgentRun)
+			mux.HandleFunc("POST /api/v1/agent/runs/{runId}/cancel", s.cancelAgentRun)
+			mux.HandleFunc("POST /api/v1/changesets/{changeSetId}/rollback", s.rollbackAgentChangeSet)
+			// Keep the original colon-style preview endpoints for clients that
+			// adopted the feature before the public Workbook Agent contract.
+			mux.HandleFunc("POST /api/v1/agent/runs/{runAction}", s.executeAgentRun)
+			mux.HandleFunc("POST /api/v1/changesets/{changeSetAction}", s.rollbackAgentChangeSet)
+		}
 	}
 	if automationService != nil {
 		mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/automations", s.listAutomations)
@@ -1094,6 +1108,9 @@ func requiredScope(r *http.Request) string {
 		return "range.write"
 	}
 	if strings.Contains(path, "/ai/") || strings.Contains(path, "/ai:") {
+		return "ai.use"
+	}
+	if strings.Contains(path, "/agent/") || strings.Contains(path, "/changesets/") {
 		return "ai.use"
 	}
 	if strings.Contains(path, "/automation-runs/") {

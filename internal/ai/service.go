@@ -21,7 +21,7 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const actionColumns = `id::text,workbook_id::text,sheet_id::text,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,approval_idempotency_key,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,approved_at,undone_at,created_at,updated_at`
+const actionColumns = `id::text,workbook_id::text,sheet_id::text,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,approval_idempotency_key,coalesce(operation_id::text,''),operation_result,undo_idempotency_key,coalesce(undo_operation_id::text,''),undo_result,error_message,approved_at,undone_at,created_at,updated_at,coalesce(conversation_id::text,''),risk,plan,tool_calls,validation`
 
 type Service struct {
 	pool       *pgxpool.Pool
@@ -122,6 +122,10 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 	if err != nil {
 		return Action{}, err
 	}
+	toolCalls, err := validateGatewayTools(input, selected, generated.ToolCalls, config.MaxChanges)
+	if err != nil {
+		return Action{}, err
+	}
 	now := s.now()
 	status := StatusPlanned
 	eventType := "planned"
@@ -129,6 +133,9 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		status = StatusCompleted
 		eventType = "completed"
 	}
+	risk := riskForMode(input.Mode, len(changes))
+	steps := buildPlanSteps(input.Mode, risk, changes, toolCalls)
+	preflight := ValidationResult{Passed: true, Checks: []ValidationCheck{{Name: "selection_bounds", Passed: true, Message: "모든 셀 변경이 선택 범위 안에 있습니다."}, {Name: "tool_authorization", Passed: true, Message: "지원되고 허용된 도구만 계획에 포함되었습니다."}}}
 	action := Action{
 		ID: identity.New(), WorkbookID: input.WorkbookID, SheetID: input.SheetID,
 		ActorID: input.ActorID, ClientID: input.ClientID, IdempotencyKey: input.IdempotencyKey,
@@ -136,15 +143,19 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 		BaseVersion: book.Version, Model: planModel(config, limits, usage), Summary: trimLength(generated.Summary, 2000),
 		Explanation: trimLength(generated.Explanation, 12000), Changes: changes, Findings: findings,
 		InputCellCount: rows * columns, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		ConversationID: input.ConversationID, Risk: risk, Plan: steps, ToolCalls: toolCalls, Validation: preflight,
 	}
 	encodedChanges, _ := json.Marshal(action.Changes)
 	encodedFindings, _ := json.Marshal(action.Findings)
+	encodedPlan, _ := json.Marshal(action.Plan)
+	encodedTools, _ := json.Marshal(action.ToolCalls)
+	encodedValidation, _ := json.Marshal(action.Validation)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Action{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	command, err := tx.Exec(ctx, `INSERT INTO ai_actions(id,workbook_id,sheet_id,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,$18,$18) ON CONFLICT(actor_id,idempotency_key) DO NOTHING`, action.ID, action.WorkbookID, action.SheetID, action.ActorID, action.ClientID, action.IdempotencyKey, action.Mode, action.Range, action.Request, action.Status, action.BaseVersion, action.Model, action.Summary, action.Explanation, encodedChanges, encodedFindings, action.InputCellCount, now)
+	command, err := tx.Exec(ctx, `INSERT INTO ai_actions(id,workbook_id,sheet_id,actor_id,client_id,idempotency_key,mode,selected_range,request,status,base_version,model,summary,explanation,changes,findings,input_cell_count,revision,created_at,updated_at,conversation_id,risk,plan,tool_calls,validation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,$18,$18,$19,$20,$21,$22,$23) ON CONFLICT(actor_id,idempotency_key) DO NOTHING`, action.ID, action.WorkbookID, action.SheetID, action.ActorID, action.ClientID, action.IdempotencyKey, action.Mode, action.Range, action.Request, action.Status, action.BaseVersion, action.Model, action.Summary, action.Explanation, encodedChanges, encodedFindings, action.InputCellCount, now, nullableUUID(action.ConversationID), action.Risk, encodedPlan, encodedTools, encodedValidation)
 	if err != nil {
 		return Action{}, err
 	}
@@ -471,8 +482,8 @@ type actionScanner interface{ Scan(...any) error }
 
 func scanAction(row actionScanner) (Action, error) {
 	var action Action
-	var changes, findings, operation, undo []byte
-	err := row.Scan(&action.ID, &action.WorkbookID, &action.SheetID, &action.ActorID, &action.ClientID, &action.IdempotencyKey, &action.Mode, &action.Range, &action.Request, &action.Status, &action.BaseVersion, &action.Model, &action.Summary, &action.Explanation, &changes, &findings, &action.InputCellCount, &action.Revision, &action.approvalIdempotencyKey, &action.OperationID, &operation, &action.undoIdempotencyKey, &action.UndoOperationID, &undo, &action.ErrorMessage, &action.ApprovedAt, &action.UndoneAt, &action.CreatedAt, &action.UpdatedAt)
+	var changes, findings, operation, undo, plan, tools, validation []byte
+	err := row.Scan(&action.ID, &action.WorkbookID, &action.SheetID, &action.ActorID, &action.ClientID, &action.IdempotencyKey, &action.Mode, &action.Range, &action.Request, &action.Status, &action.BaseVersion, &action.Model, &action.Summary, &action.Explanation, &changes, &findings, &action.InputCellCount, &action.Revision, &action.approvalIdempotencyKey, &action.OperationID, &operation, &action.undoIdempotencyKey, &action.UndoOperationID, &undo, &action.ErrorMessage, &action.ApprovedAt, &action.UndoneAt, &action.CreatedAt, &action.UpdatedAt, &action.ConversationID, &action.Risk, &plan, &tools, &validation)
 	if err != nil {
 		return Action{}, err
 	}
@@ -480,6 +491,15 @@ func scanAction(row actionScanner) (Action, error) {
 		return Action{}, err
 	}
 	if err := json.Unmarshal(findings, &action.Findings); err != nil {
+		return Action{}, err
+	}
+	if err := json.Unmarshal(plan, &action.Plan); err != nil {
+		return Action{}, err
+	}
+	if err := json.Unmarshal(tools, &action.ToolCalls); err != nil {
+		return Action{}, err
+	}
+	if err := json.Unmarshal(validation, &action.Validation); err != nil {
 		return Action{}, err
 	}
 	if len(operation) > 0 && string(operation) != "null" {
@@ -531,7 +551,7 @@ func validatePlanInput(input PlanInput) error {
 		return fmt.Errorf("%w: workbook_id, sheet_id, range and idempotency_key are required", ErrInvalid)
 	}
 	if !validMode(input.Mode) {
-		return fmt.Errorf("%w: mode must be formula, explain, fix, summarize, anomaly or clean", ErrInvalid)
+		return fmt.Errorf("%w: unsupported workbook agent mode", ErrInvalid)
 	}
 	if input.Request == "" || len(input.Request) > 4000 {
 		return fmt.Errorf("%w: request must contain 1 to 4000 characters", ErrInvalid)
@@ -575,7 +595,13 @@ func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook
 	if len(plan.Findings) != 0 {
 		return nil, nil, fmt.Errorf("%w: write AI modes cannot return findings", ErrGateway)
 	}
-	if len(plan.Changes) < 1 || len(plan.Changes) > maxChanges {
+	if mode == ModeChart {
+		if len(plan.Changes) != 0 || len(plan.ToolCalls) != 1 {
+			return nil, nil, fmt.Errorf("%w: chart mode requires one tool call and no cell changes", ErrGateway)
+		}
+		return []ProposedChange{}, []Finding{}, nil
+	}
+	if (len(plan.Changes) < 1 && !(mode == ModeAgent && len(plan.ToolCalls) > 0)) || len(plan.Changes) > maxChanges {
 		return nil, nil, fmt.Errorf("%w: model must propose 1 to %d changes", ErrGateway, maxChanges)
 	}
 	seen := make(map[string]struct{}, len(plan.Changes))
@@ -590,13 +616,26 @@ func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook
 		}
 		seen[key] = struct{}{}
 		before := snapshotFromCell(current[key])
-		after := CellSnapshot{Style: cloneRaw(before.Style)}
+		after := CellSnapshot{Style: cloneRaw(before.Style), Value: cloneRaw(before.Value), Formula: before.Formula, SpillSource: before.SpillSource}
 		if mode == ModeClean {
 			if err := validateCleanChange(candidate); err != nil {
 				return nil, nil, err
 			}
+			after.Value, after.Formula, after.SpillSource = nil, "", ""
 			if !candidate.Clear {
 				after.Value = cloneRaw(candidate.Value)
+			}
+		} else if mode == ModeFormat {
+			if len(bytes.TrimSpace(candidate.Value)) != 0 || candidate.Clear || strings.TrimSpace(candidate.Formula) != "" || len(bytes.TrimSpace(candidate.Style)) == 0 {
+				return nil, nil, fmt.Errorf("%w: format changes require only a complete style object", ErrGateway)
+			}
+			if err := workbook.ValidateCellStyle(workbook.CellInput{Row: candidate.Row, Column: candidate.Column, Style: candidate.Style}); err != nil {
+				return nil, nil, fmt.Errorf("%w: invalid format style: %v", ErrGateway, err)
+			}
+			after.Style = cloneRaw(candidate.Style)
+		} else if mode == ModeAgent {
+			if err := applyAgentCandidate(&after, candidate); err != nil {
+				return nil, nil, err
 			}
 		} else {
 			if len(bytes.TrimSpace(candidate.Value)) != 0 || candidate.Clear {
@@ -606,14 +645,14 @@ func validateGatewayPlan(mode string, selected cellrange.Range, cells []workbook
 			if !strings.HasPrefix(formula, "=") || len(formula) > 8192 {
 				return nil, nil, fmt.Errorf("%w: every proposed formula must begin with '=' and be at most 8192 characters", ErrGateway)
 			}
-			after.Formula = formula
+			after.Value, after.Formula, after.SpillSource = nil, formula, ""
 		}
 		if snapshotsEqual(before, after) {
 			continue
 		}
 		changes = append(changes, ProposedChange{Row: candidate.Row, Column: candidate.Column, Address: cellrange.Address(candidate.Row, candidate.Column), Before: before, After: after})
 	}
-	if len(changes) == 0 {
+	if len(changes) == 0 && !(mode == ModeAgent && len(plan.ToolCalls) > 0) {
 		return nil, nil, fmt.Errorf("%w: model proposed no effective changes", ErrGateway)
 	}
 	sort.Slice(changes, func(i, j int) bool {
@@ -629,14 +668,14 @@ func actionCellInputs(action Action) ([]workbook.CellInput, map[string]workbook.
 	cells := make([]workbook.CellInput, 0, len(action.Changes))
 	expected := make(map[string]workbook.Cell, len(action.Changes))
 	for _, change := range action.Changes {
-		cells = append(cells, workbook.CellInput{Row: change.Row, Column: change.Column, Value: cloneRaw(change.After.Value), Formula: change.After.Formula, Style: cloneRaw(change.Before.Style)})
+		cells = append(cells, workbook.CellInput{Row: change.Row, Column: change.Column, Value: cloneRaw(change.After.Value), Formula: change.After.Formula, Style: cloneRaw(change.After.Style)})
 		expected[coordinateKey(change.Row, change.Column)] = workbook.Cell{SheetID: action.SheetID, Row: change.Row, Column: change.Column, Value: cloneRaw(change.Before.Value), Formula: change.Before.Formula, Style: cloneRaw(change.Before.Style), SpillSource: change.Before.SpillSource}
 	}
 	return cells, expected
 }
 
 func validMode(mode string) bool {
-	return mode == ModeFormula || mode == ModeExplain || mode == ModeFix || mode == ModeSummarize || mode == ModeAnomaly || mode == ModeClean
+	return mode == ModeFormula || mode == ModeExplain || mode == ModeFix || mode == ModeSummarize || mode == ModeAnomaly || mode == ModeClean || mode == ModeFormat || mode == ModeChart || mode == ModeAgent
 }
 
 func validateCleanChange(change gatewayChange) error {
@@ -663,6 +702,239 @@ func validateCleanChange(change gatewayChange) error {
 	default:
 		return fmt.Errorf("%w: clean values must be strings, numbers or booleans; use clear=true to clear a cell", ErrGateway)
 	}
+}
+
+func applyAgentCandidate(after *CellSnapshot, change gatewayChange) error {
+	hasFormula := strings.TrimSpace(change.Formula) != ""
+	hasStyle := len(bytes.TrimSpace(change.Style)) != 0
+	hasValue := len(bytes.TrimSpace(change.Value)) != 0
+	count := 0
+	for _, present := range []bool{hasFormula, hasStyle, hasValue, change.Clear} {
+		if present {
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: agent cell changes require exactly one formula, style, scalar value, or clear operation", ErrGateway)
+	}
+	switch {
+	case hasFormula:
+		formula := strings.TrimSpace(change.Formula)
+		if !strings.HasPrefix(formula, "=") || len(formula) > 8192 {
+			return fmt.Errorf("%w: agent formulas must begin with '=' and be at most 8192 characters", ErrGateway)
+		}
+		after.Value, after.Formula, after.SpillSource = nil, formula, ""
+	case hasStyle:
+		if err := workbook.ValidateCellStyle(workbook.CellInput{Style: change.Style}); err != nil {
+			return fmt.Errorf("%w: invalid agent style: %v", ErrGateway, err)
+		}
+		after.Style = cloneRaw(change.Style)
+	case hasValue, change.Clear:
+		if err := validateCleanChange(change); err != nil {
+			return err
+		}
+		after.Value, after.Formula, after.SpillSource = nil, "", ""
+		if !change.Clear {
+			after.Value = cloneRaw(change.Value)
+		}
+	}
+	return nil
+}
+
+type createChartArguments struct {
+	SheetID           string `json:"sheet_id,omitempty"`
+	SourceSheetID     string `json:"source_sheet_id,omitempty"`
+	Type              string `json:"type"`
+	Title             string `json:"title,omitempty"`
+	SourceRange       string `json:"source_range"`
+	FirstRowHeaders   *bool  `json:"first_row_headers,omitempty"`
+	FirstColumnLabels *bool  `json:"first_column_labels,omitempty"`
+	LegendPosition    string `json:"legend_position,omitempty"`
+	XAxisTitle        string `json:"x_axis_title,omitempty"`
+	YAxisTitle        string `json:"y_axis_title,omitempty"`
+}
+
+type reportChartArguments struct {
+	Type              string `json:"type"`
+	Title             string `json:"title,omitempty"`
+	SourceRange       string `json:"source_range"`
+	FirstRowHeaders   *bool  `json:"first_row_headers,omitempty"`
+	FirstColumnLabels *bool  `json:"first_column_labels,omitempty"`
+	LegendPosition    string `json:"legend_position,omitempty"`
+	XAxisTitle        string `json:"x_axis_title,omitempty"`
+	YAxisTitle        string `json:"y_axis_title,omitempty"`
+}
+
+type createReportSheetArguments struct {
+	Name  string                `json:"name"`
+	Cells []gatewayChange       `json:"cells"`
+	Chart *reportChartArguments `json:"chart,omitempty"`
+}
+
+type createReportSheetResult struct {
+	Sheet         workbook.Sheet          `json:"sheet"`
+	CellOperation workbook.MutationResult `json:"cell_operation"`
+	Chart         *workbook.Chart         `json:"chart,omitempty"`
+}
+
+func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates []gatewayToolCall, maxChanges int) ([]ToolCall, error) {
+	if input.Mode != ModeChart && input.Mode != ModeAgent {
+		if len(candidates) != 0 {
+			return nil, fmt.Errorf("%w: %s mode cannot call workbook tools", ErrGateway, input.Mode)
+		}
+		return []ToolCall{}, nil
+	}
+	if len(candidates) > 10 {
+		return nil, fmt.Errorf("%w: an agent plan may contain at most 10 workbook tool calls", ErrGateway)
+	}
+	items := make([]ToolCall, 0, len(candidates))
+	reportSheets := 0
+	for index, candidate := range candidates {
+		name := strings.TrimSpace(candidate.Name)
+		switch name {
+		case "create_chart":
+			var arguments createChartArguments
+			if json.Unmarshal(candidate.Arguments, &arguments) != nil {
+				return nil, fmt.Errorf("%w: create_chart arguments are invalid", ErrGateway)
+			}
+			arguments.SheetID = strings.TrimSpace(arguments.SheetID)
+			arguments.SourceSheetID = strings.TrimSpace(arguments.SourceSheetID)
+			if arguments.SheetID == "" {
+				arguments.SheetID = input.SheetID
+			}
+			if arguments.SourceSheetID == "" {
+				arguments.SourceSheetID = input.SheetID
+			}
+			if arguments.SheetID != input.SheetID || arguments.SourceSheetID != input.SheetID {
+				return nil, fmt.Errorf("%w: create_chart may only use the active sheet", ErrGateway)
+			}
+			source, err := cellrange.Parse(strings.TrimSpace(arguments.SourceRange))
+			if err != nil || source.Start.Row < selected.Start.Row || source.End.Row > selected.End.Row || source.Start.Column < selected.Start.Column || source.End.Column > selected.End.Column {
+				return nil, fmt.Errorf("%w: create_chart source_range must stay inside selected_range", ErrGateway)
+			}
+			arguments.SourceRange = normalizedSelection(source)
+			arguments.Type = normalizeChartType(arguments.Type)
+			if arguments.Type == "" {
+				return nil, fmt.Errorf("%w: create_chart type is invalid", ErrGateway)
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_report_sheet":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_report_sheet requires agent mode", ErrGateway)
+			}
+			reportSheets++
+			if reportSheets > 1 {
+				return nil, fmt.Errorf("%w: a plan may create at most one report sheet", ErrGateway)
+			}
+			arguments, err := validateCreateReportSheet(input, candidate.Arguments, maxChanges)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		default:
+			return nil, fmt.Errorf("%w: unsupported workbook tool %q", ErrGateway, name)
+		}
+	}
+	if input.Mode == ModeChart && (len(items) != 1 || items[0].Name != "create_chart") {
+		return nil, fmt.Errorf("%w: chart mode requires exactly one create_chart tool", ErrGateway)
+	}
+	return items, nil
+}
+
+func validateCreateReportSheet(input PlanInput, raw json.RawMessage, maxChanges int) (createReportSheetArguments, error) {
+	var arguments createReportSheetArguments
+	if json.Unmarshal(raw, &arguments) != nil {
+		return arguments, fmt.Errorf("%w: create_report_sheet arguments are invalid", ErrGateway)
+	}
+	arguments.Name = strings.TrimSpace(arguments.Name)
+	if arguments.Name == "" || len([]rune(arguments.Name)) > 100 || strings.ContainsAny(arguments.Name, "\x00\r\n") {
+		return arguments, fmt.Errorf("%w: report sheet name must contain 1 to 100 safe characters", ErrGateway)
+	}
+	if input.Context != nil {
+		for _, sheet := range input.Context.Sheets {
+			if strings.EqualFold(sheet.Name, arguments.Name) {
+				return arguments, fmt.Errorf("%w: report sheet name already exists", ErrGateway)
+			}
+		}
+	}
+	if maxChanges < 1 {
+		maxChanges = 100
+	}
+	if len(arguments.Cells) < 1 || len(arguments.Cells) > maxChanges || len(arguments.Cells) > workbook.MaxBatchCells {
+		return arguments, fmt.Errorf("%w: create_report_sheet requires 1 to %d cells", ErrGateway, min(maxChanges, workbook.MaxBatchCells))
+	}
+	seen := make(map[string]struct{}, len(arguments.Cells))
+	minRow, minColumn, maxRow, maxColumn := 1<<30, 1<<30, 0, 0
+	for index := range arguments.Cells {
+		cell := arguments.Cells[index]
+		if cell.Row < 1 || cell.Row > 1_000_000 || cell.Column < 1 || cell.Column > 16_384 {
+			return arguments, fmt.Errorf("%w: report cell coordinates are invalid", ErrGateway)
+		}
+		key := coordinateKey(cell.Row, cell.Column)
+		if _, exists := seen[key]; exists {
+			return arguments, fmt.Errorf("%w: report contains a duplicate cell", ErrGateway)
+		}
+		seen[key] = struct{}{}
+		blank := CellSnapshot{}
+		if err := applyAgentCandidate(&blank, cell); err != nil {
+			return arguments, err
+		}
+		minRow, minColumn = min(minRow, cell.Row), min(minColumn, cell.Column)
+		maxRow, maxColumn = max(maxRow, cell.Row), max(maxColumn, cell.Column)
+	}
+	if arguments.Chart != nil {
+		arguments.Chart.Type = normalizeChartType(arguments.Chart.Type)
+		if arguments.Chart.Type == "" {
+			return arguments, fmt.Errorf("%w: report chart type is invalid", ErrGateway)
+		}
+		source, err := cellrange.Parse(strings.TrimSpace(arguments.Chart.SourceRange))
+		if err != nil || source.Start.Row < minRow || source.End.Row > maxRow || source.Start.Column < minColumn || source.End.Column > maxColumn {
+			return arguments, fmt.Errorf("%w: report chart source_range must stay inside the report cells", ErrGateway)
+		}
+		arguments.Chart.SourceRange = normalizedSelection(source)
+	}
+	return arguments, nil
+}
+
+func normalizeChartType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if !map[string]bool{"bar": true, "line": true, "area": true, "pie": true, "scatter": true, "histogram": true}[value] {
+		return ""
+	}
+	return value
+}
+
+func normalizedSelection(selected cellrange.Range) string {
+	start, end := cellrange.Address(selected.Start.Row, selected.Start.Column), cellrange.Address(selected.End.Row, selected.End.Column)
+	if start == end {
+		return start
+	}
+	return start + ":" + end
+}
+
+func buildPlanSteps(mode, risk string, changes []ProposedChange, tools []ToolCall) []PlanStep {
+	steps := []PlanStep{
+		{Position: 1, ToolName: "get_workbook", Description: "워크북과 현재 시트 구조 확인", Status: "completed", Risk: RiskRead},
+		{Position: 2, ToolName: "get_selection", Description: "선택 범위와 의미 구조 분석", Status: "completed", Risk: RiskRead},
+	}
+	position := 3
+	if len(changes) > 0 {
+		name := approvalToolName(mode)
+		steps = append(steps, PlanStep{Position: position, ToolName: name, Description: fmt.Sprintf("선택 범위의 %d개 셀 변경", len(changes)), Status: "waiting_approval", Risk: risk})
+		position++
+	}
+	for _, tool := range tools {
+		description := "차트 소스 검증 후 워크북에 차트 생성"
+		if tool.Name == "create_report_sheet" {
+			description = "새 보고서 시트에 수식과 차트를 함께 생성"
+		}
+		steps = append(steps, PlanStep{Position: position, ToolName: tool.Name, Description: description, Status: "waiting_approval", Risk: tool.Risk, Arguments: cloneRaw(tool.Arguments)})
+		position++
+	}
+	steps = append(steps, PlanStep{Position: position, ToolName: "validate_changeset", Description: "적용 결과와 수식 오류 검증", Status: "pending", Risk: RiskRead})
+	return steps
 }
 
 func validateFindings(mode string, selected cellrange.Range, current map[string]workbook.Cell, candidates []gatewayFinding, limit int) ([]Finding, error) {
@@ -707,6 +979,15 @@ func snapshotsEqual(left, right CellSnapshot) bool {
 func approvalToolName(mode string) string {
 	if mode == ModeClean {
 		return "data.clean"
+	}
+	if mode == ModeFormat {
+		return "range.format"
+	}
+	if mode == ModeChart {
+		return "chart.create"
+	}
+	if mode == ModeAgent {
+		return "agent.execute"
 	}
 	return "formula.set"
 }
@@ -761,4 +1042,11 @@ func samePlanRequest(action Action, input PlanInput) bool {
 	return action.WorkbookID == input.WorkbookID && action.SheetID == input.SheetID &&
 		action.Mode == input.Mode && action.Range == input.Range && action.Request == input.Request &&
 		action.BaseVersion == input.BaseVersion
+}
+
+func nullableUUID(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
 }

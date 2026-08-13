@@ -78,6 +78,40 @@ func TestGatewayPlanValidationSupportsReadOnlyInsightsAndLiteralCleaning(t *test
 	}
 }
 
+func TestValidateWorkbookAgentFormattingAndChartTools(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:B2")
+	cells := []workbook.Cell{{Row: 1, Column: 1, Value: json.RawMessage(`"매출"`)}}
+	changes, findings, err := validateGatewayPlan(ModeFormat, selected, cells, gatewayPlan{Summary: "format", Changes: []gatewayChange{{Row: 1, Column: 1, Style: json.RawMessage(`{"bold":true,"background":"#dbeafe"}`)}}}, 10)
+	if err != nil || len(changes) != 1 || len(findings) != 0 || string(changes[0].After.Style) == "" {
+		t.Fatalf("format plan = %#v, %#v, %v", changes, findings, err)
+	}
+	chartArgs := json.RawMessage(`{"type":"bar","title":"매출","source_range":"A1:B2"}`)
+	chartPlan := gatewayPlan{Summary: "chart", ToolCalls: []gatewayToolCall{{Name: "create_chart", Arguments: chartArgs}}}
+	changes, findings, err = validateGatewayPlan(ModeChart, selected, cells, chartPlan, 10)
+	if err != nil || len(changes) != 0 || len(findings) != 0 {
+		t.Fatalf("chart plan = %#v, %#v, %v", changes, findings, err)
+	}
+	tools, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeChart, IdempotencyKey: "chart"}, selected, chartPlan.ToolCalls, 10)
+	if err != nil || len(tools) != 1 || tools[0].Name != "create_chart" || tools[0].Risk != RiskMedium {
+		t.Fatalf("chart tools = %#v, %v", tools, err)
+	}
+	outside := []gatewayToolCall{{Name: "create_chart", Arguments: json.RawMessage(`{"type":"line","source_range":"A1:C3"}`)}}
+	if _, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeChart, IdempotencyKey: "outside"}, selected, outside, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("outside chart error = %v", err)
+	}
+	report := []gatewayToolCall{{Name: "create_report_sheet", Arguments: json.RawMessage(`{"name":"경영 보고","cells":[{"row":1,"column":1,"value":"월"},{"row":1,"column":2,"value":"매출"},{"row":2,"column":1,"value":"1월"},{"row":2,"column":2,"formula":"='Data'!B2"}],"chart":{"type":"bar","source_range":"A1:B2"}}`)}}
+	contextView := &workbook.AgentContext{Sheets: []workbook.AgentSheet{{Name: "Data"}}}
+	reportTools, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeAgent, IdempotencyKey: "report", Context: contextView}, selected, report, 10)
+	if err != nil || len(reportTools) != 1 || reportTools[0].Name != "create_report_sheet" || reportTools[0].Risk != RiskHigh {
+		t.Fatalf("report tools = %#v, %v", reportTools, err)
+	}
+	unsafeReport := []gatewayToolCall{{Name: "create_report_sheet", Arguments: json.RawMessage(`{"name":"경영 보고","cells":[{"row":1,"column":1,"value":"월"}],"chart":{"type":"bar","source_range":"A1:B2"}}`)}}
+	if _, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeAgent, IdempotencyKey: "unsafe-report"}, selected, unsafeReport, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("unsafe report error = %v", err)
+	}
+}
+
 func TestStripJSONFence(t *testing.T) {
 	t.Parallel()
 	if actual := stripJSONFence("```json\n{\"summary\":\"ok\"}\n```"); actual != `{"summary":"ok"}` {
