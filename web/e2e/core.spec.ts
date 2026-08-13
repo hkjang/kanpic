@@ -1,4 +1,14 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function unreadableVisibleText(page:Page){
+  return page.locator('body *').evaluateAll(elements=>elements.flatMap(element=>{
+    const style=getComputedStyle(element),rect=element.getBoundingClientRect()
+    const hasOwnText=Array.from(element.childNodes).some(node=>node.nodeType===Node.TEXT_NODE&&Boolean(node.textContent?.trim()))
+    if(!hasOwnText||style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0||rect.width===0||rect.height===0)return[]
+    const size=Number.parseFloat(style.fontSize)
+    return size<11?[{element:element.tagName.toLowerCase(),className:element.className,text:element.textContent?.trim().slice(0,60),size}]:[]
+  }))
+}
 
 test('login and profile menus expose the same build version', async ({ page }) => {
   const build = await page.request.get('/api/v1/version').then(response => response.json())
@@ -33,6 +43,19 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await expect(page.locator('.formula-bar')).toBeVisible()
   await expect(page.getByText('Workbook Agent', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
+})
+
+test('keeps visible interface text readable across primary surfaces', async ({ page, request }) => {
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`가독성 검증 ${Date.now()}`}}).then(response=>response.json())
+  try{
+    for(const path of ['/',`/workbooks/${workbook.id}`,'/admin']){
+      await page.goto(path)
+      await page.waitForLoadState('networkidle')
+      expect(await unreadableVisibleText(page),`${path}에 11px 미만의 표시 텍스트가 있습니다.`).toEqual([])
+    }
+  }finally{
+    await request.delete(`/api/v1/workbooks/${workbook.id}`)
+  }
 })
 
 

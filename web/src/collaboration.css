@@ -12,7 +12,7 @@
   border-radius: 14px;
   color: #66747c;
   background: #fff;
-  font-size: 9px;
+  font-size: var(--font-label);
   white-space: nowrap;
 }
 
