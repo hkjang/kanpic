@@ -126,6 +126,9 @@ type PlanInput struct {
 	ActorID        string                 `json:"-"`
 	ConversationID string                 `json:"conversation_id,omitempty"`
 	Context        *workbook.AgentContext `json:"-"`
+	Conversation   []ConversationMessage  `json:"-"`
+	Memory         []AgentWorkMemory      `json:"-"`
+	Charts         []workbook.Chart       `json:"-"`
 }
 
 type ApprovalInput struct {
@@ -188,6 +191,7 @@ type WorkbookAgent interface {
 	GetRun(context.Context, string, string) (AgentRun, error)
 	GetRunPlan(context.Context, string, string) (AgentPlan, error)
 	ListRuns(context.Context, string, string, int) ([]AgentRun, error)
+	ListConversations(context.Context, string, string, int) ([]AgentConversation, error)
 	RunForChangeSet(context.Context, string, string) (AgentRun, error)
 	ApproveRun(context.Context, string, ApprovalInput) (AgentExecutionResult, error)
 	CancelRun(context.Context, string, ApprovalInput) (AgentRun, error)
@@ -206,4 +210,30 @@ func RequiredApprovalScope(mode string) string {
 		return "chart.write"
 	}
 	return "formula.write"
+}
+
+func RequiredApprovalScopes(action Action) []string {
+	seen := map[string]bool{}
+	add := func(scope string) {
+		if scope != "" {
+			seen[scope] = true
+		}
+	}
+	add(RequiredApprovalScope(action.Mode))
+	for _, tool := range action.ToolCalls {
+		switch tool.Name {
+		case "create_chart", "update_chart":
+			add("chart.write")
+		case "create_report_sheet":
+			add("range.write")
+		}
+	}
+	ordered := []string{"formula.write", "range.write", "chart.write"}
+	result := make([]string, 0, len(seen))
+	for _, scope := range ordered {
+		if seen[scope] {
+			result = append(result, scope)
+		}
+	}
+	return result
 }

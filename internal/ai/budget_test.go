@@ -96,8 +96,8 @@ func TestRequestGatewayPlanRetriesATruncatedReply(t *testing.T) {
 	}
 }
 
-// When the budget already fills the published window there is nothing left to
-// grow into, so the caller is told what to do instead of retrying forever.
+// Once the actual prompt usage fills the published window there is nothing
+// left to grow into, so the caller stops after at most one recalibration.
 func TestRequestGatewayPlanReportsAnUnavoidableTruncation(t *testing.T) {
 	t.Parallel()
 	calls := 0
@@ -111,7 +111,7 @@ func TestRequestGatewayPlanReportsAnUnavoidableTruncation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "잘렸습니다") {
 		t.Fatalf("truncation error=%v", err)
 	}
-	if calls != 1 || usage.CompletionTokens != 31000 {
+	if calls < 1 || calls > 2 || usage.Attempts != calls || usage.CompletionTokens != 31000 {
 		t.Fatalf("calls=%d usage=%#v", calls, usage)
 	}
 }

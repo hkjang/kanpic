@@ -124,6 +124,23 @@ func (s *Server) listAgentRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) {
+	if !requireAPIScopes(w, r, "ai.use", "range.read") {
+		return
+	}
+	workbookID := r.PathValue("workbookId")
+	if !s.requireWorkbookAccess(w, r, workbookID, workbook.CapabilityRead) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.workbookAgent().ListConversations(r.Context(), workbookID, actorID(r), limit)
+	if err != nil {
+		s.writeAIError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) getAgentRun(w http.ResponseWriter, r *http.Request) {
 	if !requireAPIScopes(w, r, "ai.use", "range.read") {
 		return
@@ -211,7 +228,8 @@ func (s *Server) executeAgentRunPhase(w http.ResponseWriter, r *http.Request, ac
 		writeJSON(w, http.StatusOK, cancelled)
 		return
 	}
-	if !s.requireWorkbookAccess(w, r, run.WorkbookID, workbook.CapabilityWrite) || !requireAPIScopes(w, r, "ai.use", ai.RequiredApprovalScope(run.Action.Mode)) {
+	requiredScopes := append([]string{"ai.use"}, ai.RequiredApprovalScopes(run.Action)...)
+	if !s.requireWorkbookAccess(w, r, run.WorkbookID, workbook.CapabilityWrite) || !requireAPIScopes(w, r, requiredScopes...) {
 		return
 	}
 	result, err := s.workbookAgent().ApproveRun(r.Context(), actionID, input)

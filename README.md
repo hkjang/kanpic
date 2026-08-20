@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.32.1
+VERSION=v0.33.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -70,7 +70,7 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 
 동일 셀을 두 사용자가 같은 기준 버전에서 수정하면 마지막 입력은 화면에 임시 반영하되 충돌을 별도 PostgreSQL 기록으로 남깁니다. 편집기 상단의 주황색 충돌 배지 또는 **편집 충돌** 도구를 열면 충돌 전 기준, 먼저 반영된 상대 변경, 당시 제출값과 현재 서버값을 값·수식·서식 단위로 비교할 수 있습니다. **현재 값 유지** 또는 **먼저 반영된 값 복원** 결정은 새로운 서버 작업과 워크북 버전으로 기록되며, 복원 전 같은 셀이 다시 바뀌었다면 안전하게 거부됩니다. REST `/api/v1/workbooks/{workbookId}/conflicts`, `/api/v1/conflicts/{conflictId}:resolve`와 MCP `spreadsheet.conflict.list|get|resolve`가 같은 `range.read`/`range.write` 계약을 제공합니다.
 
-편집기의 **Workbook Agent**는 관리자가 등록한 사내 OpenAI 호환 LLM Gateway만 사용합니다. 선택 범위와 워크북·시트 구조를 의미 문맥으로 읽어 수식 생성·채우기·오류 수정, 분석·이상치·정제, 자동 서식, 차트, 신규 보고서 시트+수식+차트 복합 작업을 계획합니다. 셀 Diff, 도구 인자, 위험도와 검증 단계를 명시적으로 승인하기 전에는 워크북을 바꾸지 않으며 ChangeSet 전체를 Undo할 수 있습니다. 계획 당시 워크북 버전과 셀 값을 다시 검사하고, Agent가 만든 시트에 후속 변경이 있으면 안전하지 않은 롤백을 거부합니다. 대화·Run·Plan·Step·Tool Call·검증·승인·Undo 이력은 PostgreSQL과 감사 로그에 보존됩니다. REST `/api/v1/workbooks/{workbookId}/agent/*`, `/api/v1/agent/runs/*`, `/api/v1/changesets/*`와 기존 `/api/v1/ai/*`, MCP `spreadsheet.ai.action.*`가 같은 `ai.use` 및 작업별 최소 scope 계약을 사용합니다.
+편집기의 **Workbook Agent**는 관리자가 등록한 사내 OpenAI 호환 LLM Gateway만 사용합니다. 같은 대화에서 “선택 범위를 막대 차트로 만들어줘” 다음에 “그 차트를 선 차트로 바꿔줘”처럼 후속 요청을 이어갈 수 있으며, 패널을 다시 열면 마지막 대화를 복원하고 대화 목록에서 이전 세션을 전환할 수 있습니다. 매 턴 최근 메시지, 이전 실행의 적용·Undo·실패 상태를 구분한 작업 메모리, 현재 차트 ID·revision을 함께 읽고 상황별 후속 작업도 제안합니다. 작업 메모리에는 변경 주소와 객체 결과만 담고 범위 밖 셀 값은 넣지 않습니다. 선택 범위와 워크북·시트 구조를 의미 문맥으로 읽어 수식 생성·채우기·오류 수정, 분석·이상치·정제, 자동 서식, 차트, 신규 보고서 시트+수식+차트 복합 작업을 계획합니다. 셀 Diff, 도구 인자, 위험도와 검증 단계를 명시적으로 승인하기 전에는 워크북을 바꾸지 않으며 ChangeSet 전체를 Undo할 수 있습니다. 계획 당시 워크북 버전과 셀 값을 다시 검사하고, Agent가 만든 시트에 후속 변경이 있으면 안전하지 않은 롤백을 거부합니다. 대화·Run·Plan·Step·Tool Call·검증·승인·Undo 이력은 PostgreSQL과 감사 로그에 보존됩니다. REST `/api/v1/workbooks/{workbookId}/agent/*`, `/api/v1/agent/runs/*`, `/api/v1/changesets/*`와 기존 `/api/v1/ai/*`, MCP `spreadsheet.ai.action.*`가 같은 `ai.use` 및 작업별 최소 scope 계약을 사용합니다.
 
 도구 모음의 **자동화** 버튼에서는 수동 실행, 특정 셀 범위 변경, 5필드 Cron 일정 또는 개인 API 키로 인증한 인바운드 웹훅을 조건으로 값 설정, 상대 참조 수식 적용과 내용 지우기 작업을 정의할 수 있습니다. 일정에는 IANA 시간대(기본 `UTC`)를 지정하며 다음 실행 시각과 성공·변경 없음·실패 이력을 확인할 수 있습니다. 웹훅은 `automation.webhook.invoke` scope와 `Idempotency-Key`가 필수이고 최대 1MiB JSON 원문은 저장하지 않으며 SHA-256·크기·호출 키 ID만 감사에 보존합니다. 저장 직후 최신 서버 셀 기준 미리보기를 확인하고 명시적으로 실행하며, 실행 이력에서 성공 작업을 Undo할 수 있습니다. 정의 revision, 예약 시각, 실행 기준 버전, 변경 전 셀 스냅샷, 작업 ID와 감사 이력은 PostgreSQL에 보존되고 모든 계약은 REST와 `spreadsheet.automation.*` MCP 도구로 동일하게 제공됩니다. 자동화는 기본 비활성화이며 관리자가 `/admin`의 **워크북 자동화 실행 정책**에서 셀 수, 시간당 실행 수와 스케줄러 확인 주기를 검증한 뒤 활성화합니다.
 

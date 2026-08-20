@@ -261,6 +261,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 			mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/agent/context", s.getAgentContext)
 			mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/agent/messages", s.sendAgentMessage)
 			mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/agent/runs", s.listAgentRuns)
+			mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/agent/conversations", s.listAgentConversations)
 			mux.HandleFunc("GET /api/v1/agent/runs/{runId}", s.getAgentRun)
 			mux.HandleFunc("GET /api/v1/agent/runs/{runId}/plan", s.getAgentPlan)
 			mux.HandleFunc("POST /api/v1/agent/runs/{runId}/approve", s.approveAgentRun)

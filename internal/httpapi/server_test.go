@@ -102,6 +102,10 @@ func (f *fakeWorkbookAgent) ListRuns(_ context.Context, _, _ string, _ int) ([]a
 	return []ai.AgentRun{f.run}, nil
 }
 
+func (f *fakeWorkbookAgent) ListConversations(_ context.Context, workbookID, _ string, _ int) ([]ai.AgentConversation, error) {
+	return []ai.AgentConversation{{ID: "conversation", WorkbookID: workbookID, Title: "B열에 수식을 채워줘", LatestRunID: f.run.ID, LatestState: f.run.State, MessageCount: len(f.run.Messages), RunCount: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}}, nil
+}
+
 func (f *fakeWorkbookAgent) RunForChangeSet(_ context.Context, _, _ string) (ai.AgentRun, error) {
 	return f.run, nil
 }
@@ -847,6 +851,7 @@ func TestWorkbookAgentRESTContractAcceptsDocumentedPathsAndMinimalMessage(t *tes
 		path   string
 	}{
 		{http.MethodPost, "/api/v1/workbooks/book/agent/messages"},
+		{http.MethodGet, "/api/v1/workbooks/book/agent/conversations"},
 		{http.MethodGet, "/api/v1/agent/runs/run"},
 		{http.MethodGet, "/api/v1/agent/runs/run/plan"},
 		{http.MethodPost, "/api/v1/agent/runs/run/approve"},
@@ -880,8 +885,11 @@ func TestWorkbookAgentRESTContractAcceptsDocumentedPathsAndMinimalMessage(t *tes
 	listed := request[struct {
 		Items []ai.AgentRun `json:"items"`
 	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/agent/runs", nil, http.StatusOK)
-	if got.ID != run.ID || plan.RunID != run.ID || len(listed.Items) != 1 {
-		t.Fatalf("agent queries got=%#v plan=%#v list=%#v", got, plan, listed.Items)
+	conversations := request[struct {
+		Items []ai.AgentConversation `json:"items"`
+	}](t, server, http.MethodGet, "/api/v1/workbooks/"+book.ID+"/agent/conversations", nil, http.StatusOK)
+	if got.ID != run.ID || plan.RunID != run.ID || len(listed.Items) != 1 || len(conversations.Items) != 1 || conversations.Items[0].LatestRunID != run.ID {
+		t.Fatalf("agent queries got=%#v plan=%#v list=%#v conversations=%#v", got, plan, listed.Items, conversations.Items)
 	}
 	applied := request[ai.AgentExecutionResult](t, server, http.MethodPost, "/api/v1/agent/runs/"+run.ID+"/approve", map[string]any{"idempotency_key": "apply", "expected_revision": 1}, http.StatusOK)
 	if applied.Run.Action.Status != ai.StatusApplied || applied.Operation == nil || applied.Operation.OperationID != "agent-operation" {

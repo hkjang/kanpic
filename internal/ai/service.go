@@ -754,6 +754,24 @@ type createChartArguments struct {
 	YAxisTitle        string `json:"y_axis_title,omitempty"`
 }
 
+type updateChartArguments struct {
+	ChartID           string  `json:"chart_id"`
+	ExpectedRevision  int64   `json:"expected_revision"`
+	Type              *string `json:"type,omitempty"`
+	Title             *string `json:"title,omitempty"`
+	SourceRange       *string `json:"source_range,omitempty"`
+	FirstRowHeaders   *bool   `json:"first_row_headers,omitempty"`
+	FirstColumnLabels *bool   `json:"first_column_labels,omitempty"`
+	LegendPosition    *string `json:"legend_position,omitempty"`
+	XAxisTitle        *string `json:"x_axis_title,omitempty"`
+	YAxisTitle        *string `json:"y_axis_title,omitempty"`
+}
+
+type updateChartResult struct {
+	Before workbook.Chart `json:"before"`
+	After  workbook.Chart `json:"after"`
+}
+
 type reportChartArguments struct {
 	Type              string `json:"type"`
 	Title             string `json:"title,omitempty"`
@@ -819,6 +837,13 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "update_chart":
+			arguments, err := validateUpdateChart(input, selected, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_report_sheet":
 			if input.Mode != ModeAgent {
 				return nil, fmt.Errorf("%w: create_report_sheet requires agent mode", ErrGateway)
@@ -837,10 +862,86 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			return nil, fmt.Errorf("%w: unsupported workbook tool %q", ErrGateway, name)
 		}
 	}
-	if input.Mode == ModeChart && (len(items) != 1 || items[0].Name != "create_chart") {
-		return nil, fmt.Errorf("%w: chart mode requires exactly one create_chart tool", ErrGateway)
+	if input.Mode == ModeChart && (len(items) != 1 || items[0].Name != "create_chart" && items[0].Name != "update_chart") {
+		return nil, fmt.Errorf("%w: chart mode requires exactly one create_chart or update_chart tool", ErrGateway)
 	}
 	return items, nil
+}
+
+func validateUpdateChart(input PlanInput, selected cellrange.Range, raw json.RawMessage) (updateChartArguments, error) {
+	var arguments updateChartArguments
+	if json.Unmarshal(raw, &arguments) != nil {
+		return arguments, fmt.Errorf("%w: update_chart arguments are invalid", ErrGateway)
+	}
+	arguments.ChartID = strings.TrimSpace(arguments.ChartID)
+	var current *workbook.Chart
+	for index := range input.Charts {
+		if input.Charts[index].ID == arguments.ChartID {
+			current = &input.Charts[index]
+			break
+		}
+	}
+	if current == nil || current.WorkbookID != "" && current.WorkbookID != input.WorkbookID {
+		return arguments, fmt.Errorf("%w: update_chart chart_id must reference a current workbook chart", ErrGateway)
+	}
+	if arguments.Type == nil && arguments.Title == nil && arguments.SourceRange == nil && arguments.FirstRowHeaders == nil && arguments.FirstColumnLabels == nil && arguments.LegendPosition == nil && arguments.XAxisTitle == nil && arguments.YAxisTitle == nil {
+		return arguments, fmt.Errorf("%w: update_chart must change at least one supported field", ErrGateway)
+	}
+	if arguments.Type != nil {
+		value := normalizeChartType(*arguments.Type)
+		if value == "" {
+			return arguments, fmt.Errorf("%w: update_chart type is invalid", ErrGateway)
+		}
+		arguments.Type = &value
+	}
+	if arguments.Title != nil {
+		value := strings.TrimSpace(*arguments.Title)
+		if len([]rune(value)) > 200 {
+			return arguments, fmt.Errorf("%w: update_chart title is too long", ErrGateway)
+		}
+		arguments.Title = &value
+	}
+	if arguments.SourceRange != nil {
+		if current.SourceSheetID != input.SheetID {
+			return arguments, fmt.Errorf("%w: update_chart may only change a source range on the active sheet", ErrGateway)
+		}
+		source, err := cellrange.Parse(strings.TrimSpace(*arguments.SourceRange))
+		if err != nil || source.Start.Row < selected.Start.Row || source.End.Row > selected.End.Row || source.Start.Column < selected.Start.Column || source.End.Column > selected.End.Column {
+			return arguments, fmt.Errorf("%w: update_chart source_range must stay inside selected_range", ErrGateway)
+		}
+		value := normalizedSelection(source)
+		arguments.SourceRange = &value
+	}
+	if arguments.LegendPosition != nil {
+		value := strings.ToLower(strings.TrimSpace(*arguments.LegendPosition))
+		if value != "none" && value != "top" && value != "right" && value != "bottom" && value != "left" {
+			return arguments, fmt.Errorf("%w: update_chart legend_position is invalid", ErrGateway)
+		}
+		arguments.LegendPosition = &value
+	}
+	for name, value := range map[string]**string{"x_axis_title": &arguments.XAxisTitle, "y_axis_title": &arguments.YAxisTitle} {
+		if *value == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(**value)
+		if len([]rune(trimmed)) > 100 {
+			return arguments, fmt.Errorf("%w: update_chart %s is too long", ErrGateway, name)
+		}
+		*value = &trimmed
+	}
+	changed := arguments.Type != nil && *arguments.Type != current.Type ||
+		arguments.Title != nil && *arguments.Title != current.Title ||
+		arguments.SourceRange != nil && *arguments.SourceRange != current.SourceRange ||
+		arguments.FirstRowHeaders != nil && *arguments.FirstRowHeaders != current.FirstRowHeaders ||
+		arguments.FirstColumnLabels != nil && *arguments.FirstColumnLabels != current.FirstColumnLabels ||
+		arguments.LegendPosition != nil && *arguments.LegendPosition != current.LegendPosition ||
+		arguments.XAxisTitle != nil && *arguments.XAxisTitle != current.XAxisTitle ||
+		arguments.YAxisTitle != nil && *arguments.YAxisTitle != current.YAxisTitle
+	if !changed {
+		return arguments, fmt.Errorf("%w: update_chart proposed no effective change", ErrGateway)
+	}
+	arguments.ExpectedRevision = current.Revision
+	return arguments, nil
 }
 
 func validateCreateReportSheet(input PlanInput, raw json.RawMessage, maxChanges int) (createReportSheetArguments, error) {
@@ -927,7 +1028,9 @@ func buildPlanSteps(mode, risk string, changes []ProposedChange, tools []ToolCal
 	}
 	for _, tool := range tools {
 		description := "차트 소스 검증 후 워크북에 차트 생성"
-		if tool.Name == "create_report_sheet" {
+		if tool.Name == "update_chart" {
+			description = "현재 차트 리비전을 확인하고 요청한 속성 변경"
+		} else if tool.Name == "create_report_sheet" {
 			description = "새 보고서 시트에 수식과 차트를 함께 생성"
 		}
 		steps = append(steps, PlanStep{Position: position, ToolName: tool.Name, Description: description, Status: "waiting_approval", Risk: tool.Risk, Arguments: cloneRaw(tool.Arguments)})

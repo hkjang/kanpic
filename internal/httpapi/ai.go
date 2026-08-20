@@ -150,7 +150,8 @@ func (s *Server) executeAIAction(w http.ResponseWriter, r *http.Request) {
 			s.writeAIError(w, r, loadErr)
 			return
 		}
-		if !requireAPIScopes(w, r, "ai.use", ai.RequiredApprovalScope(planned.Mode)) {
+		requiredScopes := append([]string{"ai.use"}, ai.RequiredApprovalScopes(planned)...)
+		if !requireAPIScopes(w, r, requiredScopes...) {
 			return
 		}
 		result, err = s.ai.Approve(r.Context(), action, input)

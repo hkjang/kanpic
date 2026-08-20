@@ -35,7 +35,10 @@ func (s *Service) SendMessage(ctx context.Context, input AgentMessageInput) (Age
 	}
 	duplicateInput := PlanInput{WorkbookID: input.WorkbookID, SheetID: input.SheetID, Range: input.Selection, Request: input.Message, Mode: routed.Mode, BaseVersion: input.BaseVersion}
 	if existing, err := s.findByIdempotency(ctx, input.ActorID, input.IdempotencyKey); err == nil {
-		if !samePlanRequest(existing, duplicateInput) || existing.ConversationID == "" {
+		if input.Mode == "" {
+			duplicateInput.Mode = existing.Mode
+		}
+		if !samePlanRequest(existing, duplicateInput) || existing.ConversationID == "" || input.ConversationID != "" && existing.ConversationID != input.ConversationID {
 			return AgentRun{}, fmt.Errorf("%w: idempotency_key was already used for a different agent message", ErrInvalid)
 		}
 		return s.GetRun(ctx, existing.ID, input.ActorID)
@@ -56,11 +59,27 @@ func (s *Service) SendMessage(ctx context.Context, input AgentMessageInput) (Age
 	if err != nil {
 		return AgentRun{}, err
 	}
+	conversation, err := s.listConversationMessages(ctx, conversationID)
+	if err != nil {
+		return AgentRun{}, err
+	}
+	charts, err := s.workbooks.ListCharts(ctx, input.WorkbookID, "")
+	if err != nil {
+		return AgentRun{}, err
+	}
+	memory, err := s.listConversationMemory(ctx, conversationID, input.ActorID, 6)
+	if err != nil {
+		return AgentRun{}, err
+	}
+	if input.Mode == "" {
+		routed = routeFollowUpIntent(input.Message, routed, conversation, charts)
+	}
 	action, err := s.Plan(ctx, PlanInput{
 		WorkbookID: input.WorkbookID, SheetID: input.SheetID, Range: input.Selection,
 		Request: input.Message, Mode: routed.Mode, BaseVersion: input.BaseVersion,
 		IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, ActorID: input.ActorID,
 		ConversationID: conversationID, Context: &contextView,
+		Conversation: compactConversation(conversation, 24, 12_000), Memory: memory, Charts: charts,
 	})
 	if err != nil {
 		return AgentRun{}, err
@@ -162,6 +181,9 @@ func (s *Service) persistAgentRun(ctx context.Context, conversationID string, ro
 	if command.RowsAffected() == 0 {
 		return tx.Commit(ctx)
 	}
+	if err := supersedePendingAgentRuns(ctx, tx, conversationID, action.ID, action.ActorID, now); err != nil {
+		return err
+	}
 	contextID := identity.New()
 	if _, err := tx.Exec(ctx, `INSERT INTO workbook_contexts(id,workbook_id,sheet_id,workbook_version,selected_range,context,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, contextID, action.WorkbookID, action.SheetID, action.BaseVersion, action.Range, contextJSON, now); err != nil {
 		return err
@@ -241,6 +263,31 @@ func (s *Service) persistAgentRun(ctx context.Context, conversationID string, ro
 	return tx.Commit(ctx)
 }
 
+func supersedePendingAgentRuns(ctx context.Context, tx pgx.Tx, conversationID, currentRunID, actorID string, now time.Time) error {
+	filter := `SELECT id FROM ai_actions WHERE conversation_id=$1 AND id<>$2 AND status='planned'`
+	if _, err := tx.Exec(ctx, `UPDATE agent_steps SET status=CASE WHEN status IN ('waiting_approval','pending','planned') THEN 'cancelled' ELSE status END,updated_at=$3 WHERE plan_id IN (SELECT id FROM agent_plans WHERE run_id IN (`+filter+`))`, conversationID, currentRunID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_tool_calls SET status=CASE WHEN status IN ('waiting_approval','pending','planned') THEN 'cancelled' ELSE status END,completed_at=coalesce(completed_at,$3) WHERE run_id IN (`+filter+`)`, conversationID, currentRunID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE change_sets SET status='cancelled' WHERE run_id IN (`+filter+`)`, conversationID, currentRunID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_plans SET status='cancelled',updated_at=$3 WHERE run_id IN (`+filter+`)`, conversationID, currentRunID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$3,completed_at=$4,updated_at=$4 WHERE id IN (`+filter+`)`, conversationID, currentRunID, AgentCancelled, now); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"superseded_by_run_id": currentRunID})
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_audit_logs(run_id,actor_id,event_type,payload,created_at) SELECT id,$3,'superseded',$4,$5 FROM ai_actions WHERE conversation_id=$1 AND id<>$2 AND status='planned'`, conversationID, currentRunID, actorID, payload, now); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE ai_actions SET status='cancelled',revision=revision+1,updated_at=$3 WHERE conversation_id=$1 AND id<>$2 AND status='planned'`, conversationID, currentRunID, now)
+	return err
+}
+
 func (s *Service) GetRun(ctx context.Context, runID, actorID string) (AgentRun, error) {
 	var run AgentRun
 	var contextJSON, validationJSON []byte
@@ -267,6 +314,7 @@ func (s *Service) GetRun(ctx context.Context, runID, actorID string) (AgentRun, 
 	}
 	_ = s.pool.QueryRow(ctx, `SELECT id::text FROM change_sets WHERE run_id=$1`, run.ID).Scan(&run.ChangeSetID)
 	run.Messages, err = s.listConversationMessages(ctx, run.ConversationID)
+	run.SuggestedFollowUps = suggestedFollowUps(run.Action)
 	return run, err
 }
 
@@ -326,6 +374,36 @@ func (s *Service) ListRuns(ctx context.Context, workbookID, actorID string, limi
 	return items, nil
 }
 
+func (s *Service) ListConversations(ctx context.Context, workbookID, actorID string, limit int) ([]AgentConversation, error) {
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.pool.Query(ctx, `SELECT c.id::text,c.workbook_id::text,c.title,
+		coalesce(latest.id::text,''),coalesce(latest.state,''),
+		(SELECT count(*)::int FROM ai_messages m WHERE m.conversation_id=c.id),
+		(SELECT count(*)::int FROM agent_runs r WHERE r.conversation_id=c.id),
+		c.created_at,c.updated_at
+		FROM ai_conversations c
+		JOIN LATERAL (
+			SELECT r.id,r.state FROM agent_runs r WHERE r.conversation_id=c.id ORDER BY r.started_at DESC,r.id DESC LIMIT 1
+		) latest ON true
+		WHERE c.workbook_id=$1 AND lower(c.actor_id)=lower($2)
+		ORDER BY c.updated_at DESC,c.id DESC LIMIT $3`, workbookID, actorID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentConversation{}
+	for rows.Next() {
+		var item AgentConversation
+		if err := rows.Scan(&item.ID, &item.WorkbookID, &item.Title, &item.LatestRunID, &item.LatestState, &item.MessageCount, &item.RunCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) RunForChangeSet(ctx context.Context, changeSetID, actorID string) (AgentRun, error) {
 	var runID string
 	err := s.pool.QueryRow(ctx, `SELECT run_id::text FROM change_sets WHERE id=$1 AND lower(actor_id)=lower($2)`, changeSetID, actorID).Scan(&runID)
@@ -353,6 +431,164 @@ func (s *Service) listConversationMessages(ctx context.Context, conversationID s
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Service) listConversationMemory(ctx context.Context, conversationID, actorID string, limit int) ([]AgentWorkMemory, error) {
+	if limit < 1 || limit > 12 {
+		limit = 6
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id::text,mode,status,summary,selected_range,changes,tool_calls,updated_at
+		FROM ai_actions WHERE conversation_id=$1 AND lower(actor_id)=lower($2)
+		ORDER BY created_at DESC,id DESC LIMIT $3`, conversationID, actorID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentWorkMemory{}
+	for rows.Next() {
+		var item AgentWorkMemory
+		var changesJSON, toolsJSON []byte
+		if err := rows.Scan(&item.RunID, &item.Mode, &item.Status, &item.Summary, &item.Selection, &changesJSON, &toolsJSON, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		var changes []ProposedChange
+		if err := json.Unmarshal(changesJSON, &changes); err != nil {
+			return nil, err
+		}
+		for _, change := range changes {
+			if len(item.Changes) >= 16 {
+				break
+			}
+			item.Changes = append(item.Changes, AgentMemoryChange{Address: change.Address, Kind: memoryChangeKind(change.After)})
+		}
+		var tools []ToolCall
+		if err := json.Unmarshal(toolsJSON, &tools); err != nil {
+			return nil, err
+		}
+		for _, tool := range tools {
+			item.Tools = append(item.Tools, projectMemoryTool(tool))
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The database query is newest-first for efficient limiting; prompts read
+	// more naturally and deterministically in chronological order.
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
+	}
+	return items, nil
+}
+
+func memoryChangeKind(snapshot CellSnapshot) string {
+	switch {
+	case strings.TrimSpace(snapshot.Formula) != "":
+		return "formula"
+	case len(snapshot.Style) > 0:
+		return "style"
+	case len(snapshot.Value) > 0:
+		return "value"
+	default:
+		return "clear"
+	}
+}
+
+func projectMemoryTool(tool ToolCall) AgentMemoryTool {
+	item := AgentMemoryTool{Name: tool.Name, Status: tool.Status}
+	switch tool.Name {
+	case "create_chart":
+		var arguments createChartArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{
+				"sheet_id": arguments.SheetID, "source_sheet_id": arguments.SourceSheetID, "type": arguments.Type,
+				"title": arguments.Title, "source_range": arguments.SourceRange, "legend_position": arguments.LegendPosition,
+			})
+		}
+		var chart workbook.Chart
+		if json.Unmarshal(tool.Result, &chart) == nil && chart.ID != "" {
+			item.Result = marshalMemory(memoryChart(chart))
+		}
+	case "update_chart":
+		var arguments updateChartArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(arguments)
+		}
+		var result updateChartResult
+		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
+			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
+		}
+	case "create_report_sheet":
+		var arguments createReportSheetArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{"name": arguments.Name, "cell_count": len(arguments.Cells), "chart": arguments.Chart})
+		}
+		var result createReportSheetResult
+		if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
+			projected := map[string]any{"sheet_id": result.Sheet.ID, "sheet_name": result.Sheet.Name, "cell_count": result.CellOperation.AppliedCells}
+			if result.Chart != nil {
+				projected["chart"] = memoryChart(*result.Chart)
+			}
+			item.Result = marshalMemory(projected)
+		}
+	}
+	return item
+}
+
+func memoryChart(chart workbook.Chart) map[string]any {
+	return map[string]any{"chart_id": chart.ID, "type": chart.Type, "title": chart.Title, "source_range": chart.SourceRange, "revision": chart.Revision}
+}
+
+func marshalMemory(value any) json.RawMessage {
+	encoded, _ := json.Marshal(value)
+	return encoded
+}
+
+func suggestedFollowUps(action Action) []string {
+	for _, tool := range action.ToolCalls {
+		switch tool.Name {
+		case "create_chart", "update_chart":
+			return []string{"이 차트를 선 차트로 바꿔줘", "차트 제목과 축 이름을 더 명확하게 바꿔줘", "현재 차트를 기준으로 핵심 추세를 설명해줘"}
+		case "create_report_sheet":
+			return []string{"방금 만든 보고서 구성을 요약해줘", "보고서 차트를 선 차트로 바꿔줘", "같은 형식으로 더 간결한 보고서를 다시 계획해줘"}
+		}
+	}
+	switch action.Mode {
+	case ModeExplain, ModeSummarize, ModeAnomaly:
+		return []string{"가장 중요한 내용만 세 줄로 정리해줘", "이 결과에서 추가로 확인할 항목을 찾아줘", "이 분석을 바탕으로 차트를 만들어줘"}
+	case ModeFormat:
+		return []string{"같은 서식을 현재 선택 범위에 맞게 다시 계획해줘", "헤더만 더 강조해줘", "적용될 서식을 간단히 설명해줘"}
+	default:
+		if action.Status == StatusApplied {
+			return []string{"방금 적용한 결과를 요약해줘", "같은 규칙을 현재 선택 범위에도 적용해줘", "방금 작업을 차트로 시각화해줘"}
+		}
+		return []string{"변경 범위를 더 작게 다시 계획해줘", "제안한 수식이나 값의 근거를 설명해줘", "이 결과를 차트로 만드는 계획도 추가해줘"}
+	}
+}
+
+func compactConversation(messages []ConversationMessage, maxMessages, maxRunes int) []ConversationMessage {
+	if maxMessages < 1 || maxRunes < 1 || len(messages) == 0 {
+		return []ConversationMessage{}
+	}
+	start := max(0, len(messages)-maxMessages)
+	items := append([]ConversationMessage(nil), messages[start:]...)
+	total := 0
+	for index := len(items) - 1; index >= 0; index-- {
+		runes := []rune(items[index].Content)
+		remaining := maxRunes - total
+		if remaining <= 0 {
+			items = items[index+1:]
+			break
+		}
+		if len(runes) > remaining {
+			items[index].Content = string(runes[len(runes)-remaining:])
+			total = maxRunes
+			items = items[index:]
+			break
+		}
+		total += len(runes)
+	}
+	return items
 }
 
 func normalizeAgentMessage(input AgentMessageInput) AgentMessageInput {
@@ -396,6 +632,10 @@ func (s *Service) ApproveRun(ctx context.Context, runID string, input ApprovalIn
 	if IsReadOnlyMode(action.Mode) {
 		return AgentExecutionResult{}, fmt.Errorf("%w: read-only agent runs cannot be approved", ErrInvalid)
 	}
+	if action.Status == StatusApplied && action.approvalIdempotencyKey == input.IdempotencyKey {
+		run, err := s.GetRun(ctx, runID, input.ActorID)
+		return AgentExecutionResult{Run: run}, err
+	}
 	if err := s.setAgentState(ctx, runID, AgentExecuting, "executing"); err != nil {
 		return AgentExecutionResult{}, err
 	}
@@ -409,9 +649,22 @@ func (s *Service) ApproveRun(ctx context.Context, runID string, input ApprovalIn
 		}
 		action = result.Action
 		operation, changes = &result.Operation, result.Changes
-	} else if err := s.claimToolOnlyApproval(ctx, action, input); err != nil {
-		_ = s.setAgentState(ctx, runID, AgentFailed, "failed")
-		return AgentExecutionResult{}, err
+	} else {
+		resuming := action.Status == StatusApplying && action.approvalIdempotencyKey == input.IdempotencyKey
+		if !resuming {
+			book, err := s.workbooks.GetWorkbook(ctx, action.WorkbookID)
+			if err != nil || book.Version != action.BaseVersion {
+				_ = s.setAgentState(ctx, runID, AgentFailed, "failed")
+				if err != nil {
+					return AgentExecutionResult{}, err
+				}
+				return AgentExecutionResult{}, workbook.ErrVersionConflict
+			}
+		}
+		if err := s.claimToolOnlyApproval(ctx, action, input); err != nil {
+			_ = s.setAgentState(ctx, runID, AgentFailed, "failed")
+			return AgentExecutionResult{}, err
+		}
 	}
 	if err := s.executeAgentTools(ctx, &action, input.ActorID); err != nil {
 		if operation != nil {
@@ -488,6 +741,33 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 				return err
 			}
 			tool.Result, _ = json.Marshal(chart)
+			tool.Status = "completed"
+		case "update_chart":
+			var arguments updateChartArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored update_chart arguments are invalid", ErrInvalid)
+			}
+			before, err := s.workbooks.GetChart(ctx, arguments.ChartID)
+			if err != nil || before.WorkbookID != action.WorkbookID || before.Revision != arguments.ExpectedRevision {
+				if err != nil {
+					return err
+				}
+				return workbook.ErrVersionConflict
+			}
+			expectedRevision := arguments.ExpectedRevision
+			after, err := s.workbooks.UpdateChart(ctx, arguments.ChartID, actorID, workbook.UpdateChartInput{
+				Type: arguments.Type, Title: arguments.Title, SourceRange: arguments.SourceRange,
+				FirstRowHeaders: arguments.FirstRowHeaders, FirstColumnLabels: arguments.FirstColumnLabels,
+				LegendPosition: arguments.LegendPosition, XAxisTitle: arguments.XAxisTitle, YAxisTitle: arguments.YAxisTitle,
+				ExpectedRevision: &expectedRevision,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(updateChartResult{Before: before, After: after})
 			tool.Status = "completed"
 		case "create_report_sheet":
 			if err := s.executeReportSheetTool(ctx, action, tool, actorID); err != nil {
@@ -592,6 +872,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var chart workbook.Chart
 			passed := tool.Status == "completed" && json.Unmarshal(tool.Result, &chart) == nil && chart.ID != ""
 			checks = append(checks, ValidationCheck{Name: "chart_source", Passed: passed, Message: "차트 생성과 소스 범위를 확인했습니다."})
+		case "update_chart":
+			var result updateChartResult
+			passed := tool.Status == "completed" && json.Unmarshal(tool.Result, &result) == nil && result.Before.ID != "" && result.After.ID == result.Before.ID && result.After.Revision == result.Before.Revision+1
+			checks = append(checks, ValidationCheck{Name: "chart_update", Passed: passed, Message: "차트 변경과 리비전을 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -781,6 +1065,23 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			if json.Unmarshal(tool.Result, &chart) == nil && chart.ID != "" {
 				revision := chart.Revision
 				if err := s.workbooks.DeleteChart(ctx, chart.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "update_chart":
+			var result updateChartResult
+			if json.Unmarshal(tool.Result, &result) == nil && result.Before.ID != "" && result.After.ID == result.Before.ID {
+				expectedRevision := result.After.Revision
+				sheetID, sourceSheetID := result.Before.SheetID, result.Before.SourceSheetID
+				chartType, title, sourceRange := result.Before.Type, result.Before.Title, result.Before.SourceRange
+				firstRowHeaders, firstColumnLabels := result.Before.FirstRowHeaders, result.Before.FirstColumnLabels
+				legendPosition, xAxisTitle, yAxisTitle := result.Before.LegendPosition, result.Before.XAxisTitle, result.Before.YAxisTitle
+				position := result.Before.Position
+				if _, err := s.workbooks.UpdateChart(ctx, result.Before.ID, input.ActorID, workbook.UpdateChartInput{
+					SheetID: &sheetID, SourceSheetID: &sourceSheetID, Type: &chartType, Title: &title, SourceRange: &sourceRange,
+					FirstRowHeaders: &firstRowHeaders, FirstColumnLabels: &firstColumnLabels, LegendPosition: &legendPosition,
+					XAxisTitle: &xAxisTitle, YAxisTitle: &yAxisTitle, Position: &position, ExpectedRevision: &expectedRevision,
+				}); err != nil {
 					return AgentExecutionResult{}, err
 				}
 			}

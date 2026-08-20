@@ -2447,6 +2447,110 @@ func TestPostgresWorkbookAgentPlansExecutesValidatesAndRollsBackChangeSet(t *tes
 	}
 }
 
+func TestPostgresWorkbookAgentContinuesConversationAndUpdatesExistingChart(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-chat-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 멀티턴", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "chat-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"월"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"8월"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`120`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postCalls := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-chat-test","context_length":16384}]}`))
+			return
+		}
+		postCalls++
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		content := ""
+		if len(body.Messages) > 1 {
+			content = body.Messages[1].Content
+		}
+		plan := `{"summary":"막대 차트 생성","explanation":"선택 범위를 막대 차트로 만듭니다.","findings":[],"changes":[],"tool_calls":[{"name":"create_chart","arguments":{"type":"bar","title":"월별 매출","source_range":"A1:B2"}}]}`
+		if postCalls == 2 {
+			charts, listErr := repository.ListCharts(ctx, book.ID, sheet.ID)
+			if listErr != nil || len(charts) != 1 {
+				t.Errorf("chart inventory before follow-up=%#v err=%v", charts, listErr)
+				return
+			}
+			if !strings.Contains(content, `"conversation_history"`) || !strings.Contains(content, "선택 범위로 막대 차트를 만들어줘") || !strings.Contains(content, `"conversation_work_memory"`) || !strings.Contains(content, `"status": "applied"`) || !strings.Contains(content, `"name": "create_chart"`) || !strings.Contains(content, charts[0].ID) || !strings.Contains(content, `"type": "bar"`) {
+				t.Errorf("follow-up prompt is missing conversation or chart inventory: %s", content)
+			}
+			plan = fmt.Sprintf(`{"summary":"선 차트로 변경","explanation":"앞서 만든 차트의 유형만 선 차트로 변경합니다.","findings":[],"changes":[],"tool_calls":[{"name":"update_chart","arguments":{"chart_id":%q,"type":"line"}}]}`, charts[0].ID)
+		}
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 300, "completion_tokens": 100}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-chat-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	first, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B2", Message: "선택 범위로 막대 차트를 만들어줘", BaseVersion: seed.ServerVersion, IdempotencyKey: "chat-agent-first", ClientID: "browser", ActorID: actor})
+	if err != nil || first.Action.Mode != kanpicai.ModeChart || first.ConversationID == "" || len(first.Action.ToolCalls) != 1 || first.Action.ToolCalls[0].Name != "create_chart" {
+		t.Fatalf("first chart turn=%#v err=%v", first, err)
+	}
+	created, err := service.ApproveRun(ctx, first.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "chat-agent-first-approve", ExpectedRevision: first.Action.Revision})
+	if err != nil || !created.Run.Validation.Passed {
+		t.Fatalf("first chart approval=%#v err=%v", created, err)
+	}
+	conversations, err := service.ListConversations(ctx, book.ID, actor, 20)
+	if err != nil || len(conversations) != 1 || conversations[0].ID != first.ConversationID || conversations[0].LatestRunID != first.ID || conversations[0].MessageCount != 2 || conversations[0].RunCount != 1 {
+		t.Fatalf("conversation index=%#v err=%v", conversations, err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	second, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B2", Message: "막대 차트를 선 차트로 바꿔줘", ConversationID: first.ConversationID, BaseVersion: current.Version, IdempotencyKey: "chat-agent-second", ClientID: "browser", ActorID: actor})
+	if err != nil || second.ConversationID != first.ConversationID || len(second.Messages) != 4 || len(second.Action.ToolCalls) != 1 || second.Action.ToolCalls[0].Name != "update_chart" {
+		t.Fatalf("follow-up chart turn=%#v err=%v", second, err)
+	}
+	updated, err := service.ApproveRun(ctx, second.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "chat-agent-second-approve", ExpectedRevision: second.Action.Revision})
+	if err != nil || !updated.Run.Validation.Passed {
+		t.Fatalf("follow-up chart approval=%#v err=%v", updated, err)
+	}
+	charts, err := repository.ListCharts(ctx, book.ID, sheet.ID)
+	if err != nil || len(charts) != 1 || charts[0].Type != "line" || charts[0].Revision != 2 {
+		t.Fatalf("updated chart=%#v err=%v", charts, err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, second.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "chat-agent-second-rollback", ExpectedRevision: updated.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("follow-up rollback=%#v err=%v", rolledBack, err)
+	}
+	charts, err = repository.ListCharts(ctx, book.ID, sheet.ID)
+	if err != nil || len(charts) != 1 || charts[0].Type != "bar" || charts[0].Revision != 3 {
+		t.Fatalf("restored chart=%#v err=%v", charts, err)
+	}
+}
+
 func TestPostgresWorkbookAgentCreatesAndRollsBackReportSheetFormulaAndChart(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {

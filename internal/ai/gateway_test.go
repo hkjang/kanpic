@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"kanpic/internal/workbook"
@@ -109,6 +110,69 @@ func TestValidateWorkbookAgentFormattingAndChartTools(t *testing.T) {
 	unsafeReport := []gatewayToolCall{{Name: "create_report_sheet", Arguments: json.RawMessage(`{"name":"경영 보고","cells":[{"row":1,"column":1,"value":"월"}],"chart":{"type":"bar","source_range":"A1:B2"}}`)}}
 	if _, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeAgent, IdempotencyKey: "unsafe-report"}, selected, unsafeReport, 10); !errors.Is(err, ErrGateway) {
 		t.Fatalf("unsafe report error = %v", err)
+	}
+}
+
+func TestValidateWorkbookAgentCanUpdateOnlyAChartFromCurrentInventory(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:B4")
+	chart := workbook.Chart{ID: "chart-1", WorkbookID: "book-1", SheetID: "sheet-1", SourceSheetID: "sheet-1", Type: "bar", SourceRange: "A1:B4", Revision: 3}
+	input := PlanInput{WorkbookID: "book-1", SheetID: "sheet-1", Mode: ModeChart, IdempotencyKey: "update", Charts: []workbook.Chart{chart}}
+	tools, err := validateGatewayTools(input, selected, []gatewayToolCall{{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"line"}`)}}, 10)
+	if err != nil || len(tools) != 1 || tools[0].Name != "update_chart" {
+		t.Fatalf("update chart tools=%#v err=%v", tools, err)
+	}
+	var arguments updateChartArguments
+	if err := json.Unmarshal(tools[0].Arguments, &arguments); err != nil || arguments.ExpectedRevision != 3 || arguments.Type == nil || *arguments.Type != "line" {
+		t.Fatalf("normalized update arguments=%#v err=%v", arguments, err)
+	}
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"chart_id":"invented","type":"line"}`),
+		json.RawMessage(`{"chart_id":"chart-1"}`),
+		json.RawMessage(`{"chart_id":"chart-1","type":"bar"}`),
+		json.RawMessage(`{"chart_id":"chart-1","source_range":"A1:C4"}`),
+	} {
+		if _, err := validateGatewayTools(input, selected, []gatewayToolCall{{Name: "update_chart", Arguments: raw}}, 10); !errors.Is(err, ErrGateway) {
+			t.Fatalf("unsafe update_chart %s error=%v", raw, err)
+		}
+	}
+}
+
+func TestBuildPromptIncludesBoundedConversationAndCurrentChartObjects(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:B2")
+	preview := BuildPrompt(Config{GatewayURL: "https://llm.internal", Model: "test", MaxOutputTokens: 512}, PlanInput{
+		Mode: ModeChart, Range: "A1:B2", Request: "선 차트로 바꿔줘",
+		Conversation: []ConversationMessage{{Role: "user", Content: "막대 차트를 만들어줘"}, {Role: "assistant", Content: "막대 차트 생성 계획입니다."}},
+		Memory:       []AgentWorkMemory{{RunID: "run-1", Mode: ModeChart, Status: StatusApplied, Summary: "막대 차트 생성", Selection: "A1:B2", Tools: []AgentMemoryTool{{Name: "create_chart", Status: "completed", Result: json.RawMessage(`{"chart_id":"chart-1","type":"bar","revision":1}`)}}}},
+		Charts:       []workbook.Chart{{ID: "chart-1", Type: "bar", SourceRange: "A1:B2", Revision: 1}},
+	}, selected, nil, ModelLimits{Model: "test", ContextWindow: 4096})
+	for _, expected := range []string{`"conversation_history"`, "막대 차트를 만들어줘", `"conversation_work_memory"`, `"status": "applied"`, `"workbook_objects"`, `"chart-1"`, `"revision": 1`} {
+		if !strings.Contains(preview.UserContent, expected) {
+			t.Fatalf("prompt does not contain %q: %s", expected, preview.UserContent)
+		}
+	}
+}
+
+func TestConversationWorkMemoryProjectsOutCellValues(t *testing.T) {
+	t.Parallel()
+	tool := projectMemoryTool(ToolCall{
+		Name:      "create_report_sheet",
+		Status:    "completed",
+		Arguments: json.RawMessage(`{"name":"요약","cells":[{"row":1,"column":1,"value":"민감한 값"}],"chart":{"type":"bar","source_range":"A1:B2"}}`),
+		Result:    json.RawMessage(`{"sheet":{"id":"sheet-report","name":"요약"},"cell_operation":{"applied_cells":1},"chart":{"id":"chart-report","type":"bar","source_range":"A1:B2","revision":1}}`),
+	})
+	if strings.Contains(string(tool.Arguments), "민감한 값") || strings.Contains(string(tool.Arguments), `"cells"`) {
+		t.Fatalf("work memory leaked report cells: %s", tool.Arguments)
+	}
+	for _, expected := range []string{`"cell_count":1`, `"name":"요약"`, `"chart_id":"chart-report"`} {
+		combined := string(tool.Arguments) + string(tool.Result)
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("projected memory does not contain %q: %#v", expected, tool)
+		}
+	}
+	if memoryChangeKind(CellSnapshot{Formula: "=A1*2"}) != "formula" || memoryChangeKind(CellSnapshot{}) != "clear" {
+		t.Fatalf("memory change classification is incorrect")
 	}
 }
 

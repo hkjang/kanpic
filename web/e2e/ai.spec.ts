@@ -17,9 +17,14 @@ const aiGateway=createServer((request,response)=>{
     request.on('data',chunk=>{body+=String(chunk)})
     request.on('end',()=>{
       const completion=JSON.parse(body) as {messages:Array<{role:string;content:string}>;max_tokens:number}
-      const context=JSON.parse(completion.messages.at(-1)?.content||'{}') as {mode?:string}
+      const context=JSON.parse(completion.messages.at(-1)?.content||'{}') as {mode?:string;request?:string;selected_range?:string;workbook_objects?:{charts?:Array<{id:string;type:string}>}}
       requestedBudgets.push((completion as unknown as {max_tokens:number}).max_tokens)
-      const plan=context.mode==='summarize'
+      const currentChart=context.workbook_objects?.charts?.[0]
+      const plan=context.request?.includes('선 차트로')&&currentChart
+        ?{summary:'선 차트로 변경',explanation:'앞서 만든 차트의 유형을 변경합니다.',findings:[],changes:[],tool_calls:[{name:'update_chart',arguments:{chart_id:currentChart.id,type:'line'}}]}
+        :context.request?.includes('막대 차트')
+        ?{summary:'막대 차트 생성',explanation:'선택 범위를 막대 차트로 만듭니다.',findings:[],changes:[],tool_calls:[{name:'create_chart',arguments:{type:'bar',title:'선택 범위 차트',source_range:context.selected_range||'A1:B1'}}]}
+        :context.mode==='summarize'
         ?{summary:'범위 요약 완료',explanation:'선택 범위의 값이 적습니다.',findings:[],changes:[]}
         :context.mode==='anomaly'
         ?{summary:'이상치 한 건',explanation:'A1은 표본이 적어 검토가 필요합니다.',findings:[{row:1,column:1,severity:'warning',title:'검토 값',description:'비교 표본이 적어 수동 검토가 필요합니다.'}],changes:[]}
@@ -169,7 +174,7 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     await expect(panel.getByText('AI 변경을 새 서버 버전으로 되돌렸습니다.')).toBeVisible()
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items.length}).toBe(0)
 
-    await panel.getByRole('button',{name:'새 요청 작성'}).click()
+    await panel.getByRole('button',{name:'새 대화 시작'}).click()
     await panel.getByRole('radio',{name:/이상치 탐지/}).click()
     await panel.getByRole('textbox',{name:'AI 요청'}).fill('선택 범위의 이상치를 찾아줘')
     await panel.getByRole('button',{name:'분석 및 계획 미리보기'}).click()
@@ -178,7 +183,7 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     await expect(panel.getByText('현재: 5')).toBeVisible()
     await expect(panel.locator('.ai-approval button.primary')).toHaveCount(0)
 
-    await panel.getByRole('button',{name:'새 요청 작성'}).click()
+    await panel.getByRole('button',{name:'새 대화 시작'}).click()
     await panel.getByRole('radio',{name:/데이터 정제/}).click()
     await panel.getByRole('textbox',{name:'AI 요청'}).fill('A1의 숫자 형식을 정제해줘')
     await panel.getByRole('button',{name:'분석 및 계획 미리보기'}).click()
@@ -193,6 +198,20 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     expect(cleanAudit.events.map((event:{tool_name:string})=>event.tool_name)).toEqual(['range.read','data.clean'])
     await panel.getByRole('button',{name:'Undo'}).click()
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1`).then(response=>response.json());return range.items[0]?.value}).toBe(5)
+
+    await panel.getByRole('button',{name:'새 AI 대화 시작'}).click()
+    await panel.getByRole('textbox',{name:'AI 요청'}).fill('선택 범위로 막대 차트를 만들어줘')
+    await panel.getByRole('button',{name:'분석 및 계획 미리보기'}).click()
+    await expect(panel.getByText('막대 차트 생성',{exact:true})).toBeVisible()
+    await panel.locator('.ai-approval button.primary').click()
+    await expect.poll(async()=>{const result=await page.request.get(`/api/v1/workbooks/${workbookId}/charts`).then(response=>response.json());return result.items[0]?.type}).toBe('bar')
+    await panel.getByRole('textbox',{name:'AI 요청'}).fill('막대 차트를 선 차트로 바꿔줘')
+    await panel.getByRole('button',{name:'후속 요청 보내기'}).click()
+    await expect(panel.getByText('선 차트로 변경',{exact:true})).toBeVisible()
+    await expect(panel.getByLabel('Agent 대화')).toContainText('선택 범위로 막대 차트를 만들어줘')
+    await expect(panel.getByLabel('Agent 대화')).toContainText('막대 차트를 선 차트로 바꿔줘')
+    await panel.locator('.ai-approval button.primary').click()
+    await expect.poll(async()=>{const result=await page.request.get(`/api/v1/workbooks/${workbookId}/charts`).then(response=>response.json());return result.items[0]?.type}).toBe('line')
     expect(seeded.server_version).toBe(2)
   }finally{
     if(workbookId)await page.request.delete(`/api/v1/workbooks/${workbookId}`)

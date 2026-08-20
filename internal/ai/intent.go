@@ -1,6 +1,10 @@
 package ai
 
-import "strings"
+import (
+	"strings"
+
+	"kanpic/internal/workbook"
+)
 
 type routedIntent struct {
 	Mode  string
@@ -39,6 +43,9 @@ func routeIntent(message string) routedIntent {
 	if containsAny(value, "경영진 보고", "경영회의", "신규 시트", "새 시트", "피벗", "pivot", "여러 시트", "sheet1", "sheet2") {
 		return routedIntent{Mode: ModeAgent, Skill: "workbook_orchestration"}
 	}
+	if containsAny(value, "차트", "그래프", "chart", "시각화") && containsAny(value, "바꿔", "변경", "수정", "전환", "업데이트", "change", "update") {
+		return routedIntent{Mode: ModeChart, Skill: "chart_update"}
+	}
 	if containsAny(value, "차트", "그래프", "chart", "시각화") {
 		return routedIntent{Mode: ModeChart, Skill: "chart_generation"}
 	}
@@ -61,6 +68,25 @@ func routeIntent(message string) routedIntent {
 		return routedIntent{Mode: ModeFormula, Skill: "formula_generation"}
 	}
 	return routedIntent{Mode: ModeSummarize, Skill: "data_analysis"}
+}
+
+func routeFollowUpIntent(message string, routed routedIntent, history []ConversationMessage, charts []workbook.Chart) routedIntent {
+	if routed.Mode != ModeSummarize || routed.Skill != "data_analysis" || len(charts) == 0 {
+		return routed
+	}
+	value := strings.ToLower(strings.TrimSpace(message))
+	if !containsAny(value, "바꿔", "변경", "수정", "전환", "업데이트", "제목", "범례", "축", "change", "update", "rename") {
+		return routed
+	}
+	start := max(0, len(history)-6)
+	previous := ""
+	for _, item := range history[start:] {
+		previous += " " + strings.ToLower(item.Content)
+	}
+	if containsAny(previous, "차트", "그래프", "chart", "시각화") {
+		return routedIntent{Mode: ModeChart, Skill: "chart_update"}
+	}
+	return routed
 }
 
 func containsAny(value string, candidates ...string) bool {

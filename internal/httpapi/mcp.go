@@ -973,15 +973,15 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		input.ActorID = actor
-		required := "range.write"
+		required := []string{"range.write"}
 		if name == "spreadsheet.ai.action.approve" {
 			action, err := s.ai.Get(ctx, stringArg(args, "action_id"), actor)
 			if err != nil {
 				return nil, err
 			}
-			required = ai.RequiredApprovalScope(action.Mode)
+			required = ai.RequiredApprovalScopes(action)
 		}
-		if err := requireMCPScopes(r, required); err != nil {
+		if err := requireMCPScopes(r, required...); err != nil {
 			return nil, err
 		}
 		var result ai.ExecutionResult

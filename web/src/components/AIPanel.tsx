@@ -1,17 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCircle, ListChecks, RefreshCw, RotateCcw, Send, ShieldCheck, Sparkles, Terminal, Wrench, XCircle } from 'lucide-react'
-import { FormEvent, useEffect, useState } from 'react'
+import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCircle, ListChecks, MessageSquarePlus, RefreshCw, RotateCcw, Send, ShieldCheck, Sparkles, Terminal, Wrench, XCircle } from 'lucide-react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { api, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
-import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview, AIUsage, AgentContext, AgentExecutionResult, AgentRun } from '../types'
+import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview, AIUsage, AgentContext, AgentConversation, AgentExecutionResult, AgentRun } from '../types'
 
 type Mode=AIAction['mode']
 type Props={workbookId:string;workbookName?:string;sheetId:string;sheetName?:string;selectionRange:string;baseVersion:number;initialMode?:Mode;initialRequest?:string;onClose:()=>void;onExecuted:(result:AIExecutionResult)=>void}
 
-const modeLabel:Record<Mode,string>={formula:'수식 생성',explain:'수식 설명',fix:'수식 오류 수정',summarize:'범위 분석',anomaly:'이상치 탐지',clean:'데이터 정제',format:'자동 서식',chart:'차트 생성',agent:'복합 작업'}
+const modeLabel:Record<Mode,string>={formula:'수식 생성',explain:'수식 설명',fix:'수식 오류 수정',summarize:'범위 분석',anomaly:'이상치 탐지',clean:'데이터 정제',format:'자동 서식',chart:'차트 작업',agent:'자동 에이전트'}
 
 /** What each mode does, whether it writes, and a request that works well. */
 const MODES:Array<{id:Mode;hint:string;writes:boolean;examples:string[]}>=[
+  {id:'agent',hint:'요청 의도를 자동으로 판단하고 이전 대화와 현재 워크북 상태를 이어서 작업합니다.',writes:true,examples:['선택 범위로 막대 차트를 만들어줘','방금 만든 막대 차트를 선 차트로 바꿔줘']},
   {id:'summarize',hint:'선택 범위의 핵심 지표와 패턴을 정리합니다.',writes:false,examples:['핵심 지표와 눈에 띄는 변화를 3줄로 요약해줘','제품별 매출 비중과 상위 항목을 알려줘']},
   {id:'anomaly',hint:'평균이나 추세에서 벗어난 값을 찾아 알려 줍니다.',writes:false,examples:['평균에서 크게 벗어난 값을 찾아줘','전월 대비 급격히 변한 항목을 알려줘']},
   {id:'explain',hint:'선택한 수식의 계산 방식과 참조를 설명합니다.',writes:false,examples:['이 수식이 무엇을 계산하는지 설명해줘','참조하는 범위와 계산 순서를 알려줘']},
@@ -20,7 +21,6 @@ const MODES:Array<{id:Mode;hint:string;writes:boolean;examples:string[]}>=[
   {id:'clean',hint:'공백·대소문자·날짜 형식 등을 일관되게 정리합니다.',writes:true,examples:['앞뒤 공백을 없애고 날짜 형식을 YYYY-MM-DD로 통일해줘','전화번호 형식을 010-0000-0000으로 맞춰줘']},
   {id:'format',hint:'헤더·데이터 유형을 분석해 안전한 셀 서식을 제안합니다.',writes:true,examples:['이 데이터를 보기 좋게 정리해줘','헤더와 숫자 형식을 보고서 스타일로 바꿔줘']},
   {id:'chart',hint:'선택 범위와 계열을 검증한 뒤 적합한 차트를 제안합니다.',writes:true,examples:['월별 매출 차트를 만들어줘','카테고리별 값을 막대 차트로 보여줘']},
-  {id:'agent',hint:'수식·서식·차트를 조합하는 복합 계획을 만듭니다.',writes:true,examples:['이 파일을 경영진 보고용으로 정리해줘','분석하고 핵심 차트까지 만들어줘']},
 ]
 
 const snapshotText=(snapshot:AICellSnapshot)=>snapshot.formula||(snapshot.value===undefined||snapshot.value===null||snapshot.value===''?'(빈 셀)':typeof snapshot.value==='string'?snapshot.value:JSON.stringify(snapshot.value))
@@ -40,25 +40,33 @@ export function rangeCellCount(range:string){
   return (Math.abs(end.row-start.row)+1)*(Math.abs(end.column-start.column)+1)
 }
 
-export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRange,baseVersion,initialMode='summarize',initialRequest='',onClose,onExecuted}:Props){
+export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRange,baseVersion,initialMode='agent',initialRequest='',onClose,onExecuted}:Props){
   const client=useQueryClient()
   const [mode,setMode]=useState<Mode>(initialMode)
   const [request,setRequest]=useState(initialRequest)
   const [run,setRun]=useState<AgentRun>()
   const [conversationId,setConversationId]=useState<string>()
+  const [pendingMessage,setPendingMessage]=useState('')
   const [guideOpen,setGuideOpen]=useState(false)
   const [promptOpen,setPromptOpen]=useState(false)
   const [elapsed,setElapsed]=useState(0)
+  const [sessionError,setSessionError]=useState('')
+  const requestRef=useRef<HTMLTextAreaElement>(null)
+  const composerRef=useRef<HTMLFormElement>(null)
+  const restoredWorkbook=useRef('')
+  const conversationStorageKey=`kanpic:agent-conversation:${workbookId}`
   const config=useQuery({queryKey:['ai-config'],queryFn:()=>api<AIConfig>('/api/v1/ai/config')})
   const context=useQuery({queryKey:['agent-context',workbookId,sheetId,selectionRange],queryFn:()=>api<AgentContext>(`/api/v1/workbooks/${workbookId}/agent/context?sheet_id=${encodeURIComponent(sheetId)}&selection=${encodeURIComponent(selectionRange)}`),enabled:Boolean(config.data?.enabled)})
-  const recent=useQuery({queryKey:['agent-runs',workbookId],queryFn:()=>api<{items:AgentRun[]}>(`/api/v1/workbooks/${workbookId}/agent/runs?limit=8`)})
-  const refresh=async()=>Promise.all([client.invalidateQueries({queryKey:['agent-runs',workbookId]}),client.invalidateQueries({queryKey:['ai-actions',workbookId]})])
+  const conversations=useQuery({queryKey:['agent-conversations',workbookId],queryFn:()=>api<{items:AgentConversation[]}>(`/api/v1/workbooks/${workbookId}/agent/conversations?limit=20`),enabled:Boolean(config.data?.enabled)})
+  const refresh=async()=>Promise.all([client.invalidateQueries({queryKey:['agent-conversations',workbookId]}),client.invalidateQueries({queryKey:['agent-runs',workbookId]}),client.invalidateQueries({queryKey:['ai-actions',workbookId]})])
   const selectedCells=rangeCellCount(selectionRange)
   const overLimit=Boolean(config.data&&selectedCells>config.data.max_input_cells)
   const active=MODES.find(item=>item.id===mode)??MODES[0]
   const plan=useMutation({
-    mutationFn:()=>{const key=newIdempotencyKey();return api<AgentRun>(`/api/v1/workbooks/${workbookId}/agent/messages`,{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({sheet_id:sheetId,selection:selectionRange,message:request.trim(),mode,conversation_id:conversationId,base_version:baseVersion,idempotency_key:key,client_id:collaborationClientId()})})},
-    onSuccess:async item=>{setRun(item);setConversationId(item.conversation_id);await refresh()},
+    mutationFn:()=>{const key=newIdempotencyKey();return api<AgentRun>(`/api/v1/workbooks/${workbookId}/agent/messages`,{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({sheet_id:sheetId,selection:selectionRange,message:request.trim(),mode:mode==='agent'?undefined:mode,conversation_id:conversationId,base_version:baseVersion,idempotency_key:key,client_id:collaborationClientId()})})},
+    onMutate:()=>setPendingMessage(request.trim()),
+    onSuccess:async item=>{setRun(item);setConversationId(item.conversation_id);window.localStorage.setItem(conversationStorageKey,item.conversation_id);setRequest('');setMode('agent');setPendingMessage('');setSessionError('');await refresh()},
+    onError:()=>setPendingMessage(''),
   })
   // The prompt preview is fetched on demand so opening the panel never reads
   // cells that nobody asked to send.
@@ -80,6 +88,7 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
     mutationFn:(item:AgentRun)=>api<AgentRun>(`/api/v1/agent/runs/${item.id}/cancel`,{method:'POST',body:JSON.stringify({idempotency_key:newIdempotencyKey(),client_id:collaborationClientId(),expected_revision:item.action.revision})}),
     onSuccess:async item=>{setRun(item);await refresh()},
   })
+  const actionPending=approve.isPending||undo.isPending||cancel.isPending
   // A gateway round trip takes seconds, so the wait is counted out loud.
   useEffect(()=>{
     if(!plan.isPending){setElapsed(0);return}
@@ -87,11 +96,39 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
     const timer=window.setInterval(()=>setElapsed(Math.round((Date.now()-started)/1000)),500)
     return()=>window.clearInterval(timer)
   },[plan.isPending])
+  const loadRun=async(id:string)=>{
+    setSessionError('')
+    try{
+      const item=await api<AgentRun>(`/api/v1/agent/runs/${id}`)
+      setRun(item)
+      setConversationId(item.conversation_id)
+      setMode('agent')
+      window.localStorage.setItem(conversationStorageKey,item.conversation_id)
+    }catch(error){
+      window.localStorage.removeItem(conversationStorageKey)
+      setSessionError(error instanceof Error?error.message:'대화를 불러오지 못했습니다.')
+    }
+  }
+  useEffect(()=>{
+    if(!conversations.data||restoredWorkbook.current===workbookId)return
+    restoredWorkbook.current=workbookId
+    const saved=window.localStorage.getItem(conversationStorageKey)
+    const item=conversations.data.items.find(candidate=>candidate.id===saved)
+    if(item?.latest_run_id){void loadRun(item.latest_run_id);return}
+    if(saved)window.localStorage.removeItem(conversationStorageKey)
+    setRun(undefined)
+    setConversationId(undefined)
+  },[conversationStorageKey,conversations.data,workbookId])
+  useEffect(()=>{
+    const element=composerRef.current
+    if(element&&typeof element.scrollIntoView==='function')window.requestAnimationFrame(()=>element.scrollIntoView({block:'end'}))
+  },[pendingMessage,run?.id,run?.messages.length])
   const submit=(event:FormEvent)=>{event.preventDefault();if(request.trim()&&config.data?.enabled&&!overLimit)plan.mutate()}
-  const loadRun=async(id:string)=>{const item=await api<AgentRun>(`/api/v1/agent/runs/${id}`);setRun(item);setConversationId(item.conversation_id)}
+  const startConversation=()=>{window.localStorage.removeItem(conversationStorageKey);restoredWorkbook.current=workbookId;setRun(undefined);setConversationId(undefined);setRequest('');setMode('agent');setPromptOpen(false);setPendingMessage('');setSessionError('')}
+  const chooseFollowUp=(suggestion:string)=>{setMode('agent');setRequest(suggestion);window.requestAnimationFrame(()=>requestRef.current?.focus())}
   const error=plan.error||approve.error||undo.error||cancel.error
   return <aside className="ai-panel managed-ai-panel" aria-label="AI 도우미 패널">
-    <div className="ai-panel-head"><span><Bot/> Workbook Agent</span><div><button className="ai-head-help" aria-label="사용 가이드 열기" aria-expanded={guideOpen} title="사용 가이드" onClick={()=>setGuideOpen(current=>!current)}><HelpCircle/></button><button onClick={onClose} aria-label="Workbook Agent 닫기">×</button></div></div>
+    <div className="ai-panel-head"><span><Bot/> Workbook Agent</span><div><button className="ai-head-help" aria-label="새 AI 대화 시작" title="새 대화" disabled={plan.isPending||actionPending} onClick={startConversation}><MessageSquarePlus/></button><button className="ai-head-help" aria-label="사용 가이드 열기" aria-expanded={guideOpen} title="사용 가이드" onClick={()=>setGuideOpen(current=>!current)}><HelpCircle/></button><button onClick={onClose} aria-label="Workbook Agent 닫기">×</button></div></div>
     <div className="ai-scroll">
       {guideOpen&&<UsageGuide config={config.data} onClose={()=>setGuideOpen(false)}/>}
       {config.isLoading&&<div className="ai-state"><RefreshCw className="spin"/>AI 설정을 확인하는 중…</div>}
@@ -101,29 +138,31 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
         <section className="agent-context" aria-label="현재 워크북 문맥"><header><Sparkles/><strong>현재 문맥</strong></header><dl><dt>Workbook</dt><dd>{run?.context.workbook_title||context.data?.workbook_title||workbookName||workbookId}</dd><dt>Sheet</dt><dd>{run?.context.active_sheet.name||context.data?.active_sheet?.name||sheetName||sheetId}</dd><dt>Selection</dt><dd>{selectionRange}</dd></dl></section>
         <div className={`ai-scope${overLimit?' over':''}`}><ShieldCheck/><div><strong>{selectionRange} · {selectedCells.toLocaleString()}셀만 모델에 전달</strong><small>{overLimit?`한 번에 최대 ${config.data.max_input_cells.toLocaleString()}셀까지 보낼 수 있습니다. 범위를 좁혀 주세요.`:`최대 ${config.data.max_input_cells.toLocaleString()}셀 · 모델 ${config.data.model}`}</small></div></div>
         {run&&<AgentTimeline run={run}/>}
-        {!run&&<>
-          <div className="ai-intro"><div className="ai-glyph"><Sparkles/></div><h3>워크북과 함께 일하는 Agent</h3><p>선택과 시트 구조를 읽고 계획합니다. 변경은 Diff를 검토하고 승인한 뒤에만 적용됩니다.</p></div>
-          <form className="ai-composer" onSubmit={submit}>
+        {pendingMessage&&<section className="agent-timeline pending" aria-live="polite"><article className="user"><strong>사용자</strong><p>{pendingMessage}</p></article><article className="assistant thinking"><RefreshCw className="spin"/><p>{run?.action.status==='planned'?'이전 승인 대기 계획을 대체할 새 계획을 만드는 중':'대화와 현재 워크북 상태를 읽고 계획하는 중'} · {elapsed}초</p></article></section>}
+        {!run&&<div className="ai-intro"><div className="ai-glyph"><Sparkles/></div><h3>워크북과 대화하며 작업하세요</h3><p>“차트로 만들어줘” 다음에 “선 차트로 바꿔줘”처럼 이어서 요청할 수 있습니다. 변경은 매번 검토하고 승인한 뒤 적용됩니다.</p></div>}
+        {run&&<><AgentPlanView run={run}/><ActionPreview action={run.action} onApprove={()=>approve.mutate(run)} onCancel={()=>cancel.mutate(run)} onUndo={()=>undo.mutate(run)} pending={actionPending||plan.isPending} onNew={startConversation} onRetry={()=>{setMode(run.action.mode);setRequest(run.action.request)}}/></>}
+          {run&&(run.suggested_follow_ups?.length??0)>0&&<section className="ai-followup-suggestions" aria-label="추천 후속 요청"><strong><Sparkles/> 다음 작업 제안</strong><div>{run.suggested_follow_ups?.map(suggestion=><button type="button" key={suggestion} disabled={plan.isPending||actionPending} onClick={()=>chooseFollowUp(suggestion)}>{suggestion}</button>)}</div></section>}
+          <form ref={composerRef} className={`ai-composer${run?' followup':''}`} onSubmit={submit}>
+            {run?<label className="ai-followup-mode"><span>후속 요청 · 같은 대화</span><select aria-label="AI 작업 방식" value={mode} onChange={event=>setMode(event.target.value as Mode)}>{MODES.map(item=><option value={item.id} key={item.id}>{modeLabel[item.id]}</option>)}</select></label>:<>
             <div className="ai-mode-grid" role="radiogroup" aria-label="AI 작업 유형">
               {MODES.map(item=><button type="button" key={item.id} role="radio" aria-checked={mode===item.id} className={mode===item.id?'active':''} onClick={()=>setMode(item.id)}>
-                <strong>{modeLabel[item.id]}</strong><em>{item.writes?'변경 제안':'읽기 전용'}</em>
+                <strong>{modeLabel[item.id]}</strong><em>{item.id==='agent'?'자동 판단':item.writes?'변경 제안':'읽기 전용'}</em>
               </button>)}
             </div>
             <p className="ai-mode-hint">{active.hint}</p>
             <div className="ai-examples">{(context.data?.suggested_prompts?.length?context.data.suggested_prompts:active.examples).map(example=><button type="button" key={example} onClick={()=>setRequest(example)}>{example}</button>)}</div>
-            <textarea aria-label="AI 요청" value={request} maxLength={4000}
+            </>}
+            <textarea ref={requestRef} aria-label="AI 요청" value={request} maxLength={4000}
               onChange={event=>setRequest(event.target.value)}
               onKeyDown={event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submit(event)}}}
-              placeholder={`예: ${active.examples[0]}`}/>
+              placeholder={run?'예: 막대 차트를 선 차트로 바꿔줘':`예: ${active.examples[0]}`}/>
             <div className="ai-composer-foot"><small>{request.length.toLocaleString()} / 4,000자 · Ctrl/⌘+Enter로 실행</small></div>
-            <button className="primary" disabled={!request.trim()||plan.isPending||overLimit}>{plan.isPending?<RefreshCw className="spin"/>:<Send/>} {plan.isPending?`계획 생성 중 ${elapsed}초`:'분석 및 계획 미리보기'}</button>
+            <button className="primary" disabled={!request.trim()||plan.isPending||actionPending||overLimit}>{plan.isPending?<RefreshCw className="spin"/>:<Send/>} {plan.isPending?`응답 생성 중 ${elapsed}초`:run?'후속 요청 보내기':'분석 및 계획 미리보기'}</button>
             <small><Eye/> 승인 전에는 워크북을 변경하지 않습니다.</small>
           </form>
-          <PromptDisclosure open={promptOpen} onToggle={()=>setPromptOpen(current=>!current)} preview={preview.data} loading={preview.isFetching} error={preview.isError} disabled={overLimit}/>
-        </>}
-        {run&&<><AgentPlanView run={run}/><ActionPreview action={run.action} onApprove={()=>approve.mutate(run)} onCancel={()=>cancel.mutate(run)} onUndo={()=>undo.mutate(run)} pending={approve.isPending||undo.isPending||cancel.isPending} onNew={()=>{setRun(undefined);setPromptOpen(false)}} onRetry={()=>{setMode(run.action.mode);setRequest(run.action.request);setRun(undefined)}}/></>}
-        {error&&<div className="ai-error" role="alert"><AlertTriangle/>{error instanceof Error?error.message:'AI 작업을 처리하지 못했습니다.'}</div>}
-        {(recent.data?.items.length??0)>0&&<div className="ai-history"><div><Clock3/><strong>Agent 작업 이력</strong></div>{recent.data?.items.slice(0,5).map(item=><button key={item.id} onClick={()=>void loadRun(item.id)}><span>{modeLabel[item.action.mode]} · {item.selection}</span><small>{agentStateLabel(item.state)} · {new Date(item.started_at).toLocaleString('ko-KR')}</small></button>)}</div>}
+          {!run&&<PromptDisclosure open={promptOpen} onToggle={()=>setPromptOpen(current=>!current)} preview={preview.data} loading={preview.isFetching} error={preview.isError} disabled={overLimit}/>}
+        {(error||sessionError)&&<div className="ai-error" role="alert"><AlertTriangle/>{sessionError||(error instanceof Error?error.message:'AI 작업을 처리하지 못했습니다.')}</div>}
+        {(conversations.data?.items.length??0)>0&&<div className="ai-history"><div><Clock3/><strong>대화</strong></div>{conversations.data?.items.map(item=><button key={item.id} className={item.id===conversationId?'active':''} disabled={!item.latest_run_id||plan.isPending||actionPending} onClick={()=>item.latest_run_id&&void loadRun(item.latest_run_id)} aria-label={`대화 열기: ${item.title}`}><span>{item.title}</span><small>{item.message_count>0?`${Math.ceil(item.message_count/2)}턴 · `:''}{item.latest_state?agentStateLabel(item.latest_state):'대화 시작됨'} · {new Date(item.updated_at).toLocaleString('ko-KR')}</small></button>)}</div>}
       </>}
     </div>
   </aside>
@@ -193,15 +232,15 @@ function ActionPreview({action,onApprove,onCancel,onUndo,pending,onNew,onRetry}:
     <p>{action.explanation}</p>
     {findings.length>0&&<div className="ai-finding-list">{findings.map((finding,index)=><article className={finding.severity} key={`${finding.address||'range'}:${index}`}><header><span>{finding.address||'전체 범위'}</span><em>{severityLabel(finding.severity)}</em></header><strong>{finding.title}</strong><p>{finding.description}</p>{finding.address&&<code>현재: {snapshotText(finding.cell??{})}</code>}</article>)}</div>}
     {action.changes.length>0&&<div className="ai-change-list">{action.changes.map(change=><article key={`${change.row}:${change.column}`}><strong>{change.address}</strong><div><small>현재</small><code>{action.mode==='format'?JSON.stringify(change.before.style??{}):snapshotText(change.before)}</code></div><span>→</span><div><small>제안</small><code>{action.mode==='format'?JSON.stringify(change.after.style??{}):snapshotText(change.after)}</code></div></article>)}</div>}
-    {action.tool_calls?.map(tool=><article className="agent-tool-preview" key={tool.id||tool.idempotency_key}><header><Wrench/><strong>{tool.name}</strong><em>{riskLabel(tool.risk)}</em></header><pre>{JSON.stringify(tool.arguments,null,2)}</pre></article>)}
+    {action.tool_calls?.map((tool,index)=><article className="agent-tool-preview" key={tool.id||tool.idempotency_key||`${tool.name}:${index}`}><header><Wrench/><strong>{tool.name}</strong><em>{riskLabel(tool.risk)}</em></header><pre>{JSON.stringify(tool.arguments,null,2)}</pre></article>)}
     <div className="ai-plan-meta"><span>기준 버전 v{action.base_version}</span>{action.changes.length>0&&<span>{action.changes.length}셀 변경</span>}{findings.length>0&&<span>{findings.length}개 발견</span>}<span>{action.model}</span>{usage?.prompt_tokens?<span>입력 {usage.prompt_tokens.toLocaleString()}토큰</span>:null}{usage?.completion_tokens?<span>응답 {usage.completion_tokens.toLocaleString()}토큰</span>:null}{usage&&(usage.attempts??1)>1?<span>재시도 {(usage.attempts??1)-1}회</span>:null}</div>
     {action.status==='failed'&&<div className="ai-error"><AlertTriangle/>{action.error_message||'작업이 실패했습니다.'}</div>}
     {action.status==='planned'&&!readOnly&&<div className="ai-approval"><p><ShieldCheck/> 위 변경만 하나의 ChangeSet으로 적용되고 전체 Undo할 수 있습니다.</p><div><button onClick={onCancel} disabled={pending}><XCircle/> 취소</button><button className="primary" aria-label="검토한 계획 승인 및 변경 적용" onClick={onApprove} disabled={pending}><Check/> 변경 적용</button></div></div>}
     {(action.status==='completed'||(action.status==='planned'&&readOnly))&&<div className="ai-explanation-done"><Check/> 읽기 전용 분석이 완료됐으며 워크북 변경은 없습니다.</div>}
     {(action.status==='applying'||action.status==='undoing')&&<div className="ai-state"><RefreshCw className="spin"/>서버 작업을 마무리하는 중…</div>}
-    {action.status==='applied'&&<div className="ai-applied"><Check/><div><strong>승인한 변경이 적용되었습니다.</strong><small>서버 버전 v{action.operation?.server_version}</small></div><button onClick={onUndo} disabled={pending}><RotateCcw/> Undo</button></div>}
+    {action.status==='applied'&&<div className="ai-applied"><Check/><div><strong>승인한 변경이 적용되었습니다.</strong><small>{action.operation?.server_version?`서버 버전 v${action.operation.server_version}`:'현재 워크북에 실시간 반영됨'}</small></div><button onClick={onUndo} disabled={pending}><RotateCcw/> Undo</button></div>}
     {action.status==='undone'&&<div className="ai-explanation-done"><RotateCcw/> AI 변경을 새 서버 버전으로 되돌렸습니다.</div>}
-    <div className="ai-action-actions"><button onClick={onRetry}>같은 요청 고쳐 쓰기</button><button onClick={onNew}>새 요청 작성</button></div>
+    <div className="ai-action-actions"><button onClick={onRetry} disabled={pending}>이 요청 수정</button><button onClick={onNew} disabled={pending}>새 대화 시작</button></div>
   </div>
 }
 

@@ -10,7 +10,7 @@ const operation:MutationResult={operation_id:'op-ai',workbook_id:'book-1',sheet_
 const completed:AgentRun={...run,state:'COMPLETED',action:{...action,status:'applied',revision:2,operation_id:'op-ai',operation},plan:{...run.plan,status:'completed',steps:run.plan.steps.map(step=>({...step,status:'completed'}))},validation:{passed:true,checks:[{name:'changed_cells',passed:true,message:'예상 1셀, 적용 1셀'}]}}
 const executed:AgentExecutionResult={run:completed,operation,changes:[{row:1,column:2,formula:'=A1*2'}]}
 
-afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals()})
+afterEach(()=>{cleanup();window.localStorage.clear();vi.restoreAllMocks();vi.unstubAllGlobals()})
 
 function renderPanel(onExecuted=vi.fn(),selection='A1:B1'){
   const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}})
@@ -106,6 +106,52 @@ describe('AIPanel',()=>{
     expect(await screen.findByText('선택 범위 분석')).toBeInTheDocument()
     expect(screen.getByText('읽기 전용 분석이 완료됐으며 워크북 변경은 없습니다.')).toBeInTheDocument()
     expect(screen.queryByRole('button',{name:/변경 적용/})).not.toBeInTheDocument()
+  })
+
+  it('keeps the composer open and sends follow-up turns in the same conversation',async()=>{
+    const followAction:AIAction={...action,id:'run-2',mode:'chart',request:'막대 차트를 선 차트로 바꿔줘',summary:'기존 차트를 선 차트로 변경',changes:[],tool_calls:[{name:'update_chart',arguments:{chart_id:'chart-1',type:'line',expected_revision:1},status:'planned',risk:'MEDIUM'}]}
+    const followRun:AgentRun={...run,id:'run-2',action:followAction,goal:followAction.summary,messages:[...run.messages,{id:'m3',conversation_id:'conversation-1',agent_run_id:'run-2',role:'user',content:followAction.request,created_at:action.created_at},{id:'m4',conversation_id:'conversation-1',agent_run_id:'run-2',role:'assistant',content:followAction.summary,created_at:action.created_at}],plan:{...run.plan,run_id:'run-2',goal:followAction.summary}}
+    const messageBodies:Array<Record<string,unknown>>=[]
+    vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+      const path=String(input)
+      if(path==='/api/v1/ai/config')return response({enabled:true,model:'offline-model',max_input_cells:200,max_changes:100})
+      if(path==='/api/v1/workbooks/book-1/agent/messages'){
+        messageBodies.push(JSON.parse(String(init?.body)) as Record<string,unknown>)
+        return response(messageBodies.length===1?run:followRun,201)
+      }
+      return response({items:[]})
+    }))
+    renderPanel()
+    await screen.findByText(/A1:B1 · 2셀만 모델에 전달/)
+    fireEvent.change(screen.getByLabelText('AI 요청'),{target:{value:'선택 범위로 막대 차트를 만들어줘'}})
+    fireEvent.click(screen.getByRole('button',{name:'분석 및 계획 미리보기'}))
+    expect(await screen.findByRole('button',{name:'후속 요청 보내기'})).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('AI 요청'),{target:{value:'막대 차트를 선 차트로 바꿔줘'}})
+    fireEvent.click(screen.getByRole('button',{name:'후속 요청 보내기'}))
+    await waitFor(()=>expect(messageBodies).toHaveLength(2))
+    expect(messageBodies[0].mode).toBeUndefined()
+    expect(messageBodies[1]).toMatchObject({conversation_id:'conversation-1',message:'막대 차트를 선 차트로 바꿔줘'})
+    expect(await screen.findByLabelText('Agent 대화')).toHaveTextContent('기존 차트를 선 차트로 변경')
+  })
+
+  it('restores the last conversation and offers contextual follow-up requests',async()=>{
+    const restored={...completed,suggested_follow_ups:['방금 적용한 결과를 요약해줘','같은 규칙을 현재 선택 범위에도 적용해줘']}
+    window.localStorage.setItem('kanpic:agent-conversation:book-1','conversation-1')
+    vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL)=>{
+      const path=String(input)
+      if(path==='/api/v1/ai/config')return response({enabled:true,model:'offline-model',max_input_cells:200,max_changes:100})
+      if(path==='/api/v1/workbooks/book-1/agent/conversations?limit=20')return response({items:[{id:'conversation-1',workbook_id:'book-1',title:'B1에 두 배 수식',latest_run_id:'run-1',latest_state:'COMPLETED',message_count:2,run_count:1,created_at:action.created_at,updated_at:action.updated_at}]})
+      if(path==='/api/v1/agent/runs/run-1')return response(restored)
+      return response({items:[]})
+    }))
+    renderPanel()
+    expect(await screen.findByLabelText('Agent 대화')).toHaveTextContent('A1을 두 배로 계산')
+    expect(screen.getByRole('button',{name:'대화 열기: B1에 두 배 수식'})).toHaveClass('active')
+    fireEvent.click(screen.getByRole('button',{name:'방금 적용한 결과를 요약해줘'}))
+    expect(screen.getByLabelText('AI 요청')).toHaveValue('방금 적용한 결과를 요약해줘')
+    fireEvent.click(screen.getByRole('button',{name:'새 AI 대화 시작'}))
+    expect(screen.getByText('워크북과 대화하며 작업하세요')).toBeInTheDocument()
+    expect(window.localStorage.getItem('kanpic:agent-conversation:book-1')).toBeNull()
   })
 
   it('shows the exact structured prompt only when asked',async()=>{
