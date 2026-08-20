@@ -110,10 +110,10 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 			return Action{}, err
 		}
 	}
-	planContext, cancel := context.WithTimeout(ctx, config.Timeout)
-	defer cancel()
-	limits := s.modelLimits(planContext, client, config)
-	generated, usage, err := requestGatewayPlan(planContext, client, config, input, selected, cells, limits)
+	limitsContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	limits := s.modelLimits(limitsContext, client, config)
+	cancel()
+	generated, usage, err := requestGatewayPlan(ctx, client, config, input, selected, cells, limits)
 	if err != nil {
 		s.logger.Warn("AI plan gateway failed", "actor_id", input.ActorID, "workbook_id", input.WorkbookID, "error", err)
 		return Action{}, err

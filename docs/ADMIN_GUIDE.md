@@ -166,7 +166,7 @@ flowchart LR
 | `ai.model` | `kanpic-default` | 요청에 사용할 배포 모델 이름 |
 | `ai.api_key` | 빈 값 | Gateway Bearer API Key 비밀 설정 |
 | `ai.ca_pem` | 빈 값 | 폐쇄망 사설 CA 인증서 PEM 비밀 설정 |
-| `ai.timeout_seconds` | `30` | Gateway 요청 제한 시간 |
+| `ai.timeout_seconds` | `30` | Gateway 호출 1회당 제한 시간 |
 | `ai.max_input_cells` | `200` | 한 계획에 전달할 선택 범위 최대 셀 수 |
 | `ai.max_changes` | `100` | 한 계획에서 허용할 최대 변경 셀 수 |
 | `ai.max_output_tokens` | `0` | 응답 최대 토큰. `0`이면 모델의 컨텍스트 길이에서 자동 계산 |
@@ -280,7 +280,7 @@ DELETE /api/v1/admin/ai/actions?before=YYYY-MM-DD
 
 세 경로 모두 관리자만 호출할 수 있습니다. 목록은 워크북 제목과 계획 이벤트에 기록된 토큰 사용량을 함께 반환합니다.
 
-429와 5xx 응답, 연결 실패는 짧은 간격으로 최대 2회까지 자동 재시도하고, 400대 거부 응답은 재시도하지 않습니다. 각 계획의 입력·응답 토큰과 시도 횟수는 `ai_action_events` 페이로드에 남고 사용자 화면에도 표시됩니다.
+한 계획은 최대 3회의 Gateway 호출 안에서 복구를 시도합니다. 429와 5xx 응답, 연결 실패는 짧은 간격으로 재시도합니다. JSON 문법 오류, Markdown·추론 태그가 섞인 응답, 필수 필드 누락과 안전 검증 실패에는 제한된 교정 사유를 모델에 다시 전달합니다. OpenAI 호환 Gateway가 `response_format`을 400 또는 422로 거부하면 해당 옵션을 빼고 엄격한 JSON 프롬프트로 한 번 더 시도합니다. `ai.timeout_seconds`는 각 호출에 따로 적용됩니다. 각 계획의 입력·응답 토큰과 시도 횟수는 `ai_action_events` 페이로드에 남고 사용자 화면에도 표시됩니다.
 
 **전체 검증**은 URL·모델·타입·제한값과 CA PEM을 검사하고, **연결 테스트**는 Gateway의 `GET /v1/models`를 호출합니다. API Key와 CA 원문은 비밀 설정으로 저장되며 조회 응답에 다시 노출되지 않습니다. 완전 폐쇄망에서는 `ai.gateway_url`을 사내 vLLM 또는 사내 LLM Gateway 주소로 지정하면 외부 인터넷 연결 없이 동작합니다.
 

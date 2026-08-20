@@ -75,7 +75,7 @@ func TestRequestGatewayPlanRetriesATruncatedReply(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"잘린"},"finish_reason":"length"}],"usage":{"prompt_tokens":1200,"completion_tokens":1024}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"완성\",\"explanation\":\"\",\"changes\":[],\"findings\":[]}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1200,"completion_tokens":80}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"완성\",\"explanation\":\"선택 범위를 요약했습니다.\",\"changes\":[],\"findings\":[]}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1200,"completion_tokens":80}}`))
 	}))
 	defer server.Close()
 
@@ -116,7 +116,26 @@ func TestRequestGatewayPlanReportsAnUnavoidableTruncation(t *testing.T) {
 	}
 }
 
-// A gateway that is briefly unavailable is retried; a rejected request is not.
+func TestRequestGatewayPlanReportsThreeGrowingTruncations(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"잘린"},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":1000}}`))
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1")
+	_, usage, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{Mode: ModeSummarize, Range: "A1", Request: "요약"}, selected, nil, ModelLimits{Model: "m"})
+	if err == nil || !strings.Contains(err.Error(), "3회 연속 잘렸습니다") {
+		t.Fatalf("truncation error=%v", err)
+	}
+	if calls != maxGatewayAttempts || usage.Attempts != maxGatewayAttempts {
+		t.Fatalf("calls=%d usage=%#v", calls, usage)
+	}
+}
+
+// A gateway that is briefly unavailable is retried. A JSON-mode rejection gets
+// one compatibility fallback, then an ordinary 400 response stops immediately.
 func TestRequestGatewayPlanRetriesOnlyTransientFailures(t *testing.T) {
 	t.Parallel()
 	calls := 0
@@ -126,7 +145,7 @@ func TestRequestGatewayPlanRetriesOnlyTransientFailures(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"ok\",\"changes\":[],\"findings\":[]}"},"finish_reason":"stop"}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"ok\",\"explanation\":\"요약 완료\",\"changes\":[],\"findings\":[]}"},"finish_reason":"stop"}]}`))
 	}))
 	defer server.Close()
 	selected, _ := cellrange.Parse("A1:A1")
@@ -137,7 +156,83 @@ func TestRequestGatewayPlanRetriesOnlyTransientFailures(t *testing.T) {
 
 	rejects := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
 	defer rejects.Close()
-	if _, usage, err := requestGatewayPlan(context.Background(), rejects.Client(), Config{GatewayURL: rejects.URL, Model: "m"}, PlanInput{Mode: ModeSummarize, Range: "A1", Request: "요약"}, selected, nil, ModelLimits{}); err == nil || usage.Attempts != 1 {
-		t.Fatalf("rejected request should not retry: usage=%#v, %v", usage, err)
+	if _, usage, err := requestGatewayPlan(context.Background(), rejects.Client(), Config{GatewayURL: rejects.URL, Model: "m"}, PlanInput{Mode: ModeSummarize, Range: "A1", Request: "요약"}, selected, nil, ModelLimits{}); err == nil || usage.Attempts != 2 {
+		t.Fatalf("a rejected JSON mode request gets one compatibility fallback: usage=%#v, %v", usage, err)
+	}
+}
+
+func TestRequestGatewayPlanRepairsMalformedAndSemanticallyInvalidReplies(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:B1")
+	cells := []workbook.Cell{{Row: 1, Column: 1, Value: json.RawMessage(`5`)}}
+	t.Run("semantic validation feedback", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var request struct {
+				Messages []struct {
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			if calls == 1 {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"수식 계획\",\"explanation\":\"\",\"changes\":[],\"findings\":[],\"tool_calls\":[]}"},"finish_reason":"stop"}]}`))
+				return
+			}
+			if len(request.Messages) != 3 || !strings.Contains(request.Messages[2].Content, "must propose") {
+				t.Errorf("repair messages=%#v", request.Messages)
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"수식 계획\",\"explanation\":\"B1에 수식을 제안합니다.\",\"changes\":[{\"row\":1,\"column\":2,\"formula\":\"=A1*2\"}],\"findings\":[],\"tool_calls\":[]}"},"finish_reason":"stop"}]}`))
+		}))
+		defer server.Close()
+		plan, usage, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{Mode: ModeFormula, Range: "A1:B1", Request: "B1에 두 배 수식", IdempotencyKey: "repair"}, selected, cells, ModelLimits{Model: "m"})
+		if err != nil || usage.Attempts != 2 || len(plan.Changes) != 1 {
+			t.Fatalf("plan=%#v usage=%#v err=%v", plan, usage, err)
+		}
+	})
+
+	t.Run("malformed content and array content", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			if calls == 1 {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"I can create that plan."},"finish_reason":"stop"}]}`))
+				return
+			}
+			content := "<think>done</think>\n```json\n{\"summary\":\"수식 계획\",\"explanation\":\"B1 변경\",\"changes\":[{\"row\":1,\"column\":2,\"formula\":\"=A1*2\"}],\"findings\":[],\"tool_calls\":[]}\n```"
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": content}}}, "finish_reason": "stop"}}})
+		}))
+		defer server.Close()
+		plan, usage, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{Mode: ModeFormula, Range: "A1:B1", Request: "두 배", IdempotencyKey: "array"}, selected, cells, ModelLimits{Model: "m"})
+		if err != nil || usage.Attempts != 2 || len(plan.Changes) != 1 {
+			t.Fatalf("plan=%#v usage=%#v err=%v", plan, usage, err)
+		}
+	})
+}
+
+func TestRequestGatewayPlanFallsBackWhenResponseFormatIsUnsupported(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if calls == 1 {
+			if len(request["response_format"]) == 0 {
+				t.Error("first request did not ask for JSON mode")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(request["response_format"]) != 0 {
+			t.Error("fallback kept unsupported response_format")
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"요약\",\"explanation\":\"한 셀입니다.\",\"changes\":[],\"findings\":[],\"tool_calls\":[]}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1")
+	plan, usage, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{Mode: ModeSummarize, Range: "A1", Request: "요약"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil || calls != 2 || usage.Attempts != 2 || plan.Summary != "요약" {
+		t.Fatalf("calls=%d plan=%#v usage=%#v err=%v", calls, plan, usage, err)
 	}
 }

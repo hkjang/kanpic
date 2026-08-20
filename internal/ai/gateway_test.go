@@ -183,6 +183,31 @@ func TestStripJSONFence(t *testing.T) {
 	}
 }
 
+func TestDecodeGatewayPlanAcceptsCommonCompatibleResponseShapes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		tool    bool
+	}{
+		{name: "reasoning and prose fence", content: "<think>internal reasoning</think>\nHere is the plan:\n```JSON\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}\n```"},
+		{name: "orphan reasoning close", content: "First inspect the draft {\"draft\":true}.\n</THINK>\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}"},
+		{name: "plan envelope", content: `{"plan":{"summary":"ok","explanation":"done","findings":[],"changes":[],"tool_calls":[]}}`},
+		{name: "camel and function tool", tool: true, content: `{"summary":"chart","explanation":"done","findings":[],"changes":[],"toolCalls":[{"function":{"name":"create_chart","arguments":"{\"type\":\"bar\",\"source_range\":\"A1:B2\"}"}}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := decodeGatewayPlan(test.content)
+			if err != nil || plan.Summary == "" {
+				t.Fatalf("plan=%#v err=%v", plan, err)
+			}
+			if test.tool && (len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_chart" || !json.Valid(plan.ToolCalls[0].Arguments)) {
+				t.Fatalf("normalized tools=%#v", plan.ToolCalls)
+			}
+		})
+	}
+}
+
 func TestAIInputNormalizationAndUnicodeTruncation(t *testing.T) {
 	t.Parallel()
 	input := normalizePlanInput(PlanInput{WorkbookID: " book ", SheetID: " sheet ", ActorID: " actor ", ClientID: " browser ", IdempotencyKey: " key ", Mode: " formula ", Range: " A1:B1 ", Request: " 두 배 수식 "})
