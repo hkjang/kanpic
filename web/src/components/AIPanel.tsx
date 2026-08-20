@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCircle, ListChecks, MessageSquarePlus, RefreshCw, RotateCcw, Send, ShieldCheck, Sparkles, Terminal, Wrench, XCircle } from 'lucide-react'
+import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCircle, ListChecks, MessagesSquare, MessageSquarePlus, RefreshCw, RotateCcw, Send, ShieldCheck, Sparkles, Terminal, Wrench, XCircle } from 'lucide-react'
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { api, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
@@ -48,11 +48,12 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
   const [conversationId,setConversationId]=useState<string>()
   const [pendingMessage,setPendingMessage]=useState('')
   const [guideOpen,setGuideOpen]=useState(false)
+  const [historyOpen,setHistoryOpen]=useState(false)
   const [promptOpen,setPromptOpen]=useState(false)
   const [elapsed,setElapsed]=useState(0)
   const [sessionError,setSessionError]=useState('')
   const requestRef=useRef<HTMLTextAreaElement>(null)
-  const composerRef=useRef<HTMLFormElement>(null)
+  const chatRef=useRef<HTMLDivElement>(null)
   const restoredWorkbook=useRef('')
   const conversationStorageKey=`kanpic:agent-conversation:${workbookId}`
   const config=useQuery({queryKey:['ai-config'],queryFn:()=>api<AIConfig>('/api/v1/ai/config')})
@@ -103,6 +104,7 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
       setRun(item)
       setConversationId(item.conversation_id)
       setMode('agent')
+      setHistoryOpen(false)
       window.localStorage.setItem(conversationStorageKey,item.conversation_id)
     }catch(error){
       window.localStorage.removeItem(conversationStorageKey)
@@ -120,52 +122,47 @@ export function AIPanel({workbookId,workbookName,sheetId,sheetName,selectionRang
     setConversationId(undefined)
   },[conversationStorageKey,conversations.data,workbookId])
   useEffect(()=>{
-    const element=composerRef.current
-    if(element&&typeof element.scrollIntoView==='function')window.requestAnimationFrame(()=>element.scrollIntoView({block:'end'}))
-  },[pendingMessage,run?.id,run?.messages.length])
-  const submit=(event:FormEvent)=>{event.preventDefault();if(request.trim()&&config.data?.enabled&&!overLimit)plan.mutate()}
-  const startConversation=()=>{window.localStorage.removeItem(conversationStorageKey);restoredWorkbook.current=workbookId;setRun(undefined);setConversationId(undefined);setRequest('');setMode('agent');setPromptOpen(false);setPendingMessage('');setSessionError('')}
+    const element=chatRef.current
+    if(element)window.requestAnimationFrame(()=>{element.scrollTop=element.scrollHeight})
+  },[pendingMessage,run?.id,run?.messages.length,run?.updated_at])
+  const canSend=Boolean(request.trim()&&config.data?.enabled&&!overLimit&&!plan.isPending&&!actionPending)
+  const send=()=>{if(canSend)plan.mutate()}
+  const submit=(event:FormEvent)=>{event.preventDefault();send()}
+  const startConversation=()=>{window.localStorage.removeItem(conversationStorageKey);restoredWorkbook.current=workbookId;setRun(undefined);setConversationId(undefined);setRequest('');setMode('agent');setPromptOpen(false);setPendingMessage('');setSessionError('');setHistoryOpen(false);window.requestAnimationFrame(()=>requestRef.current?.focus())}
   const chooseFollowUp=(suggestion:string)=>{setMode('agent');setRequest(suggestion);window.requestAnimationFrame(()=>requestRef.current?.focus())}
+  const editLastRequest=()=>{if(!run)return;setMode(run.action.mode);setRequest(run.action.request);window.requestAnimationFrame(()=>requestRef.current?.focus())}
   const error=plan.error||approve.error||undo.error||cancel.error
   return <aside className="ai-panel managed-ai-panel" aria-label="AI 도우미 패널">
-    <div className="ai-panel-head"><span><Bot/> Workbook Agent</span><div><button className="ai-head-help" aria-label="새 AI 대화 시작" title="새 대화" disabled={plan.isPending||actionPending} onClick={startConversation}><MessageSquarePlus/></button><button className="ai-head-help" aria-label="사용 가이드 열기" aria-expanded={guideOpen} title="사용 가이드" onClick={()=>setGuideOpen(current=>!current)}><HelpCircle/></button><button onClick={onClose} aria-label="Workbook Agent 닫기">×</button></div></div>
-    <div className="ai-scroll">
+    <div className="ai-panel-head"><span><Bot/><span><strong>AI 도우미</strong><small>멀티턴 Workbook Agent</small></span></span><div><button className={`ai-head-help${historyOpen?' active':''}`} aria-label="AI 대화 목록 열기" aria-expanded={historyOpen} title="대화 목록" onClick={()=>setHistoryOpen(current=>!current)}><MessagesSquare/></button><button className="ai-head-help" aria-label="새 AI 대화 시작" title="새 대화" disabled={plan.isPending||actionPending} onClick={startConversation}><MessageSquarePlus/></button><button className="ai-head-help" aria-label="사용 가이드 열기" aria-expanded={guideOpen} title="사용 가이드" onClick={()=>setGuideOpen(current=>!current)}><HelpCircle/></button><button onClick={onClose} aria-label="Workbook Agent 닫기">×</button></div></div>
+    {config.data?.enabled&&<section className={`ai-chat-scope${overLimit?' over':''}`} aria-label="현재 채팅 범위"><div><strong>{run?.context.active_sheet.name||context.data?.active_sheet?.name||sheetName||sheetId}</strong><span>{selectionRange}</span></div><small>{selectedCells.toLocaleString()}셀 · {config.data.model}</small></section>}
+    <div className="ai-chat-scroll" ref={chatRef}>
+      {historyOpen&&<ConversationList items={conversations.data?.items??[]} activeId={conversationId} loading={conversations.isLoading} disabled={plan.isPending||actionPending} onOpen={item=>item.latest_run_id&&void loadRun(item.latest_run_id)}/>}
       {guideOpen&&<UsageGuide config={config.data} onClose={()=>setGuideOpen(false)}/>}
       {config.isLoading&&<div className="ai-state"><RefreshCw className="spin"/>AI 설정을 확인하는 중…</div>}
       {config.isError&&<div className="ai-state error"><AlertTriangle/>AI 설정을 불러오지 못했습니다.</div>}
       {config.data&&!config.data.enabled&&<div className="ai-disabled"><Bot/><strong>AI가 아직 비활성화되어 있습니다.</strong><p>관리자가 사내 LLM Gateway를 검증하고 활성화하면 선택 범위 기반 계획을 사용할 수 있습니다.</p><a href="/admin?tab=settings">관리자 AI 설정 열기</a><button className="ai-inline-link" onClick={()=>setGuideOpen(true)}>사용 가이드 먼저 보기</button></div>}
       {config.data?.enabled&&<>
-        <section className="agent-context" aria-label="현재 워크북 문맥"><header><Sparkles/><strong>현재 문맥</strong></header><dl><dt>Workbook</dt><dd>{run?.context.workbook_title||context.data?.workbook_title||workbookName||workbookId}</dd><dt>Sheet</dt><dd>{run?.context.active_sheet.name||context.data?.active_sheet?.name||sheetName||sheetId}</dd><dt>Selection</dt><dd>{selectionRange}</dd></dl></section>
-        <div className={`ai-scope${overLimit?' over':''}`}><ShieldCheck/><div><strong>{selectionRange} · {selectedCells.toLocaleString()}셀만 모델에 전달</strong><small>{overLimit?`한 번에 최대 ${config.data.max_input_cells.toLocaleString()}셀까지 보낼 수 있습니다. 범위를 좁혀 주세요.`:`최대 ${config.data.max_input_cells.toLocaleString()}셀 · 모델 ${config.data.model}`}</small></div></div>
+        {overLimit&&<div className="ai-error" role="alert"><AlertTriangle/>한 번에 최대 {config.data.max_input_cells.toLocaleString()}셀까지 보낼 수 있습니다. 범위를 좁혀 주세요.</div>}
         {run&&<AgentTimeline run={run}/>}
         {pendingMessage&&<section className="agent-timeline pending" aria-live="polite"><article className="user"><strong>사용자</strong><p>{pendingMessage}</p></article><article className="assistant thinking"><RefreshCw className="spin"/><p>{run?.action.status==='planned'?'이전 승인 대기 계획을 대체할 새 계획을 만드는 중':'대화와 현재 워크북 상태를 읽고 계획하는 중'} · {elapsed}초</p></article></section>}
-        {!run&&<div className="ai-intro"><div className="ai-glyph"><Sparkles/></div><h3>워크북과 대화하며 작업하세요</h3><p>“차트로 만들어줘” 다음에 “선 차트로 바꿔줘”처럼 이어서 요청할 수 있습니다. 변경은 매번 검토하고 승인한 뒤 적용됩니다.</p></div>}
-        {run&&<><AgentPlanView run={run}/><ActionPreview action={run.action} onApprove={()=>approve.mutate(run)} onCancel={()=>cancel.mutate(run)} onUndo={()=>undo.mutate(run)} pending={actionPending||plan.isPending} onNew={startConversation} onRetry={()=>{setMode(run.action.mode);setRequest(run.action.request)}}/></>}
+        {!run&&!pendingMessage&&<div className="ai-chat-welcome"><div className="ai-glyph"><Sparkles/></div><h3>무엇을 도와드릴까요?</h3><p>선택한 범위를 기준으로 자연스럽게 요청하세요. 작업 유형은 Agent가 판단하고, 변경은 검토 후에만 적용됩니다.</p><div><span>예시</span><p>“이 범위의 핵심 추세를 설명해줘”</p><p>“선택한 부분을 막대 차트로 만들어줘”</p><p>“방금 만든 차트를 선 차트로 바꿔줘”</p></div></div>}
+        {run&&<section className="ai-chat-result" aria-label="현재 Agent 작업"><AgentPlanView run={run}/><ActionPreview action={run.action} onApprove={()=>approve.mutate(run)} onCancel={()=>cancel.mutate(run)} onUndo={()=>undo.mutate(run)} pending={actionPending||plan.isPending} onRetry={editLastRequest}/></section>}
           {run&&(run.suggested_follow_ups?.length??0)>0&&<section className="ai-followup-suggestions" aria-label="추천 후속 요청"><strong><Sparkles/> 다음 작업 제안</strong><div>{run.suggested_follow_ups?.map(suggestion=><button type="button" key={suggestion} disabled={plan.isPending||actionPending} onClick={()=>chooseFollowUp(suggestion)}>{suggestion}</button>)}</div></section>}
-          <form ref={composerRef} className={`ai-composer${run?' followup':''}`} onSubmit={submit}>
-            {run?<label className="ai-followup-mode"><span>후속 요청 · 같은 대화</span><select aria-label="AI 작업 방식" value={mode} onChange={event=>setMode(event.target.value as Mode)}>{MODES.map(item=><option value={item.id} key={item.id}>{modeLabel[item.id]}</option>)}</select></label>:<>
-            <div className="ai-mode-grid" role="radiogroup" aria-label="AI 작업 유형">
-              {MODES.map(item=><button type="button" key={item.id} role="radio" aria-checked={mode===item.id} className={mode===item.id?'active':''} onClick={()=>setMode(item.id)}>
-                <strong>{modeLabel[item.id]}</strong><em>{item.id==='agent'?'자동 판단':item.writes?'변경 제안':'읽기 전용'}</em>
-              </button>)}
-            </div>
-            <p className="ai-mode-hint">{active.hint}</p>
-            <div className="ai-examples">{(context.data?.suggested_prompts?.length?context.data.suggested_prompts:active.examples).map(example=><button type="button" key={example} onClick={()=>setRequest(example)}>{example}</button>)}</div>
-            </>}
-            <textarea ref={requestRef} aria-label="AI 요청" value={request} maxLength={4000}
-              onChange={event=>setRequest(event.target.value)}
-              onKeyDown={event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();submit(event)}}}
-              placeholder={run?'예: 막대 차트를 선 차트로 바꿔줘':`예: ${active.examples[0]}`}/>
-            <div className="ai-composer-foot"><small>{request.length.toLocaleString()} / 4,000자 · Ctrl/⌘+Enter로 실행</small></div>
-            <button className="primary" disabled={!request.trim()||plan.isPending||actionPending||overLimit}>{plan.isPending?<RefreshCw className="spin"/>:<Send/>} {plan.isPending?`응답 생성 중 ${elapsed}초`:run?'후속 요청 보내기':'분석 및 계획 미리보기'}</button>
-            <small><Eye/> 승인 전에는 워크북을 변경하지 않습니다.</small>
-          </form>
-          {!run&&<PromptDisclosure open={promptOpen} onToggle={()=>setPromptOpen(current=>!current)} preview={preview.data} loading={preview.isFetching} error={preview.isError} disabled={overLimit}/>}
+          {promptOpen&&<PromptDisclosure open={promptOpen} onToggle={()=>setPromptOpen(false)} preview={preview.data} loading={preview.isFetching} error={preview.isError} disabled={overLimit}/>}
         {(error||sessionError)&&<div className="ai-error" role="alert"><AlertTriangle/>{sessionError||(error instanceof Error?error.message:'AI 작업을 처리하지 못했습니다.')}</div>}
-        {(conversations.data?.items.length??0)>0&&<div className="ai-history"><div><Clock3/><strong>대화</strong></div>{conversations.data?.items.map(item=><button key={item.id} className={item.id===conversationId?'active':''} disabled={!item.latest_run_id||plan.isPending||actionPending} onClick={()=>item.latest_run_id&&void loadRun(item.latest_run_id)} aria-label={`대화 열기: ${item.title}`}><span>{item.title}</span><small>{item.message_count>0?`${Math.ceil(item.message_count/2)}턴 · `:''}{item.latest_state?agentStateLabel(item.latest_state):'대화 시작됨'} · {new Date(item.updated_at).toLocaleString('ko-KR')}</small></button>)}</div>}
       </>}
     </div>
+    {config.data?.enabled&&<form className="ai-chat-composer" onSubmit={submit}>
+      <div className="ai-chat-options"><label><Bot/><select aria-label="AI 작업 방식" value={mode} title={active.hint} onChange={event=>setMode(event.target.value as Mode)}>{MODES.map(item=><option value={item.id} key={item.id}>{modeLabel[item.id]}</option>)}</select></label><button type="button" aria-label="모델에 보내는 내용 보기" aria-expanded={promptOpen} onClick={()=>setPromptOpen(current=>!current)}><Terminal/></button></div>
+      <div className="ai-chat-input"><textarea ref={requestRef} aria-label="AI 요청" value={request} maxLength={4000} rows={2} onChange={event=>setRequest(event.target.value)} onKeyDown={event=>{if(event.nativeEvent.isComposing)return;if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}}} placeholder={run?'이어서 요청하세요…':active.examples[0]}/><button className="primary" aria-label="AI 메시지 보내기" title="메시지 보내기" disabled={!canSend}>{plan.isPending?<RefreshCw className="spin"/>:<Send/>}</button></div>
+      <div className="ai-chat-composer-foot"><small>{run?'같은 대화에 이어서 전송':'새 대화 시작'} · Enter 전송 · Shift+Enter 줄바꿈</small><span>{request.length.toLocaleString()} / 4,000</span></div>
+      <small className="ai-chat-safety"><Eye/> 변경 작업은 계획을 확인하고 승인해야 적용됩니다.</small>
+    </form>}
   </aside>
+}
+
+function ConversationList({items,activeId,loading,disabled,onOpen}:{items:AgentConversation[];activeId?:string;loading:boolean;disabled:boolean;onOpen:(item:AgentConversation)=>void}){
+  return <section className="ai-conversation-list" aria-label="AI 대화 목록"><header><MessagesSquare/><div><strong>대화 목록</strong><small>이 워크북에서 이어서 작업할 대화</small></div></header>{loading&&<p><RefreshCw className="spin"/>대화를 불러오는 중…</p>}{!loading&&items.length===0&&<p>아직 저장된 대화가 없습니다.</p>}{items.map(item=><button type="button" key={item.id} className={item.id===activeId?'active':''} disabled={!item.latest_run_id||disabled} onClick={()=>onOpen(item)} aria-label={`대화 열기: ${item.title}`}><span>{item.title}</span><small>{item.message_count>0?`${Math.ceil(item.message_count/2)}턴 · `:''}{item.latest_state?agentStateLabel(item.latest_state):'대화 시작됨'} · {new Date(item.updated_at).toLocaleString('ko-KR')}</small></button>)}</section>
 }
 
 /** Shows the exact request that would leave the building, on demand. */
@@ -194,7 +191,7 @@ function UsageGuide({config,onClose}:{config?:AIConfig;onClose:()=>void}){
     <header><strong><HelpCircle/> 사용 가이드</strong><button onClick={onClose} aria-label="사용 가이드 닫기">×</button></header>
     <ol>
       <li><strong>범위를 선택합니다.</strong> 시트에서 분석하거나 고칠 범위를 먼저 고릅니다. 선택한 범위 안의 값이 있는 셀만 전송됩니다.</li>
-      <li><strong>작업 유형을 고릅니다.</strong> 요약·이상치·설명은 읽기 전용이고, 수식·정제·서식·차트·복합 작업은 변경을 제안합니다.</li>
+      <li><strong>채팅으로 요청합니다.</strong> 기본 자동 에이전트가 의도를 판단합니다. 꼭 필요한 경우에만 입력창 위 선택 메뉴에서 작업 방식을 고정합니다.</li>
       <li><strong>계획을 검토합니다.</strong> 셀 Diff와 실행할 도구, 위험도, 검증 단계를 적용 전에 보여 줍니다.</li>
       <li><strong>승인해야 적용됩니다.</strong> 승인한 ChangeSet만 반영되고 <em>Undo</em>로 수식·차트·Agent 생성 시트를 함께 되돌릴 수 있습니다.</li>
     </ol>
@@ -221,7 +218,7 @@ function AgentPlanView({run}:{run:AgentRun}){
   </section>
 }
 
-function ActionPreview({action,onApprove,onCancel,onUndo,pending,onNew,onRetry}:{action:AIAction;onApprove:()=>void;onCancel:()=>void;onUndo:()=>void;pending:boolean;onNew:()=>void;onRetry:()=>void}){
+function ActionPreview({action,onApprove,onCancel,onUndo,pending,onRetry}:{action:AIAction;onApprove:()=>void;onCancel:()=>void;onUndo:()=>void;pending:boolean;onRetry:()=>void}){
   const readOnly=action.mode==='explain'||action.mode==='summarize'||action.mode==='anomaly'
   const findings=action.findings??[]
   // Usage arrives with a fresh plan and is kept in the audit event afterwards.
@@ -240,7 +237,7 @@ function ActionPreview({action,onApprove,onCancel,onUndo,pending,onNew,onRetry}:
     {(action.status==='applying'||action.status==='undoing')&&<div className="ai-state"><RefreshCw className="spin"/>서버 작업을 마무리하는 중…</div>}
     {action.status==='applied'&&<div className="ai-applied"><Check/><div><strong>승인한 변경이 적용되었습니다.</strong><small>{action.operation?.server_version?`서버 버전 v${action.operation.server_version}`:'현재 워크북에 실시간 반영됨'}</small></div><button onClick={onUndo} disabled={pending}><RotateCcw/> Undo</button></div>}
     {action.status==='undone'&&<div className="ai-explanation-done"><RotateCcw/> AI 변경을 새 서버 버전으로 되돌렸습니다.</div>}
-    <div className="ai-action-actions"><button onClick={onRetry} disabled={pending}>이 요청 수정</button><button onClick={onNew} disabled={pending}>새 대화 시작</button></div>
+    <div className="ai-action-actions"><button onClick={onRetry} disabled={pending}>이 요청 수정</button></div>
   </div>
 }
 

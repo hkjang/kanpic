@@ -2,8 +2,20 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import './ResizableRightPanel.css'
 
 const MIN_WIDTH=320
-const MAX_WIDTH=760
-const GRID_WIDTH=360
+const MAX_WIDTH=960
+const GRID_WIDTH=320
+
+export type RightPanelKey='ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'
+
+export const RIGHT_PANEL_CONFIG:Record<RightPanelKey,{label:string;defaultWidth:number}>={
+  ai:{label:'AI 도우미',defaultWidth:460},
+  automation:{label:'자동화',defaultWidth:430},
+  history:{label:'버전 이력',defaultWidth:380},
+  comments:{label:'댓글',defaultWidth:400},
+  conflicts:{label:'편집 충돌',defaultWidth:440},
+  charts:{label:'차트',defaultWidth:400},
+  pivots:{label:'피벗',defaultWidth:420},
+}
 
 function availableMaxWidth(){
   if(typeof window==='undefined')return MAX_WIDTH
@@ -11,7 +23,8 @@ function availableMaxWidth(){
 }
 function clampWidth(width:number){return Math.min(availableMaxWidth(),Math.max(MIN_WIDTH,Math.round(width)))}
 
-export function ResizableRightPanel({panelKey,defaultWidth=400,children}:{panelKey:string;defaultWidth?:number;children:ReactNode}){
+export function ResizableRightPanel({panelKey,children}:{panelKey:RightPanelKey;children:ReactNode}){
+  const {label,defaultWidth}=RIGHT_PANEL_CONFIG[panelKey]
   const storageKey=`kanpic:right-panel-width:${panelKey}`
   const [width,setWidth]=useState(()=>{
     const saved=typeof window==='undefined'?null:window.localStorage.getItem(storageKey)
@@ -49,13 +62,13 @@ export function ResizableRightPanel({panelKey,defaultWidth=400,children}:{panelK
     <div
       className="right-panel-resizer"
       role="separator"
-      aria-label="우측 패널 너비 조절"
+      aria-label={`${label} 패널 너비 조절`}
       aria-orientation="vertical"
       aria-valuemin={MIN_WIDTH}
       aria-valuemax={availableMaxWidth()}
       aria-valuenow={width}
       tabIndex={0}
-      title="드래그하거나 화살표 키로 패널 너비 조절 · 두 번 클릭해 초기화"
+      title={`${label} 패널 · 드래그하거나 화살표 키로 너비 조절 · 두 번 클릭해 초기화`}
       onPointerDown={startResize}
       onPointerMove={moveResize}
       onPointerUp={stopResize}
@@ -67,7 +80,7 @@ export function ResizableRightPanel({panelKey,defaultWidth=400,children}:{panelK
         else if(event.key==='Home'){event.preventDefault();updateWidth(MIN_WIDTH)}
         else if(event.key==='End'){event.preventDefault();updateWidth(availableMaxWidth())}
       }}
-    ><span/></div>
+    ><span/><output aria-hidden="true">{width}px</output></div>
     <div className="right-panel-content">{children}</div>
   </section>
 }

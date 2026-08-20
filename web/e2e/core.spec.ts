@@ -41,8 +41,37 @@ test('creates a workbook and opens the virtual canvas editor', async ({ page }) 
   await page.waitForURL(/\/workbooks\//)
   await expect(page.locator('canvas.grid-canvas')).toBeVisible()
   await expect(page.locator('.formula-bar')).toBeVisible()
-  await expect(page.getByText('Workbook Agent', { exact: true })).toBeVisible()
+  await expect(page.getByText('AI 도우미', { exact: true })).toBeVisible()
   await page.screenshot({ path: 'test-results/kanpic-editor.png', fullPage: true })
+})
+
+test('every editor right panel uses the shared resizer', async ({ page, request }) => {
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`패널 너비 ${Date.now()}`}}).then(response=>response.json())
+  try{
+    await page.setViewportSize({width:860,height:720})
+    await page.goto(`/workbooks/${workbook.id}`)
+    await page.waitForSelector('.grid-canvas')
+    const toolbar=page.locator('.toolbar')
+    const panels=[
+      ['AI 도우미','AI 도우미'],
+      ['자동화 패널','자동화'],
+      ['차트 패널','차트'],
+      ['피벗 패널','피벗'],
+      ['댓글','댓글'],
+      ['편집 충돌','편집 충돌'],
+      ['버전 이력','버전 이력'],
+    ] as const
+    for(const [buttonName,panelName] of panels){
+      if(buttonName!=='AI 도우미')await toolbar.getByRole('button',{name:buttonName,exact:true}).evaluate(button=>(button as HTMLButtonElement).click())
+      const separator=page.getByRole('separator',{name:`${panelName} 패널 너비 조절`})
+      await expect(separator).toBeVisible()
+      const before=Number(await separator.getAttribute('aria-valuenow'))
+      await separator.press('ArrowRight')
+      await expect(separator).toHaveAttribute('aria-valuenow',String(before-16))
+    }
+  }finally{
+    await request.delete(`/api/v1/workbooks/${workbook.id}`)
+  }
 })
 
 test('keeps visible interface text readable across primary surfaces', async ({ page, request }) => {
@@ -479,7 +508,7 @@ test('creates a live native chart and exposes the same definition through REST',
   await page.getByRole('button', { name: '차트 패널' }).click()
   const panelFrame=page.locator('.right-panel-frame')
   const initialPanelWidth=await panelFrame.evaluate(element=>element.getBoundingClientRect().width)
-  const panelResizer=page.getByRole('separator',{name:'우측 패널 너비 조절'})
+  const panelResizer=page.getByRole('separator',{name:'차트 패널 너비 조절'})
   await panelResizer.focus()
   await page.keyboard.press('ArrowLeft')
   await expect.poll(async()=>panelFrame.evaluate(element=>element.getBoundingClientRect().width)).toBeGreaterThan(initialPanelWidth)

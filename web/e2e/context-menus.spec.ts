@@ -281,7 +281,7 @@ test('a cell context menu opens Workbook Agent with a scoped request', async ({ 
     await expect(submenu.getByRole('menuitem',{name:'선택 범위 분석'})).toBeVisible()
     await submenu.getByRole('menuitem',{name:'선택 범위 분석'}).click()
     const panel=page.getByRole('complementary',{name:'AI 도우미 패널'})
-    await expect(panel.getByText('Workbook Agent',{exact:true})).toBeVisible()
+    await expect(panel.getByText('AI 도우미',{exact:true})).toBeVisible()
     await expect(panel.getByRole('textbox',{name:'AI 요청'})).toHaveValue('선택 범위의 핵심 지표와 패턴을 분석해줘')
   }finally{
     await request.put('/api/v1/admin/settings/ai.enabled',{data:{key:'ai.enabled',value:false,value_type:'boolean'}})
