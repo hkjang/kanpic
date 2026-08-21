@@ -65,7 +65,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange,onResolveNumericRun}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean;onResolveNumericRun?:(row:number,column:number)=>Promise<number|undefined>}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
@@ -771,12 +771,26 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
     let row=activeRow-1
     while(row>=1&&typeof cells.get(cellKey(row,activeColumn))?.value==='number')row-=1
-    if(row<activeRow-1){setDraft(`=${name}(${address(row+1,activeColumn)}:${address(activeRow-1,activeColumn)})`);setEditing(true);return}
+    if(row<activeRow-1){
+      // The walk stops where the loaded rows stop, which on a long column is
+      // not where the numbers stop. The page reads the column from the server
+      // and reports the real start; a SUM over the visible tail looks right
+      // and is wrong.
+      if(onResolveNumericRun){
+        void onResolveNumericRun(activeRow,activeColumn).then(start=>{
+          const first=start??row+1
+          setDraft(`=${name}(${address(first,activeColumn)}:${address(activeRow-1,activeColumn)})`)
+          setEditing(true)
+        })
+        return
+      }
+      setDraft(`=${name}(${address(row+1,activeColumn)}:${address(activeRow-1,activeColumn)})`);setEditing(true);return
+    }
     let column=activeColumn-1
     while(column>=1&&typeof cells.get(cellKey(activeRow,column))?.value==='number')column-=1
     setDraft(column<activeColumn-1?`=${name}(${address(activeRow,column+1)}:${address(activeRow,activeColumn-1)})`:`=${name}()`)
     setEditing(true)
-  },[activeColumn,activeRow,cells,selectCell,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow,setEditing])
+  },[activeColumn,activeRow,cells,onResolveNumericRun,selectCell,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow,setEditing])
   const autoSum=useCallback(()=>insertAggregate('SUM'),[insertAggregate])
   useEffect(()=>{const shortcut=(event:Event)=>{
     const detail=(event as CustomEvent<GridShortcut>).detail

@@ -359,6 +359,22 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const region=dataRegion(cells,seedRow,seedColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS})
     return {region,cells}
   }
+  // The first row of the run of numbers that ends just above a cell, read from
+  // the server so a long column sums all of itself rather than the part the
+  // grid happens to hold.
+  const resolveNumericRun=async(row:number,column:number)=>{
+    if(!activeSheet||row<2)return undefined
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1)return undefined
+    const label=`${address(1,column)}:${address(Math.min(Math.max(used.max_row,row),MAX_PRINT_ROWS),column)}`
+    const read=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+    if(!read)return undefined
+    const numbers=new Set(read.items.filter(cell=>typeof cell.value==='number').map(cell=>cell.row))
+    let first=row
+    while(first-1>=1&&numbers.has(first-1))first-=1
+    return first===row?undefined:first
+  }
   const sortColumn=async(column:number,direction:'asc'|'desc')=>{
     if(!writable())return
     const seedRow=editorSelection.startRow
@@ -917,7 +933,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
       }}/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange} onResolveNumericRun={resolveNumericRun}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}

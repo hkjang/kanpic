@@ -103,3 +103,34 @@ test('printing covers the whole sheet, not the rows on screen', async ({ page, r
     return false
   }),{timeout:10_000}).toBe(true)
 })
+
+// Auto sum walked up through the rows the grid had loaded, so a long column
+// summed its visible tail and looked perfectly ordinary doing it.
+test('auto sum covers the whole column, not the rows on screen', async ({ page, request }) => {
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`자동 합계 ${Date.now()}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id
+  const cells:Array<Record<string,unknown>>=[]
+  for(let row=1;row<=ROWS;row+=1)cells.push({row,column:1,value:1})
+  await request.patch(`/api/v1/sheets/${sheet}/cells:paste`,{data:{idempotency_key:`sum-seed-${Date.now()}`,cells}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.waitForSelector('.grid-canvas')
+  await page.locator('.name-box').fill(`A${ROWS+1}`)
+  await page.keyboard.press('Enter')
+  // The grid takes the selection before it takes keystrokes; pressing the
+  // shortcut too early lands it on whatever was selected before.
+  await expect(page.locator('.name-box')).toHaveValue(`A${ROWS+1}`)
+  // Under a loaded suite the grid occasionally takes focus a beat after the
+  // name box hands it back, and the shortcut goes nowhere. Retrying the key
+  // press tolerates that without weakening what is being checked.
+  await expect.poll(async()=>{
+    if(await page.locator('.cell-editor').inputValue()==='')await page.keyboard.press('Alt+Equal')
+    return page.locator('.cell-editor').inputValue()
+  },{timeout:15_000}).toBe(`=SUM(A1:A${ROWS})`)
+  await page.keyboard.press('Enter')
+
+  await expect.poll(async()=>{
+    const range=await request.get(`/api/v1/sheets/${sheet}/ranges/A${ROWS+1}:A${ROWS+1}`).then(response=>response.json())
+    return range.items[0]?.value
+  },{timeout:15_000}).toBe(ROWS)
+})
