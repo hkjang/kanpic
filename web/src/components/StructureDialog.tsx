@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { MergeRange } from '../lib/merge'
 import { useDialog } from '../lib/useDialog'
 
-export type StructureCommand = { axis:'row'|'column'; action:'insert'|'delete'; index:number; count:number }
+export type StructureCommand = { axis:'row'|'column'; action:'insert'|'delete'|'move'; index:number; count:number; destination?:number }
 
 export function StructureDialog({range,onClose,onApply}:{range:MergeRange;onClose:()=>void;onApply:(command:StructureCommand)=>Promise<void>}){
   const [saving,setSaving]=useState(false)

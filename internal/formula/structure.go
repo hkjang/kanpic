@@ -15,14 +15,17 @@ const (
 	MaxColumns = 16_384
 )
 
-// StructuralChange describes an insertion or deletion before Index on one
-// sheet. CurrentSheet identifies where the formula lives so unqualified A1
-// references can be transformed without touching references to other sheets.
+// StructuralChange describes an insertion, a deletion or a move of Count rows
+// or columns starting at Index on one sheet. CurrentSheet identifies where the
+// formula lives so unqualified A1 references can be transformed without
+// touching references to other sheets. Destination applies to a move only and
+// names the position, in pre-move coordinates, the band lands in front of.
 type StructuralChange struct {
 	Axis         string
 	Action       string
 	Index        int
 	Count        int
+	Destination  int
 	CurrentSheet string
 	TargetSheet  string
 }
@@ -71,7 +74,8 @@ func TransformRangeAddress(input string, change StructuralChange) (string, bool,
 func TransformStructuralReferences(input string, change StructuralChange) string {
 	if input == "" || change.Index < 1 || change.Count < 1 ||
 		(change.Axis != "row" && change.Axis != "column") ||
-		(change.Action != "insert" && change.Action != "delete") {
+		(change.Action != "insert" && change.Action != "delete" && change.Action != "move") ||
+		(change.Action == "move" && change.Destination < 1) {
 		return input
 	}
 	var result strings.Builder
@@ -388,7 +392,18 @@ func transformStructuralCells(first, second structuralCell, ranged bool, change 
 	return result, true
 }
 
+// TransformPosition moves one row or column index through a structural change.
+// The bool is false when a deletion removes that index. It is exported so sheet
+// features holding a bare index — a filter criterion's column, a stored row
+// height — move exactly the way formula references move.
+func TransformPosition(position int, change StructuralChange) (int, bool) {
+	return transformStructuralPosition(position, change)
+}
+
 func transformStructuralPosition(position int, change StructuralChange) (int, bool) {
+	if change.Action == "move" {
+		return movedPosition(position, change), true
+	}
 	if change.Action == "insert" {
 		if position >= change.Index {
 			position += change.Count
@@ -420,6 +435,10 @@ func transformStructuralInterval(start, end int, change StructuralChange) (int, 
 	if start > end {
 		start, end = end, start
 	}
+	if change.Action == "move" {
+		start, end = movedInterval(start, end, change)
+		return start, end, true
+	}
 	if change.Action == "insert" {
 		switch {
 		case change.Index <= start:
@@ -450,6 +469,83 @@ func transformStructuralInterval(start, end int, change StructuralChange) (int, 
 		nextEnd = end - change.Count
 	}
 	return nextStart, nextEnd, true
+}
+
+// movedPosition applies the three-segment permutation a move describes: the
+// moved band lands at its destination and whatever the band passed over slides
+// back by Count. Every index keeps a home, so a move never yields #REF!.
+func movedPosition(position int, change StructuralChange) int {
+	bandEnd := change.Index + change.Count - 1
+	if change.Destination > bandEnd {
+		landing := change.Destination - change.Count
+		switch {
+		case position >= change.Index && position <= bandEnd:
+			return position + landing - change.Index
+		case position > bandEnd && position < change.Destination:
+			return position - change.Count
+		}
+		return position
+	}
+	if change.Destination < change.Index {
+		switch {
+		case position >= change.Index && position <= bandEnd:
+			return position - (change.Index - change.Destination)
+		case position >= change.Destination && position < change.Index:
+			return position + change.Count
+		}
+		return position
+	}
+	return position
+}
+
+// movedInterval maps a span through a move. A move can scatter a contiguous
+// span, and a formula range has to stay contiguous, so the result is the span
+// covering everything the original covered: exact when the moved band sits
+// wholly inside or wholly outside the span, and a superset when a move tears a
+// span in half. Widening keeps every original cell in the range, which is what
+// a SUM over the span means; dropping cells silently would change the answer.
+func movedInterval(start, end int, change StructuralChange) (int, int) {
+	low, high, seen := 0, 0, false
+	cover := func(first, last, shift int) {
+		if first < start {
+			first = start
+		}
+		if last > end {
+			last = end
+		}
+		if first > last {
+			return
+		}
+		first, last = first+shift, last+shift
+		if !seen {
+			low, high, seen = first, last, true
+			return
+		}
+		if first < low {
+			low = first
+		}
+		if last > high {
+			high = last
+		}
+	}
+	bandEnd := change.Index + change.Count - 1
+	if change.Destination > bandEnd {
+		cover(change.Index, bandEnd, change.Destination-change.Count-change.Index)
+		cover(bandEnd+1, change.Destination-1, -change.Count)
+		cover(1, change.Index-1, 0)
+		cover(change.Destination, MaxRows, 0)
+	} else if change.Destination < change.Index {
+		cover(change.Index, bandEnd, change.Destination-change.Index)
+		cover(change.Destination, change.Index-1, change.Count)
+		cover(1, change.Destination-1, 0)
+		cover(bandEnd+1, MaxRows, 0)
+	} else {
+		cover(start, end, 0)
+	}
+	if !seen {
+		return start, end
+	}
+	return low, high
 }
 
 func renderStructuralCell(cell structuralCell) string {

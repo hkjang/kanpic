@@ -256,6 +256,7 @@ type StructuralMutation struct {
 	Action         string `json:"action"`
 	Index          int    `json:"index"`
 	Count          int    `json:"count"`
+	Destination    int    `json:"destination"`
 }
 
 // NamedRange is a workbook-level reusable name whose target belongs to one of

@@ -65,10 +65,12 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
 export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
+  const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
   const functionCatalog=useFunctionCatalog()
   const [caret,setCaret]=useState(0),[suggestion,setSuggestion]=useState(0)
   const [noteHover,setNoteHover]=useState<{row:number;column:number;text:string;x:number;y:number}>()
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
+  const [movePreview,setMovePreview]=useState<{axis:'row'|'column';destination:number}>()
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const editor=useEditorStore()
   const {activeRow,activeColumn,anchorRow,anchorColumn,editing,draft,zoom,cells,select,setEditing,setDraft,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
@@ -324,7 +326,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle='#0f766e';context.beginPath();context.roundRect(labelX,labelY,labelWidth,18,5);context.fill()
       context.fillStyle='#fff';context.fillText(label,labelX+6,labelY+9)
     }
-  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,showGridlines,resizePreview])
+    // The drop indicator is a solid line on the boundary the dragged band will
+    // land in front of, so a move reads as "it goes here" before letting go.
+    if(movePreview){
+      context.save();context.strokeStyle='#0f766e';context.lineWidth=3
+      if(movePreview.axis==='column'){const x=columnPosition(movePreview.destination);context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,size.height)}
+      else{const y=rowPosition(movePreview.destination);context.beginPath();context.moveTo(0,Math.round(y)+.5);context.lineTo(size.width,Math.round(y)+.5)}
+      context.stroke();context.restore()
+    }
+  },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,showGridlines,resizePreview,movePreview])
 
   const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
 
@@ -504,6 +514,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
     if(region.kind==='corner'){selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});focusGrid();return}
     if(region.kind==='column'||region.kind==='row'){
+      // Pressing a header that is already part of the selected band picks the
+      // band up to move it; pressing any other header starts a new selection.
+      // That is the rule Sheets uses and it keeps both gestures on one button.
+      const bandStart=region.kind==='column'?selection.startColumn:selection.startRow,bandEnd=region.kind==='column'?selection.endColumn:selection.endRow
+      const whole=region.kind==='column'?wholeColumnsSelected:wholeRowsSelected
+      if(!readOnly&&onStructure&&!event.shiftKey&&whole&&region.index>=bandStart&&region.index<=bandEnd){
+        moveDrag.current={axis:region.kind,start:bandStart,count:bandEnd-bandStart+1,origin:region.kind==='column'?event.clientX:event.clientY,destination:bandStart,armed:false}
+        event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();focusGrid();return
+      }
       const anchor=event.shiftKey?(region.kind==='column'?anchorColumn:anchorRow):region.index
       headerDrag.current={axis:region.kind,anchor}
       if(region.kind==='column')selectSpan(1,Math.min(anchor,region.index),TOTAL_ROWS,Math.max(anchor,region.index),{row:1,column:region.index})
@@ -521,6 +540,23 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const size=clampDimensionSize(drag.axis,axis.sizeOf(drag.index)/zoom+delta)
       setResizePreview({axis:drag.axis,index:drag.index,size});return
     }
+    const moving=moveDrag.current
+    if(moving){
+      const travelled=Math.abs((moving.axis==='column'?event.clientX:event.clientY)-moving.origin)
+      if(!moving.armed&&travelled<6)return
+      moving.armed=true
+      event.currentTarget.style.cursor=moving.axis==='column'?'grabbing':'grabbing'
+      const{x,y}=pointerPosition(event)
+      const axis=moving.axis==='column'?columnAxis:rowAxis
+      const offset=moving.axis==='column'?Math.max(0,x-headerWidth):Math.max(0,y-headerHeight)
+      const index=axisIndexAtViewport(axis,offset,moving.axis==='column'?scroll.left:scroll.top,moving.axis==='column'?frozenColumns:frozenRows)
+      const edge=moving.axis==='column'?columnPositionOf(index):rowPositionOf(index)
+      const past=(moving.axis==='column'?x:y)-edge>axis.sizeOf(index)/2
+      const destination=Math.max(1,past?index+1:index)
+      if(destination!==moving.destination){moving.destination=destination;setMovePreview({axis:moving.axis,destination})}
+      else if(!movePreview)setMovePreview({axis:moving.axis,destination})
+      return
+    }
     if(headerDrag.current){
       const{x,y}=pointerPosition(event),header=headerDrag.current
       if(header.axis==='column'){const index=axisIndexAtViewport(columnAxis,Math.max(0,x-headerWidth),scroll.left,frozenColumns);selectSpan(1,Math.min(header.anchor,index),TOTAL_ROWS,Math.max(header.anchor,index),{row:1,column:index})}
@@ -530,7 +566,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(filling.current){const cell=pointCell(event);if(!cell)return;const next={startRow:Math.min(selection.startRow,cell.row),startColumn:Math.min(selection.startColumn,cell.column),endRow:Math.max(selection.endRow,cell.row),endColumn:Math.max(selection.endColumn,cell.column)};fillPreviewRef.current=next;setFillPreview(next);return}
     if(!dragging.current){
       const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
-      event.currentTarget.style.cursor=formatBrush?'copy':target?target.axis==='column'?'col-resize':'row-resize':onFillHandle(event)?'crosshair':'default'
+      const hoveredRegion=target?undefined:regionAt(x,y)
+      const overBand=!readOnly&&!!onStructure&&((hoveredRegion?.kind==='column'&&wholeColumnsSelected&&hoveredRegion.index>=selection.startColumn&&hoveredRegion.index<=selection.endColumn)||(hoveredRegion?.kind==='row'&&wholeRowsSelected&&hoveredRegion.index>=selection.startRow&&hoveredRegion.index<=selection.endRow))
+      event.currentTarget.style.cursor=formatBrush?'copy':target?target.axis==='column'?'col-resize':'row-resize':overBand?'grab':onFillHandle(event)?'crosshair':'default'
       // Hovering a cell that carries a note shows the note, which is the only
       // way to read one.
       const hovered=pointCell(event)
@@ -547,16 +585,23 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     // A selection made while the brush is loaded takes the copied format and
     // the brush is put down, which is what one click of a format painter does.
     if(formatBrush&&onPaintFormat&&(dragging.current||headerDrag.current))onPaintFormat(selectedBounds(useEditorStore.getState()))
-    dragging.current=false;headerDrag.current=null;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined)
+    dragging.current=false;headerDrag.current=null;moveDrag.current=null;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined);setMovePreview(undefined)
     event.currentTarget.style.cursor=formatBrush?'copy':'default'
     if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)
   }
   const pointerUp=(event:React.PointerEvent<HTMLCanvasElement>)=>{
     const drag=resizeDrag.current,preview=resizePreview
+    const move=moveDrag.current
     resizeDrag.current=null
     const target=fillPreviewRef.current,shouldFill=filling.current
     finishGesture(event)
     if(drag){setResizePreview(undefined);if(preview&&preview.size!==drag.size)void applyLayoutCommand({action:'resize',axis:drag.axis,start:drag.start,count:drag.count,size:preview.size});return}
+    // A drop inside the band itself lands it exactly where it started, so it is
+    // dismissed rather than sent to the server as a no-op version bump.
+    if(move?.armed&&(move.destination<move.start||move.destination>move.start+move.count)){
+      void applyStructureCommand({axis:move.axis,action:'move',index:move.start,count:move.count,destination:move.destination})
+      return
+    }
     if(shouldFill&&target)void fillSelection(target)
   }
   const pointerCancel=(event:React.PointerEvent<HTMLCanvasElement>)=>{resizeDrag.current=null;setResizePreview(undefined);finishGesture(event)}
@@ -857,6 +902,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     return [{kind:'label',label},...clipboardMenuItems(),{kind:'separator'},
       {kind:'item',label:isColumn?`왼쪽에 열 ${count}개 삽입`:`위에 행 ${count}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first,count})},
       {kind:'item',label:isColumn?`오른쪽에 열 ${count}개 삽입`:`아래에 행 ${count}개 삽입`,disabled:readOnly||!onStructure,onSelect:()=>void applyStructureCommand({axis,action:'insert',index:first+count,count})},
+      {kind:'item',label:isColumn?'왼쪽으로 이동':'위로 이동',disabled:readOnly||!onStructure||first<=1,onSelect:()=>void applyStructureCommand({axis,action:'move',index:first,count,destination:first-1})},
+      {kind:'item',label:isColumn?'오른쪽으로 이동':'아래로 이동',disabled:readOnly||!onStructure||first+count>(isColumn?TOTAL_COLUMNS:TOTAL_ROWS),onSelect:()=>void applyStructureCommand({axis,action:'move',index:first,count,destination:first+count+1})},
       {kind:'item',label:`${label} 삭제`,icon:<Trash2/>,danger:true,disabled:readOnly||!onStructure,onSelect:()=>{if(window.confirm(`${label}을(를) 삭제할까요?`))void applyStructureCommand({axis,action:'delete',index:first,count})}},
       {kind:'item',label:`${label} 내용 지우기`,icon:<Eraser/>,disabled:readOnly,onSelect:()=>void clearSelection()},
       {kind:'separator'},

@@ -300,7 +300,14 @@ func transformDimensionRanges(input []DimensionRange, mutation StructuralMutatio
 	changed := false
 	for _, interval := range input {
 		original := interval
-		if mutation.Action == "insert" {
+		if mutation.Action == "move" {
+			start, end, exists := transformGroupInterval(interval.Start, interval.End, mutation)
+			if !exists {
+				changed = true
+				continue
+			}
+			interval.Start, interval.End = start, end
+		} else if mutation.Action == "insert" {
 			if mutation.Index <= interval.Start {
 				interval.Start += mutation.Count
 				interval.End += mutation.Count
@@ -333,7 +340,9 @@ func transformDimensionRanges(input []DimensionRange, mutation StructuralMutatio
 }
 
 func transformFrozenCount(count int, mutation StructuralMutation) int {
-	if count == 0 || mutation.Index > count {
+	// A move reorders rows or columns without changing how many of them are
+	// frozen: the pane still holds the first N.
+	if count == 0 || mutation.Action == "move" || mutation.Index > count {
 		return count
 	}
 	if mutation.Action == "insert" {
@@ -499,6 +508,6 @@ func transformDimensionGroups(input []DimensionGroup, mutation StructuralMutatio
 }
 
 func transformGroupInterval(start, end int, mutation StructuralMutation) (int, int, bool) {
-	change := formula.StructuralChange{Axis: mutation.Axis, Action: mutation.Action, Index: mutation.Index, Count: mutation.Count}
+	change := formula.StructuralChange{Axis: mutation.Axis, Action: mutation.Action, Index: mutation.Index, Count: mutation.Count, Destination: mutation.Destination}
 	return formula.TransformInterval(start, end, change)
 }

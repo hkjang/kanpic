@@ -25,8 +25,8 @@ func normalizeStructuralMutation(input StructuralMutation) (StructuralMutation, 
 	if input.Axis != "row" && input.Axis != "column" {
 		return StructuralMutation{}, fmt.Errorf("%w: axis must be row or column", ErrInvalid)
 	}
-	if input.Action != "insert" && input.Action != "delete" {
-		return StructuralMutation{}, fmt.Errorf("%w: action must be insert or delete", ErrInvalid)
+	if input.Action != "insert" && input.Action != "delete" && input.Action != "move" {
+		return StructuralMutation{}, fmt.Errorf("%w: action must be insert, delete or move", ErrInvalid)
 	}
 	limit := formula.MaxRows
 	if input.Axis == "column" {
@@ -35,14 +35,27 @@ func normalizeStructuralMutation(input StructuralMutation) (StructuralMutation, 
 	if input.Index < 1 || input.Index > limit || input.Count < 1 || input.Count > MaxStructuralCount || input.Index+input.Count-1 > limit {
 		return StructuralMutation{}, fmt.Errorf("%w: index and count exceed spreadsheet bounds or the %d-item operation limit", ErrInvalid, MaxStructuralCount)
 	}
+	if input.Action == "move" {
+		// The destination names the position the band lands in front of, so it
+		// runs one past the last row or column: moving to the very end is
+		// destination limit+1.
+		if input.Destination < 1 || input.Destination > limit+1 {
+			return StructuralMutation{}, fmt.Errorf("%w: destination is outside the sheet", ErrInvalid)
+		}
+	} else {
+		input.Destination = 0
+	}
 	return input, nil
 }
 
 func formulaStructuralChange(input StructuralMutation, currentSheet, targetSheet string) formula.StructuralChange {
-	return formula.StructuralChange{Axis: input.Axis, Action: input.Action, Index: input.Index, Count: input.Count, CurrentSheet: currentSheet, TargetSheet: targetSheet}
+	return formula.StructuralChange{Axis: input.Axis, Action: input.Action, Index: input.Index, Count: input.Count, Destination: input.Destination, CurrentSheet: currentSheet, TargetSheet: targetSheet}
 }
 
 func structuralPosition(position int, input StructuralMutation) (int, bool) {
+	if input.Action == "move" {
+		return formula.TransformPosition(position, formulaStructuralChange(input, "", ""))
+	}
 	if input.Action == "insert" {
 		if position >= input.Index {
 			position += input.Count
@@ -516,8 +529,11 @@ func structureBackupName(input StructuralMutation) string {
 		axis = "열"
 	}
 	action := "삽입"
-	if input.Action == "delete" {
+	switch input.Action {
+	case "delete":
 		action = "삭제"
+	case "move":
+		action = "이동"
 	}
 	return fmt.Sprintf("%s %s 전 자동 백업", axis, action)
 }

@@ -1701,9 +1701,10 @@ func structureSchema() map[string]any {
 			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
 			"client_id":       map[string]any{"type": "string"},
 			"axis":            map[string]any{"type": "string", "enum": []string{"row", "column"}},
-			"action":          map[string]any{"type": "string", "enum": []string{"insert", "delete"}},
+			"action":          map[string]any{"type": "string", "enum": []string{"insert", "delete", "move"}},
 			"index":           map[string]any{"type": "integer", "minimum": 1},
 			"count":           map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxStructuralCount},
+			"destination":     map[string]any{"type": "integer", "minimum": 1, "description": "move only: the row or column the band lands in front of, in pre-move coordinates"},
 		},
 		"required": []string{"sheet_id", "base_version", "idempotency_key", "axis", "action", "index", "count"},
 	}

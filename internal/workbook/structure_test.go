@@ -171,3 +171,76 @@ func assertStructureCell(t *testing.T, repository Repository, sheetID, address, 
 		t.Fatalf("cell %s = %#v, error=%v; want formula=%s value=%s", address, cells, err, formulaText, value)
 	}
 }
+
+// Dragging a column to a new position is the same operation as cut-and-insert
+// but has to leave every formula pointing at the same data it did before.
+func TestMemoryStructureMoveColumnCarriesFormulasAndWidths(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "move", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0]
+	_, err = repository.ApplyCells(ctx, CellMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "move-seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"이름"`)},
+		{Row: 1, Column: 2, Value: json.RawMessage(`"수량"`)},
+		{Row: 1, Column: 3, Value: json.RawMessage(`"단가"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"연필"`)},
+		{Row: 2, Column: 2, Value: json.RawMessage(`3`)},
+		{Row: 2, Column: 3, Value: json.RawMessage(`500`)},
+		{Row: 2, Column: 4, Formula: "=B2*C2"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "move-width", ExpectedRevision: 1, Axis: "column", Action: "resize", Start: 2, Count: 1, Size: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 수량 열을 단가 뒤로 옮긴다: B가 C 자리로, C는 B 자리로 내려온다.
+	result, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: layout.ServerVersion, IdempotencyKey: "move-column", Axis: "column", Action: "move", Index: 2, Count: 1, Destination: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells, err := repository.ReadRange(ctx, sheet.ID, cellrange.Range{Start: cellrange.Position{Row: 1, Column: 1}, End: cellrange.Position{Row: 2, Column: 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]string, len(cells))
+	formulas := make(map[string]string, len(cells))
+	for _, cell := range cells {
+		address := cellrange.Address(cell.Row, cell.Column)
+		values[address] = string(cell.Value)
+		formulas[address] = cell.Formula
+	}
+	if values["B1"] != `"단가"` || values["C1"] != `"수량"` {
+		t.Fatalf("headers did not move: %v", values)
+	}
+	if values["B2"] != "500" || values["C2"] != "3" {
+		t.Fatalf("values did not move: %v", values)
+	}
+	if formulas["D2"] != "=C2*B2" {
+		t.Fatalf("formula = %q, want =C2*B2", formulas["D2"])
+	}
+	if values["D2"] != "1500" {
+		t.Fatalf("recalculated product = %q, want 1500", values["D2"])
+	}
+	moved, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	width := 0.0
+	for _, item := range moved.Sheets[0].Layout.ColumnWidths {
+		if item.Index == 3 {
+			width = item.Size
+		}
+	}
+	if width != 200 {
+		t.Fatalf("column width stayed behind: %v", moved.Sheets[0].Layout.ColumnWidths)
+	}
+	if result.StructuralAction != "move" {
+		t.Fatalf("action = %q", result.StructuralAction)
+	}
+}
