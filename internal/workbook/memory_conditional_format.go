@@ -93,7 +93,7 @@ func (r *MemoryRepository) EvaluateConditionalFormats(_ context.Context, sheetID
 		if rule.SheetID != sheetID {
 			continue
 		}
-		selected, _ := cellrange.Parse(rule.Range)
+		selected := conditionalSourceRange(rule)
 		cells := make([]Cell, 0)
 		for _, cell := range state.cells[sheetID] {
 			if selected.Contains(cell.Row, cell.Column) {

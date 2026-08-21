@@ -17,6 +17,9 @@ const (
 	MaxConditionalFormats         = 100
 	MaxConditionalFormatCells     = 100_000
 	MaxConditionalEvaluationCells = 10_000
+	// MaxConditionalFormula matches the custom data validation limit: both are
+	// one expression a person types into a dialog.
+	MaxConditionalFormula = 2_000
 )
 
 var conditionalValueOperators = map[string]struct{}{
@@ -35,6 +38,7 @@ type ConditionalFormat struct {
 	Range           string          `json:"range"`
 	RuleType        string          `json:"rule_type"`
 	Operator        string          `json:"operator,omitempty"`
+	Formula         string          `json:"formula,omitempty"`
 	Value           json.RawMessage `json:"value,omitempty"`
 	Value2          json.RawMessage `json:"value2,omitempty"`
 	Style           json.RawMessage `json:"style,omitempty"`
@@ -57,6 +61,7 @@ type CreateConditionalFormatInput struct {
 	Range          string          `json:"range"`
 	RuleType       string          `json:"rule_type"`
 	Operator       string          `json:"operator,omitempty"`
+	Formula        string          `json:"formula,omitempty"`
 	Value          json.RawMessage `json:"value,omitempty"`
 	Value2         json.RawMessage `json:"value2,omitempty"`
 	Style          json.RawMessage `json:"style,omitempty"`
@@ -73,6 +78,7 @@ type UpdateConditionalFormatInput struct {
 	Range            *string          `json:"range,omitempty"`
 	RuleType         *string          `json:"rule_type,omitempty"`
 	Operator         *string          `json:"operator,omitempty"`
+	Formula          *string          `json:"formula,omitempty"`
 	Value            *json.RawMessage `json:"value,omitempty"`
 	Value2           *json.RawMessage `json:"value2,omitempty"`
 	Style            *json.RawMessage `json:"style,omitempty"`
@@ -105,6 +111,47 @@ type ConditionalFormatEvaluation struct {
 	Items           []ConditionalFormatCell `json:"items"`
 }
 
+// conditionalSourceRange is the block a rule has to read to be evaluated. For
+// most rules that is its own range; a custom formula may name cells outside it
+// — a status column two columns over, a threshold in a corner — so the block
+// grows to cover everything the formula can reach as it shifts across the
+// range. Reading a superset is safe; reading too little would silently make
+// the formula see blanks.
+func conditionalSourceRange(rule ConditionalFormat) cellrange.Range {
+	selected, err := cellrange.Parse(rule.Range)
+	if err != nil {
+		return cellrange.Range{Start: cellrange.Position{Row: 1, Column: 1}, End: cellrange.Position{Row: 1, Column: 1}}
+	}
+	if rule.RuleType != "custom_formula" {
+		return selected
+	}
+	height := selected.End.Row - selected.Start.Row
+	width := selected.End.Column - selected.Start.Column
+	dependencies, _ := formula.New().Dependencies(rule.Formula)
+	for _, dependency := range dependencies {
+		_, address, ok := formula.SplitCellKey(dependency)
+		if !ok {
+			continue
+		}
+		referenced, parseErr := cellrange.Parse(address)
+		if parseErr != nil {
+			continue
+		}
+		selected = conditionalUnion(selected, cellrange.Range{
+			Start: referenced.Start,
+			End:   cellrange.Position{Row: min(formula.MaxRows, referenced.End.Row + height), Column: min(formula.MaxColumns, referenced.End.Column + width)},
+		})
+	}
+	return selected
+}
+
+func conditionalUnion(first, second cellrange.Range) cellrange.Range {
+	return cellrange.Range{
+		Start: cellrange.Position{Row: min(first.Start.Row, second.Start.Row), Column: min(first.Start.Column, second.Start.Column)},
+		End:   cellrange.Position{Row: max(first.End.Row, second.End.Row), Column: max(first.End.Column, second.End.Column)},
+	}
+}
+
 type conditionalFormatSource struct {
 	Rule  ConditionalFormat
 	Cells []Cell
@@ -113,7 +160,7 @@ type conditionalFormatSource struct {
 func NewConditionalFormat(sheetID, actor string, input CreateConditionalFormatInput) (ConditionalFormat, cellrange.Range, error) {
 	rule := ConditionalFormat{
 		SheetID: sheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Name: input.Name, Range: input.Range,
-		RuleType: input.RuleType, Operator: input.Operator, Value: cloneJSON(input.Value), Value2: cloneJSON(input.Value2),
+		RuleType: input.RuleType, Operator: input.Operator, Formula: input.Formula, Value: cloneJSON(input.Value), Value2: cloneJSON(input.Value2),
 		Style: cloneJSON(input.Style), MinColor: input.MinColor, MidColor: input.MidColor, MaxColor: input.MaxColor,
 		BarColor: input.BarColor, Priority: input.Priority, StopIfTrue: input.StopIfTrue, CreatedBy: actor, UpdatedBy: actor,
 	}
@@ -181,6 +228,22 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		if err := ValidateStylePatch(rule.Style); err != nil {
 			return ConditionalFormat{}, cellrange.Range{}, err
 		}
+		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Formula = "", "", "", "", ""
+	case "custom_formula":
+		rule.Formula = strings.TrimSpace(rule.Formula)
+		if !strings.HasPrefix(rule.Formula, "=") || len([]rune(rule.Formula)) > MaxConditionalFormula {
+			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: custom conditional format requires a formula starting with = and up to %d characters", ErrInvalid, MaxConditionalFormula)
+		}
+		if _, formulaErr := formula.New().Dependencies(rule.Formula); formulaErr != nil {
+			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: %s", ErrInvalid, formulaErr.Message)
+		}
+		if len(rule.Style) == 0 {
+			rule.Style = json.RawMessage(`{"background":"#dbeafe","color":"#1e3a8a"}`)
+		}
+		if err := ValidateStylePatch(rule.Style); err != nil {
+			return ConditionalFormat{}, cellrange.Range{}, err
+		}
+		rule.Operator, rule.Value, rule.Value2 = "", nil, nil
 		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor = "", "", "", ""
 	case "duplicate":
 		if rule.Operator == "" {
@@ -196,7 +259,7 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 			return ConditionalFormat{}, cellrange.Range{}, err
 		}
 		rule.Value, rule.Value2 = nil, nil
-		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor = "", "", "", ""
+		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Formula = "", "", "", "", ""
 	case "color_scale":
 		if rule.MinColor == "" {
 			rule.MinColor = "#dcfce7"
@@ -207,7 +270,7 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		if !validHexColor(rule.MinColor) || !validHexColor(rule.MaxColor) || rule.MidColor != "" && !validHexColor(rule.MidColor) {
 			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: color scale colors must be #RRGGBB", ErrInvalid)
 		}
-		rule.Operator, rule.Value, rule.Value2, rule.Style, rule.BarColor = "", nil, nil, nil, ""
+		rule.Operator, rule.Value, rule.Value2, rule.Style, rule.BarColor, rule.Formula = "", nil, nil, nil, "", ""
 		rule.StopIfTrue = false
 	case "data_bar":
 		if rule.BarColor == "" {
@@ -216,11 +279,11 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		if !validHexColor(rule.BarColor) {
 			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: data bar color must be #RRGGBB", ErrInvalid)
 		}
-		rule.Operator, rule.Value, rule.Value2, rule.Style = "", nil, nil, nil
+		rule.Operator, rule.Value, rule.Value2, rule.Style, rule.Formula = "", nil, nil, nil, ""
 		rule.MinColor, rule.MidColor, rule.MaxColor = "", "", ""
 		rule.StopIfTrue = false
 	default:
-		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, duplicate, color_scale, or data_bar", ErrInvalid)
+		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, custom_formula, duplicate, color_scale, or data_bar", ErrInvalid)
 	}
 	return rule, selected, nil
 }
@@ -241,6 +304,9 @@ func ApplyConditionalFormatUpdate(current ConditionalFormat, actor string, input
 	}
 	if input.Operator != nil {
 		updated.Operator = *input.Operator
+	}
+	if input.Formula != nil {
+		updated.Formula = *input.Formula
 	}
 	if input.Value != nil {
 		updated.Value = cloneJSON(*input.Value)
@@ -321,11 +387,18 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 			continue
 		}
 		values := make(map[cellKey]any, len(source.Cells))
+		formulaCells := make(map[string]any)
+		if rule.RuleType == "custom_formula" {
+			formulaCells = make(map[string]any, len(source.Cells))
+		}
 		duplicates := make(map[string]int)
 		minimum, maximum, hasNumber := 0.0, 0.0, false
 		for _, cell := range source.Cells {
 			value := conditionalCellValue(cell)
 			values[cellKey{cell.Row, cell.Column}] = value
+			if rule.RuleType == "custom_formula" {
+				formulaCells[cellrange.Address(cell.Row, cell.Column)] = value
+			}
 			if !conditionalBlank(value) {
 				duplicates[validationCanonical(value)]++
 			}
@@ -346,7 +419,18 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 					continue
 				}
 				value := values[key]
-				matched, patch, bar := evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber)
+				matched, patch, bar := false, json.RawMessage(nil), (*ConditionalDataBar)(nil)
+				if rule.RuleType == "custom_formula" {
+					// The formula is written for the top-left cell of the range
+					// and moves with each cell, which is what makes one rule
+					// able to highlight a whole table by its own columns.
+					shifted := formula.ShiftReferences(rule.Formula, row-ruleRange.Start.Row, column-ruleRange.Start.Column)
+					evaluated := formula.New().Evaluate(shifted, formulaCells)
+					matched = evaluated.Error == nil && conditionalTruthy(evaluated.Value)
+					patch = cloneJSON(rule.Style)
+				} else {
+					matched, patch, bar = evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber)
+				}
 				if !matched {
 					continue
 				}
@@ -415,6 +499,23 @@ func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[s
 		return true, nil, &ConditionalDataBar{Color: rule.BarColor, Ratio: conditionalRatio(number, minimum, maximum)}
 	default:
 		return false, nil, nil
+	}
+}
+
+// conditionalTruthy reads a formula result the way a spreadsheet does: TRUE,
+// a non-zero number and a non-empty string all count as a match.
+func conditionalTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case float64:
+		return typed != 0
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "TRUE")
+	default:
+		return false
 	}
 }
 

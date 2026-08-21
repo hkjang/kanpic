@@ -174,3 +174,63 @@ func assertConditionalStyle(t *testing.T, raw json.RawMessage, key string, expec
 		t.Fatalf("style %s=%#v, want %#v; raw=%s err=%v", key, style[key], expected, raw, err)
 	}
 }
+
+// A custom formula rule is written for the top-left cell of its range and
+// moves with each cell, so one rule can highlight whole rows from a column the
+// rule does not even cover.
+func TestMemoryConditionalCustomFormulaHighlightsRowsByAnotherColumn(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "맞춤 수식", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "custom-seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"연필"`)}, {Row: 1, Column: 3, Value: json.RawMessage(`"완료"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"공책"`)}, {Row: 2, Column: 3, Value: json.RawMessage(`"진행"`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"지우개"`)}, {Row: 3, Column: 3, Value: json.RawMessage(`"완료"`)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateConditionalFormat(ctx, sheet, "alice", CreateConditionalFormatInput{
+		IdempotencyKey: "custom-rule", Range: "A1:B3", RuleType: "custom_formula", Formula: `=$C1="완료"`,
+		Style: json.RawMessage(`{"background":"#dcfce7"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	evaluation, err := repository.EvaluateConditionalFormats(ctx, sheet, cellrange.Range{Start: cellrange.Position{Row: 1, Column: 1}, End: cellrange.Position{Row: 3, Column: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched := make(map[string]bool, len(evaluation.Items))
+	for _, item := range evaluation.Items {
+		matched[cellrange.Address(item.Row, item.Column)] = true
+	}
+	for _, address := range []string{"A1", "B1", "A3", "B3"} {
+		if !matched[address] {
+			t.Fatalf("%s should be highlighted: %#v", address, matched)
+		}
+	}
+	for _, address := range []string{"A2", "B2"} {
+		if matched[address] {
+			t.Fatalf("%s must stay plain: %#v", address, matched)
+		}
+	}
+}
+
+func TestConditionalCustomFormulaValidation(t *testing.T) {
+	_, _, err := NormalizeConditionalFormat(ConditionalFormat{SheetID: "s", Range: "A1:B2", RuleType: "custom_formula", Formula: "C1"})
+	if err == nil {
+		t.Fatal("a formula without = must be refused")
+	}
+	_, _, err = NormalizeConditionalFormat(ConditionalFormat{SheetID: "s", Range: "A1:B2", RuleType: "custom_formula", Formula: "=SUM("})
+	if err == nil {
+		t.Fatal("an unparseable formula must be refused")
+	}
+	// Switching a rule to another type must not leave the old formula behind.
+	rule, _, err := NormalizeConditionalFormat(ConditionalFormat{SheetID: "s", Range: "A1:B2", RuleType: "value", Operator: "greater_than", Value: json.RawMessage(`10`), Formula: `=$C1="완료"`})
+	if err != nil || rule.Formula != "" {
+		t.Fatalf("value rule kept a formula: %#v, %v", rule, err)
+	}
+}

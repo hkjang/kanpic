@@ -12,7 +12,7 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const conditionalFormatColumns = `c.id::text,w.id::text,w.version,c.sheet_id::text,c.idempotency_key,c.name,c.cell_range,c.rule_type,c.operator,c.value,c.value2,c.style,c.min_color,c.mid_color,c.max_color,c.bar_color,c.priority,c.stop_if_true,c.revision,c.created_by,c.updated_by,c.created_at,c.updated_at`
+const conditionalFormatColumns = `c.id::text,w.id::text,w.version,c.sheet_id::text,c.idempotency_key,c.name,c.cell_range,c.rule_type,c.operator,c.formula,c.value,c.value2,c.style,c.min_color,c.mid_color,c.max_color,c.bar_color,c.priority,c.stop_if_true,c.revision,c.created_by,c.updated_by,c.created_at,c.updated_at`
 
 type conditionalFormatScanner interface{ Scan(...any) error }
 
@@ -117,7 +117,7 @@ func (r *PostgresRepository) EvaluateConditionalFormats(ctx context.Context, she
 	sources := make([]conditionalFormatSource, 0, len(rules))
 	var workbookVersion int64
 	for _, rule := range rules {
-		selected, _ := cellrange.Parse(rule.Range)
+		selected := conditionalSourceRange(rule)
 		cells, readErr := readRangeQuery(ctx, tx, sheetID, selected)
 		if readErr != nil {
 			return ConditionalFormatEvaluation{}, readErr
@@ -161,7 +161,7 @@ func (r *PostgresRepository) UpdateConditionalFormat(ctx context.Context, id, ac
 	}
 	now := r.now()
 	updated.Revision, updated.UpdatedAt, updated.WorkbookVersion = current.Revision+1, now, current.WorkbookVersion+1
-	command, err := tx.Exec(ctx, `UPDATE conditional_formats SET name=$2,cell_range=$3,rule_type=$4,operator=$5,value=$6,value2=$7,style=$8,min_color=$9,mid_color=$10,max_color=$11,bar_color=$12,priority=$13,stop_if_true=$14,revision=$15,updated_by=$16,updated_at=$17 WHERE id=$1 AND revision=$18`, id, updated.Name, updated.Range, updated.RuleType, updated.Operator, nullableJSON(updated.Value), nullableJSON(updated.Value2), nullableJSON(updated.Style), updated.MinColor, updated.MidColor, updated.MaxColor, updated.BarColor, updated.Priority, updated.StopIfTrue, updated.Revision, actor, now, current.Revision)
+	command, err := tx.Exec(ctx, `UPDATE conditional_formats SET name=$2,cell_range=$3,rule_type=$4,operator=$5,formula=$19,value=$6,value2=$7,style=$8,min_color=$9,mid_color=$10,max_color=$11,bar_color=$12,priority=$13,stop_if_true=$14,revision=$15,updated_by=$16,updated_at=$17 WHERE id=$1 AND revision=$18`, id, updated.Name, updated.Range, updated.RuleType, updated.Operator, nullableJSON(updated.Value), nullableJSON(updated.Value2), nullableJSON(updated.Style), updated.MinColor, updated.MidColor, updated.MaxColor, updated.BarColor, updated.Priority, updated.StopIfTrue, updated.Revision, actor, now, current.Revision, updated.Formula)
 	if err != nil {
 		return ConditionalFormat{}, err
 	}
@@ -239,7 +239,7 @@ func listWorkbookConditionalFormatsTx(ctx context.Context, tx pgx.Tx, workbookID
 func scanConditionalFormat(row conditionalFormatScanner) (ConditionalFormat, error) {
 	var rule ConditionalFormat
 	var value, value2, style []byte
-	err := row.Scan(&rule.ID, &rule.WorkbookID, &rule.WorkbookVersion, &rule.SheetID, &rule.CreateKey, &rule.Name, &rule.Range, &rule.RuleType, &rule.Operator, &value, &value2, &style, &rule.MinColor, &rule.MidColor, &rule.MaxColor, &rule.BarColor, &rule.Priority, &rule.StopIfTrue, &rule.Revision, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt)
+	err := row.Scan(&rule.ID, &rule.WorkbookID, &rule.WorkbookVersion, &rule.SheetID, &rule.CreateKey, &rule.Name, &rule.Range, &rule.RuleType, &rule.Operator, &rule.Formula, &value, &value2, &style, &rule.MinColor, &rule.MidColor, &rule.MaxColor, &rule.BarColor, &rule.Priority, &rule.StopIfTrue, &rule.Revision, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
 		return ConditionalFormat{}, err
 	}
@@ -248,6 +248,6 @@ func scanConditionalFormat(row conditionalFormatScanner) (ConditionalFormat, err
 }
 
 func insertConditionalFormatTx(ctx context.Context, tx pgx.Tx, rule ConditionalFormat) error {
-	_, err := tx.Exec(ctx, `INSERT INTO conditional_formats(id,sheet_id,idempotency_key,name,cell_range,rule_type,operator,value,value2,style,min_color,mid_color,max_color,bar_color,priority,stop_if_true,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, rule.ID, rule.SheetID, rule.CreateKey, rule.Name, rule.Range, rule.RuleType, rule.Operator, nullableJSON(rule.Value), nullableJSON(rule.Value2), nullableJSON(rule.Style), rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Priority, rule.StopIfTrue, rule.Revision, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt)
+	_, err := tx.Exec(ctx, `INSERT INTO conditional_formats(id,sheet_id,idempotency_key,name,cell_range,rule_type,operator,formula,value,value2,style,min_color,mid_color,max_color,bar_color,priority,stop_if_true,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, rule.ID, rule.SheetID, rule.CreateKey, rule.Name, rule.Range, rule.RuleType, rule.Operator, rule.Formula, nullableJSON(rule.Value), nullableJSON(rule.Value2), nullableJSON(rule.Style), rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Priority, rule.StopIfTrue, rule.Revision, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt)
 	return err
 }
