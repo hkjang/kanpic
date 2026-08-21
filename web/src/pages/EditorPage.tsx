@@ -626,6 +626,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       case 'layout-dialog':setLayoutOpen(true);return
       case 'note':setNoteOpen(true);return
       case 'cell-history':setHistoryCell(address(command.row,command.column));return
+      case 'subtotal':void openSubtotal();return
+      case 'cleanup-duplicates':void openCleanup('duplicates');return
+      case 'split-columns':void openSplitDialog();return
       case 'column-stats':setRightPanel('stats');return
       case 'column-filter':setColumnFilter({column:command.column,x:command.x,y:command.y});return
       case 'structure-dialog':setStructureOpen(true);return
@@ -768,6 +771,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:functions',group:'명령',label:'함수 목록',icon:<Search/>,keywords:'function 함수 수식',run:()=>setFunctionsOpen(true)},
     {id:'cmd:gridlines',group:'명령',label:showGridlines?'눈금선 숨기기':'눈금선 표시',icon:<Grid2X2/>,keywords:'gridline 눈금선 격자',run:()=>setShowGridlines(current=>!current)},
     {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
+    {id:'cmd:subtotal',group:'명령',label:'부분합',icon:<Table2/>,keywords:'subtotal 부분합 소계 그룹 합계',run:()=>void openSubtotal()},
+    {id:'cmd:subtotal-remove',group:'명령',label:'부분합 제거',icon:<Table2/>,keywords:'subtotal 부분합 제거 소계 삭제',run:()=>void openCleanup('subtotals')},
+    {id:'cmd:slicer',group:'명령',label:'슬라이서 추가',icon:<Table2/>,keywords:'slicer 슬라이서 필터 버튼',run:()=>void addSlicer().catch(error=>alert(error instanceof Error?error.message:'슬라이서를 추가하지 못했습니다.'))},
+    {id:'cmd:connections',group:'명령',label:'데이터 연결',icon:<Table2/>,keywords:'connection importrange 연결 가져오기 새로 고침',run:()=>setRightPanel('connections')},
+    {id:'cmd:column-stats',group:'명령',label:'열 통계',icon:<Table2/>,keywords:'stats 통계 요약 분포',run:()=>setRightPanel('stats')},
+    {id:'cmd:protect',group:'명령',label:'시트·범위 보호',icon:<Table2/>,keywords:'protect 보호 잠금 권한',run:()=>setProtectedOpen(true)},
+    {id:'cmd:cell-history',group:'명령',label:'편집 기록 표시',icon:<Table2/>,keywords:'history 이력 기록 변경',run:()=>setHistoryCell(address(editor.activeRow,editor.activeColumn))},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},

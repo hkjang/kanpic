@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, History, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, StickyNote, Table2, Trash2 } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, History, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Sigma, Scissors, StickyNote, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
@@ -45,7 +45,7 @@ export type GridShortcut=
 
 /** Menu actions the editor page owns because they open dialogs or panels. */
 export type GridMenuCommand=
-  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'|'column-stats'}
+  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'|'column-stats'|'subtotal'|'cleanup-duplicates'|'split-columns'}
   | {command:'cell-history';row:number;column:number}
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
@@ -896,6 +896,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         {kind:'item',label:'데이터 검증…',icon:<BadgeCheck/>,onSelect:()=>onMenuCommand?.({command:'data-validation'})},
         {kind:'item',label:'조건부 서식…',icon:<Palette/>,onSelect:()=>onMenuCommand?.({command:'conditional-format'})},
         {kind:'item',label:'이름 범위 지정…',icon:<Link2/>,onSelect:()=>onMenuCommand?.({command:'named-range'})},
+        {kind:'separator'},
+        {kind:'item',label:'부분합…',icon:<Sigma/>,onSelect:()=>onMenuCommand?.({command:'subtotal'})},
+        {kind:'item',label:'중복 항목 삭제…',icon:<Rows3/>,onSelect:()=>onMenuCommand?.({command:'cleanup-duplicates'})},
+        {kind:'item',label:'텍스트를 열로 분할…',onSelect:()=>onMenuCommand?.({command:'split-columns'})},
       ]},
       {kind:'submenu',label:'삽입',disabled:readOnly||!onMenuCommand,items:[
         {kind:'item',label:'차트 만들기…',icon:<BarChart3/>,onSelect:()=>onMenuCommand?.({command:'chart'})},
