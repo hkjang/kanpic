@@ -80,7 +80,9 @@ test('the AI panel scrolls, explains itself and shows the exact prompt', async (
   const scroller=panel.locator('.ai-chat-scroll')
   await expect.poll(async()=>scroller.evaluate(element=>element.scrollHeight>element.clientHeight)).toBe(true)
   await scroller.evaluate(element=>element.scrollTo(0,element.scrollHeight))
-  expect(await scroller.evaluate(element=>element.scrollTop)).toBeGreaterThan(0)
+  // The browser reports the new position on the next frame, not in the same
+  // tick as the scroll, so this is polled rather than read once.
+  await expect.poll(()=>scroller.evaluate(element=>element.scrollTop)).toBeGreaterThan(0)
   await panel.getByRole('button',{name:'사용 가이드 닫기'}).click()
 
   // The prompt disclosure shows the real system prompt and the real payload.

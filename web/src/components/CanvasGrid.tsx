@@ -4,6 +4,7 @@ import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
 import { applySuggestion } from '../lib/formulaSuggest'
+import { suggestColumnValues } from '../lib/valueSuggest'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
 import { dataRegion, looksLikeHeaderRow, populatedCell } from '../lib/dataRegion'
@@ -746,8 +747,17 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
   const textEditing=editing&&!dropdown
   const hint=textEditing?formulaHint(functionCatalog,draft,caret):undefined
+  // Repeating an entry already in the column is the most common thing anybody
+  // types, so those values are offered whenever a formula hint is not showing.
+  const valueSuggestions=textEditing&&!hint?suggestColumnValues(cells,activeColumn,activeRow,draft):[]
   // Accepting a suggestion rewrites the draft and puts the caret inside the
   // brackets, so typing can continue with the arguments.
+  const chooseValue=(value:string)=>{
+    setDraft(value)
+    setCaret(value.length)
+    setSuggestion(0)
+    requestAnimationFrame(()=>editorInput.current?.setSelectionRange(value.length,value.length))
+  }
   const chooseSuggestion=(name:string)=>{
     if(!hint)return
     const next=applySuggestion(draft,hint.context,name)
@@ -783,12 +793,26 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           if(event.key==='Tab'||(event.key==='Enter'&&!primary)){event.preventDefault();chooseSuggestion(suggestions[suggestion].name);return}
           if(event.key==='Escape'){event.preventDefault();setSuggestion(-1);return}
         }
+        // A column suggestion is taken with Tab or the arrow keys only. Enter
+        // stays a commit so typing a value that happens to be a prefix of an
+        // existing one is never rewritten.
+        if(valueSuggestions.length>0&&suggestion>=0){
+          if(event.key==='ArrowDown'){event.preventDefault();setSuggestion((suggestion+1)%valueSuggestions.length);return}
+          if(event.key==='ArrowUp'){event.preventDefault();setSuggestion((suggestion-1+valueSuggestions.length)%valueSuggestions.length);return}
+          if(event.key==='Tab'){event.preventDefault();chooseValue(valueSuggestions[suggestion]);return}
+          if(event.key==='Escape'){event.preventDefault();setSuggestion(-1);return}
+        }
         if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}
         else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}
         else if(event.key==='Tab'){event.preventDefault();commitAndMove(0,event.shiftKey?-1:1)}
         else if(event.key==='Escape'){event.preventDefault();setEditing(false);setDraft(activeText)}
       }}/>
     {textEditing&&hint&&suggestion>=0&&<FormulaAutocomplete hint={hint} active={suggestion} left={inputLeft} top={inputTop+inputHeight+1} onChoose={chooseSuggestion}/>}
+    {valueSuggestions.length>0&&suggestion>=0&&<div className="value-suggest" role="listbox" aria-label="열 값 제안" style={{left:inputLeft,top:inputTop+inputHeight+1,minWidth:Math.max(inputWidth,150)}}>
+      {valueSuggestions.map((value,index)=><button key={value} role="option" aria-selected={index===suggestion} className={index===suggestion?'active':undefined}
+        onMouseDown={event=>{event.preventDefault();chooseValue(value)}}>{value}</button>)}
+      <small>Tab으로 채우기</small>
+    </div>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

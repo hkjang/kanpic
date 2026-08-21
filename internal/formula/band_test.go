@@ -105,3 +105,39 @@ func TestMinAndMaxUnderstandDateColumns(t *testing.T) {
 		t.Errorf("mixed MIN=%v", result.Value)
 	}
 }
+
+// An inline table is how a small lookup or a set of thresholds is written
+// without giving up cells for it.
+func TestArrayLiteralsBehaveLikeARange(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 5.0, "A2": 9.0}
+	for formula, expected := range map[string]any{
+		"=SUM({1,2,3})":                     6.0,
+		"=SUM({1,2;3,4})":                   10.0,
+		"=COUNT({1,2;3,4})":                 4.0,
+		"=SUM({A1,A2})":                     14.0,
+		"=SUMPRODUCT({1,2,3},{2,2,2})":      12.0,
+		`=XLOOKUP(2,{1,2,3},{"하","중","상"})`: "중",
+		`=XLOOKUP(120000,{50000;100000;300000},{"보급";"중급";"고급"},"보급",-1)`: "중급",
+		"=INDEX({10,20;30,40},2,1)": 30.0,
+		"=SUM({1,2},{3,4})":         10.0,
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil || result.Value != expected {
+			t.Errorf("%s = %v (%v), want %v", formula, result.Value, result.Error, expected)
+		}
+	}
+	// A ragged literal is rejected rather than silently padded.
+	if result := New().Evaluate("=SUM({1,2;3})", nil); result.Error == nil {
+		t.Fatalf("ragged literal returned %v", result.Value)
+	}
+	// A semicolon still separates arguments outside a literal.
+	if result := New().Evaluate("=SUM(1;2;3)", nil); result.Error != nil || result.Value != 6.0 {
+		t.Fatalf("semicolon arguments = %v (%v)", result.Value, result.Error)
+	}
+	// A literal spills like any other array result.
+	spilled := New().Evaluate("={1,2;3,4}", nil)
+	if matrix, ok := spilled.Value.([][]any); !ok || len(matrix) != 2 || matrix[1][1] != 4.0 {
+		t.Fatalf("literal spill = %v (%v)", spilled.Value, spilled.Error)
+	}
+}

@@ -112,6 +112,9 @@ const (
 	tokenColon
 	tokenBang
 	tokenQuotedIdentifier
+	tokenSemicolon
+	tokenArrayOpen
+	tokenArrayClose
 	tokenError
 )
 
@@ -231,8 +234,17 @@ func lex(input string) ([]token, error) {
 		case ')':
 			tokens = append(tokens, token{kind: tokenRight})
 			index++
-		case ',', ';':
+		case ',':
 			tokens = append(tokens, token{kind: tokenComma})
+			index++
+		case ';':
+			tokens = append(tokens, token{kind: tokenSemicolon})
+			index++
+		case '{':
+			tokens = append(tokens, token{kind: tokenArrayOpen})
+			index++
+		case '}':
+			tokens = append(tokens, token{kind: tokenArrayClose})
 			index++
 		case ':':
 			tokens = append(tokens, token{kind: tokenColon})
@@ -755,6 +767,8 @@ func (p *parser) primary() (node, error) {
 		}
 		p.position++
 		return value, nil
+	case tokenArrayOpen:
+		return p.arrayLiteral()
 	case tokenIdentifier, tokenQuotedIdentifier:
 		if current.kind == tokenQuotedIdentifier && p.current().kind != tokenBang {
 			return nil, fmt.Errorf("quoted name %q must qualify a cell reference", current.text)
@@ -787,7 +801,9 @@ func (p *parser) primary() (node, error) {
 						return nil, err
 					}
 					arguments = append(arguments, argument)
-					if p.current().kind != tokenComma {
+					// A semicolon separates arguments too, which some locales
+					// type and older kanpic formulas already contain.
+					if p.current().kind != tokenComma && p.current().kind != tokenSemicolon {
 						break
 					}
 					p.position++
@@ -981,6 +997,87 @@ func (p *parser) buildRangeAt(sheetID string, firstRow, firstColumn, lastRow, la
 		return referenceNode{addresses[0]}, nil
 	}
 	return rangeNode{rows: lastRow - firstRow + 1, columns: lastColumn - firstColumn + 1, addresses: addresses}, nil
+}
+
+// arrayLiteral parses {1,2;3,4}: commas separate columns and semicolons rows,
+// which is how a fixed table is written inline in a formula.
+func (p *parser) arrayLiteral() (node, error) {
+	rows := make([][]node, 0, 2)
+	current := make([]node, 0, 2)
+	for {
+		if p.current().kind == tokenArrayClose {
+			p.position++
+			break
+		}
+		value, err := p.expression(0)
+		if err != nil {
+			return nil, err
+		}
+		current = append(current, value)
+		switch p.current().kind {
+		case tokenComma:
+			p.position++
+		case tokenSemicolon:
+			p.position++
+			rows = append(rows, current)
+			current = make([]node, 0, len(current))
+		case tokenArrayClose:
+			p.position++
+			rows = append(rows, current)
+			current = nil
+		default:
+			return nil, fmt.Errorf("array literal expects , between values and ; between rows")
+		}
+		if current == nil {
+			break
+		}
+	}
+	if len(rows) == 0 || len(rows[0]) == 0 {
+		return nil, formulaError("#VALUE!", "array literal is empty")
+	}
+	columns := len(rows[0])
+	count := 0
+	for _, row := range rows {
+		if len(row) != columns {
+			return nil, formulaError("#VALUE!", "every row of an array literal needs the same number of values")
+		}
+		count += len(row)
+	}
+	if count > 100_000 {
+		return nil, formulaError("#VALUE!", "range is too large")
+	}
+	return arrayLiteralNode{rows: len(rows), columns: columns, values: flattenNodes(rows)}, nil
+}
+
+func flattenNodes(rows [][]node) []node {
+	values := make([]node, 0, len(rows)*len(rows[0]))
+	for _, row := range rows {
+		values = append(values, row...)
+	}
+	return values
+}
+
+// arrayLiteralNode evaluates its members in place, so {A1,A2;B1,B2} works as
+// well as a literal table of numbers.
+type arrayLiteralNode struct {
+	rows, columns int
+	values        []node
+}
+
+func (n arrayLiteralNode) eval(cells map[string]any) (any, error) {
+	values := make([]any, 0, len(n.values))
+	for _, item := range n.values {
+		value, err := item.eval(cells)
+		if err != nil {
+			return nil, err
+		}
+		scalar, scalarErr := scalarValue(value)
+		if scalarErr != nil {
+			return nil, scalarErr
+		}
+		values = append(values, scalar)
+	}
+	return arrayValue{rows: n.rows, columns: n.columns, values: values}, nil
 }
 
 // columnOnlyReference recognises the column half of an unbounded reference.

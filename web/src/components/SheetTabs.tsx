@@ -1,6 +1,7 @@
 import { Check, ChevronLeft, ChevronRight, Cloud, CloudOff, Copy, Eye, EyeOff, LayoutList, MoreHorizontal, Palette, Plus, Save, SquareArrowOutUpRight, Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { SelectionSummary } from './SelectionSummary'
 import type { Sheet } from '../types'
 
 const colors:Array<{value:string;label:string}>=[
@@ -123,6 +124,7 @@ export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,readOnly=fal
     </div>}
     {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>setMenu(undefined)}/>}
     {error&&<span className="sheet-tabs-error">{error}</span>}
+    <SelectionSummary/>
     <button className="sheet-status" disabled={!onStatusClick} onClick={onStatusClick}>{saveState==='offline'?<CloudOff/>:<Cloud/>} {saveLabel}</button>
   </div>
 }
