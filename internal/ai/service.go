@@ -91,6 +91,25 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 	if !sheetBelongsToWorkbook(book, input.SheetID) {
 		return Action{}, workbook.ErrNotFound
 	}
+	if (input.Mode == ModeChart || input.Mode == ModeAgent) && input.Charts == nil {
+		input.Charts, err = s.workbooks.ListCharts(ctx, input.WorkbookID, "")
+		if err != nil {
+			return Action{}, err
+		}
+	}
+	if chartUpdateRequested(input) {
+		target := recommendedChartTarget(input)
+		if target == nil {
+			return Action{}, fmt.Errorf("%w: 수정할 차트를 찾을 수 없습니다. 현재 차트 ID나 정확한 제목을 요청에 포함하세요", ErrInvalid)
+		}
+		if desired := requestedChartType(input.Request); desired != "" && chartTypeOnlyUpdate(input.Request) {
+			for _, chart := range input.Charts {
+				if chart.ID == target.ChartID && normalizeChartType(chart.Type) == desired {
+					return Action{}, fmt.Errorf("%w: 선택한 차트는 이미 %s 형식입니다", ErrInvalid, desired)
+				}
+			}
+		}
+	}
 	selected, err := cellrange.Parse(input.Range)
 	if err != nil {
 		return Action{}, fmt.Errorf("%w: range is invalid", ErrInvalid)
@@ -110,10 +129,12 @@ func (s *Service) Plan(ctx context.Context, input PlanInput) (Action, error) {
 			return Action{}, err
 		}
 	}
-	limitsContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	planningContext, cancelPlanning := context.WithTimeout(ctx, maxPlanningDuration)
+	defer cancelPlanning()
+	limitsContext, cancel := context.WithTimeout(planningContext, modelLimitsLookupTimeout(config))
 	limits := s.modelLimits(limitsContext, client, config)
 	cancel()
-	generated, usage, err := requestGatewayPlan(ctx, client, config, input, selected, cells, limits)
+	generated, usage, err := requestGatewayPlan(planningContext, client, config, input, selected, cells, limits)
 	if err != nil {
 		s.logger.Warn("AI plan gateway failed", "actor_id", input.ActorID, "workbook_id", input.WorkbookID, "error", err)
 		return Action{}, err
@@ -204,6 +225,12 @@ func (s *Service) Preview(ctx context.Context, input PlanInput) (PromptPreview, 
 	if !sheetBelongsToWorkbook(book, input.SheetID) {
 		return PromptPreview{}, workbook.ErrNotFound
 	}
+	if (input.Mode == ModeChart || input.Mode == ModeAgent) && input.Charts == nil {
+		input.Charts, err = s.workbooks.ListCharts(ctx, input.WorkbookID, "")
+		if err != nil {
+			return PromptPreview{}, err
+		}
+	}
 	selected, err := cellrange.Parse(input.Range)
 	if err != nil {
 		return PromptPreview{}, fmt.Errorf("%w: range is invalid", ErrInvalid)
@@ -222,7 +249,7 @@ func (s *Service) Preview(ctx context.Context, input PlanInput) (PromptPreview, 
 			return PromptPreview{}, err
 		}
 	}
-	limitsContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	limitsContext, cancel := context.WithTimeout(ctx, modelLimitsLookupTimeout(config))
 	defer cancel()
 	return BuildPrompt(config, input, selected, cells, s.modelLimits(limitsContext, client, config)), nil
 }
@@ -805,12 +832,26 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 	if len(candidates) > 10 {
 		return nil, fmt.Errorf("%w: an agent plan may contain at most 10 workbook tool calls", ErrGateway)
 	}
+	if input.Mode == ModeChart {
+		if len(candidates) != 1 {
+			return nil, fmt.Errorf("%w: chart mode requires exactly one create_chart or update_chart tool", ErrGateway)
+		}
+		if expected := expectedChartTool(input); expected != "" && strings.TrimSpace(candidates[0].Name) != expected {
+			return nil, fmt.Errorf("%w: this chart request requires %s, not %s", ErrGateway, expected, strings.TrimSpace(candidates[0].Name))
+		}
+	}
 	items := make([]ToolCall, 0, len(candidates))
 	reportSheets := 0
+	createdCharts := 0
+	chartMutationTools := 0
+	updatedChartIDs := map[string]struct{}{}
 	for index, candidate := range candidates {
 		name := strings.TrimSpace(candidate.Name)
 		switch name {
 		case "create_chart":
+			if len(input.Charts)+createdCharts >= workbook.MaxChartsPerWorkbook {
+				return nil, fmt.Errorf("%w: a workbook may contain at most %d charts", ErrGateway, workbook.MaxChartsPerWorkbook)
+			}
 			var arguments createChartArguments
 			if json.Unmarshal(candidate.Arguments, &arguments) != nil {
 				return nil, fmt.Errorf("%w: create_chart arguments are invalid", ErrGateway)
@@ -823,6 +864,9 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			if arguments.SourceSheetID == "" {
 				arguments.SourceSheetID = input.SheetID
 			}
+			if strings.TrimSpace(arguments.SourceRange) == "" {
+				arguments.SourceRange = normalizedSelection(selected)
+			}
 			if arguments.SheetID != input.SheetID || arguments.SourceSheetID != input.SheetID {
 				return nil, fmt.Errorf("%w: create_chart may only use the active sheet", ErrGateway)
 			}
@@ -831,17 +875,41 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 				return nil, fmt.Errorf("%w: create_chart source_range must stay inside selected_range", ErrGateway)
 			}
 			arguments.SourceRange = normalizedSelection(source)
+			cellCount := int64(source.End.Row-source.Start.Row+1) * int64(source.End.Column-source.Start.Column+1)
+			if cellCount > workbook.MaxChartSourceCells {
+				return nil, fmt.Errorf("%w: create_chart source_range may contain at most %d cells", ErrGateway, workbook.MaxChartSourceCells)
+			}
 			arguments.Type = normalizeChartType(arguments.Type)
 			if arguments.Type == "" {
 				return nil, fmt.Errorf("%w: create_chart type is invalid", ErrGateway)
 			}
+			arguments.Title = strings.TrimSpace(arguments.Title)
+			arguments.XAxisTitle = strings.TrimSpace(arguments.XAxisTitle)
+			arguments.YAxisTitle = strings.TrimSpace(arguments.YAxisTitle)
+			if len([]rune(arguments.Title)) > 200 || len([]rune(arguments.XAxisTitle)) > 100 || len([]rune(arguments.YAxisTitle)) > 100 {
+				return nil, fmt.Errorf("%w: create_chart title or axis title is too long", ErrGateway)
+			}
+			arguments.LegendPosition = strings.ToLower(strings.TrimSpace(arguments.LegendPosition))
+			if arguments.LegendPosition == "" {
+				arguments.LegendPosition = "right"
+			}
+			if !validChartLegendPosition(arguments.LegendPosition) {
+				return nil, fmt.Errorf("%w: create_chart legend_position is invalid", ErrGateway)
+			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+			createdCharts++
+			chartMutationTools++
 		case "update_chart":
 			arguments, err := validateUpdateChart(input, selected, candidate.Arguments)
 			if err != nil {
 				return nil, err
 			}
+			if _, duplicate := updatedChartIDs[arguments.ChartID]; duplicate {
+				return nil, fmt.Errorf("%w: an agent plan may update chart_id %s only once", ErrGateway, arguments.ChartID)
+			}
+			updatedChartIDs[arguments.ChartID] = struct{}{}
+			chartMutationTools++
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_report_sheet":
@@ -856,16 +924,73 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			if err != nil {
 				return nil, err
 			}
+			if arguments.Chart != nil {
+				if len(input.Charts)+createdCharts >= workbook.MaxChartsPerWorkbook {
+					return nil, fmt.Errorf("%w: a workbook may contain at most %d charts", ErrGateway, workbook.MaxChartsPerWorkbook)
+				}
+				createdCharts++
+				chartMutationTools++
+			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		default:
 			return nil, fmt.Errorf("%w: unsupported workbook tool %q", ErrGateway, name)
 		}
 	}
-	if input.Mode == ModeChart && (len(items) != 1 || items[0].Name != "create_chart" && items[0].Name != "update_chart") {
-		return nil, fmt.Errorf("%w: chart mode requires exactly one create_chart or update_chart tool", ErrGateway)
+	if input.Mode == ModeAgent && chartMutationTools > 0 && len(items) > 1 {
+		return nil, fmt.Errorf("%w: an agent plan with a chart mutation may contain only one workbook tool call", ErrGateway)
 	}
 	return items, nil
+}
+
+func requestedChartType(request string) string {
+	value := strings.ToLower(request)
+	type match struct {
+		name  string
+		index int
+	}
+	best := match{index: -1}
+	for _, candidate := range []struct {
+		name    string
+		markers []string
+	}{
+		{name: "bar", markers: []string{"막대", "bar"}},
+		{name: "line", markers: []string{"선 차트", "선형", "선으로", "라인", "line"}},
+		{name: "area", markers: []string{"영역", "area"}},
+		{name: "pie", markers: []string{"원형", "파이", "pie"}},
+		{name: "scatter", markers: []string{"분산형", "산점", "scatter"}},
+		{name: "histogram", markers: []string{"히스토그램", "histogram"}},
+	} {
+		for _, marker := range candidate.markers {
+			if index := strings.LastIndex(value, marker); index > best.index {
+				best = match{name: candidate.name, index: index}
+			}
+		}
+	}
+	return best.name
+}
+
+func chartTypeOnlyUpdate(request string) bool {
+	value := strings.ToLower(request)
+	return !containsAny(value, "제목", "범례", "축 제목", "x축", "y축", "원본", "범위", "헤더", "레이블", "title", "legend", "axis", "source", "range", "header", "label")
+}
+
+func expectedChartTool(input PlanInput) string {
+	if input.Mode != ModeChart {
+		return ""
+	}
+	switch chartSkillForInput(input) {
+	case "chart_generation":
+		return "create_chart"
+	case "chart_update":
+		return "update_chart"
+	default:
+		return ""
+	}
+}
+
+func validChartLegendPosition(value string) bool {
+	return value == "none" || value == "top" || value == "right" || value == "bottom" || value == "left"
 }
 
 func validateUpdateChart(input PlanInput, selected cellrange.Range, raw json.RawMessage) (updateChartArguments, error) {
@@ -874,6 +999,18 @@ func validateUpdateChart(input PlanInput, selected cellrange.Range, raw json.Raw
 		return arguments, fmt.Errorf("%w: update_chart arguments are invalid", ErrGateway)
 	}
 	arguments.ChartID = strings.TrimSpace(arguments.ChartID)
+	if input.Mode == ModeAgent && !chartUpdateRequested(input) {
+		return arguments, fmt.Errorf("%w: update_chart requires an explicit chart update request", ErrGateway)
+	}
+	if chartUpdateRequested(input) {
+		target := recommendedChartTarget(input)
+		if target == nil {
+			return arguments, fmt.Errorf("%w: chart update target is ambiguous; name one current chart ID or exact title", ErrGateway)
+		}
+		if arguments.ChartID != target.ChartID {
+			return arguments, fmt.Errorf("%w: chart update must use current chart_id %s", ErrGateway, target.ChartID)
+		}
+	}
 	var current *workbook.Chart
 	for index := range input.Charts {
 		if input.Charts[index].ID == arguments.ChartID {
@@ -882,66 +1019,114 @@ func validateUpdateChart(input PlanInput, selected cellrange.Range, raw json.Raw
 		}
 	}
 	if current == nil || current.WorkbookID != "" && current.WorkbookID != input.WorkbookID {
-		return arguments, fmt.Errorf("%w: update_chart chart_id must reference a current workbook chart", ErrGateway)
+		return arguments, fmt.Errorf("%w: update_chart chart_id must reference a current workbook chart (%s)", ErrGateway, currentChartIDs(input.Charts))
 	}
-	if arguments.Type == nil && arguments.Title == nil && arguments.SourceRange == nil && arguments.FirstRowHeaders == nil && arguments.FirstColumnLabels == nil && arguments.LegendPosition == nil && arguments.XAxisTitle == nil && arguments.YAxisTitle == nil {
-		return arguments, fmt.Errorf("%w: update_chart must change at least one supported field", ErrGateway)
+	if strings.TrimSpace(current.SourceSheetID) == "" || strings.TrimSpace(current.SourceRange) == "#REF!" {
+		return arguments, fmt.Errorf("%w: update_chart cannot modify a chart with a broken source reference", ErrGateway)
 	}
 	if arguments.Type != nil {
 		value := normalizeChartType(*arguments.Type)
 		if value == "" {
 			return arguments, fmt.Errorf("%w: update_chart type is invalid", ErrGateway)
 		}
-		arguments.Type = &value
+		if value == normalizeChartType(current.Type) {
+			arguments.Type = nil
+		} else {
+			arguments.Type = &value
+		}
 	}
 	if arguments.Title != nil {
 		value := strings.TrimSpace(*arguments.Title)
 		if len([]rune(value)) > 200 {
 			return arguments, fmt.Errorf("%w: update_chart title is too long", ErrGateway)
 		}
-		arguments.Title = &value
+		if value == strings.TrimSpace(current.Title) {
+			arguments.Title = nil
+		} else {
+			arguments.Title = &value
+		}
 	}
 	if arguments.SourceRange != nil {
-		if current.SourceSheetID != input.SheetID {
-			return arguments, fmt.Errorf("%w: update_chart may only change a source range on the active sheet", ErrGateway)
-		}
 		source, err := cellrange.Parse(strings.TrimSpace(*arguments.SourceRange))
-		if err != nil || source.Start.Row < selected.Start.Row || source.End.Row > selected.End.Row || source.Start.Column < selected.Start.Column || source.End.Column > selected.End.Column {
-			return arguments, fmt.Errorf("%w: update_chart source_range must stay inside selected_range", ErrGateway)
+		if err != nil {
+			return arguments, fmt.Errorf("%w: update_chart source_range is invalid", ErrGateway)
 		}
 		value := normalizedSelection(source)
-		arguments.SourceRange = &value
+		cellCount := int64(source.End.Row-source.Start.Row+1) * int64(source.End.Column-source.Start.Column+1)
+		if cellCount > workbook.MaxChartSourceCells {
+			return arguments, fmt.Errorf("%w: update_chart source_range may contain at most %d cells", ErrGateway, workbook.MaxChartSourceCells)
+		}
+		currentSource := strings.TrimSpace(current.SourceRange)
+		if parsed, parseErr := cellrange.Parse(currentSource); parseErr == nil {
+			currentSource = normalizedSelection(parsed)
+		}
+		if value == currentSource {
+			arguments.SourceRange = nil
+		} else if current.SourceSheetID != input.SheetID {
+			return arguments, fmt.Errorf("%w: update_chart may only change a source range on the active sheet", ErrGateway)
+		} else if source.Start.Row < selected.Start.Row || source.End.Row > selected.End.Row || source.Start.Column < selected.Start.Column || source.End.Column > selected.End.Column {
+			return arguments, fmt.Errorf("%w: update_chart source_range must stay inside selected_range", ErrGateway)
+		} else {
+			arguments.SourceRange = &value
+		}
+	}
+	if arguments.FirstRowHeaders != nil && *arguments.FirstRowHeaders == current.FirstRowHeaders {
+		arguments.FirstRowHeaders = nil
+	}
+	if arguments.FirstColumnLabels != nil && *arguments.FirstColumnLabels == current.FirstColumnLabels {
+		arguments.FirstColumnLabels = nil
 	}
 	if arguments.LegendPosition != nil {
 		value := strings.ToLower(strings.TrimSpace(*arguments.LegendPosition))
-		if value != "none" && value != "top" && value != "right" && value != "bottom" && value != "left" {
+		if value == strings.ToLower(strings.TrimSpace(current.LegendPosition)) {
+			arguments.LegendPosition = nil
+		} else if !validChartLegendPosition(value) {
 			return arguments, fmt.Errorf("%w: update_chart legend_position is invalid", ErrGateway)
+		} else {
+			arguments.LegendPosition = &value
 		}
-		arguments.LegendPosition = &value
 	}
-	for name, value := range map[string]**string{"x_axis_title": &arguments.XAxisTitle, "y_axis_title": &arguments.YAxisTitle} {
-		if *value == nil {
+	for name, value := range map[string]struct {
+		candidate **string
+		current   string
+	}{
+		"x_axis_title": {candidate: &arguments.XAxisTitle, current: current.XAxisTitle},
+		"y_axis_title": {candidate: &arguments.YAxisTitle, current: current.YAxisTitle},
+	} {
+		if *value.candidate == nil {
 			continue
 		}
-		trimmed := strings.TrimSpace(**value)
+		trimmed := strings.TrimSpace(**value.candidate)
 		if len([]rune(trimmed)) > 100 {
 			return arguments, fmt.Errorf("%w: update_chart %s is too long", ErrGateway, name)
 		}
-		*value = &trimmed
+		if trimmed == strings.TrimSpace(value.current) {
+			*value.candidate = nil
+		} else {
+			*value.candidate = &trimmed
+		}
 	}
-	changed := arguments.Type != nil && *arguments.Type != current.Type ||
-		arguments.Title != nil && *arguments.Title != current.Title ||
-		arguments.SourceRange != nil && *arguments.SourceRange != current.SourceRange ||
-		arguments.FirstRowHeaders != nil && *arguments.FirstRowHeaders != current.FirstRowHeaders ||
-		arguments.FirstColumnLabels != nil && *arguments.FirstColumnLabels != current.FirstColumnLabels ||
-		arguments.LegendPosition != nil && *arguments.LegendPosition != current.LegendPosition ||
-		arguments.XAxisTitle != nil && *arguments.XAxisTitle != current.XAxisTitle ||
-		arguments.YAxisTitle != nil && *arguments.YAxisTitle != current.YAxisTitle
-	if !changed {
+	if arguments.Type == nil && arguments.Title == nil && arguments.SourceRange == nil && arguments.FirstRowHeaders == nil && arguments.FirstColumnLabels == nil && arguments.LegendPosition == nil && arguments.XAxisTitle == nil && arguments.YAxisTitle == nil {
 		return arguments, fmt.Errorf("%w: update_chart proposed no effective change", ErrGateway)
 	}
 	arguments.ExpectedRevision = current.Revision
 	return arguments, nil
+}
+
+func currentChartIDs(charts []workbook.Chart) string {
+	ids := make([]string, 0, minInt(len(charts), 10))
+	for _, chart := range charts {
+		if id := strings.TrimSpace(chart.ID); id != "" {
+			ids = append(ids, id)
+			if len(ids) == 10 {
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return "no current chart IDs are available"
+	}
+	return "available chart_ids: " + strings.Join(ids, ", ")
 }
 
 func validateCreateReportSheet(input PlanInput, raw json.RawMessage, maxChanges int) (createReportSheetArguments, error) {
@@ -995,6 +1180,23 @@ func validateCreateReportSheet(input PlanInput, raw json.RawMessage, maxChanges 
 			return arguments, fmt.Errorf("%w: report chart source_range must stay inside the report cells", ErrGateway)
 		}
 		arguments.Chart.SourceRange = normalizedSelection(source)
+		cellCount := int64(source.End.Row-source.Start.Row+1) * int64(source.End.Column-source.Start.Column+1)
+		if cellCount > workbook.MaxChartSourceCells {
+			return arguments, fmt.Errorf("%w: report chart source_range may contain at most %d cells", ErrGateway, workbook.MaxChartSourceCells)
+		}
+		arguments.Chart.Title = strings.TrimSpace(arguments.Chart.Title)
+		arguments.Chart.XAxisTitle = strings.TrimSpace(arguments.Chart.XAxisTitle)
+		arguments.Chart.YAxisTitle = strings.TrimSpace(arguments.Chart.YAxisTitle)
+		if len([]rune(arguments.Chart.Title)) > 200 || len([]rune(arguments.Chart.XAxisTitle)) > 100 || len([]rune(arguments.Chart.YAxisTitle)) > 100 {
+			return arguments, fmt.Errorf("%w: report chart title or axis title is too long", ErrGateway)
+		}
+		arguments.Chart.LegendPosition = strings.ToLower(strings.TrimSpace(arguments.Chart.LegendPosition))
+		if arguments.Chart.LegendPosition == "" {
+			arguments.Chart.LegendPosition = "right"
+		}
+		if !validChartLegendPosition(arguments.Chart.LegendPosition) {
+			return arguments, fmt.Errorf("%w: report chart legend_position is invalid", ErrGateway)
+		}
 	}
 	return arguments, nil
 }
@@ -1129,6 +1331,7 @@ func normalizePlanInput(input PlanInput) PlanInput {
 	input.ClientID = strings.TrimSpace(input.ClientID)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.Mode = strings.TrimSpace(input.Mode)
+	input.Skill = strings.TrimSpace(input.Skill)
 	input.Range = strings.TrimSpace(input.Range)
 	input.Request = strings.TrimSpace(input.Request)
 	return input

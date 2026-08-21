@@ -129,6 +129,7 @@ type PlanInput struct {
 	Conversation   []ConversationMessage  `json:"-"`
 	Memory         []AgentWorkMemory      `json:"-"`
 	Charts         []workbook.Chart       `json:"-"`
+	Skill          string                 `json:"-"`
 }
 
 type ApprovalInput struct {

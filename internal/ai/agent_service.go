@@ -73,13 +73,18 @@ func (s *Service) SendMessage(ctx context.Context, input AgentMessageInput) (Age
 	}
 	if input.Mode == "" {
 		routed = routeFollowUpIntent(input.Message, routed, conversation, charts)
+	} else if input.Mode == ModeChart {
+		inferred := routeFollowUpIntent(input.Message, routeIntent(input.Message), conversation, charts)
+		if inferred.Mode == ModeChart && inferred.Skill == "chart_update" {
+			routed.Skill = inferred.Skill
+		}
 	}
 	action, err := s.Plan(ctx, PlanInput{
 		WorkbookID: input.WorkbookID, SheetID: input.SheetID, Range: input.Selection,
 		Request: input.Message, Mode: routed.Mode, BaseVersion: input.BaseVersion,
 		IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, ActorID: input.ActorID,
 		ConversationID: conversationID, Context: &contextView,
-		Conversation: compactConversation(conversation, 24, 12_000), Memory: memory, Charts: charts,
+		Conversation: compactConversation(conversation, 24, 12_000), Memory: memory, Charts: charts, Skill: routed.Skill,
 	})
 	if err != nil {
 		return AgentRun{}, err

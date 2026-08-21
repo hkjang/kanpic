@@ -101,6 +101,15 @@ func TestValidateWorkbookAgentFormattingAndChartTools(t *testing.T) {
 	if _, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeChart, IdempotencyKey: "outside"}, selected, outside, 10); !errors.Is(err, ErrGateway) {
 		t.Fatalf("outside chart error = %v", err)
 	}
+	defaultRange := []gatewayToolCall{{Name: "create_chart", Arguments: json.RawMessage(`{"type":"line"}`)}}
+	tools, err = validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeChart, IdempotencyKey: "default-range"}, selected, defaultRange, 10)
+	if err != nil {
+		t.Fatalf("default chart range error=%v", err)
+	}
+	var defaultArguments createChartArguments
+	if json.Unmarshal(tools[0].Arguments, &defaultArguments) != nil || defaultArguments.SourceRange != "A1:B2" {
+		t.Fatalf("default chart range=%#v", defaultArguments)
+	}
 	report := []gatewayToolCall{{Name: "create_report_sheet", Arguments: json.RawMessage(`{"name":"경영 보고","cells":[{"row":1,"column":1,"value":"월"},{"row":1,"column":2,"value":"매출"},{"row":2,"column":1,"value":"1월"},{"row":2,"column":2,"formula":"='Data'!B2"}],"chart":{"type":"bar","source_range":"A1:B2"}}`)}}
 	contextView := &workbook.AgentContext{Sheets: []workbook.AgentSheet{{Name: "Data"}}}
 	reportTools, err := validateGatewayTools(PlanInput{SheetID: "sheet", Mode: ModeAgent, IdempotencyKey: "report", Context: contextView}, selected, report, 10)
@@ -126,6 +135,14 @@ func TestValidateWorkbookAgentCanUpdateOnlyAChartFromCurrentInventory(t *testing
 	if err := json.Unmarshal(tools[0].Arguments, &arguments); err != nil || arguments.ExpectedRevision != 3 || arguments.Type == nil || *arguments.Type != "line" {
 		t.Fatalf("normalized update arguments=%#v err=%v", arguments, err)
 	}
+	// Models often echo the current source range alongside the real type
+	// change. The unchanged field must not make an otherwise safe update fail
+	// merely because the current selection is narrower than that source.
+	narrow, _ := cellrange.Parse("A1:A1")
+	tools, err = validateGatewayTools(input, narrow, []gatewayToolCall{{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"line","source_range":"A1:B4"}`)}}, 10)
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("echoed chart source rejected: tools=%#v err=%v", tools, err)
+	}
 	for _, raw := range []json.RawMessage{
 		json.RawMessage(`{"chart_id":"invented","type":"line"}`),
 		json.RawMessage(`{"chart_id":"chart-1"}`),
@@ -147,10 +164,125 @@ func TestBuildPromptIncludesBoundedConversationAndCurrentChartObjects(t *testing
 		Memory:       []AgentWorkMemory{{RunID: "run-1", Mode: ModeChart, Status: StatusApplied, Summary: "막대 차트 생성", Selection: "A1:B2", Tools: []AgentMemoryTool{{Name: "create_chart", Status: "completed", Result: json.RawMessage(`{"chart_id":"chart-1","type":"bar","revision":1}`)}}}},
 		Charts:       []workbook.Chart{{ID: "chart-1", Type: "bar", SourceRange: "A1:B2", Revision: 1}},
 	}, selected, nil, ModelLimits{Model: "test", ContextWindow: 4096})
-	for _, expected := range []string{`"conversation_history"`, "막대 차트를 만들어줘", `"conversation_work_memory"`, `"status": "applied"`, `"workbook_objects"`, `"chart-1"`, `"revision": 1`} {
+	for _, expected := range []string{`"conversation_history"`, "막대 차트를 만들어줘", `"conversation_work_memory"`, `"status": "applied"`, `"required_chart_tool": "update_chart"`, `"workbook_objects"`, `"recommended_chart_target"`, `"chart_id": "chart-1"`, `"reason": "latest_applied_chart"`, `"revision": 1`} {
 		if !strings.Contains(preview.UserContent, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, preview.UserContent)
 		}
+	}
+}
+
+func TestRecommendedChartTargetNeverGuessesAmongCurrentCharts(t *testing.T) {
+	t.Parallel()
+	charts := []workbook.Chart{{ID: "chart-1", Title: "매출", Revision: 1}, {ID: "chart-2", Title: "이익", Revision: 2}}
+	input := PlanInput{Mode: ModeChart, Request: "그 차트를 선으로 바꿔줘", Charts: charts}
+	if target := recommendedChartTarget(input); target != nil {
+		t.Fatalf("ambiguous target=%#v", target)
+	}
+	input.Memory = []AgentWorkMemory{{Status: StatusApplied, Tools: []AgentMemoryTool{{Name: "update_chart", Status: StatusCompleted, Result: json.RawMessage(`{"after":{"chart_id":"chart-2"}}`)}}}}
+	if target := recommendedChartTarget(input); target == nil || target.ChartID != "chart-2" || target.Revision != 2 {
+		t.Fatalf("memory target=%#v", target)
+	}
+	input.Request = "이익 차트를 선으로 바꿔줘"
+	input.Memory[0].Tools[0].Result = json.RawMessage(`{"after":{"chart_id":"chart-1"}}`)
+	if target := recommendedChartTarget(input); target == nil || target.ChartID != "chart-2" || target.Reason != "explicit_current_chart" {
+		t.Fatalf("explicit target=%#v", target)
+	}
+	input.Request = "그 차트를 선으로 바꿔줘"
+	input.Memory[0].Tools = append(input.Memory[0].Tools, AgentMemoryTool{Name: "update_chart", Status: StatusCompleted, Result: json.RawMessage(`{"after":{"chart_id":"chart-2"}}`)})
+	if target := recommendedChartTarget(input); target != nil {
+		t.Fatalf("multi-chart memory target=%#v", target)
+	}
+	input.Memory[0].Tools = input.Memory[0].Tools[:1]
+	input.Memory[0].Status = StatusUndone
+	if target := recommendedChartTarget(input); target != nil {
+		t.Fatalf("undone target=%#v", target)
+	}
+}
+
+func TestValidateChartIntentAndResolvedTarget(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:B4")
+	charts := []workbook.Chart{
+		{ID: "chart-1", WorkbookID: "book", SourceSheetID: "sheet", Title: "매출", Type: "bar", SourceRange: "A1:B4", Revision: 1},
+		{ID: "chart-2", WorkbookID: "book", SourceSheetID: "sheet", Title: "이익", Type: "bar", SourceRange: "A1:B4", Revision: 2},
+	}
+	updateInput := PlanInput{WorkbookID: "book", SheetID: "sheet", Mode: ModeChart, Skill: "chart_update", Request: "이익 차트를 선으로 바꿔줘", Charts: charts}
+	if _, err := validateGatewayTools(updateInput, selected, []gatewayToolCall{{Name: "create_chart", Arguments: json.RawMessage(`{"type":"line","source_range":"A1:B4"}`)}}, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("update intent accepted create: %v", err)
+	}
+	wrongTarget := []gatewayToolCall{{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"line"}`)}}
+	if _, err := validateGatewayTools(updateInput, selected, wrongTarget, 10); !errors.Is(err, ErrGateway) || !strings.Contains(err.Error(), "chart-2") {
+		t.Fatalf("update intent accepted wrong target: %v", err)
+	}
+	correctTarget := []gatewayToolCall{{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-2","type":"line"}`)}}
+	if _, err := validateGatewayTools(updateInput, selected, correctTarget, 10); err != nil {
+		t.Fatalf("update intent rejected target: %v", err)
+	}
+	createInput := updateInput
+	createInput.Skill, createInput.Request = "chart_generation", "새 차트를 만들어줘"
+	if _, err := validateGatewayTools(createInput, selected, correctTarget, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("create intent accepted update: %v", err)
+	}
+	agentInput := updateInput
+	agentInput.Mode, agentInput.Skill, agentInput.Request = ModeAgent, "workbook_orchestration", "보고서를 만들고 이익 차트를 선으로 바꿔줘"
+	if _, err := validateGatewayTools(agentInput, selected, wrongTarget, 10); !errors.Is(err, ErrGateway) || !strings.Contains(err.Error(), "chart-2") {
+		t.Fatalf("agent update accepted wrong target: %v", err)
+	}
+	if _, err := validateGatewayTools(agentInput, selected, correctTarget, 10); err != nil {
+		t.Fatalf("agent update rejected target: %v", err)
+	}
+}
+
+func TestRequestedChartTypeUsesTheConversionDestination(t *testing.T) {
+	t.Parallel()
+	if actual := requestedChartType("막대 차트를 선 차트로 바꿔줘"); actual != "line" {
+		t.Fatalf("requested type=%q", actual)
+	}
+	if !chartTypeOnlyUpdate("선으로 바꿔줘") || chartTypeOnlyUpdate("선 차트로 바꾸고 제목도 수정해줘") {
+		t.Fatal("chart type-only classification is incorrect")
+	}
+}
+
+func TestValidateChartPlansMatchRepositoryConstraints(t *testing.T) {
+	t.Parallel()
+	selected, _ := cellrange.Parse("A1:A10001")
+	input := PlanInput{WorkbookID: "book", SheetID: "sheet", Mode: ModeAgent, IdempotencyKey: "constraints", Charts: []workbook.Chart{}}
+	for name, arguments := range map[string]string{
+		"source cells": `{"type":"bar","source_range":"A1:A10001"}`,
+		"legend":       `{"type":"bar","source_range":"A1:A2","legend_position":"middle"}`,
+		"title":        `{"type":"bar","source_range":"A1:A2","title":"` + strings.Repeat("가", 201) + `"}`,
+	} {
+		if _, err := validateGatewayTools(input, selected, []gatewayToolCall{{Name: "create_chart", Arguments: json.RawMessage(arguments)}}, 10); !errors.Is(err, ErrGateway) {
+			t.Fatalf("%s constraint error=%v", name, err)
+		}
+	}
+	full := input
+	full.Charts = make([]workbook.Chart, workbook.MaxChartsPerWorkbook)
+	if _, err := validateGatewayTools(full, selected, []gatewayToolCall{{Name: "create_chart", Arguments: json.RawMessage(`{"type":"bar","source_range":"A1:A2"}`)}}, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("chart count constraint error=%v", err)
+	}
+	broken := input
+	broken.Charts = []workbook.Chart{{ID: "broken", WorkbookID: "book", Type: "bar", SourceRange: "#REF!", Revision: 1}}
+	if _, err := validateGatewayTools(broken, selected, []gatewayToolCall{{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"broken","type":"line"}`)}}, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("broken chart update error=%v", err)
+	}
+	current := workbook.Chart{ID: "chart-1", WorkbookID: "book", SourceSheetID: "sheet", Type: "bar", SourceRange: "A1:A2", Revision: 1}
+	duplicate := input
+	duplicate.Request = "차트를 다른 형식으로 바꿔줘"
+	duplicate.Charts = []workbook.Chart{current}
+	calls := []gatewayToolCall{
+		{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"line"}`)},
+		{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"area"}`)},
+	}
+	if _, err := validateGatewayTools(duplicate, selected, calls, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("duplicate update error=%v", err)
+	}
+	combined := []gatewayToolCall{
+		{Name: "update_chart", Arguments: json.RawMessage(`{"chart_id":"chart-1","type":"line"}`)},
+		{Name: "create_chart", Arguments: json.RawMessage(`{"type":"bar","source_range":"A1:A2"}`)},
+	}
+	if _, err := validateGatewayTools(duplicate, selected, combined, 10); !errors.Is(err, ErrGateway) {
+		t.Fatalf("multi-tool chart mutation error=%v", err)
 	}
 }
 
@@ -192,8 +324,19 @@ func TestDecodeGatewayPlanAcceptsCommonCompatibleResponseShapes(t *testing.T) {
 	}{
 		{name: "reasoning and prose fence", content: "<think>internal reasoning</think>\nHere is the plan:\n```JSON\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}\n```"},
 		{name: "orphan reasoning close", content: "First inspect the draft {\"draft\":true}.\n</THINK>\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}"},
+		{name: "complete draft before orphan close", content: "{\"summary\":\"draft\",\"explanation\":\"discard me\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}\n</think>\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}"},
+		{name: "draft object before final plan", content: "Draft: {\"type\":\"bar\",\"source_range\":\"A1:B2\"}\nFinal: {\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}"},
+		{name: "unclosed reasoning with draft object", content: "<think>Draft: {\"type\":\"bar\"}\n{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}"},
+		{name: "literal think close in JSON string", content: `{"summary":"ok","explanation":"문자열 </think> 보존","findings":[],"changes":[],"tool_calls":[]}`},
+		{name: "literal think pair in JSON string", content: `{"summary":"ok","explanation":"문자열 <think>태그</think> 보존","findings":[],"changes":[],"tool_calls":[]}`},
+		{name: "literal think pair in fenced JSON", content: "```json\n{\"summary\":\"ok\",\"explanation\":\"문자열 <think>태그</think> 보존\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}\n```"},
+		{name: "empty tool metadata before plan", content: `metadata {"tool_calls":[]} final {"summary":"ok","explanation":"done","findings":[],"changes":[],"tool_calls":[]}`},
+		{name: "named metadata before plan", content: `metadata {"name":"매출"} final {"summary":"ok","explanation":"done","findings":[],"changes":[],"tool_calls":[]}`},
 		{name: "plan envelope", content: `{"plan":{"summary":"ok","explanation":"done","findings":[],"changes":[],"tool_calls":[]}}`},
+		{name: "recursive string envelope", content: `{"response":"{\"data\":{\"plan\":{\"summary\":\"ok\",\"explanation\":\"done\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}}}"}`},
+		{name: "singleton array", content: `[{"summary":"ok","explanation":"done","findings":[],"changes":[],"tool_calls":[]}]`},
 		{name: "camel and function tool", tool: true, content: `{"summary":"chart","explanation":"done","findings":[],"changes":[],"toolCalls":[{"function":{"name":"create_chart","arguments":"{\"type\":\"bar\",\"source_range\":\"A1:B2\"}"}}]}`},
+		{name: "direct fenced tool", tool: true, content: "{\"name\":\"create_chart\",\"input\":\"계획:\\n```json\\n{\\\"chartType\\\":\\\"bar\\\",\\\"sourceRange\\\":\\\"A1:B2\\\"}\\n```\"}"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -205,6 +348,51 @@ func TestDecodeGatewayPlanAcceptsCommonCompatibleResponseShapes(t *testing.T) {
 				t.Fatalf("normalized tools=%#v", plan.ToolCalls)
 			}
 		})
+	}
+}
+
+func TestDecodeGatewayPlanRejectsTwoCompletePlans(t *testing.T) {
+	t.Parallel()
+	content := `{"summary":"first","explanation":"one","findings":[],"changes":[],"tool_calls":[]} {"summary":"second","explanation":"two","findings":[],"changes":[],"tool_calls":[]}`
+	if plan, err := decodeGatewayPlan(content); err == nil {
+		t.Fatalf("ambiguous plan was accepted: %#v", plan)
+	}
+}
+
+func TestDecodeGatewayPlanPrefersFinalPlanAfterOrphanThinkClose(t *testing.T) {
+	t.Parallel()
+	content := `{"summary":"draft","explanation":"discard","findings":[],"changes":[],"tool_calls":[]}</think>{"summary":"final","explanation":"keep","findings":[],"changes":[],"tool_calls":[]}`
+	plan, err := decodeGatewayPlan(content)
+	if err != nil || plan.Summary != "final" {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+}
+
+func TestDecodeGatewayPlanPreservesReasoningTagsInsideWrappedJSON(t *testing.T) {
+	t.Parallel()
+	content := "Result:\n```json\n{\"summary\":\"ok\",\"explanation\":\"keep <think>literal</think> and </think>\",\"findings\":[],\"changes\":[],\"tool_calls\":[]}\n```"
+	plan, err := decodeGatewayPlan(content)
+	if err != nil || plan.Explanation != "keep <think>literal</think> and </think>" {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+}
+
+func TestNormalizeToolArgumentsDoesNotChooseAmongMultipleObjects(t *testing.T) {
+	t.Parallel()
+	var call gatewayToolCall
+	err := json.Unmarshal([]byte(`{"name":"update_chart","input":"draft {\"chart_id\":\"chart-1\",\"type\":\"line\"} final {\"chart_id\":\"chart-2\",\"type\":\"line\"}"}`), &call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Valid(call.Arguments) {
+		t.Fatalf("ambiguous arguments were normalized: %s", call.Arguments)
+	}
+	err = json.Unmarshal([]byte(`{"name":"update_chart","input":"draft {\"chart_id\":\"chart-1\",\"type\":\"line\"} final {\"chart_id\":\"chart-2\""}`), &call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Valid(call.Arguments) {
+		t.Fatalf("truncated final arguments selected the draft: %s", call.Arguments)
 	}
 }
 
