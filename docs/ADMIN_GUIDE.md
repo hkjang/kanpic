@@ -312,14 +312,16 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 
 **정책 검증**은 값 유형과 범위를 검사합니다. **저장소 준비 상태 테스트**는 자동화가 활성화된 경우 PostgreSQL의 예약 및 웹훅 감사 컬럼을 실제로 조회해 최신 마이그레이션까지 적용됐는지 확인합니다. 운영 활성화 전에는 낮은 한도로 수동 실행과 Undo를 확인한 다음 셀 변경·일정·웹훅 트리거를 켜는 것을 권장합니다. 확인 주기는 서버 재시작 없이 다음 스케줄러 tick부터 반영됩니다.
 
-자동화 정의는 이름별 유일성과 revision 기반 낙관적 잠금을 사용하며 삭제는 soft delete로 처리됩니다. 실행은 기준 워크북 버전, 작업 정의, 변경 전 셀 스냅샷, 예약 기준 시각, 실제 셀 작업 및 Undo 작업 ID를 `automation_runs`에 보존합니다. 수동·웹훅 재시도는 사용자·자동화·멱등 키로, 셀 변경 재전송은 원본 `operation_id`로, 예약 실행은 자동화와 `scheduled_for` 조합으로 중복 제거합니다. 웹훅 payload 원문은 보존하지 않고 API 키 UUID, SHA-256과 byte 수만 저장합니다. 다중 인스턴스가 같은 예약을 조회해도 서버 권위 셀 작업과 PostgreSQL 유일 제약으로 한 번만 반영됩니다. 실행은 정확한 기준 버전 및 셀 스냅샷이 일치할 때만 적용되고, 성공·변경 없음·실패·Undo는 구조화 로그와 감사 로그에서 추적할 수 있습니다.
+자동화 정의는 이름별 유일성과 revision 기반 낙관적 잠금을 사용하며 삭제는 soft delete로 처리됩니다. 실행은 기준 워크북 버전, 작업 정의, 변경 전 셀 스냅샷, 예약 기준 시각, 실제 셀 작업 및 Undo 작업 ID를 `automation_runs`에 보존합니다. 수동 실행은 검증 응답의 자동화 revision과 워크북 `base_version`을 모두 제출해야 하며 둘 중 하나라도 바뀌면 409로 중단됩니다. 수동·웹훅 재시도는 사용자·자동화·멱등 키로, 셀 변경 재전송은 원본 `operation_id`로, 예약 실행은 자동화와 `scheduled_for` 조합으로 중복 제거합니다. 중복 실행 결과는 협업 이벤트를 다시 발행하지 않습니다. 웹훅 payload 원문은 보존하지 않고 API 키 UUID, SHA-256과 byte 수만 저장합니다. 다중 인스턴스의 시간당 실행 한도 판정과 실행 행 생성은 워크북 단위 PostgreSQL advisory lock 안에서 처리되고, 같은 예약을 조회해도 서버 권위 셀 작업과 유일 제약으로 한 번만 반영됩니다. 셀 적용 뒤 실행 상태 기록이 일시 실패한 예약은 `running` 상태와 due 시각을 유지해 같은 실행 ID로 복구하며, 실행 성공 알림과 다음 시각 갱신 실패를 분리합니다. 실행은 정확한 기준 버전 및 셀 스냅샷이 일치할 때만 적용되고, 성공·변경 없음·실패·Undo는 구조화 로그와 감사 로그에서 추적할 수 있습니다.
+
+업그레이드 시 `024_automation_rate_admission.sql`이 자동 적용되어 실제로 접수된 실행과 실행 제한으로 거부된 예약 이력을 구분합니다. 기존 실행 이력은 접수된 실행으로 유지됩니다. 자체 REST/MCP 클라이언트가 수동 실행을 호출한다면 `:test` 응답의 `automation_revision`과 `base_version`을 각각 `expected_revision`, `expected_base_version`으로 보내도록 함께 업그레이드해야 합니다.
 
 ---
 
 ## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 7.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `017_webhook_automations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `024_automation_rate_admission.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가하며, `024_automation_rate_admission.sql`은 실행 제한에 실제로 접수된 이력만 포함하도록 구분 컬럼과 조회 인덱스를 추가합니다.
 
 ### 7.2 백업 및 복구 명령어 (pg_dump)
 

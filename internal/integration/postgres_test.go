@@ -39,6 +39,70 @@ func (values staticAISettings) Values(context.Context) (map[string]any, error) {
 	return values, nil
 }
 
+type barrierRepository struct {
+	workbook.Repository
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (r *barrierRepository) ReadRange(ctx context.Context, sheetID string, selected cellrange.Range) ([]workbook.Cell, error) {
+	cells, err := r.Repository.ReadRange(ctx, sheetID, selected)
+	if err != nil {
+		return nil, err
+	}
+	r.reached <- struct{}{}
+	select {
+	case <-r.release:
+		return cells, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type ambiguousApplyRepository struct {
+	workbook.Repository
+	mu       sync.Mutex
+	failOnce bool
+}
+
+func (r *ambiguousApplyRepository) ApplyCells(ctx context.Context, mutation workbook.CellMutation) (workbook.MutationResult, error) {
+	r.mu.Lock()
+	fail := r.failOnce
+	r.failOnce = false
+	r.mu.Unlock()
+	result, err := r.Repository.ApplyCells(ctx, mutation)
+	if err != nil {
+		return workbook.MutationResult{}, err
+	}
+	if fail {
+		return workbook.MutationResult{}, context.DeadlineExceeded
+	}
+	return result, nil
+}
+
+type firstApplyBarrierRepository struct {
+	workbook.Repository
+	once    sync.Once
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (r *firstApplyBarrierRepository) ApplyCells(ctx context.Context, mutation workbook.CellMutation) (workbook.MutationResult, error) {
+	blocked := false
+	r.once.Do(func() {
+		blocked = true
+		close(r.reached)
+	})
+	if blocked {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return workbook.MutationResult{}, ctx.Err()
+		}
+	}
+	return r.Repository.ApplyCells(ctx, mutation)
+}
+
 func TestPostgresDurabilityFlow(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_DSN")
 	if dsn == "" {
@@ -2055,7 +2119,7 @@ func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
 	if err != nil || len(cells) != 0 {
 		t.Fatalf("preview wrote cells=%#v, %v", cells, err)
 	}
-	runInput := automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-run", ExpectedRevision: item.Revision}
+	runInput := automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-run", ExpectedRevision: item.Revision, ExpectedBaseVersion: preview.BaseVersion}
 	executed, err := service.Run(ctx, item.ID, runInput)
 	if err != nil || executed.Run.Status != automation.StatusSucceeded || executed.Operation.ServerVersion != 3 || executed.Operation.AppliedCells != 2 {
 		t.Fatalf("executed=%#v, %v", executed, err)
@@ -2067,6 +2131,14 @@ func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
 	duplicateRun, err := service.Run(ctx, item.ID, runInput)
 	if err != nil || !duplicateRun.Run.Duplicate || duplicateRun.Operation.OperationID != executed.Operation.OperationID || duplicateRun.Operation.ServerVersion != 3 {
 		t.Fatalf("duplicate run=%#v, %v", duplicateRun, err)
+	}
+	noChanges, err := service.Preview(ctx, item.ID)
+	if err != nil || noChanges.BaseVersion != executed.Operation.ServerVersion || noChanges.AutomationRevision != item.Revision || len(noChanges.Changes) != 0 {
+		t.Fatalf("no-change preview=%#v, %v", noChanges, err)
+	}
+	_, err = service.Run(ctx, item.ID, automation.RunInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "automation-stale-run", ExpectedRevision: item.Revision, ExpectedBaseVersion: preview.BaseVersion})
+	if !errors.Is(err, workbook.ErrVersionConflict) {
+		t.Fatalf("stale preview run error=%v", err)
 	}
 	runs, err := service.ListRuns(ctx, item.ID, 10)
 	if err != nil || len(runs) != 1 || runs[0].ID != executed.Run.ID {
@@ -2126,6 +2198,9 @@ func TestPostgresAutomationLifecycleTriggerUndoAndAudit(t *testing.T) {
 	if err := service.Delete(ctx, item.ID, actor, updated.Revision); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.Create(ctx, book.ID, actor, createInput); !errors.Is(err, automation.ErrRevision) {
+		t.Fatalf("deleted automation idempotency replay error=%v", err)
+	}
 	items, err := service.List(ctx, book.ID)
 	if err != nil || len(items) != 0 {
 		t.Fatalf("automations after delete=%#v, %v", items, err)
@@ -2162,6 +2237,14 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 		"automation.scheduler_poll_seconds": float64(5),
 	}
 	service := automation.NewService(pool, config, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	disabled, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "중지된 예약", Enabled: false, IdempotencyKey: "disabled-schedule-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "0 * * * *", Timezone: "UTC"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "D1", Value: json.RawMessage(`"disabled"`)},
+	})
+	if err != nil || disabled.NextRunAt != nil {
+		t.Fatalf("disabled schedule=%#v, %v", disabled, err)
+	}
 	item, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
 		Name: "평일 상태 갱신", Enabled: true, IdempotencyKey: "schedule-create",
 		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "*/5 * * * MON-FRI", Timezone: "Asia/Seoul"},
@@ -2626,6 +2709,307 @@ func TestPostgresWorkbookAgentCreatesAndRollsBackReportSheetFormulaAndChart(t *t
 	var changeSetStatus string
 	if err := pool.QueryRow(ctx, `SELECT status FROM change_sets WHERE id=$1`, run.ChangeSetID).Scan(&changeSetStatus); err != nil || changeSetStatus != "rolled_back" {
 		t.Fatalf("report changeset status=%q, %v", changeSetStatus, err)
+	}
+}
+
+func TestPostgresAutomationRateLimitIsAtomicAndSnapshotIsBounded(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	baseRepository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("automation-limit-user-%d", time.Now().UnixNano())
+	book, err := baseRepository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "automation atomic limit", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseRepository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	repository := &barrierRepository{Repository: baseRepository, reached: make(chan struct{}, 2), release: make(chan struct{})}
+	service := automation.NewService(pool, staticAISettings{
+		"automation.enabled":                true,
+		"automation.max_cells_per_run":      float64(1000),
+		"automation.max_runs_per_hour":      float64(1),
+		"automation.scheduler_poll_seconds": float64(15),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	definitions := make([]automation.Automation, 0, 2)
+	for index, address := range []string{"A1", "B1"} {
+		item, createErr := service.Create(ctx, book.ID, actor, automation.CreateInput{
+			Name: fmt.Sprintf("동시 실행 %d", index+1), Enabled: true, IdempotencyKey: fmt.Sprintf("atomic-create-%d", index+1),
+			Trigger: automation.TriggerDefinition{Type: automation.TriggerManual},
+			Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: address, Value: json.RawMessage(fmt.Sprintf("%d", index+1))},
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		definitions = append(definitions, item)
+	}
+
+	errorsByRun := make(chan error, 2)
+	for index, item := range definitions {
+		go func(index int, item automation.Automation) {
+			_, runErr := service.Run(ctx, item.ID, automation.RunInput{
+				ActorID: actor, IdempotencyKey: fmt.Sprintf("atomic-run-%d", index+1), ExpectedRevision: item.Revision, ExpectedBaseVersion: book.Version,
+			})
+			errorsByRun <- runErr
+		}(index, item)
+	}
+	for range definitions {
+		select {
+		case <-repository.reached:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	close(repository.release)
+	succeeded, rateLimited := 0, 0
+	for range definitions {
+		runErr := <-errorsByRun
+		switch {
+		case runErr == nil:
+			succeeded++
+		case errors.Is(runErr, automation.ErrRate):
+			rateLimited++
+		default:
+			t.Fatalf("unexpected concurrent run error=%v", runErr)
+		}
+	}
+	var runCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE workbook_id=$1`, book.ID).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if succeeded != 1 || rateLimited != 1 || runCount != 1 {
+		t.Fatalf("atomic rate limit succeeded=%d rate_limited=%d stored_runs=%d", succeeded, rateLimited, runCount)
+	}
+
+	// A scheduler rejection is useful history, but it must not itself consume a
+	// slot and extend the rate-limit window indefinitely.
+	scheduled, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "제한 후 재시도", Enabled: true, IdempotencyKey: "rate-schedule-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerSchedule, Cron: "* * * * *", Timezone: "UTC"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "D1", Value: json.RawMessage(`"scheduled"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	firstDue := now.Add(-time.Minute)
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, scheduled.ID, firstDue); err != nil {
+		t.Fatal(err)
+	}
+	limitedResults, limitedErr := service.RunDueSchedules(ctx, now, 10)
+	if !errors.Is(limitedErr, automation.ErrRate) || len(limitedResults) != 1 || limitedResults[0].Run.Status != automation.StatusFailed {
+		t.Fatalf("rate-limited schedule results=%#v error=%v", limitedResults, limitedErr)
+	}
+	var excludedRuns int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id=$1 AND NOT counts_toward_rate`, scheduled.ID).Scan(&excludedRuns); err != nil || excludedRuns != 1 {
+		t.Fatalf("rate-excluded schedule runs=%d, %v", excludedRuns, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE automation_runs SET started_at=$2 WHERE workbook_id=$1 AND counts_toward_rate`, book.ID, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	secondDue := now.Add(-30 * time.Second)
+	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, scheduled.ID, secondDue); err != nil {
+		t.Fatal(err)
+	}
+	retried, retryErr := service.RunDueSchedules(ctx, now, 10)
+	if retryErr != nil || len(retried) != 1 || retried[0].Run.Status != automation.StatusSucceeded {
+		t.Fatalf("schedule after expired admitted run=%#v, %v", retried, retryErr)
+	}
+
+	largeValue, _ := json.Marshal(strings.Repeat("가", 10_000))
+	large, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "확장 스냅샷 제한", Enabled: true, IdempotencyKey: "large-snapshot-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerManual},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "C1:C1000", Value: largeValue},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This preview intentionally bypasses the synchronization barrier used only
+	// by the concurrent run check above.
+	boundedService := automation.NewService(pool, staticAISettings{
+		"automation.enabled":           true,
+		"automation.max_cells_per_run": float64(1000),
+		"automation.max_runs_per_hour": float64(1),
+	}, baseRepository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := boundedService.Preview(ctx, large.ID); !errors.Is(err, automation.ErrInvalid) || !strings.Contains(err.Error(), "snapshot") {
+		t.Fatalf("expanded snapshot error=%v", err)
+	}
+}
+
+func TestPostgresAutomationRunRecoversAmbiguousApplyAndClosesAdmissionRaces(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	baseRepository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("automation-recovery-user-%d", time.Now().UnixNano())
+	book, err := baseRepository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "automation recovery", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseRepository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	settings := staticAISettings{
+		"automation.enabled":                true,
+		"automation.max_cells_per_run":      float64(1000),
+		"automation.max_runs_per_hour":      float64(100),
+		"automation.scheduler_poll_seconds": float64(15),
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	ambiguousRepository := &ambiguousApplyRepository{Repository: baseRepository, failOnce: true}
+	ambiguousService := automation.NewService(pool, settings, ambiguousRepository, logger)
+	ambiguous, err := ambiguousService.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "응답 유실 복구", Enabled: true, IdempotencyKey: "ambiguous-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerManual},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "A1", Value: json.RawMessage(`5`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := ambiguousService.Preview(ctx, ambiguous.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := automation.RunInput{ActorID: actor, IdempotencyKey: "ambiguous-run", ExpectedRevision: preview.AutomationRevision, ExpectedBaseVersion: preview.BaseVersion}
+	if _, err := ambiguousService.Run(ctx, ambiguous.ID, input); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first ambiguous run error=%v", err)
+	}
+	running, err := ambiguousService.ListRuns(ctx, ambiguous.ID, 10)
+	if err != nil || len(running) != 1 || running[0].Status != automation.StatusRunning || running[0].ErrorMessage == "" {
+		t.Fatalf("retryable run history=%#v, %v", running, err)
+	}
+	recovered, err := ambiguousService.Run(ctx, ambiguous.ID, input)
+	if err != nil || recovered.Run.Status != automation.StatusSucceeded || recovered.Operation.OperationID == "" || !recovered.Operation.Duplicate {
+		t.Fatalf("recovered ambiguous run=%#v, %v", recovered, err)
+	}
+	var operationCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM cell_operations WHERE workbook_id=$1 AND operation_type='automation.set_value'`, book.ID).Scan(&operationCount); err != nil || operationCount != 1 {
+		t.Fatalf("ambiguous operation count=%d, %v", operationCount, err)
+	}
+
+	revisionBarrier := &barrierRepository{Repository: baseRepository, reached: make(chan struct{}, 1), release: make(chan struct{})}
+	revisionService := automation.NewService(pool, settings, revisionBarrier, logger)
+	revisionItem, err := revisionService.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "정의 경합", Enabled: true, IdempotencyKey: "revision-race-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerManual},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "B1", Value: json.RawMessage(`"old"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookAfterAmbiguous, err := baseRepository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionError := make(chan error, 1)
+	go func() {
+		_, runErr := revisionService.Run(ctx, revisionItem.ID, automation.RunInput{ActorID: actor, IdempotencyKey: "revision-race-run", ExpectedRevision: revisionItem.Revision, ExpectedBaseVersion: bookAfterAmbiguous.Version})
+		revisionError <- runErr
+	}()
+	select {
+	case <-revisionBarrier.reached:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if _, err := revisionService.Update(ctx, revisionItem.ID, actor, automation.UpdateInput{
+		Name: revisionItem.Name, Enabled: true, ExpectedRevision: revisionItem.Revision,
+		Trigger: revisionItem.Trigger,
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "B1", Value: json.RawMessage(`"new"`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(revisionBarrier.release)
+	if err := <-revisionError; !errors.Is(err, automation.ErrRevision) {
+		t.Fatalf("definition admission race error=%v", err)
+	}
+	var staleRunCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id=$1`, revisionItem.ID).Scan(&staleRunCount); err != nil || staleRunCount != 0 {
+		t.Fatalf("stale definition stored runs=%d, %v", staleRunCount, err)
+	}
+	latestRevisionItem, err := revisionService.Get(ctx, revisionItem.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestRevisionPreview, err := revisionService.Preview(ctx, revisionItem.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := revisionService.Update(ctx, revisionItem.ID, actor, automation.UpdateInput{
+		Name: latestRevisionItem.Name, Enabled: false, ExpectedRevision: latestRevisionItem.Revision,
+		Trigger: latestRevisionItem.Trigger, Action: latestRevisionItem.Action,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = revisionService.Run(ctx, revisionItem.ID, automation.RunInput{ActorID: actor, IdempotencyKey: "stale-disabled-run", ExpectedRevision: latestRevisionPreview.AutomationRevision, ExpectedBaseVersion: latestRevisionPreview.BaseVersion})
+	if !errors.Is(err, automation.ErrRevision) {
+		t.Fatalf("stale disabled definition must report revision conflict, got %v", err)
+	}
+
+	currentBook, err := baseRepository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := baseRepository.ApplyCells(ctx, workbook.CellMutation{SheetID: book.Sheets[0].ID, ActorID: actor, BaseVersion: currentBook.Version, IdempotencyKey: "trigger-race-source", Cells: []workbook.CellInput{{Row: 1, Column: 3, Value: json.RawMessage(`1`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyBarrier := &firstApplyBarrierRepository{Repository: baseRepository, reached: make(chan struct{}), release: make(chan struct{})}
+	triggerService := automation.NewService(pool, settings, applyBarrier, logger)
+	triggerItem, err := triggerService.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "트리거 경합", Enabled: true, IdempotencyKey: "trigger-race-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerCellChange, SheetID: book.Sheets[0].ID, Range: "C1"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: book.Sheets[0].ID, Range: "D1", Value: json.RawMessage(`"triggered"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	triggerInput := func(runActor, key string) automation.RunInput {
+		return automation.RunInput{ActorID: runActor, IdempotencyKey: key, ExpectedRevision: triggerItem.Revision, TriggerType: automation.TriggerCellChange, TriggerOperationID: source.OperationID}
+	}
+	firstResult := make(chan struct {
+		result automation.ExecutionResult
+		err    error
+	}, 1)
+	go func() {
+		result, runErr := triggerService.Run(ctx, triggerItem.ID, triggerInput(actor, "trigger-race-first"))
+		firstResult <- struct {
+			result automation.ExecutionResult
+			err    error
+		}{result: result, err: runErr}
+	}()
+	select {
+	case <-applyBarrier.reached:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	second, secondErr := triggerService.Run(ctx, triggerItem.ID, triggerInput(actor+"-other", "trigger-race-second"))
+	if secondErr != nil || second.Operation.OperationID == "" {
+		t.Fatalf("running trigger duplicate recovery=%#v, %v", second, secondErr)
+	}
+	close(applyBarrier.release)
+	first := <-firstResult
+	if first.err != nil || first.result.Operation.OperationID == "" || first.result.Operation.OperationID != second.Operation.OperationID {
+		t.Fatalf("first trigger race result=%#v, %v; second=%#v", first.result, first.err, second)
+	}
+	var triggerRunCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM automation_runs WHERE automation_id=$1`, triggerItem.ID).Scan(&triggerRunCount); err != nil || triggerRunCount != 1 {
+		t.Fatalf("trigger race stored runs=%d, %v", triggerRunCount, err)
 	}
 }
 

@@ -656,6 +656,7 @@ func (s *Server) sortRange(w http.ResponseWriter, r *http.Request) {
 	}
 	if !result.Duplicate && result.AppliedCells > 0 {
 		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+		s.triggerCellAutomations(r, result, cells)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

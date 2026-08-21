@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.33.0
+VERSION=v0.34.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -74,7 +74,7 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 
 AI 도우미·자동화·차트·피벗·댓글·편집 충돌·버전 등 편집기의 모든 오른쪽 기능 패널은 공통 리사이저를 사용합니다. 왼쪽 경계를 마우스로 끌거나 키보드로 조절할 수 있고, 패널별 너비가 브라우저에 독립적으로 저장됩니다.
 
-도구 모음의 **자동화** 버튼에서는 수동 실행, 특정 셀 범위 변경, 5필드 Cron 일정 또는 개인 API 키로 인증한 인바운드 웹훅을 조건으로 값 설정, 상대 참조 수식 적용과 내용 지우기 작업을 정의할 수 있습니다. 일정에는 IANA 시간대(기본 `UTC`)를 지정하며 다음 실행 시각과 성공·변경 없음·실패 이력을 확인할 수 있습니다. 웹훅은 `automation.webhook.invoke` scope와 `Idempotency-Key`가 필수이고 최대 1MiB JSON 원문은 저장하지 않으며 SHA-256·크기·호출 키 ID만 감사에 보존합니다. 저장 직후 최신 서버 셀 기준 미리보기를 확인하고 명시적으로 실행하며, 실행 이력에서 성공 작업을 Undo할 수 있습니다. 정의 revision, 예약 시각, 실행 기준 버전, 변경 전 셀 스냅샷, 작업 ID와 감사 이력은 PostgreSQL에 보존되고 모든 계약은 REST와 `spreadsheet.automation.*` MCP 도구로 동일하게 제공됩니다. 자동화는 기본 비활성화이며 관리자가 `/admin`의 **워크북 자동화 실행 정책**에서 셀 수, 시간당 실행 수와 스케줄러 확인 주기를 검증한 뒤 활성화합니다.
+도구 모음의 **자동화** 버튼에서는 수동 실행, 특정 셀 범위 변경, 5필드 Cron 일정 또는 개인 API 키로 인증한 인바운드 웹훅을 조건으로 값 설정, 상대 참조 수식 적용과 내용 지우기 작업을 정의할 수 있습니다. 일정에는 IANA 시간대(기본 `UTC`)를 지정하며 다음 실행 시각과 성공·변경 없음·실패 이력을 확인할 수 있습니다. 웹훅은 `automation.webhook.invoke` scope와 `Idempotency-Key`가 필수이고 최대 1MiB JSON 원문은 저장하지 않으며 SHA-256·크기·호출 키 ID만 감사에 보존합니다. 저장 대기 편집을 동기화한 뒤 최신 서버 셀 기준 미리보기를 확인하고 명시적으로 실행하며, 미리보기의 자동화 revision과 워크북 버전이 달라지면 재검증합니다. 변경이 없으면 정상 상태로 안내하고, 실행 이력에서 성공 작업을 Undo할 수 있습니다. 정의 revision, 예약 시각, 실행 기준 버전, 변경 전 셀 스냅샷, 작업 ID와 감사 이력은 PostgreSQL에 보존되고 모든 계약은 REST와 `spreadsheet.automation.*` MCP 도구로 동일하게 제공됩니다. 자동화는 기본 비활성화이며 관리자가 `/admin`의 **워크북 자동화 실행 정책**에서 셀 수, 시간당 실행 수와 스케줄러 확인 주기를 검증한 뒤 활성화합니다.
 
 툴바의 댓글 버튼에서는 현재 셀 또는 범위에 스레드를 만들고 답글·수정·삭제·해결·재열기를 수행할 수 있습니다. 본문에서 `@사용자ID` 또는 `@이메일`을 입력하면 상단 알림 메뉴에 멘션이 표시되고, 알림을 선택하면 원래 시트와 범위로 이동합니다. 댓글은 HTML로 렌더링하지 않으며 revision 기반 충돌 방지와 idempotency key를 사용합니다. REST의 `/api/v1/workbooks/{workbookId}/comments`, `/api/v1/comments/{commentId}`, `/api/v1/me/notifications` 계약은 `spreadsheet.comment.*`와 `spreadsheet.notification.*` MCP 도구로도 동일하게 제공됩니다.
 

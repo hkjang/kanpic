@@ -2,6 +2,7 @@ package formula
 
 import (
 	"strings"
+	"unicode"
 
 	"kanpic/pkg/cellrange"
 )
@@ -236,7 +237,12 @@ var volatileFunctions = []string{"INDIRECT(", "OFFSET(", "RAND(", "RANDBETWEEN("
 // IsVolatile reports whether a formula has to be recalculated whenever
 // anything in the workbook changes.
 func IsVolatile(input string) bool {
-	upper := strings.ToUpper(strings.ReplaceAll(input, " ", ""))
+	upper := strings.Map(func(character rune) rune {
+		if unicode.IsSpace(character) {
+			return -1
+		}
+		return unicode.ToUpper(character)
+	}, input)
 	for _, name := range volatileFunctions {
 		if strings.Contains(upper, name) {
 			return true

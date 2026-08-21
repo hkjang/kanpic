@@ -16,6 +16,7 @@ var (
 	ErrDisabled  = errors.New("automation is disabled")
 	ErrRate      = errors.New("automation rate limit exceeded")
 	ErrNoChanges = errors.New("automation has no effective changes")
+	ErrRunFailed = errors.New("automation run previously failed")
 )
 
 const (
@@ -86,16 +87,17 @@ type UpdateInput struct {
 }
 
 type RunInput struct {
-	ActorID            string     `json:"-"`
-	ClientID           string     `json:"client_id,omitempty"`
-	IdempotencyKey     string     `json:"idempotency_key"`
-	ExpectedRevision   int64      `json:"expected_revision,omitempty"`
-	TriggerType        string     `json:"-"`
-	TriggerOperationID string     `json:"-"`
-	ScheduledFor       *time.Time `json:"-"`
-	TriggerKeyID       string     `json:"-"`
-	PayloadDigest      string     `json:"-"`
-	PayloadBytes       int        `json:"-"`
+	ActorID             string     `json:"-"`
+	ClientID            string     `json:"client_id,omitempty"`
+	IdempotencyKey      string     `json:"idempotency_key"`
+	ExpectedRevision    int64      `json:"expected_revision,omitempty"`
+	ExpectedBaseVersion int64      `json:"expected_base_version,omitempty"`
+	TriggerType         string     `json:"-"`
+	TriggerOperationID  string     `json:"-"`
+	ScheduledFor        *time.Time `json:"-"`
+	TriggerKeyID        string     `json:"-"`
+	PayloadDigest       string     `json:"-"`
+	PayloadBytes        int        `json:"-"`
 }
 
 type CellSnapshot struct {
@@ -114,10 +116,13 @@ type PreviewChange struct {
 }
 
 type Preview struct {
-	AutomationID string          `json:"automation_id"`
-	WorkbookID   string          `json:"workbook_id"`
-	BaseVersion  int64           `json:"base_version"`
-	Changes      []PreviewChange `json:"changes"`
+	AutomationID       string           `json:"automation_id"`
+	AutomationName     string           `json:"automation_name"`
+	AutomationRevision int64            `json:"automation_revision"`
+	WorkbookID         string           `json:"workbook_id"`
+	BaseVersion        int64            `json:"base_version"`
+	Action             ActionDefinition `json:"action"`
+	Changes            []PreviewChange  `json:"changes"`
 }
 
 type Run struct {
@@ -147,6 +152,8 @@ type Run struct {
 	expected           map[string]workbook.Cell
 	idempotencyKey     string
 	undoKey            string
+	excludedFromRate   bool
+	automationRevision int64
 }
 
 type ExecutionResult struct {
@@ -164,6 +171,7 @@ type ServiceAPI interface {
 	Preview(context.Context, string) (Preview, error)
 	Run(context.Context, string, RunInput) (ExecutionResult, error)
 	ListRuns(context.Context, string, int) ([]Run, error)
+	GetRunWorkbookID(context.Context, string) (string, error)
 	Undo(context.Context, string, RunInput) (ExecutionResult, error)
 	TriggerCellChange(context.Context, workbook.MutationResult, []workbook.CellInput, string) ([]ExecutionResult, error)
 }

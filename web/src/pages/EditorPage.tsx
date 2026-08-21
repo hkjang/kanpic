@@ -205,7 +205,29 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const handleRestored=async(result:MutationResult)=>{editor.reset();updateVersion(result.server_version);await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]})])}
   const handleConflictResolved=(result:CellConflictResolutionResult)=>{updateVersion(result.operation.server_version);if(!result.operation.duplicate&&result.operation.applied_cells>0)editor.recordOperation(result.operation.operation_id);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const handleAIExecuted=(result:AIExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['ai-actions',workbookId]});client.invalidateQueries({queryKey:['agent-runs',workbookId]})}
-  const handleAutomationExecuted=(result:AutomationExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['automations',workbookId]})}
+  const prepareAutomationExecution=async()=>{
+    if(!navigator.onLine)throw new Error('자동화 검증과 실행은 서버에 연결된 상태에서만 사용할 수 있습니다.')
+    if(useEditorStore.getState().editing)gridShortcut({command:'commit-draft'})
+    if(useEditorStore.getState().editing)throw new Error('편집 중인 셀 입력을 먼저 확정하세요.')
+    const deadline=Date.now()+15_000
+    while(useEditorStore.getState().saveState==='saving'){
+      if(Date.now()>=deadline)throw new Error('셀 변경 저장이 완료되지 않았습니다. 저장 상태를 확인한 뒤 다시 시도하세요.')
+      await new Promise(resolve=>window.setTimeout(resolve,50))
+    }
+    if(useEditorStore.getState().saveState==='error')throw new Error('저장 오류가 있는 셀 변경을 먼저 해결하세요.')
+    editor.setSaveState('saving')
+    try{
+      await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
+      if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 서버에 반영하지 못했습니다. 연결 또는 편집 충돌을 확인하세요.')
+      const current=useEditorStore.getState()
+		if(current.conflicts>0)throw new Error('셀 편집 충돌을 먼저 해결한 뒤 자동화를 검증하세요.')
+      current.setSaveState(current.conflicts?'conflict':'saved',current.conflicts)
+		const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`)
+		updateVersion(latest.version)
+		return latest.version
+	}catch(reason){const current=useEditorStore.getState();current.setSaveState(current.conflicts?'conflict':'error',current.conflicts);throw reason}
+  }
+  const handleAutomationExecuted=(result:AutomationExecutionResult)=>{updateVersion(result.operation.server_version);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['automations',workbookId]})}
   const clearFormat=()=>applyFormat(Object.fromEntries(CLEARABLE_STYLE_KEYS.map(key=>[key,null])))
   const hideSelection=(axis:'row'|'column')=>applyLayout(axis==='row'
     ?{action:'hide',axis,start:editorSelection.startRow,count:editorSelection.endRow-editorSelection.startRow+1}
@@ -682,7 +704,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'separator'},
       {kind:'item',label:'차트 패널',checked:rightPanel==='charts',onSelect:()=>setRightPanel(current=>current==='charts'?null:'charts')},
       {kind:'item',label:'피벗 패널',checked:rightPanel==='pivots',onSelect:()=>setRightPanel(current=>current==='pivots'?null:'pivots')},
-      {kind:'item',label:'자동화',checked:rightPanel==='automation',onSelect:()=>setRightPanel(current=>current==='automation'?null:'automation')},
+      {kind:'item',label:'자동화',checked:rightPanel==='automation',disabled:!canWrite,onSelect:()=>setRightPanel(current=>current==='automation'?null:'automation')},
       {kind:'separator'},
       {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
@@ -703,7 +725,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
-        {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
+        {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
         {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
         {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
         {rightPanel==='conflicts'&&<ConflictPanel workbookId={workbookId} sheets={workbook.data.sheets} currentActor={session?.user?.id??'local-user'} onClose={()=>setRightPanel(null)} onNavigate={navigateToRange} onResolved={handleConflictResolved}/>}

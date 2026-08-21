@@ -251,12 +251,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const formula=raw.startsWith('=')?raw:''
     let value:unknown=formula?undefined:parsedValue(raw)
     if(formula&&navigator.onLine){
+      // Formula evaluation happens before the outbox write. Mark that gap as
+      // saving so workbook-wide actions can wait for the draft to be durable.
+      setSaveState('saving')
       const formulaCells:Record<string,unknown>={}
       cells.forEach(candidate=>{formulaCells[address(candidate.row,candidate.column)]=candidate.value})
       try{const evaluated=await api<{value?:unknown;error?:{code:string}}>(`/api/v1/formulas:evaluate`,{method:'POST',body:JSON.stringify({formula,cells:formulaCells})});value=evaluated.error?.code??formulaPreview(evaluated.value)}catch{value='#ERROR!'}
     }
     return saveCell(value,formula,row,column)
-  },[activeRow,activeColumn,cells,saveCell])
+  },[activeRow,activeColumn,cells,saveCell,setSaveState])
 
   useEffect(()=>{const sync=()=>flushOutbox(handleApplied);window.addEventListener('online',sync);const timer=window.setInterval(sync,3000);sync();return()=>{window.removeEventListener('online',sync);window.clearInterval(timer)}},[handleApplied])
 

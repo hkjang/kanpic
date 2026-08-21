@@ -239,6 +239,7 @@ func (s *Server) executeAgentRunPhase(w http.ResponseWriter, r *http.Request, ac
 	}
 	if result.Operation != nil && !result.Operation.Duplicate {
 		s.collab.PublishOperation(result.Run.WorkbookID, result.Run.SheetID, input.ActorID, input.ClientID, result.Changes, *result.Operation)
+		s.triggerCellAutomations(r, *result.Operation, result.Changes)
 	}
 	if result.Operation == nil || len(result.Run.Action.ToolCalls) > 0 {
 		s.publishCurrentVersion(r.Context(), result.Run.WorkbookID, input.ActorID, input.ClientID)

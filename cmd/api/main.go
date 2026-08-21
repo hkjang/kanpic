@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -72,9 +73,17 @@ func main() {
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
 	runtimeContext, stopRuntime := context.WithCancel(context.Background())
 	defer stopRuntime()
-	go automationService.RunScheduler(runtimeContext)
+	var runtimeWorkers sync.WaitGroup
+	runtimeWorkers.Add(2)
+	go func() {
+		defer runtimeWorkers.Done()
+		automationService.RunScheduler(runtimeContext)
+	}()
 	// Applies ai.history_retention_days without an operator having to prune.
-	go aiService.RunRetention(runtimeContext)
+	go func() {
+		defer runtimeWorkers.Done()
+		aiService.RunRetention(runtimeContext)
+	}()
 
 	go func() {
 		logger.Info("kanpic API started", "address", address, "storage", "postgres")
@@ -92,5 +101,15 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
+	}
+	runtimeStopped := make(chan struct{})
+	go func() {
+		runtimeWorkers.Wait()
+		close(runtimeStopped)
+	}()
+	select {
+	case <-runtimeStopped:
+	case <-ctx.Done():
+		logger.Error("background workers did not stop before shutdown deadline", "error", ctx.Err())
 	}
 }

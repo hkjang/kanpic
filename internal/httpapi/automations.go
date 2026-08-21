@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"kanpic/internal/automation"
 	"kanpic/internal/workbook"
@@ -144,7 +146,7 @@ func (s *Server) invokeAutomationWebhook(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" || len(idempotencyKey) > 200 {
+	if idempotencyKey == "" || utf8.RuneCountInString(idempotencyKey) > 200 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 헤더는 1~200자여야 합니다."}})
 		return
 	}
@@ -230,7 +232,9 @@ func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workb
 	if s.automations == nil || result.Duplicate || result.AppliedCells == 0 {
 		return
 	}
-	runs, err := s.automations.TriggerCellChange(ctx, result, cells, actor)
+	triggerContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	runs, err := s.automations.TriggerCellChange(triggerContext, result, cells, actor)
 	if err != nil {
 		s.logger.Error("cell-change automation failed", "operation_id", result.OperationID, "workbook_id", result.WorkbookID, "error", err)
 	}
@@ -240,7 +244,7 @@ func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workb
 }
 
 func (s *Server) publishAutomationResult(actor, clientID string, result automation.ExecutionResult) {
-	if result.Operation.OperationID == "" || result.Operation.Duplicate {
+	if result.Run.Duplicate || result.Operation.OperationID == "" || result.Operation.Duplicate {
 		return
 	}
 	s.collab.PublishOperation(result.Operation.WorkbookID, result.Operation.SheetID, actor, clientID, result.Changes, result.Operation)
@@ -258,6 +262,8 @@ func (s *Server) writeAutomationError(w http.ResponseWriter, r *http.Request, er
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "automation_disabled", "message": "관리자 화면에서 자동화를 활성화하세요."}})
 	case errors.Is(err, automation.ErrRate):
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{"code": "automation_rate_limit", "message": err.Error()}})
+	case errors.Is(err, automation.ErrRunFailed):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "automation_run_failed", "message": "같은 멱등 키의 이전 자동화 실행이 실패했습니다. 실행 이력을 확인하세요."}})
 	case errors.Is(err, workbook.ErrNotFound), errors.Is(err, workbook.ErrInvalid), errors.Is(err, workbook.ErrValidation):
 		s.writeError(w, r, err)
 	default:

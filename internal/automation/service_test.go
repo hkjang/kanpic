@@ -2,10 +2,18 @@ package automation
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"kanpic/internal/workbook"
 )
+
+func TestIdempotencyKeyLimitCountsCharacters(t *testing.T) {
+	if !validIdempotencyKey(strings.Repeat("가", 200)) || validIdempotencyKey(strings.Repeat("가", 201)) || validIdempotencyKey(" \t") {
+		t.Fatal("idempotency key must contain 1 to 200 Unicode characters")
+	}
+}
 
 func TestValidScalarAcceptsOnlyBoundedPrimitiveValues(t *testing.T) {
 	tests := []struct {
@@ -52,5 +60,32 @@ func TestRequiredActionScope(t *testing.T) {
 		if scope := RequiredActionScope(action); scope != "range.write" {
 			t.Fatalf("%s scope=%q", action, scope)
 		}
+	}
+}
+
+func TestFormulaSnapshotNoOpKeepsStableFormulaButRecalculatesVolatileFormula(t *testing.T) {
+	style := json.RawMessage(`{"bold":true}`)
+	stableBefore := CellSnapshot{Value: json.RawMessage(`6`), Formula: "=A1*2", Style: style}
+	stableAfter := CellSnapshot{Formula: "=A1*2", Style: style}
+	if !snapshotsEquivalentForAction(stableBefore, stableAfter, ActionSetFormula) {
+		t.Fatal("the computed value must not make an unchanged stable formula look modified")
+	}
+	volatileBefore := CellSnapshot{Value: json.RawMessage(`1`), Formula: "=RAND()", Style: style}
+	volatileAfter := CellSnapshot{Formula: "=RAND()", Style: style}
+	if snapshotsEquivalentForAction(volatileBefore, volatileAfter, ActionSetFormula) {
+		t.Fatal("volatile formulas must still be recalculated")
+	}
+}
+
+func TestReplayRunPreservesOriginalOperationAndReplaysFailureAsError(t *testing.T) {
+	original := workbook.MutationResult{OperationID: "run-operation"}
+	undo := workbook.MutationResult{OperationID: "undo-operation"}
+	replayed, err := replayRun(Run{Status: StatusUndone, Operation: &original, UndoOperation: &undo})
+	if err != nil || !replayed.Run.Duplicate || replayed.Operation.OperationID != original.OperationID {
+		t.Fatalf("undone run replay=%#v, %v", replayed, err)
+	}
+	failed, err := replayRun(Run{Status: StatusFailed, ErrorMessage: "write conflict"})
+	if !errors.Is(err, ErrRunFailed) || !failed.Run.Duplicate {
+		t.Fatalf("failed run replay=%#v, %v", failed, err)
 	}
 }

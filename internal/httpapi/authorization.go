@@ -84,6 +84,10 @@ func capabilityForRequest(r *http.Request) workbook.Capability {
 	// Copying a sheet reads the source; the target is authorized separately.
 	case strings.HasSuffix(path, "/copy"):
 		return workbook.CapabilityRead
+	// Previewing an automation is a read-only operation even though the REST
+	// action uses POST so it can share the action endpoint shape with :run.
+	case r.Method == http.MethodPost && strings.HasSuffix(path, ":test") && strings.Contains(path, "/automations/"):
+		return workbook.CapabilityRead
 
 	case strings.Contains(path, "/sharing") || strings.Contains(path, "/shares") || strings.Contains(path, "/access-requests"):
 		if readOnly {
@@ -163,6 +167,12 @@ func (s *Server) resolveTargetWorkbook(ctx context.Context, r *http.Request, tar
 				return item.WorkbookID, true, nil
 			}
 		}
+	case "automationRunId":
+		if s.automations != nil {
+			if workbookID, err := s.automations.GetRunWorkbookID(ctx, target.id); err == nil && workbookID != "" {
+				return workbookID, true, nil
+			}
+		}
 	case "aiActionId":
 		if s.ai != nil {
 			if item, err := s.ai.Get(ctx, actorID(r), target.id); err == nil && item.WorkbookID != "" {
@@ -186,9 +196,10 @@ func (s *Server) authorizeWorkbookRequest(w http.ResponseWriter, r *http.Request
 	}
 	workbookID, resolved, err := s.resolveTargetWorkbook(r.Context(), r, target)
 	if err != nil {
-		// Resources owned by side services cannot always be traced back to a
-		// workbook; their handlers still perform their own actor checks.
-		if target.kind == "automationId" || target.kind == "automationRunId" || target.kind == "aiActionId" {
+		// Legacy AI fakes cannot always trace actions back to a workbook; automation
+		// resources are intentionally fail-closed because their service has no
+		// separate actor-level authorization pass.
+		if target.kind == "aiActionId" {
 			return r, true
 		}
 		s.writeError(w, r, err)
@@ -272,6 +283,7 @@ func (s *Server) authorizeWorkbookID(w http.ResponseWriter, r *http.Request, wor
 var mcpResourceArgs = []struct{ arg, kind string }{
 	{"workbook_id", "workbookId"},
 	{"sheet_id", "sheetId"},
+	{"source_sheet_id", "sheetId"},
 	{"chart_id", "chartId"},
 	{"pivot_id", "pivotId"},
 	{"named_range_id", "namedRangeId"},
@@ -282,13 +294,18 @@ var mcpResourceArgs = []struct{ arg, kind string }{
 	{"operation_id", "operationId"},
 	{"filter_view_id", "filterViewId"},
 	{"data_validation_id", "dataValidationId"},
+	{"validation_id", "dataValidationId"},
 	{"conditional_format_id", "conditionalFormatId"},
 	{"automation_id", "automationId"},
+	{"run_id", "automationRunId"},
 	{"action_id", "aiActionId"},
+	{"request_id", "accessRequestId"},
 }
 
 func mcpCapability(name string) workbook.Capability {
 	switch {
+	case name == "spreadsheet.automation.test":
+		return workbook.CapabilityRead
 	case strings.HasPrefix(name, "spreadsheet.share.") || strings.HasPrefix(name, "spreadsheet.department."):
 		if strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".get") {
 			return workbook.CapabilityRead
@@ -311,6 +328,7 @@ func mcpCapability(name string) workbook.Capability {
 // the principal may not perform.
 func (s *Server) authorizeMCPTool(r *http.Request, name string, args map[string]any) error {
 	capability := mcpCapability(name)
+	resolvedWorkbookID := ""
 	for _, candidate := range mcpResourceArgs {
 		value := strings.TrimSpace(stringArg(args, candidate.arg))
 		if value == "" {
@@ -318,13 +336,19 @@ func (s *Server) authorizeMCPTool(r *http.Request, name string, args map[string]
 		}
 		workbookID, resolved, err := s.resolveTargetWorkbook(r.Context(), r, authorizationTarget{kind: candidate.kind, id: value, capability: capability})
 		if err != nil {
-			if candidate.kind == "automationId" || candidate.kind == "automationRunId" || candidate.kind == "aiActionId" {
-				return nil
+			if candidate.kind == "aiActionId" {
+				// A few legacy AI service implementations cannot resolve an action.
+				// Keep that compatibility path, but do not let it skip validation of
+				// an already supplied workbook-scoped resource.
+				if resolvedWorkbookID == "" {
+					return nil
+				}
+				continue
 			}
 			return err
 		}
 		if !resolved {
-			return nil
+			continue
 		}
 		access, err := s.repository.ResolveWorkbookAccess(r.Context(), workbookID, s.accessPrincipal(r))
 		if err != nil {
@@ -333,7 +357,10 @@ func (s *Server) authorizeMCPTool(r *http.Request, name string, args map[string]
 		if !access.Role.Allows(capability) && !(capability == workbook.CapabilityManage && access.CanManage) {
 			return fmt.Errorf("%w: 이 워크북에 대한 %s 권한이 없습니다", workbook.ErrForbidden, capability)
 		}
-		return nil
+		if resolvedWorkbookID != "" && resolvedWorkbookID != workbookID {
+			return fmt.Errorf("%w: MCP resource identifiers must belong to one workbook", workbook.ErrForbidden)
+		}
+		resolvedWorkbookID = workbookID
 	}
 	return nil
 }

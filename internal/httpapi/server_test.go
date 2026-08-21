@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -131,6 +132,7 @@ type fakeAutomationService struct {
 	item              automation.Automation
 	run               automation.Run
 	triggerCalls      int
+	triggerContextErr error
 	scheduledListener func(automation.ExecutionResult)
 	lastRunInput      automation.RunInput
 }
@@ -165,13 +167,24 @@ func (f *fakeAutomationService) Delete(_ context.Context, _, _ string, _ int64) 
 	return nil
 }
 func (f *fakeAutomationService) Preview(_ context.Context, _ string) (automation.Preview, error) {
-	return automation.Preview{AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, BaseVersion: 1, Changes: []automation.PreviewChange{{Row: 1, Column: 2, Address: "B1", After: automation.CellSnapshot{Value: json.RawMessage(`"완료"`)}}}}, nil
+	return automation.Preview{AutomationID: f.item.ID, AutomationName: f.item.Name, AutomationRevision: f.item.Revision, WorkbookID: f.item.WorkbookID, BaseVersion: 1, Action: f.item.Action, Changes: []automation.PreviewChange{{Row: 1, Column: 2, Address: "B1", After: automation.CellSnapshot{Value: json.RawMessage(`"완료"`)}}}}, nil
 }
 func (f *fakeAutomationService) Run(_ context.Context, _ string, input automation.RunInput) (automation.ExecutionResult, error) {
 	f.lastRunInput = input
 	triggerType := input.TriggerType
 	if triggerType == "" {
 		triggerType = automation.TriggerManual
+	}
+	if triggerType == automation.TriggerManual {
+		if input.ExpectedRevision < 1 || input.ExpectedBaseVersion < 1 {
+			return automation.ExecutionResult{}, automation.ErrInvalid
+		}
+		if input.ExpectedRevision != f.item.Revision {
+			return automation.ExecutionResult{}, automation.ErrRevision
+		}
+		if input.ExpectedBaseVersion != 1 {
+			return automation.ExecutionResult{}, workbook.ErrVersionConflict
+		}
 	}
 	if triggerType == automation.TriggerWebhook {
 		f.run = automation.Run{ID: "automation-webhook-run", AutomationID: f.item.ID, WorkbookID: f.item.WorkbookID, ActorID: input.ActorID, TriggerType: triggerType, TriggerKeyID: input.TriggerKeyID, PayloadDigest: input.PayloadDigest, PayloadBytes: input.PayloadBytes, Status: automation.StatusSucceeded}
@@ -187,13 +200,20 @@ func (f *fakeAutomationService) ListRuns(_ context.Context, _ string, _ int) ([]
 	}
 	return []automation.Run{f.run}, nil
 }
+func (f *fakeAutomationService) GetRunWorkbookID(_ context.Context, id string) (string, error) {
+	if f.run.ID == "" || f.run.ID != id {
+		return "", automation.ErrNotFound
+	}
+	return f.run.WorkbookID, nil
+}
 func (f *fakeAutomationService) Undo(_ context.Context, _ string, input automation.RunInput) (automation.ExecutionResult, error) {
 	operation := workbook.MutationResult{OperationID: "automation-undo", WorkbookID: f.item.WorkbookID, SheetID: f.item.Action.SheetID, BaseVersion: 2, ServerVersion: 3, AppliedCells: 1}
 	f.run.Status, f.run.UndoOperationID, f.run.UndoOperation = automation.StatusUndone, operation.OperationID, &operation
 	return automation.ExecutionResult{Run: f.run, Operation: operation}, nil
 }
-func (f *fakeAutomationService) TriggerCellChange(_ context.Context, _ workbook.MutationResult, _ []workbook.CellInput, _ string) ([]automation.ExecutionResult, error) {
+func (f *fakeAutomationService) TriggerCellChange(ctx context.Context, _ workbook.MutationResult, _ []workbook.CellInput, _ string) ([]automation.ExecutionResult, error) {
 	f.triggerCalls++
+	f.triggerContextErr = ctx.Err()
 	return []automation.ExecutionResult{}, nil
 }
 
@@ -946,6 +966,11 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	if webhookProperties["payload"] == nil || webhookProperties["idempotency_key"] == nil {
 		t.Fatalf("automation webhook schema=%#v", webhookTool.InputSchema)
 	}
+	runTool, _ := findMCPTool("spreadsheet.automation.run")
+	runProperties, _ := runTool.InputSchema["properties"].(map[string]any)
+	if runProperties["expected_base_version"] == nil || !reflect.DeepEqual(runTool.InputSchema["required"], []string{"automation_id", "expected_revision", "expected_base_version", "idempotency_key"}) {
+		t.Fatalf("automation run preview binding schema=%#v", runTool.InputSchema)
+	}
 	for _, expectation := range []struct {
 		method string
 		path   string
@@ -975,10 +1000,6 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	if service.scheduledListener == nil {
 		t.Fatal("scheduled automation collaboration listener was not registered")
 	}
-	unauthorizedWebhook := request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/automation-id:webhook", map[string]any{"event": "changed"}, http.StatusUnauthorized)
-	if errorValue, _ := unauthorizedWebhook["error"].(map[string]any); errorValue["code"] != "api_key_required" {
-		t.Fatalf("unauthorized webhook=%#v", unauthorizedWebhook)
-	}
 	book := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "Automation API"}, http.StatusCreated)
 	created := request[automation.Automation](t, server, http.MethodPost, "/api/v1/workbooks/"+book.ID+"/automations", map[string]any{
 		"name": "수동 상태 변경", "enabled": true, "idempotency_key": "create-automation",
@@ -987,6 +1008,10 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	}, http.StatusCreated)
 	if created.ID != "automation-id" || created.Revision != 1 || created.Action.Range != "B1" {
 		t.Fatalf("REST automation create=%#v", created)
+	}
+	unauthorizedWebhook := request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/automation-id:webhook", map[string]any{"event": "changed"}, http.StatusUnauthorized)
+	if errorValue, _ := unauthorizedWebhook["error"].(map[string]any); errorValue["code"] != "api_key_required" {
+		t.Fatalf("unauthorized webhook=%#v", unauthorizedWebhook)
 	}
 	preview := request[automation.Preview](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":test", map[string]any{}, http.StatusOK)
 	if len(preview.Changes) != 1 || preview.Changes[0].Address != "B1" {
@@ -1000,6 +1025,13 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 	if updated.Revision != 2 || updated.Action.Type != automation.ActionSetFormula {
 		t.Fatalf("REST automation update=%#v", updated)
 	}
+	updatedPreview := request[automation.Preview](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":test", map[string]any{}, http.StatusOK)
+	if updatedPreview.AutomationRevision != updated.Revision || updatedPreview.Action.Formula != updated.Action.Formula {
+		t.Fatalf("updated automation preview=%#v", updatedPreview)
+	}
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":run", map[string]any{"idempotency_key": "missing-preview-tokens"}, http.StatusBadRequest)
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":run", map[string]any{"expected_revision": 1, "expected_base_version": updatedPreview.BaseVersion, "idempotency_key": "stale-preview-revision"}, http.StatusConflict)
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/automations/"+created.ID+":run", map[string]any{"expected_revision": updatedPreview.AutomationRevision, "expected_base_version": updatedPreview.BaseVersion + 1, "idempotency_key": "stale-preview-version"}, http.StatusConflict)
 	mcpGet := request[struct {
 		Result struct {
 			Structured automation.Automation `json:"structuredContent"`
@@ -1012,7 +1044,7 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 		Result struct {
 			Structured automation.ExecutionResult `json:"structuredContent"`
 		} `json:"result"`
-	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 81, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.automation.run", "arguments": map[string]any{"automation_id": created.ID, "expected_revision": 2, "idempotency_key": "run-automation"}}}, http.StatusOK)
+	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 81, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.automation.run", "arguments": map[string]any{"automation_id": created.ID, "expected_revision": updatedPreview.AutomationRevision, "expected_base_version": updatedPreview.BaseVersion, "idempotency_key": "run-automation"}}}, http.StatusOK)
 	if mcpRun.Result.Structured.Run.Status != automation.StatusSucceeded || mcpRun.Result.Structured.Operation.OperationID != "automation-operation" {
 		t.Fatalf("MCP automation run=%#v", mcpRun)
 	}
@@ -1042,6 +1074,61 @@ func TestAutomationRESTAndMCPShareRevisionedExecutionContract(t *testing.T) {
 		t.Fatalf("cell-change automation trigger calls=%d", service.triggerCalls)
 	}
 	request[map[string]any](t, server, http.MethodDelete, "/api/v1/automations/"+created.ID+"?expected_revision=2", nil, http.StatusNoContent)
+}
+
+func TestAutomationAuthorizationBindsPreviewAndRunUndoToWorkbook(t *testing.T) {
+	repository := workbook.NewMemoryRepository()
+	book, err := repository.CreateWorkbook(context.Background(), workbook.CreateWorkbookInput{Title: "private", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &fakeAutomationService{run: automation.Run{ID: "private-run", WorkbookID: book.ID}}
+	server := &Server{repository: repository, automations: service}
+
+	previewRequest := httptest.NewRequest(http.MethodPost, "/api/v1/automations/item:test", nil)
+	if capability := capabilityForRequest(previewRequest); capability != workbook.CapabilityRead {
+		t.Fatalf("REST preview capability=%q", capability)
+	}
+	if capability := mcpCapability("spreadsheet.automation.test"); capability != workbook.CapabilityRead {
+		t.Fatalf("MCP preview capability=%q", capability)
+	}
+
+	outsider := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	outsider.Header.Set("X-Kanpic-Actor", "bob")
+	err = server.authorizeMCPTool(outsider, "spreadsheet.automation.run.undo", map[string]any{"run_id": "private-run"})
+	if !errors.Is(err, workbook.ErrForbidden) {
+		t.Fatalf("cross-workbook automation undo authorization error=%v", err)
+	}
+	decoy, err := repository.CreateWorkbook(context.Background(), workbook.CreateWorkbookInput{Title: "decoy", OwnerID: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = server.authorizeMCPTool(outsider, "spreadsheet.automation.run.undo", map[string]any{"workbook_id": decoy.ID, "run_id": "private-run"})
+	if !errors.Is(err, workbook.ErrForbidden) {
+		t.Fatalf("decoy workbook must not bypass automation undo authorization: %v", err)
+	}
+	owner := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	owner.Header.Set("X-Kanpic-Actor", "alice")
+	if err := server.authorizeMCPTool(owner, "spreadsheet.automation.run.undo", map[string]any{"run_id": "private-run"}); err != nil {
+		t.Fatalf("owner automation undo authorization error=%v", err)
+	}
+}
+
+func TestAutomationDuplicatePublishAndCellTriggerCancellationSafety(t *testing.T) {
+	server := &Server{}
+	server.publishAutomationResult("actor", "client", automation.ExecutionResult{
+		Run:       automation.Run{Duplicate: true},
+		Operation: workbook.MutationResult{OperationID: "already-published"},
+	})
+
+	service := &fakeAutomationService{}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	server = &Server{automations: service, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	server.triggerCellAutomationsContext(cancelled, workbook.MutationResult{OperationID: "source", AppliedCells: 1}, []workbook.CellInput{{Row: 1, Column: 1}}, "actor")
+	if service.triggerCalls != 1 || service.triggerContextErr != nil {
+		t.Fatalf("detached cell trigger calls=%d context_error=%v", service.triggerCalls, service.triggerContextErr)
+	}
 }
 
 func TestAutomationWebhookRequiresScopedAPIKeyAndBoundsJSONPayload(t *testing.T) {

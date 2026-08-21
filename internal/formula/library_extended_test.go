@@ -230,7 +230,7 @@ func TestOffsetAndIndirectResolveConstantTargets(t *testing.T) {
 	if computed.Error != nil || computed.Value != 2.0 {
 		t.Fatalf("computed INDIRECT = %v (%v)", computed.Value, computed.Error)
 	}
-	if !IsVolatile(`=INDIRECT("A"&2)`) || !IsVolatile("=TODAY()") || IsVolatile("=SUM(A1:A3)") {
+	if !IsVolatile(`=INDIRECT("A"&2)`) || !IsVolatile("=TODAY()") || !IsVolatile("=NOW\t()") || !IsVolatile("=INDIRECT\n(\"A2\")") || IsVolatile("=SUM(A1:A3)") {
 		t.Fatal("volatility detection is wrong")
 	}
 }

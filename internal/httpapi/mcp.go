@@ -147,7 +147,7 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.automation.update", "자동화 정의와 활성 상태를 revision 기반으로 변경합니다.", "automation.write", automationUpdateSchema()),
 	tool("spreadsheet.automation.delete", "자동화를 revision 기반으로 비활성화하고 삭제합니다.", "automation.write", automationDeleteSchema()),
 	tool("spreadsheet.automation.test", "최신 서버 셀을 사용해 쓰기 없이 자동화 변경 미리보기를 검증합니다.", "automation.read", requiredProps("automation_id", "string")),
-	tool("spreadsheet.automation.run", "자동화를 멱등 실행하고 하나의 서버 권위 셀 작업으로 반영합니다.", "automation.run", automationRunSchema()),
+	tool("spreadsheet.automation.run", "test 응답의 automation_revision과 base_version을 검증해 자동화를 멱등 실행하고 하나의 서버 권위 셀 작업으로 반영합니다.", "automation.run", automationRunSchema()),
 	tool("spreadsheet.automation.webhook.invoke", "개인 API 키로 인증한 JSON webhook payload의 digest만 감사에 보존하고 자동화를 멱등 실행합니다.", "automation.webhook.invoke", automationWebhookSchema()),
 	tool("spreadsheet.automation.run.list", "자동화 실행·실패·Undo 이력을 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
 	tool("spreadsheet.automation.run.undo", "성공한 자동화 실행을 후속 변경과 충돌하지 않는 범위에서 되돌립니다.", "automation.run", automationUndoSchema()),
@@ -564,6 +564,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		result, cells, err := s.applyRangeSort(ctx, stringArg(args, "sheet_id"), actor, input)
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
 			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+			s.triggerCellAutomations(r, result, cells)
 		}
 		return result, err
 	case "spreadsheet.structure.apply":
@@ -993,6 +994,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		if err == nil && !result.Operation.Duplicate {
 			s.collab.PublishOperation(result.Action.WorkbookID, result.Action.SheetID, actor, input.ClientID, result.Changes, result.Operation)
+			s.triggerCellAutomations(r, result.Operation, result.Changes)
 		}
 		return result, err
 	case "spreadsheet.automation.list":
@@ -1601,7 +1603,7 @@ func automationWebhookSchema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"automation_id":   map[string]any{"type": "string", "minLength": 1},
-			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
 			"client_id":       map[string]any{"type": "string"},
 			"payload":         map[string]any{"description": "최대 1MiB JSON 값. 원문은 저장하지 않고 SHA-256과 byte 수만 기록합니다."},
 		},
@@ -1632,7 +1634,7 @@ func automationCreateSchema() map[string]any {
 			"enabled":         map[string]any{"type": "boolean"},
 			"trigger":         automationTriggerSchema(),
 			"action":          automationActionSchema(),
-			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
 		},
 		"required": []string{"workbook_id", "name", "enabled", "trigger", "action", "idempotency_key"},
 	}
@@ -1668,12 +1670,13 @@ func automationRunSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"automation_id":     map[string]any{"type": "string", "minLength": 1},
-			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
-			"idempotency_key":   map[string]any{"type": "string", "minLength": 1},
-			"client_id":         map[string]any{"type": "string"},
+			"automation_id":         map[string]any{"type": "string", "minLength": 1},
+			"expected_revision":     map[string]any{"type": "integer", "minimum": 1},
+			"expected_base_version": map[string]any{"type": "integer", "minimum": 1},
+			"idempotency_key":       map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
+			"client_id":             map[string]any{"type": "string"},
 		},
-		"required": []string{"automation_id", "expected_revision", "idempotency_key"},
+		"required": []string{"automation_id", "expected_revision", "expected_base_version", "idempotency_key"},
 	}
 }
 
@@ -1682,7 +1685,7 @@ func automationUndoSchema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"run_id":          map[string]any{"type": "string", "minLength": 1},
-			"idempotency_key": map[string]any{"type": "string", "minLength": 1},
+			"idempotency_key": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
 			"client_id":       map[string]any{"type": "string"},
 		},
 		"required": []string{"run_id", "idempotency_key"},
