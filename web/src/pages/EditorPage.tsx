@@ -17,6 +17,7 @@ import { SlicerOverlay } from '../components/SlicerOverlay'
 import { ConnectionPanel } from '../components/ConnectionPanel'
 import { CellHistoryDialog } from '../components/CellHistoryDialog'
 import { LinkDialog } from '../components/LinkDialog'
+import { PromptDialog, type PromptRequest } from '../components/PromptDialog'
 import { parseFilterRange } from '../lib/filter'
 import { ChartPanel } from '../components/ChartPanel'
 import '../components/ChartLauncher.css'
@@ -88,7 +89,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -473,12 +474,16 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   }
   const createWorkbook=async()=>{const created=await api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({title:'제목 없는 워크북',workspace_id:'default'})});window.location.href=`/workbooks/${created.id}`}
   const duplicateWorkbook=async()=>{const copy=await api<Workbook>(`/api/v1/workbooks/${workbookId}/duplicate`,{method:'POST',body:JSON.stringify({title:`${workbook.data?.title??'워크북'} 복사본`})});window.location.href=`/workbooks/${copy.id}`}
-  const renameWorkbook=async()=>{
-    const next=window.prompt('워크북 이름',workbook.data?.title??'')
-    if(next===null||!next.trim()||next.trim()===workbook.data?.title)return
-    await api<Workbook>(`/api/v1/workbooks/${workbookId}`,{method:'PATCH',body:JSON.stringify({title:next.trim()})})
-    await refreshWorkbook()
-  }
+  const renameWorkbook=()=>setPrompt({
+    title:'워크북 이름 변경',label:'워크북 이름',value:workbook.data?.title??'',confirmLabel:'이름 바꾸기',
+    validate:value=>value.trim()===''?'이름을 입력하세요.':undefined,
+    onSubmit:value=>{
+      if(value.trim()===workbook.data?.title)return
+      void api<Workbook>(`/api/v1/workbooks/${workbookId}`,{method:'PATCH',body:JSON.stringify({title:value.trim()})})
+        .then(refreshWorkbook)
+        .catch(error=>alert(error instanceof Error?error.message:'이름을 바꾸지 못했습니다.'))
+    },
+  })
   const trashWorkbook=async()=>{
     if(!window.confirm(`'${workbook.data?.title??''}' 워크북을 휴지통으로 옮길까요? 홈 화면의 휴지통에서 복원할 수 있습니다.`))return
     await api(`/api/v1/workbooks/${workbookId}`,{method:'DELETE'})
@@ -895,6 +900,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     {linkOpen&&activeSheet&&workbook.data&&<LinkDialog workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress}
       onClose={()=>setLinkOpen(false)} onApply={formula=>{
         // The dialog already asked everything it needs, so the link lands in the

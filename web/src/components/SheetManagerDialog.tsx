@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { PromptDialog, type PromptRequest } from './PromptDialog'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Eye, EyeOff, Sigma, SquareArrowOutUpRight, Table2, Trash2, X } from 'lucide-react'
 import { api } from '../lib/api'
@@ -31,7 +32,7 @@ export function SheetManagerDialog({workbook,sheets,activeSheetId,readOnly=false
   onDelete:(sheet:Sheet)=>Promise<void>
   onCopyTo:(sheet:Sheet)=>void
 }){
-  const [pending,setPending]=useState(false),[error,setError]=useState('')
+  const [pending,setPending]=useState(false),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const stats=useQuery({queryKey:['sheet-stats',workbook.id,workbook.version],queryFn:()=>api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbook.id}/sheet-stats`)})
   const byID=new Map((stats.data?.items??[]).map(item=>[item.sheet_id,item]))
   const ordered=[...sheets].sort((left,right)=>left.position-right.position)
@@ -44,6 +45,7 @@ export function SheetManagerDialog({workbook,sheets,activeSheetId,readOnly=false
   }
   const totals=(stats.data?.items??[]).reduce((sum,item)=>({cells:sum.cells+item.non_empty_cells,formulas:sum.formulas+item.formula_cells}),{cells:0,formulas:0})
   const dialog=useDialog<HTMLElement>(onClose)
+  if(prompt)return <PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
     <section className="modal sheet-manager" role="dialog" ref={dialog as React.RefObject<any>} aria-modal="true" aria-label="시트 관리">
       <header><div><h2>시트 관리</h2><p>{ordered.length}개 시트 · 데이터 {totals.cells.toLocaleString()}셀 · 수식 {totals.formulas.toLocaleString()}개</p></div><button aria-label="시트 관리 닫기" onClick={onClose}><X/></button></header>
@@ -56,10 +58,11 @@ export function SheetManagerDialog({workbook,sheets,activeSheetId,readOnly=false
               <i className={sheet.color?'':'empty'} style={sheet.color?{background:sheet.color}:undefined}/>
               <button className="sheet-manager-open" onClick={()=>{if(!sheet.hidden){onSelect(sheet);onClose()}}} disabled={sheet.hidden} title={sheet.hidden?'숨긴 시트는 표시한 뒤 열 수 있습니다':'이 시트로 이동'}>{sheet.name}</button>
               {sheet.hidden&&<em>숨김</em>}
-              {!readOnly&&<button className="sheet-manager-rename" aria-label={`${sheet.name} 이름 변경`} onClick={()=>{
-                const next=window.prompt('시트 이름',sheet.name)
-                if(next!==null&&next.trim()&&next.trim()!==sheet.name)void run(()=>onRename(sheet,next.trim()))
-              }}>이름</button>}
+              {!readOnly&&<button className="sheet-manager-rename" aria-label={`${sheet.name} 이름 변경`} onClick={()=>setPrompt({
+                title:'시트 이름 변경',label:'시트 이름',value:sheet.name,confirmLabel:'이름 바꾸기',
+                validate:value=>value.trim()===''?'이름을 입력하세요.':undefined,
+                onSubmit:value=>{if(value.trim()!==sheet.name)void run(()=>onRename(sheet,value.trim()))},
+              })}>이름</button>}
             </span>
             <span>{item?`${item.non_empty_cells.toLocaleString()}셀`:'—'}{item&&item.formula_cells>0?<small><Sigma/> {item.formula_cells.toLocaleString()}</small>:null}</span>
             <span>{item&&item.max_row>0?`A1:${cellAddress(item.max_row,item.max_column)}`:'비어 있음'}</span>

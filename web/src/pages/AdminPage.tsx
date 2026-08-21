@@ -4,6 +4,7 @@ import { Activity, ArrowLeft, Building2, Bot, LineChart, Mail, Send, CheckCircle
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
+import { PromptDialog, type PromptRequest } from '../components/PromptDialog'
 import { useDialog } from '../lib/useDialog'
 import type { AdminOverview, AIAction, MailDeliveryPage, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
@@ -71,7 +72,7 @@ function OverviewPanel({onNavigate}:{onNavigate:(tab:'users'|'departments'|'work
 function WorkbookGovernancePanel(){
   const client=useQueryClient()
   const [filter,setFilter]=useState<string>(()=>new URLSearchParams(location.search).get('filter')||'all')
-  const [message,setMessage]=useState(''),[error,setError]=useState('')
+  const [message,setMessage]=useState(''),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const workbooks=useQuery({queryKey:['admin-workbooks',filter],queryFn:()=>api<{items:GovernedWorkbook[]}>(`/api/v1/admin/workbooks?filter=${filter}`)})
   const items=workbooks.data?.items??[]
   const run=async(action:()=>Promise<unknown>,success:string)=>{
@@ -83,11 +84,12 @@ function WorkbookGovernancePanel(){
     if(!window.confirm(`'${item.title}'의 링크 액세스를 제한됨으로 되돌릴까요? 링크로만 접근하던 사용자는 열 수 없게 됩니다.`))return
     void run(()=>api(`/api/v1/workbooks/${item.id}/sharing`,{method:'PATCH',body:JSON.stringify({link_access:'restricted'})}),'링크 액세스를 제한했습니다.')
   }
-  const transfer=(item:GovernedWorkbook)=>{
-    const owner=window.prompt(`'${item.title}'의 새 소유자 사용자 ID 또는 이메일`,'')
-    if(!owner?.trim())return
-    void run(()=>api(`/api/v1/workbooks/${item.id}/sharing:transfer-ownership`,{method:'POST',body:JSON.stringify({new_owner_id:owner.trim(),keep_as_editor:false})}),'소유권을 이전했습니다.')
-  }
+  const transfer=(item:GovernedWorkbook)=>setPrompt({
+    title:'소유권 이전',label:'새 소유자',placeholder:'사용자 ID 또는 이메일',confirmLabel:'이전',
+    hint:`'${item.title}'의 소유자가 바뀝니다. 이전 소유자는 편집 권한도 잃습니다.`,
+    validate:value=>value.trim()===''?'새 소유자를 입력하세요.':undefined,
+    onSubmit:value=>void run(()=>api(`/api/v1/workbooks/${item.id}/sharing:transfer-ownership`,{method:'POST',body:JSON.stringify({new_owner_id:value.trim(),keep_as_editor:false})}),'소유권을 이전했습니다.'),
+  })
   const trash=(item:GovernedWorkbook)=>{
     if(!window.confirm(`'${item.title}'을(를) 휴지통으로 옮길까요? 소유자가 복원할 수 있습니다.`))return
     void run(()=>api(`/api/v1/workbooks/${item.id}`,{method:'DELETE'}),'휴지통으로 옮겼습니다.')
@@ -95,6 +97,7 @@ function WorkbookGovernancePanel(){
   const restore=(item:GovernedWorkbook)=>void run(()=>api(`/api/v1/workbooks/${item.id}/restore`,{method:'POST'}),'워크북을 복원했습니다.')
   const filters=[{id:'all',label:'전체'},{id:'anyone',label:'링크 공개'},{id:'organization',label:'조직 전체'},{id:'orphan',label:'소유자 문제'},{id:'trashed',label:'휴지통'}]
   return <main className="console-content">
+    {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     <div className="content-title"><div><span className="eyebrow">WORKBOOK GOVERNANCE</span><h1>워크북 거버넌스</h1><p>모든 워크북의 소유자와 공유 범위를 점검하고 과도한 공개를 되돌리거나 소유권을 이전합니다.</p></div><button className="secondary" onClick={()=>workbooks.refetch()}><RefreshCw/> 새로고침</button></div>
     {message&&<div className="result-banner" role="status"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}
@@ -136,7 +139,7 @@ function UsersPanel(){
   const [search,setSearch]=useState(''),[selected,setSelected]=useState<string>(),[role,setRole]=useState('')
   const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
   const [showAdd,setShowAdd]=useState(false)
-  const [message,setMessage]=useState(''),[error,setError]=useState('')
+  const [message,setMessage]=useState(''),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[];admin_roles:string[];default_admin_role:string}>('/api/v1/admin/users')})
   const adminRoles=users.data?.admin_roles??[]
   const defaultAdminRole=users.data?.default_admin_role??'kanpic-admin'
@@ -170,11 +173,11 @@ function UsersPanel(){
   const signOut=(user:DirectoryUser)=>run(
     ()=>api<{revoked_sessions:number}>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/sessions`,{method:'DELETE'}),
     '모든 세션을 종료했습니다.')
-  const note=(user:DirectoryUser)=>{
-    const next=window.prompt('메모',user.note??'')
-    if(next===null)return
-    void run(()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}`,{method:'PATCH',body:JSON.stringify({note:next})}),'메모를 저장했습니다.')
-  }
+  const note=(user:DirectoryUser)=>setPrompt({
+    title:`${user.user_id} 메모`,label:'메모',value:user.note??'',multiline:true,
+    hint:'관리자만 볼 수 있는 메모입니다. 비우면 삭제됩니다.',
+    onSubmit:value=>void run(()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}`,{method:'PATCH',body:JSON.stringify({note:value})}),'메모를 저장했습니다.'),
+  })
   const promote=(user:DirectoryUser)=>{
     if(!window.confirm(`'${user.user_id}' 계정을 관리자로 지정할까요? 모든 워크북과 시스템 설정에 접근할 수 있게 됩니다.`))return
     void run(()=>api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/roles`,{method:'POST',body:JSON.stringify({role:defaultAdminRole})}),'관리자로 지정했습니다.')
@@ -185,6 +188,7 @@ function UsersPanel(){
     void run(async()=>{for(const item of held)await api<DirectoryUser>(`/api/v1/admin/users/${encodeURIComponent(user.user_id)}/roles/${encodeURIComponent(item)}`,{method:'DELETE'})},'관리자 권한을 회수했습니다.')
   }
   return <main className="console-content">
+    {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     <div className="content-title"><div><span className="eyebrow">ACCESS CONTROL</span><h1>사용자 및 역할</h1><p>로그인한 사용자는 자동으로 등록됩니다. 계정 정지, 관리자 지정, kanpic 역할 부여와 세션 종료를 관리합니다.</p></div><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 사용자 등록</button></div>
     {message&&<div className="result-banner" role="status"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}

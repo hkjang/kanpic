@@ -178,9 +178,11 @@ test('the view menu toggles gridlines and the file menu renames the workbook', a
   await expect(page.getByRole('menuitemcheckbox',{name:'눈금선 표시'})).toHaveAttribute('aria-checked','false')
   await page.keyboard.press('Escape')
 
-  page.once('dialog',dialog=>dialog.accept(`${title} 변경`))
   await page.getByRole('menuitem',{name:'파일'}).click()
   await page.getByRole('menuitem',{name:'워크북 이름 변경…'}).click()
+  const rename=page.getByRole('dialog',{name:'워크북 이름 변경'})
+  await rename.getByRole('textbox',{name:'워크북 이름'}).fill(`${title} 변경`)
+  await rename.getByRole('button',{name:'이름 바꾸기'}).click()
   await expect.poll(async()=>(await request.get(`/api/v1/workbooks/${workbook.id}`).then(response=>response.json())).title,{timeout:10_000}).toBe(`${title} 변경`)
 })
 
