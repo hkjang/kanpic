@@ -133,6 +133,13 @@ func (r *PostgresRepository) GetPivotData(ctx context.Context, id string) (Pivot
 			return PivotData{}, err
 		}
 		data.Pivot, data.WorkbookVersion, data.Cached = item, item.WorkbookVersion, true
+		// The cached numbers are returned either way; reading the source here
+		// only decides whether to tell the reader they have moved on.
+		sourceCells, readErr := pivotRangeCells(ctx, tx, item)
+		if readErr != nil {
+			return PivotData{}, readErr
+		}
+		markPivotFreshness(&data, sourceCells)
 		return data, tx.Commit(ctx)
 	}
 	cells, err := pivotRangeCells(ctx, tx, item)

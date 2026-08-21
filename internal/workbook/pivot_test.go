@@ -194,3 +194,65 @@ func assertPivotValues(t *testing.T, actual, expected []any) {
 		}
 	}
 }
+
+// A manually refreshed pivot keeps showing the numbers it was built from, so
+// the only way to know they are old is to be told.
+func TestMemoryPivotReportsStaleSourceUntilRefreshed(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "피벗 신선도", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	seed, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "pivot-seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"지역"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"서울"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`100`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"부산"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`50`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivot, err := repository.CreatePivot(ctx, book.ID, "alice", CreatePivotInput{
+		IdempotencyKey: "pivot-stale", SheetID: sheet, SourceSheetID: sheet, Name: "지역 합계", SourceRange: "A1:B3",
+		Rows: []PivotDimension{{Column: 1}}, Values: []PivotValueField{{Column: 2, Aggregation: "sum"}}, RefreshMode: "manual",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := repository.GetPivotData(ctx, pivot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Stale {
+		t.Fatalf("a pivot built just now is not stale: %#v", fresh)
+	}
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: seed.ServerVersion + 1, IdempotencyKey: "pivot-change", Cells: []CellInput{{Row: 2, Column: 2, Value: json.RawMessage(`900`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := repository.GetPivotData(ctx, pivot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale.Stale || stale.SourceChangedAt == nil {
+		t.Fatalf("changed source must be reported: %#v", stale)
+	}
+	// The cached numbers are still what the pivot was built from.
+	if !stale.Cached {
+		t.Fatalf("manual pivot should still serve its cache: %#v", stale)
+	}
+	refreshed, err := repository.RefreshPivot(ctx, pivot.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Stale {
+		t.Fatalf("refreshed pivot = %#v", refreshed)
+	}
+	after, err := repository.GetPivotData(ctx, pivot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Stale {
+		t.Fatalf("pivot went stale again right after a refresh: %#v", after)
+	}
+}

@@ -134,6 +134,11 @@ type PivotData struct {
 	SourceRowCount  int                 `json:"source_row_count"`
 	GeneratedAt     time.Time           `json:"generated_at"`
 	Cached          bool                `json:"cached"`
+	// SourceChangedAt is the last time a cell inside the source range was
+	// written, and Stale says that happened after this result was built. A
+	// manually refreshed pivot otherwise looks current no matter how old it is.
+	SourceChangedAt *time.Time `json:"source_changed_at,omitempty"`
+	Stale           bool       `json:"stale,omitempty"`
 	Warning         string              `json:"warning,omitempty"`
 }
 
@@ -867,6 +872,30 @@ func (r *MemoryRepository) GetPivot(_ context.Context, id string) (Pivot, error)
 	return clonePivot(item), nil
 }
 
+// pivotSourceChangedAt reports when the source data last moved, which is what
+// makes a cached result stale.
+func pivotSourceChangedAt(cells []Cell) *time.Time {
+	var latest time.Time
+	for _, cell := range cells {
+		if cell.UpdatedAt.After(latest) {
+			latest = cell.UpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	return &latest
+}
+
+// markPivotFreshness stamps a cached result with the state of its source. It is
+// only ever advisory: the pivot still holds the numbers it was built from, and
+// this tells the reader whether to trust them.
+func markPivotFreshness(data *PivotData, cells []Cell) {
+	changed := pivotSourceChangedAt(cells)
+	data.SourceChangedAt = changed
+	data.Stale = changed != nil && changed.After(data.GeneratedAt)
+}
+
 func (r *MemoryRepository) GetPivotData(_ context.Context, id string) (PivotData, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -877,7 +906,9 @@ func (r *MemoryRepository) GetPivotData(_ context.Context, id string) (PivotData
 	if item.RefreshMode == "manual" {
 		if cached, found := r.pivotCache[id]; found {
 			cached.Pivot.WorkbookVersion, cached.WorkbookVersion, cached.Cached = state.workbook.Version, state.workbook.Version, true
-			return clonePivotData(cached), nil
+			result := clonePivotData(cached)
+			markPivotFreshness(&result, cells)
+			return result, nil
 		}
 	}
 	data, err := buildPivotData(item, state.workbook.Version, cells, r.now())
