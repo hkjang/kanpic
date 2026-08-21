@@ -290,6 +290,41 @@ type UpdateNamedRangeInput struct {
 	ExpectedRevision *int64  `json:"expected_revision,omitempty"`
 }
 
+// ProtectedRange restricts who may write to part of a sheet. Sharing decides
+// who can open a workbook; this decides who can change the cells a model
+// depends on.
+type ProtectedRange struct {
+	ID          string    `json:"id"`
+	SheetID     string    `json:"sheet_id"`
+	CreateKey   string    `json:"-"`
+	Range       string    `json:"range"`
+	Description string    `json:"description,omitempty"`
+	Editors     []string  `json:"editors"`
+	WarningOnly bool      `json:"warning_only"`
+	Revision    int64     `json:"revision"`
+	CreatedBy   string    `json:"created_by"`
+	UpdatedBy   string    `json:"updated_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type CreateProtectedRangeInput struct {
+	IdempotencyKey string   `json:"idempotency_key"`
+	SheetID        string   `json:"sheet_id"`
+	Range          string   `json:"range"`
+	Description    string   `json:"description"`
+	Editors        []string `json:"editors"`
+	WarningOnly    bool     `json:"warning_only"`
+}
+
+type UpdateProtectedRangeInput struct {
+	ExpectedRevision *int64    `json:"expected_revision,omitempty"`
+	Range            *string   `json:"range,omitempty"`
+	Description      *string   `json:"description,omitempty"`
+	Editors          *[]string `json:"editors,omitempty"`
+	WarningOnly      *bool     `json:"warning_only,omitempty"`
+}
+
 type ValidationOption struct {
 	Value json.RawMessage `json:"value"`
 	Label string          `json:"label,omitempty"`

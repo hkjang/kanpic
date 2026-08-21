@@ -188,6 +188,10 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/filter-views/{filterViewId}", s.updateFilterView)
 	mux.HandleFunc("DELETE /api/v1/filter-views/{filterViewId}", s.deleteFilterView)
 	mux.HandleFunc("POST /api/v1/filter-views/{filterAction}", s.evaluateFilterView)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/protected-ranges", s.listProtectedRanges)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/protected-ranges", s.createProtectedRange)
+	mux.HandleFunc("PATCH /api/v1/protected-ranges/{protectionId}", s.updateProtectedRange)
+	mux.HandleFunc("DELETE /api/v1/protected-ranges/{protectionId}", s.deleteProtectedRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/data-validations", s.listDataValidations)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/data-validations", s.createDataValidation)
 	mux.HandleFunc("GET /api/v1/data-validations/{validationId}", s.getDataValidation)
@@ -993,6 +997,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	// A write onto a protected range is refused with the reason, so the editor
+	// can say which range stopped it rather than "요청을 처리하지 못했습니다".
+	var protectionFailure *workbook.ProtectionFailure
+	if errors.As(err, &protectionFailure) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"code": "range_protected", "message": protectionFailure.Error(), "trace_id": w.Header().Get("X-Trace-ID"), "violations": protectionFailure.Violations}})
+		return
+	}
 	var validationFailure *workbook.ValidationFailure
 	if errors.As(err, &validationFailure) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": map[string]any{"code": "validation_failed", "message": validationFailure.Error(), "trace_id": w.Header().Get("X-Trace-ID"), "violations": validationFailure.Violations}})

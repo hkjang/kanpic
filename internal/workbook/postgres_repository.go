@@ -1236,7 +1236,8 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	defer func() { _ = tx.Rollback(ctx) }()
 	var workbookID string
 	var currentVersion int64
-	err = tx.QueryRow(ctx, `SELECT w.id::text,w.version FROM workbooks w JOIN sheets s ON s.workbook_id=w.id WHERE s.id=$1 AND w.deleted_at IS NULL FOR UPDATE OF w`, mutation.SheetID).Scan(&workbookID, &currentVersion)
+	var workbookOwner string
+	err = tx.QueryRow(ctx, `SELECT w.id::text,w.version,w.owner_id FROM workbooks w JOIN sheets s ON s.workbook_id=w.id WHERE s.id=$1 AND w.deleted_at IS NULL FOR UPDATE OF w`, mutation.SheetID).Scan(&workbookID, &currentVersion, &workbookOwner)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MutationResult{}, ErrNotFound
 	}
@@ -1354,6 +1355,15 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if len(effective) == 0 && formatMutation {
 		result := MutationResult{WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion, Conflicts: conflicts, CreatedAt: r.now()}
 		return result, tx.Commit(ctx)
+	}
+	// Protection is checked before anything is applied: a paste that touches a
+	// protected block is refused whole rather than applied in part.
+	protections, err := listProtectedRangesTx(ctx, tx, mutation.SheetID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if blocked, _ := CheckProtectedRanges(protections, mutation.ActorID, workbookOwner, effective); len(blocked) > 0 {
+		return MutationResult{}, &ProtectionFailure{Violations: blocked}
 	}
 	var expanded []CellInput
 	var recalculated []CellCoordinate

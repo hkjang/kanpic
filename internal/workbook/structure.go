@@ -371,6 +371,20 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			delete(nextValidations, id)
 		}
 	}
+	nextProtections := make(map[string]ProtectedRange, len(r.protections))
+	for id, rule := range r.protections {
+		if rule.SheetID != target.ID {
+			nextProtections[id] = cloneProtectedRange(rule)
+			continue
+		}
+		updated, remains, transformErr := transformProtectedForStructure(rule, target.ID, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if remains {
+			nextProtections[id] = cloneProtectedRange(updated)
+		}
+	}
 	nextConditionalFormats := cloneConditionalMap(r.conditionalFormats)
 	for id, rule := range nextConditionalFormats {
 		if rule.SheetID != target.ID {
@@ -455,6 +469,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		nextNotifications[id] = copy
 	}
 	state.cells, r.namedRanges, r.validations, r.conditionalFormats, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextConditionalFormats, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
+	r.protections = nextProtections
 	for pivotID, pivot := range nextPivots {
 		if pivot.WorkbookID == state.workbook.ID {
 			delete(r.pivotCache, pivotID)

@@ -95,6 +95,7 @@ export type FilterOperator = 'values'|'equals'|'not_equals'|'contains'|'not_cont
 export type FilterCriterion = { column:number; operator:FilterOperator; value?:unknown; values?:unknown[]; color?:string; case_sensitive?:boolean }
 export type FilterView = { id:string; sheet_id:string; actor_id:string; name:string; range:string; header_rows:number; criteria:FilterCriterion[]; active:boolean; created_at:string; updated_at:string }
 export type FilterResult = { filter_view_id:string; range:string; hidden_rows:number[]; visible_count:number; hidden_count:number; total_count:number }
+export type ProtectedRange = { id:string; sheet_id:string; range:string; description?:string; editors:string[]; warning_only:boolean; revision:number; created_by:string; updated_by:string; created_at:string; updated_at:string }
 export type ValidationRuleType = 'list'|'checkbox'|'number'|'date'|'custom_formula'
 export type ValidationOperator = 'in_list'|'between'|'not_between'|'equal'|'not_equal'|'greater_than'|'greater_or_equal'|'less_than'|'less_or_equal'|'custom'
 export type ValidationOption = { value:unknown; label?:string; color?:string }

@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.43.0
+VERSION=v0.44.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -55,6 +55,8 @@ CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 �
 홈 화면의 **빠른 시작** 은 빈 워크북과 추천 템플릿을, **템플릿 갤러리** 는 재무·회계, 영업·마케팅, 프로젝트, 인사, 운영·재고, 개인 업무, 부동산, 주식·투자, 신용평가, 금융, 수식·함수 11개 분류의 템플릿 72종을 제공합니다. 템플릿은 서버 카탈로그에서 만들어지므로 표 머리글, 예시 데이터, 계산되는 수식, 통화·백분율 서식, 열 너비, 머리글 고정이 그대로 적용됩니다. REST는 `GET /api/v1/templates`와 `POST /api/v1/workbooks`의 `template_id`를, 에이전트는 `spreadsheet.template.list`와 `spreadsheet.workbook.create`의 `template_id`를 사용합니다.
 
 시트 관리는 탭 오른쪽의 목록 버튼이나 파일 메뉴의 **모든 시트 관리…** 에서 한 화면에 모입니다. 시트별 데이터 셀 수, 수식 수, 사용 범위와 마지막 변경 시각을 확인하고 이름 변경·순서 이동·숨기기·다른 워크북으로 복사·삭제를 실행할 수 있습니다. 탭은 드래그로 순서를 바꾸고, 숨긴 시트는 **숨긴 시트 N** 버튼에서 다시 표시하며, 표시된 시트가 하나뿐이면 숨기기를 거부합니다. 삭제한 워크북은 홈 화면 **휴지통** 에서 복원하거나 완전히 삭제할 수 있고 즐겨찾기는 사용자별로 보관되므로 같은 워크북을 공유받은 사람마다 다르게 표시됩니다. REST는 `GET /api/v1/workbooks/{workbookId}/sheet-stats`, `POST /api/v1/sheets/{sheetId}/copy`, `GET /api/v1/workbooks/trash`, `POST /api/v1/workbooks/{workbookId}/restore`, `DELETE /api/v1/workbooks/{workbookId}/purge`, `PUT /api/v1/workbooks/{workbookId}/favorite`를 제공하고 같은 계약이 `spreadsheet.sheet.stats|copy`, `spreadsheet.workbook.trash|restore|purge|favorite` MCP 도구로 노출됩니다.
+
+셀 단위로는 **데이터 › 범위 보호** 가 있습니다. 보호한 범위는 지정한 사용자와 소유자만 쓸 수 있고, 그 범위에 걸친 붙여넣기는 통째로 거부되며 어떤 범위가 막았는지 메시지에 담깁니다. 행·열을 넣고 지우면 보호 범위도 함께 움직입니다.
 
 워크북은 기본적으로 **제한됨**으로 만들어지고 소유자만 접근합니다. 편집기 오른쪽 위 **공유**에서 사용자, 부서, IdP 역할에 뷰어·댓글 작성자·편집자 권한을 부여하고, 일반 액세스를 제한됨·조직 내 모든 사용자·링크가 있는 모든 사용자 중에서 고를 수 있습니다. 부서는 계층 구조이며 상위 부서에 공유하면 하위 부서 구성원까지 권한을 상속합니다. 소유자는 편집자의 재공유 허용, 뷰어의 내보내기·복사 허용, 소유권 이전을 제어하고 대기 중인 액세스 요청을 승인·거부할 수 있습니다. 권한이 없는 사용자가 링크를 열면 액세스 요청 화면이 표시되고, 뷰어와 댓글 작성자에게는 편집 도구가 잠긴 보기 전용·댓글 가능 편집기가 열립니다. 모든 REST·WebSocket·MCP 경로는 하나의 권한 계층에서 검사되며 계약은 `/api/v1/workbooks/{workbookId}/sharing`, `/shares`, `/access-requests`, `/api/v1/departments`와 `spreadsheet.share.*`, `spreadsheet.department.*`, `spreadsheet.access_request.*` MCP 도구로 제공됩니다. 관리자 콘솔은 **개요**로 시작해 사용자·부서·워크북 규모와 링크 공개, 소유자 없는 워크북, 대기 중 액세스 요청을 요약하고 각 항목에서 바로 관리 화면으로 이동합니다. **워크북 거버넌스**에서는 소유하지 않은 워크북까지 포함해 공유 범위를 점검하고 과도한 링크 공개를 되돌리거나 소유권을 이전하고 휴지통으로 옮길 수 있습니다. 조직 차원의 상한은 `sharing.max_link_access`와 `sharing.default_link_access` 설정으로 강제합니다. 부서 생성과 구성원 배치는 **부서 및 공유**에서, 계정 정지와 kanpic 역할 부여, 관리자 지정은 **사용자 및 역할**에서 관리자만 변경합니다. `kanpic-admin` 역할(또는 `auth.oidc.admin_roles`에 등록한 역할)을 부여하면 관리자가 됩니다. 로그인한 사용자는 디렉터리에 자동 등록되고, 정지된 계정은 세션이 즉시 종료되며 이후 모든 요청이 차단됩니다.
 

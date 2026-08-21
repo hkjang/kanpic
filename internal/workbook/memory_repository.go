@@ -37,6 +37,7 @@ type snapshot struct {
 	cells              map[string]map[cellKey]Cell
 	filters            map[string]FilterView
 	validations        map[string]DataValidation
+	protections        map[string]ProtectedRange
 	conditionalFormats map[string]ConditionalFormat
 	namedRanges        map[string]NamedRange
 	charts             map[string]Chart
@@ -64,6 +65,7 @@ type MemoryRepository struct {
 	imports            map[string]string
 	filters            map[string]FilterView
 	validations        map[string]DataValidation
+	protections        map[string]ProtectedRange
 	conditionalFormats map[string]ConditionalFormat
 	namedRanges        map[string]NamedRange
 	charts             map[string]Chart
@@ -90,6 +92,7 @@ func NewMemoryRepository() *MemoryRepository {
 		imports:            make(map[string]string),
 		filters:            make(map[string]FilterView),
 		validations:        make(map[string]DataValidation),
+		protections:        make(map[string]ProtectedRange),
 		conditionalFormats: make(map[string]ConditionalFormat),
 		namedRanges:        make(map[string]NamedRange),
 		charts:             make(map[string]Chart),
@@ -929,6 +932,11 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
 	var validationWarnings []ValidationViolation
+	// Protection is checked before anything is applied: a paste that touches a
+	// protected block is refused whole rather than applied in part.
+	if blocked, _ := CheckProtectedRanges(r.protectionsForSheetLocked(mutation.SheetID), mutation.ActorID, state.workbook.OwnerID, effective); len(blocked) > 0 {
+		return MutationResult{}, &ProtectionFailure{Violations: blocked}
+	}
 	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {

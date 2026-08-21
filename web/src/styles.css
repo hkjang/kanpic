@@ -166,3 +166,18 @@ button.ai-history-row:hover{background:#f6f9f9}
   .settings-row.user-row,.settings-row.department-row,.settings-row.governance-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) auto}
   .settings-row.user-row span:nth-child(3),.settings-row.user-row small:nth-child(4),.settings-row.governance-row small{display:none}
 }
+.protected-modal{width:min(560px,100%)}
+.protected-form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.protected-form label{display:flex;flex-direction:column;gap:5px;font-size:var(--font-body);font-weight:600;color:#4b5a63}
+.protected-form label.wide{grid-column:1/-1}
+.protected-form label.check-label{grid-column:1/-1;flex-direction:row;align-items:center;gap:6px;font-weight:400}
+.protected-form input{border:1px solid #d9e0e3;border-radius:6px;padding:8px;outline:0;font-size:var(--font-body)}
+.protected-form input[type=checkbox]{width:13px;height:13px;padding:0}
+.protected-list{margin-top:6px;max-height:220px;overflow:auto;border-top:1px solid #edf0f2}
+.protected-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 2px;border-bottom:1px solid #f0f3f4}
+.protected-row>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.protected-row strong{font-size:var(--font-body);color:#22333c}
+.protected-row small{font-size:var(--font-caption);color:#8b979e;overflow:hidden;text-overflow:ellipsis}
+.protected-row button{border:0;background:transparent;color:#9aa5ab;padding:5px}
+.protected-row button svg{width:14px}
+.protected-row button:hover{color:var(--danger)}

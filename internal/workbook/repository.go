@@ -84,6 +84,10 @@ type Repository interface {
 	GetDataValidation(context.Context, string) (DataValidation, error)
 	UpdateDataValidation(context.Context, string, string, UpdateDataValidationInput) (DataValidation, error)
 	DeleteDataValidation(context.Context, string, string, *int64) error
+	CreateProtectedRange(context.Context, string, string, CreateProtectedRangeInput) (ProtectedRange, error)
+	ListProtectedRanges(context.Context, string) ([]ProtectedRange, error)
+	UpdateProtectedRange(context.Context, string, string, UpdateProtectedRangeInput) (ProtectedRange, error)
+	DeleteProtectedRange(context.Context, string) error
 	CreateConditionalFormat(context.Context, string, string, CreateConditionalFormatInput) (ConditionalFormat, error)
 	ListConditionalFormats(context.Context, string) ([]ConditionalFormat, error)
 	GetConditionalFormat(context.Context, string) (ConditionalFormat, error)

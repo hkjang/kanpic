@@ -23,6 +23,7 @@ import { FilterDialog } from '../components/FilterDialog'
 import { FormatDialog,type BorderFormatCommand } from '../components/FormatDialog'
 import { NoteDialog } from '../components/NoteDialog'
 import { ColumnFilterMenu } from '../components/ColumnFilterMenu'
+import { ProtectedRangeDialog } from '../components/ProtectedRangeDialog'
 import { brushPatch } from '../lib/formatBrush'
 import { ColumnStatsPanel } from '../components/ColumnStatsPanel'
 import { LayoutDialog,type LayoutCommand } from '../components/LayoutDialog'
@@ -52,7 +53,7 @@ import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -81,7 +82,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -129,6 +130,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const createFilter=async(input:{name:string;range:string;header_rows:number;criteria:unknown[];active:boolean})=>{const item=await api<FilterView>(`/api/v1/sheets/${activeSheet!.id}/filter-views`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});await refreshFilters();return item}
   const updateFilter=async(id:string,input:Record<string,unknown>)=>{const item=await api<FilterView>(`/api/v1/filter-views/${id}`,{method:'PATCH',body:JSON.stringify(input)});await refreshFilters();return item}
   const deleteFilter=async(id:string)=>{await api(`/api/v1/filter-views/${id}`,{method:'DELETE'});await refreshFilters()}
+  const protections=useQuery({queryKey:['protected-ranges',activeSheet?.id,serverVersion],queryFn:()=>api<{items:ProtectedRange[]}>(`/api/v1/sheets/${activeSheet!.id}/protected-ranges`),enabled:Boolean(activeSheet)})
+  const refreshProtections=async()=>{await client.invalidateQueries({queryKey:['protected-ranges',activeSheet?.id]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
+  const createProtection=async(input:Record<string,unknown>)=>{await api(`/api/v1/sheets/${activeSheet!.id}/protected-ranges`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});await refreshProtections()}
+  const deleteProtection=async(rule:ProtectedRange)=>{await api(`/api/v1/protected-ranges/${rule.id}`,{method:'DELETE'});await refreshProtections()}
   const validations=useQuery({queryKey:['data-validations',activeSheet?.id],queryFn:()=>api<{items:DataValidation[]}>(`/api/v1/sheets/${activeSheet!.id}/data-validations`),enabled:Boolean(activeSheet)})
   const refreshValidations=async()=>{await client.invalidateQueries({queryKey:['data-validations',activeSheet?.id]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const createValidation=async(input:Record<string,unknown>)=>{const item=await api<DataValidation>(`/api/v1/sheets/${activeSheet!.id}/data-validations`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});updateVersion(item.workbook_version);await refreshValidations();return item}
@@ -708,6 +713,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'열 통계',onSelect:()=>setRightPanel('stats')},
+      {kind:'item',label:'범위 보호…',disabled:!canWrite,onSelect:()=>setProtectedOpen(true)},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'separator'},
       {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
@@ -805,6 +811,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onClose={()=>setColumnFilter(undefined)}
       onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
+    {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
     {noteOpen&&<NoteDialog address={selectionAddress} note={editor.cells.get(cellKey(editor.activeRow,editor.activeColumn))?.note??''} onClose={()=>setNoteOpen(false)} onApply={applyNote}/>}
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}
     {filterOpen&&<FilterDialog range={editorSelection} views={filterViews.data?.items??[]} result={filterResult.data} onClose={()=>setFilterOpen(false)} onCreate={createFilter} onUpdate={updateFilter} onDelete={deleteFilter}/>} 
