@@ -10,6 +10,12 @@ export type PrintOptions={
   region?:GridRegion
   gridlines:boolean
   headers:boolean
+  /**
+   * Rows the reader cannot see — filtered out, hidden, or folded into a
+   * collapsed group. Printing them would hand somebody a page that disagrees
+   * with the screen they printed it from.
+   */
+  hiddenRows?:Set<number>
 }
 
 const escapeHTML=(value:string)=>value.replace(/[&<>"]/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[character] as string))
@@ -58,6 +64,7 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
       rows.push(`<tr>${headerCells.join('')}</tr>`)
     }
     for(let row=region.startRow;row<=region.endRow;row+=1){
+      if(options.hiddenRows?.has(row))continue
       const columns:string[]=options.headers?[`<th class="row-head">${row}</th>`]:[]
       for(let column=region.startColumn;column<=region.endColumn;column+=1){
         const cell=cells.get(cellKey(row,column))

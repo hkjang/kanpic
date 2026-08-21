@@ -61,6 +61,7 @@ import { SubtotalDialog } from '../components/SubtotalDialog'
 import { planRemoveSubtotals, type SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
+import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
@@ -572,7 +573,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     // put a page of whatever was scrolled to in front of the reader.
     const printed=await readUsedCells()
     if(printed.truncated&&!window.confirm(`시트가 ${printed.rows.toLocaleString()}행입니다. 앞의 ${MAX_PRINT_ROWS.toLocaleString()}행만 인쇄합니다. 계속할까요?`))return
-    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true})
+    // Filters, hidden rows and folded groups all mean the same thing to a
+    // reader: that row is not on the screen they are printing.
+    const hiddenRows=new Set<number>(filterResult.data?.hidden_rows??[])
+    for(const range of activeSheet.layout?.hidden_rows??[])
+      for(let row=range.start;row<=range.end;row+=1)hiddenRows.add(row)
+    for(const row of collapsedIndexes(activeSheet.layout?.row_groups))hiddenRows.add(row)
+    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
     document.body.appendChild(frame)

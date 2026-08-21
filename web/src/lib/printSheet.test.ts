@@ -44,3 +44,32 @@ describe('printableDocument',()=>{
     expect(printableDocument(new Map(),{title:'빈 워크북',sheetName:'시트1',gridlines:true,headers:true})).toContain('인쇄할 데이터가 없습니다')
   })
 })
+
+describe('printing hidden rows',()=>{
+  const sheet=()=>{
+    const cells=new Map<string,Cell>()
+    ;[['서울',100],['부산',50],['대구',30]].forEach(([name,amount],index)=>{
+      cells.set(cellKey(index+1,1),{sheet_id:'s',row:index+1,column:1,value:name} as Cell)
+      cells.set(cellKey(index+1,2),{sheet_id:'s',row:index+1,column:2,value:amount} as Cell)
+    })
+    return cells
+  }
+
+  it('leaves out the rows the reader cannot see',()=>{
+    const html=printableDocument(sheet(),{title:'보고',sheetName:'요약',gridlines:true,headers:true,hiddenRows:new Set([2,3])})
+    expect(html).toContain('서울')
+    expect(html).not.toContain('부산')
+    expect(html).not.toContain('대구')
+  })
+
+  it('keeps the original row numbers so the page matches the sheet',()=>{
+    const html=printableDocument(sheet(),{title:'보고',sheetName:'요약',gridlines:true,headers:true,hiddenRows:new Set([2])})
+    expect(html).toContain('<th class="row-head">3</th>')
+    expect(html).not.toContain('<th class="row-head">2</th>')
+  })
+
+  it('prints everything when nothing is hidden',()=>{
+    const html=printableDocument(sheet(),{title:'보고',sheetName:'요약',gridlines:true,headers:true})
+    for(const name of ['서울','부산','대구'])expect(html).toContain(name)
+  })
+})
