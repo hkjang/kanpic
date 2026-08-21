@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, StickyNote, Table2, Trash2 } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, History, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, StickyNote, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
@@ -44,6 +44,7 @@ export type GridShortcut=
 /** Menu actions the editor page owns because they open dialogs or panels. */
 export type GridMenuCommand=
   | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'|'column-stats'}
+  | {command:'cell-history';row:number;column:number}
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
   | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
@@ -891,6 +892,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
 		{kind:'item',label:'패턴 자동 채우기',disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'agent',mode:'formula',request:'선택 범위의 패턴을 분석해 전체 행에 수식을 채워줘'})},
 	  ]},
       {kind:'separator'},
+      {kind:'item',label:'편집 기록 표시',icon:<History/>,disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'cell-history',row:range.startRow,column:range.startColumn})},
       {kind:'item',label:'셀 링크 복사',icon:<Link2/>,onSelect:()=>void copySelectionLink()},
     ]
   }

@@ -27,6 +27,9 @@ type Repository interface {
 	CreateWorkbook(context.Context, CreateWorkbookInput) (Workbook, error)
 	ListWorkbooks(context.Context, string, AccessPrincipal) ([]Workbook, error)
 
+	// One cell's edit history, read out of the operation log.
+	CellHistory(context.Context, string, int, int, int) (CellHistory, error)
+
 	// Cross-workbook connections (IMPORTRANGE).
 	ListConnections(context.Context, string) (WorkbookConnections, error)
 	RefreshConnections(context.Context, string, string) (WorkbookConnections, error)

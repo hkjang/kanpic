@@ -200,6 +200,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/data-validations/{validationId}", s.updateDataValidation)
 	mux.HandleFunc("DELETE /api/v1/data-validations/{validationId}", s.deleteDataValidation)
 	mux.HandleFunc("POST /api/v1/data-validations/{validationAction}", s.evaluateDataValidation)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/cells/{address}/history", s.cellHistory)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats", s.listConditionalFormats)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/conditional-formats", s.createConditionalFormat)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats:evaluate", s.evaluateConditionalFormats)
@@ -1210,6 +1211,9 @@ func requiredScope(r *http.Request) string {
 			return "range.read"
 		}
 		return "range.write"
+	}
+	if strings.HasSuffix(path, "/history") && strings.Contains(path, "/cells/") {
+		return "range.read"
 	}
 	if strings.Contains(path, "/ranges/") {
 		return "range.read"
