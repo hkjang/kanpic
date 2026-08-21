@@ -84,3 +84,51 @@ func TestTransformDimensionRangesForDeletion(t *testing.T) {
 		t.Fatalf("result = %#v, changed = %v", result, changed)
 	}
 }
+
+// A slicer is stored with the sheet layout, so it has to survive the same
+// column edits the rest of the layout does: follow a moved column and leave
+// with a deleted one.
+func TestMemorySlicerLifecycleAndStructureTransform(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "slicer", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0]
+	view, err := repository.CreateFilterView(ctx, sheet.ID, "alice", CreateFilterViewInput{IdempotencyKey: "slicer-filter", Name: "지역", Range: "A1:B4", HeaderRows: 1, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "slicer-add", ExpectedRevision: 1, Action: "slicer_add", Slicer: &Slicer{FilterViewID: view.ID, Column: 3, Title: "지역", Position: ChartPosition{X: 40, Y: 40, Width: 220, Height: 260}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added.Layout.Slicers) != 1 || added.Layout.Slicers[0].ID == "" || added.Layout.Slicers[0].Column != 3 {
+		t.Fatalf("added slicers = %#v", added.Layout.Slicers)
+	}
+	id := added.Layout.Slicers[0].ID
+	// A slicer that is too small to show a value list is refused rather than
+	// stored as an unusable card.
+	if _, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "slicer-tiny", ExpectedRevision: added.Layout.Revision, Action: "slicer_update", Slicer: &Slicer{ID: id, FilterViewID: view.ID, Column: 3, Position: ChartPosition{X: 0, Y: 0, Width: 20, Height: 20}}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tiny slicer error = %v", err)
+	}
+	moved, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: added.ServerVersion, IdempotencyKey: "slicer-move", Axis: "column", Action: "move", Index: 3, Count: 1, Destination: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Sheets[0].Layout.Slicers; len(got) != 1 || got[0].Column != 1 {
+		t.Fatalf("slicers after move = %#v", got)
+	}
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: moved.ServerVersion, IdempotencyKey: "slicer-delete-column", Axis: "column", Action: "delete", Index: 1, Count: 1}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if got := current.Sheets[0].Layout.Slicers; len(got) != 0 {
+		t.Fatalf("slicers after deleting their column = %#v", got)
+	}
+}

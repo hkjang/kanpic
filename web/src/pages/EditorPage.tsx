@@ -13,6 +13,8 @@ import { ApiError } from '../lib/api'
 import { ContextMenu,type MenuItem } from '../components/ContextMenu'
 import { ChartDialog } from '../components/ChartDialog'
 import { ChartOverlay } from '../components/ChartOverlay'
+import { SlicerOverlay } from '../components/SlicerOverlay'
+import { parseFilterRange } from '../lib/filter'
 import { ChartPanel } from '../components/ChartPanel'
 import '../components/ChartLauncher.css'
 import { CommentPanel } from '../components/CommentPanel'
@@ -53,7 +55,7 @@ import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -211,6 +213,30 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     layoutQueue.current=next
     return next
   }
+  // A slicer is a filter control stored with the sheet layout. Adding one
+  // needs a filter view to drive, so it offers to create one over the selected
+  // range rather than failing on a sheet that has no filter yet.
+  const addSlicer=async()=>{
+    if(!activeSheet||!writable())return
+    let view=activeFilter
+    if(!view){
+      const working=await resolveWorkingBlock()
+      if(!working)return alert('슬라이서를 만들 데이터 범위를 찾지 못했습니다.')
+      const bounds=working.region
+      if(!window.confirm('이 시트에는 필터 보기가 없습니다. 선택한 데이터 범위로 필터 보기를 만들고 슬라이서를 추가할까요?'))return
+      const idempotencyKey=newIdempotencyKey()
+      view=await api<FilterView>(`/api/v1/sheets/${activeSheet.id}/filter-views`,{method:'POST',body:JSON.stringify({idempotency_key:idempotencyKey,name:'필터 보기',range:`${address(bounds.startRow,bounds.startColumn)}:${address(bounds.endRow,bounds.endColumn)}`,header_rows:1,active:true})})
+      await refreshFilters()
+    }
+    const column=editor.activeColumn
+    const bounds=parseFilterRange(view.range)
+    if(!bounds||column<bounds.startColumn||column>bounds.endColumn)return alert('필터 범위 안의 열을 선택한 뒤 슬라이서를 추가해 주세요.')
+    const header=bounds.startRow<=bounds.endRow?editor.cells.get(cellKey(bounds.startRow,column))?.value:undefined
+    const count=activeSheet.layout?.slicers?.length??0
+    await applyLayout({action:'slicer_add',slicer:{filter_view_id:view.id,column,title:typeof header==='string'&&header.trim()?header.trim().slice(0,64):undefined,position:{x:24+count*24,y:24+count*24,width:220,height:260}}})
+  }
+  const updateSlicer=async(slicer:Slicer)=>{await applyLayout({action:'slicer_update',slicer})}
+  const removeSlicer=async(slicer:Slicer)=>{await applyLayout({action:'slicer_remove',slicer:{id:slicer.id}})}
   const exportWorkbook=async(format:'xlsx'|'csv')=>{const response=await fetch('/api/v1/exports',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({workbook_id:workbookId,sheet_id:activeSheet?.id,format})});if(!response.ok)return alert('파일을 내보내지 못했습니다.');const blob=await response.blob();const disposition=response.headers.get('Content-Disposition')||'';const encoded=disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];const basic=disposition.match(/filename="?([^";]+)"?/)?.[1];const name=encoded?decodeURIComponent(encoded):basic||`kanpic.${format}`;const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();URL.revokeObjectURL(link.href)}
   const handleRestored=async(result:MutationResult)=>{editor.reset();updateVersion(result.server_version);await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]})])}
   const handleConflictResolved=(result:CellConflictResolutionResult)=>{updateVersion(result.operation.server_version);if(!result.operation.duplicate&&result.operation.applied_cells>0)editor.recordOperation(result.operation.operation_id);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]})}
@@ -754,6 +780,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
       {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
+      {kind:'item',label:'슬라이서 추가',disabled:!canWrite,onSelect:()=>void addSlicer().catch(error=>alert(error instanceof Error?error.message:'슬라이서를 추가하지 못했습니다.'))},
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'열 통계',onSelect:()=>setRightPanel('stats')},
@@ -843,6 +870,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {rightPanel==='pivots'&&<PivotPanel pivots={pivots.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setPivotDialog(null)} onEdit={item=>setPivotDialog(item)} onOpen={setPivotResult} onRefresh={refreshPivot} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
       </ResizableRightPanel>}
     </div>
+    <SlicerOverlay slicers={activeSheet.layout?.slicers??[]} views={filterViews.data?.items??[]} sheetId={activeSheet.id} version={serverVersion} readOnly={readOnly}
+      onApply={async(view,criteria)=>{await updateFilter(view.id,{criteria})}} onUpdate={updateSlicer} onRemove={removeSlicer}/>
     <ChartOverlay charts={charts.data?.items??[]} version={serverVersion} onEdit={item=>setChartDialog(item)} onUpdate={updateChart} onDelete={deleteChart} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>
     {chartDialog!==undefined&&<ChartDialog chart={chartDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setChartDialog(undefined)} onCreate={createChart} onUpdate={updateChart} onDelete={deleteChart}/>}
     {pivotDialog!==undefined&&<PivotDialog pivot={pivotDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setPivotDialog(undefined)} onCreate={createPivot} onUpdate={updatePivot} onDelete={deletePivot}/>}

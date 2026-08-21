@@ -68,6 +68,18 @@ type SheetLayout struct {
 	ColumnGroups  []DimensionGroup `json:"column_groups,omitempty"`
 	FrozenRows    int              `json:"frozen_rows"`
 	FrozenColumns int              `json:"frozen_columns"`
+	Slicers       []Slicer         `json:"slicers,omitempty"`
+}
+
+// Slicer is a filter control pinned to the sheet. It edits one column of one
+// filter view, so the rows it hides are hidden by the filter everybody already
+// shares rather than by a second, parallel filtering mechanism.
+type Slicer struct {
+	ID           string        `json:"id"`
+	FilterViewID string        `json:"filter_view_id"`
+	Column       int           `json:"column"`
+	Title        string        `json:"title,omitempty"`
+	Position     ChartPosition `json:"position"`
 }
 
 // DimensionGroup folds a run of rows or columns away behind one control, which
@@ -93,6 +105,7 @@ type SheetLayoutMutation struct {
 	Size             float64 `json:"size,omitempty"`
 	FrozenRows       int     `json:"frozen_rows,omitempty"`
 	FrozenColumns    int     `json:"frozen_columns,omitempty"`
+	Slicer           *Slicer `json:"slicer,omitempty"`
 }
 
 type SheetLayoutResult struct {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"kanpic/internal/formula"
+	"kanpic/pkg/identity"
 )
 
 const (
@@ -38,6 +39,17 @@ func cloneSheet(sheet Sheet) Sheet {
 	return sheet
 }
 
+// MaxSlicers bounds one sheet's filter controls. Past a couple of dozen the
+// sheet is unreadable underneath them and the layout blob starts to matter.
+const MaxSlicers = 24
+
+const (
+	MinSlicerWidth  = 140
+	MaxSlicerWidth  = 600
+	MinSlicerHeight = 96
+	MaxSlicerHeight = 640
+)
+
 func normalizeSheetLayout(layout SheetLayout) SheetLayout {
 	if layout.Revision < 1 {
 		layout.Revision = 1
@@ -54,7 +66,56 @@ func normalizeSheetLayout(layout SheetLayout) SheetLayout {
 	if layout.FrozenColumns < 0 || layout.FrozenColumns > formula.MaxColumns {
 		layout.FrozenColumns = 0
 	}
+	layout.Slicers = normalizeSlicers(layout.Slicers)
 	return layout
+}
+
+func normalizeSlicers(input []Slicer) []Slicer {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make([]Slicer, 0, len(input))
+	seen := make(map[string]bool, len(input))
+	for _, item := range input {
+		normalized, err := normalizeSlicer(item)
+		if err != nil || seen[normalized.ID] {
+			continue
+		}
+		seen[normalized.ID] = true
+		result = append(result, normalized)
+		if len(result) == MaxSlicers {
+			break
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeSlicer(item Slicer) (Slicer, error) {
+	item.ID = strings.TrimSpace(item.ID)
+	item.FilterViewID = strings.TrimSpace(item.FilterViewID)
+	item.Title = strings.TrimSpace(item.Title)
+	if item.ID == "" || item.FilterViewID == "" {
+		return Slicer{}, fmt.Errorf("%w: a slicer needs an id and a filter view", ErrInvalid)
+	}
+	if len([]rune(item.Title)) > 64 {
+		return Slicer{}, fmt.Errorf("%w: slicer title must be at most 64 characters", ErrInvalid)
+	}
+	if item.Column < 1 || item.Column > formula.MaxColumns {
+		return Slicer{}, fmt.Errorf("%w: slicer column is outside the sheet", ErrInvalid)
+	}
+	if item.Position.Width < MinSlicerWidth || item.Position.Width > MaxSlicerWidth || item.Position.Height < MinSlicerHeight || item.Position.Height > MaxSlicerHeight {
+		return Slicer{}, fmt.Errorf("%w: slicer size must be %d-%dpx wide and %d-%dpx tall", ErrInvalid, MinSlicerWidth, MaxSlicerWidth, MinSlicerHeight, MaxSlicerHeight)
+	}
+	if item.Position.X < 0 {
+		item.Position.X = 0
+	}
+	if item.Position.Y < 0 {
+		item.Position.Y = 0
+	}
+	return item, nil
 }
 
 func normalizeDimensionSizes(input []DimensionSize, limit int, minimum, maximum, defaultSize float64) []DimensionSize {
@@ -136,6 +197,25 @@ func normalizeSheetLayoutMutation(input SheetLayoutMutation) (SheetLayoutMutatio
 			return SheetLayoutMutation{}, fmt.Errorf("%w: frozen rows must be at most %d and frozen columns at most %d", ErrInvalid, MaxFrozenRows, MaxFrozenColumns)
 		}
 		return input, nil
+	case "slicer_add", "slicer_update":
+		if input.Slicer == nil {
+			return SheetLayoutMutation{}, fmt.Errorf("%w: slicer is required", ErrInvalid)
+		}
+		slicer := *input.Slicer
+		if input.Action == "slicer_add" {
+			slicer.ID = identity.New()
+		}
+		normalized, err := normalizeSlicer(slicer)
+		if err != nil {
+			return SheetLayoutMutation{}, err
+		}
+		input.Slicer = &normalized
+		return input, nil
+	case "slicer_remove":
+		if input.Slicer == nil || strings.TrimSpace(input.Slicer.ID) == "" {
+			return SheetLayoutMutation{}, fmt.Errorf("%w: slicer id is required", ErrInvalid)
+		}
+		return input, nil
 	case "resize", "reset_size", "hide", "show", "show_all", "group", "ungroup", "collapse", "expand":
 	default:
 		return SheetLayoutMutation{}, fmt.Errorf("%w: unsupported layout action", ErrInvalid)
@@ -173,6 +253,14 @@ func applySheetLayoutMutation(current SheetLayout, input SheetLayoutMutation) (S
 		return next, nil
 	}
 	switch input.Action {
+	case "slicer_add", "slicer_update", "slicer_remove":
+		updated, err := applySlicerMutation(next.Slicers, input)
+		if err != nil {
+			return SheetLayout{}, err
+		}
+		next.Slicers = updated
+		next.Revision++
+		return normalizeSheetLayout(next), nil
 	case "group", "ungroup", "collapse", "expand":
 		limit, groups := formula.MaxRows, next.RowGroups
 		if input.Axis == "column" {
@@ -199,6 +287,32 @@ func applySheetLayoutMutation(current SheetLayout, input SheetLayoutMutation) (S
 	}
 	next.Revision++
 	return normalizeSheetLayout(next), nil
+}
+
+func applySlicerMutation(current []Slicer, input SheetLayoutMutation) ([]Slicer, error) {
+	target := *input.Slicer
+	if input.Action == "slicer_add" {
+		if len(current) >= MaxSlicers {
+			return nil, fmt.Errorf("%w: a sheet holds at most %d slicers", ErrInvalid, MaxSlicers)
+		}
+		return append(append([]Slicer{}, current...), target), nil
+	}
+	result := make([]Slicer, 0, len(current))
+	found := false
+	for _, item := range current {
+		if item.ID != target.ID {
+			result = append(result, item)
+			continue
+		}
+		found = true
+		if input.Action == "slicer_update" {
+			result = append(result, target)
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: slicer not found", ErrNotFound)
+	}
+	return result, nil
 }
 
 func applyDimensionMutation(sizes []DimensionSize, hidden []DimensionRange, input SheetLayoutMutation, defaultSize float64) ([]DimensionSize, []DimensionRange) {
@@ -270,6 +384,22 @@ func transformLayoutForStructure(layout SheetLayout, input StructuralMutation) S
 		frozen := transformFrozenCount(layout.FrozenColumns, input)
 		changed = changed || frozen != layout.FrozenColumns
 		layout.FrozenColumns = frozen
+	}
+	if input.Axis == "column" && len(layout.Slicers) > 0 {
+		slicers := make([]Slicer, 0, len(layout.Slicers))
+		for _, slicer := range layout.Slicers {
+			column, remains := structuralPosition(slicer.Column, input)
+			if !remains {
+				changed = true
+				continue
+			}
+			if column != slicer.Column {
+				changed = true
+			}
+			slicer.Column = column
+			slicers = append(slicers, slicer)
+		}
+		layout.Slicers = slicers
 	}
 	if changed {
 		layout.Revision++
