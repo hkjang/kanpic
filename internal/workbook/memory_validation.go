@@ -54,7 +54,7 @@ func (r *MemoryRepository) ListDataValidations(_ context.Context, sheetID string
 	result := make([]DataValidation, 0)
 	for _, rule := range r.validations {
 		if rule.SheetID == sheetID {
-			item := cloneDataValidation(rule)
+			item := r.resolveValidationSourceLocked(cloneDataValidation(rule))
 			item.WorkbookVersion = state.workbook.Version
 			result = append(result, item)
 		}
@@ -80,7 +80,7 @@ func (r *MemoryRepository) GetDataValidation(_ context.Context, id string) (Data
 		return DataValidation{}, err
 	}
 	rule.WorkbookVersion = state.workbook.Version
-	return cloneDataValidation(rule), nil
+	return r.resolveValidationSourceLocked(cloneDataValidation(rule)), nil
 }
 
 func (r *MemoryRepository) UpdateDataValidation(_ context.Context, id, actor string, input UpdateDataValidationInput) (DataValidation, error) {
@@ -149,8 +149,43 @@ func (r *MemoryRepository) dataValidationsForSheetLocked(sheetID string) []DataV
 	result := make([]DataValidation, 0)
 	for _, rule := range r.validations {
 		if rule.SheetID == sheetID {
-			result = append(result, cloneDataValidation(rule))
+			result = append(result, r.resolveValidationSourceLocked(cloneDataValidation(rule)))
 		}
 	}
 	return result
+}
+
+// resolveValidationSourceLocked fills in what a range dropdown currently
+// offers. Options are never stored, so a rule cannot drift from the list it
+// points at; the cost is this read every time the rule is used.
+func (r *MemoryRepository) resolveValidationSourceLocked(rule DataValidation) DataValidation {
+	sheetName, selected, ok := ValidationSource(rule)
+	if !ok {
+		return rule
+	}
+	state, _, err := r.sheetState(rule.SheetID)
+	if err != nil {
+		return rule
+	}
+	sourceSheetID := rule.SheetID
+	if sheetName != "" {
+		sourceSheetID = ""
+		for id, sheet := range state.sheets {
+			if strings.EqualFold(strings.TrimSpace(sheet.Name), sheetName) {
+				sourceSheetID = id
+				break
+			}
+		}
+		if sourceSheetID == "" {
+			return rule
+		}
+	}
+	cells := make([]Cell, 0)
+	for _, cell := range state.cells[sourceSheetID] {
+		if selected.Contains(cell.Row, cell.Column) {
+			cells = append(cells, cell)
+		}
+	}
+	rule.SourceOptions = ValidationOptionsFromCells(cells)
+	return rule
 }

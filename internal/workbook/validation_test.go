@@ -1,6 +1,7 @@
 package workbook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -167,5 +168,57 @@ func TestMemoryDataValidationFollowsSheetWorkbookCopiesAndVersionRestore(t *test
 	restored, err := repository.GetDataValidation(ctx, rule.ID)
 	if err != nil || restored.Range != "C1:C9" || restored.RuleType != "date" {
 		t.Fatalf("restored rule=%#v err=%v", restored, err)
+	}
+}
+
+// A range dropdown reads its choices from cells, so editing that list has to
+// change what every dropdown using it accepts — without touching the rule.
+func TestMemoryRangeDropdownFollowsItsSource(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "범위 목록", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	seed, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "list-seed", Cells: []CellInput{
+		{Row: 1, Column: 5, Value: json.RawMessage(`"서울"`)},
+		{Row: 2, Column: 5, Value: json.RawMessage(`"부산"`)},
+		{Row: 3, Column: 5, Value: json.RawMessage(`"서울"`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := repository.CreateDataValidation(ctx, sheet, "alice", CreateDataValidationInput{
+		IdempotencyKey: "list-range", Range: "A1:A5", RuleType: "list_range", SourceRange: "E1:E10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rule.Options) != 0 {
+		t.Fatalf("a range rule must not store options: %#v", rule.Options)
+	}
+	stored, err := repository.GetDataValidation(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Duplicates and blanks are dropped, order is the order of the cells.
+	if len(stored.SourceOptions) != 2 || string(stored.SourceOptions[0].Value) != `"서울"` || string(stored.SourceOptions[1].Value) != `"부산"` {
+		t.Fatalf("resolved options = %#v", stored.SourceOptions)
+	}
+	accepted, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: seed.ServerVersion + 1, IdempotencyKey: "pick-known", Cells: []CellInput{{Row: 2, Column: 1, Value: json.RawMessage(`"부산"`)}}})
+	if err != nil {
+		t.Fatalf("a listed value must be accepted: %v", err)
+	}
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: accepted.ServerVersion, IdempotencyKey: "pick-unknown", Cells: []CellInput{{Row: 3, Column: 1, Value: json.RawMessage(`"대구"`)}}}); err == nil {
+		t.Fatal("a value outside the source range must be refused")
+	}
+	// Adding it to the source list is all it takes to make it valid.
+	added, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: accepted.ServerVersion, IdempotencyKey: "extend-source", Cells: []CellInput{{Row: 4, Column: 5, Value: json.RawMessage(`"대구"`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: added.ServerVersion, IdempotencyKey: "pick-new", Cells: []CellInput{{Row: 3, Column: 1, Value: json.RawMessage(`"대구"`)}}}); err != nil {
+		t.Fatalf("a value added to the source must become valid: %v", err)
 	}
 }

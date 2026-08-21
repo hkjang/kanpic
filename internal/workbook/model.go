@@ -364,6 +364,12 @@ type DataValidation struct {
 	RuleType        string             `json:"rule_type"`
 	Operator        string             `json:"operator"`
 	Options         []ValidationOption `json:"options,omitempty"`
+	// SourceRange points a list_range rule at the cells that hold its choices.
+	SourceRange string `json:"source_range,omitempty"`
+	// SourceOptions is what that range currently holds. It is derived on read
+	// and never stored, so a dropdown always offers today's list rather than
+	// the one that existed when the rule was written.
+	SourceOptions   []ValidationOption `json:"source_options,omitempty"`
 	Value           json.RawMessage    `json:"value,omitempty"`
 	Value2          json.RawMessage    `json:"value2,omitempty"`
 	Formula         string             `json:"formula,omitempty"`
@@ -385,6 +391,7 @@ type CreateDataValidationInput struct {
 	RuleType       string             `json:"rule_type"`
 	Operator       string             `json:"operator,omitempty"`
 	Options        []ValidationOption `json:"options,omitempty"`
+	SourceRange    string             `json:"source_range,omitempty"`
 	Value          json.RawMessage    `json:"value,omitempty"`
 	Value2         json.RawMessage    `json:"value2,omitempty"`
 	Formula        string             `json:"formula,omitempty"`
@@ -400,6 +407,7 @@ type UpdateDataValidationInput struct {
 	RuleType         *string             `json:"rule_type,omitempty"`
 	Operator         *string             `json:"operator,omitempty"`
 	Options          *[]ValidationOption `json:"options,omitempty"`
+	SourceRange      *string             `json:"source_range,omitempty"`
 	Value            *json.RawMessage    `json:"value,omitempty"`
 	Value2           *json.RawMessage    `json:"value2,omitempty"`
 	Formula          *string             `json:"formula,omitempty"`

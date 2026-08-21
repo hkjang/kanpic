@@ -1384,6 +1384,11 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		if err != nil {
 			return MutationResult{}, err
 		}
+		// A range dropdown checks against the list as it stands right now, so
+		// the source is read inside the same transaction as the write.
+		for index := range rules {
+			rules[index] = r.resolveValidationSource(ctx, tx, rules[index])
+		}
 		validationWarnings, err = ValidateCellInputs(rules, existing[mutation.SheetID], inputsForSheet(expanded, mutation.SheetID), effective)
 		if err != nil {
 			return MutationResult{}, err

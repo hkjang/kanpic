@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,9 +18,12 @@ const (
 	MaxValidationRows    = 1_048_576
 	MaxValidationColumns = 16_384
 	MaxValidationOptions = 500
-	maxValidationFormula = 2_000
-	maxValidationHelp    = 500
-	maxEvaluationDetails = 100
+	// MaxValidationSourceCells bounds a range dropdown. A list longer than this
+	// is a lookup table, not something a person picks from.
+	MaxValidationSourceCells = 1_000
+	maxValidationFormula     = 2_000
+	maxValidationHelp        = 500
+	maxEvaluationDetails     = 100
 )
 
 var comparisonOperators = map[string]struct{}{
@@ -54,7 +58,7 @@ func NewDataValidation(sheetID, actor string, input CreateDataValidationInput) (
 	}
 	rule := DataValidation{
 		SheetID: sheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Range: input.Range,
-		RuleType: input.RuleType, Operator: input.Operator, Options: cloneValidationOptions(input.Options),
+		RuleType: input.RuleType, Operator: input.Operator, Options: cloneValidationOptions(input.Options), SourceRange: input.SourceRange,
 		Value: cloneJSON(input.Value), Value2: cloneJSON(input.Value2), Formula: input.Formula,
 		AllowBlank: allowBlank, RejectInput: rejectInput, ShowDropdown: showDropdown,
 		DisplayStyle: input.DisplayStyle, HelpText: input.HelpText, CreatedBy: actor, UpdatedBy: actor,
@@ -184,6 +188,25 @@ func NormalizeDataValidation(rule DataValidation) (DataValidation, cellrange.Ran
 		}
 		rule.Value, rule.Value2, rule.Formula = nil, nil, ""
 		rule.ShowDropdown, rule.DisplayStyle = false, "plain"
+	case "list_range":
+		if rule.Operator == "" {
+			rule.Operator = "in_list"
+		}
+		rule.SourceRange = strings.ToUpper(strings.TrimSpace(rule.SourceRange))
+		if rule.Operator != "in_list" || rule.SourceRange == "" {
+			return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: a range dropdown needs a source range", ErrInvalid)
+		}
+		_, source, sourceErr := splitValidationSource(rule.SourceRange)
+		if sourceErr != nil {
+			return DataValidation{}, cellrange.Range{}, sourceErr
+		}
+		cells := int64(source.End.Row-source.Start.Row+1) * int64(source.End.Column-source.Start.Column+1)
+		if cells > MaxValidationSourceCells {
+			return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: a dropdown source may cover at most %d cells", ErrInvalid, MaxValidationSourceCells)
+		}
+		// The stored rule keeps only the pointer. Options are read from the
+		// range every time, so editing the list edits every dropdown using it.
+		rule.Options, rule.Value, rule.Value2, rule.Formula = nil, nil, nil, ""
 	case "custom_formula":
 		if rule.Operator == "" {
 			rule.Operator = "custom"
@@ -195,8 +218,9 @@ func NormalizeDataValidation(rule DataValidation) (DataValidation, cellrange.Ran
 			return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: invalid validation formula: %s", ErrInvalid, formulaError.Message)
 		}
 		rule.Options, rule.Value, rule.Value2, rule.ShowDropdown, rule.DisplayStyle = nil, nil, nil, false, "plain"
+		rule.SourceRange = ""
 	default:
-		return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be list, checkbox, number, date, or custom_formula", ErrInvalid)
+		return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be list, list_range, checkbox, number, date, or custom_formula", ErrInvalid)
 	}
 	return rule, selected, nil
 }
@@ -217,6 +241,9 @@ func ApplyDataValidationUpdate(current DataValidation, actor string, input Updat
 	}
 	if input.Options != nil {
 		updated.Options = cloneValidationOptions(*input.Options)
+	}
+	if input.SourceRange != nil {
+		updated.SourceRange = *input.SourceRange
 	}
 	if input.Value != nil {
 		updated.Value = cloneJSON(*input.Value)
@@ -248,6 +275,69 @@ func ApplyDataValidationUpdate(current DataValidation, actor string, input Updat
 
 func ValidationRangesOverlap(left, right cellrange.Range) bool {
 	return left.Start.Row <= right.End.Row && right.Start.Row <= left.End.Row && left.Start.Column <= right.End.Column && right.Start.Column <= left.End.Column
+}
+
+// splitValidationSource separates an optional sheet name from a dropdown's
+// source range: "코드!A2:A50" names another sheet, "A2:A50" this one.
+func splitValidationSource(value string) (string, cellrange.Range, error) {
+	sheetName := ""
+	text := strings.TrimSpace(value)
+	if index := strings.LastIndex(text, "!"); index >= 0 {
+		sheetName = strings.Trim(strings.TrimSpace(text[:index]), "'")
+		text = strings.TrimSpace(text[index+1:])
+	}
+	selected, err := cellrange.Parse(strings.ReplaceAll(text, "$", ""))
+	if err != nil {
+		return "", cellrange.Range{}, fmt.Errorf("%w: %s is not a valid source range", ErrInvalid, value)
+	}
+	return sheetName, selected, nil
+}
+
+// ValidationSource is the sheet and range a range dropdown reads from.
+func ValidationSource(rule DataValidation) (string, cellrange.Range, bool) {
+	if rule.RuleType != "list_range" || strings.TrimSpace(rule.SourceRange) == "" {
+		return "", cellrange.Range{}, false
+	}
+	sheetName, selected, err := splitValidationSource(rule.SourceRange)
+	if err != nil {
+		return "", cellrange.Range{}, false
+	}
+	return sheetName, selected, true
+}
+
+// ValidationOptionsFromCells turns the cells of a source range into dropdown
+// options: distinct, blank-free and in the order they appear, which is the
+// order somebody typed them in.
+func ValidationOptionsFromCells(cells []Cell) []ValidationOption {
+	ordered := make([]Cell, 0, len(cells))
+	ordered = append(ordered, cells...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Row == ordered[j].Row {
+			return ordered[i].Column < ordered[j].Column
+		}
+		return ordered[i].Row < ordered[j].Row
+	})
+	options := make([]ValidationOption, 0, len(ordered))
+	seen := make(map[string]struct{}, len(ordered))
+	for _, cell := range ordered {
+		value, err := decodeValidationValue(cell.Value)
+		if err != nil || value == nil || !validationScalar(value) {
+			continue
+		}
+		if text, isText := value.(string); isText && strings.TrimSpace(text) == "" {
+			continue
+		}
+		canonical := validationCanonical(value)
+		if _, duplicate := seen[canonical]; duplicate {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		options = append(options, ValidationOption{Value: cloneJSON(cell.Value)})
+		if len(options) == MaxValidationOptions {
+			break
+		}
+	}
+	return options
 }
 
 func ValidateCellInputs(rules []DataValidation, existing map[cellKey]Cell, expanded, submitted []CellInput) ([]ValidationViolation, error) {
@@ -338,6 +428,13 @@ func validateCellValue(rule DataValidation, selected cellrange.Range, row, colum
 	}
 	valid := false
 	switch rule.RuleType {
+	case "list_range":
+		for _, option := range rule.SourceOptions {
+			if validationCanonical(mustDecodeValidationValue(option.Value)) == validationCanonical(actual) {
+				return true, ""
+			}
+		}
+		return false, validationMessage(rule, defaultValidationMessage(rule))
 	case "list", "checkbox":
 		for _, option := range rule.Options {
 			expected, _ := decodeValidationValue(option.Value)

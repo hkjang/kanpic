@@ -13,7 +13,7 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const validationColumns = `d.id::text,w.id::text,w.version,d.sheet_id::text,d.idempotency_key,d.cell_range,d.rule_type,d.operator,d.options,d.value,d.value2,d.formula,d.allow_blank,d.reject_input,d.show_dropdown,d.display_style,d.help_text,d.revision,d.created_by,d.updated_by,d.created_at,d.updated_at`
+const validationColumns = `d.id::text,w.id::text,w.version,d.sheet_id::text,d.idempotency_key,d.cell_range,d.rule_type,d.operator,d.options,d.source_range,d.value,d.value2,d.formula,d.allow_blank,d.reject_input,d.show_dropdown,d.display_style,d.help_text,d.revision,d.created_by,d.updated_by,d.created_at,d.updated_at`
 
 type validationScanner interface{ Scan(...any) error }
 
@@ -57,7 +57,7 @@ func (r *PostgresRepository) CreateDataValidation(ctx context.Context, sheetID, 
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
 	options, _ := json.Marshal(rule.Options)
-	if _, err := tx.Exec(ctx, `INSERT INTO data_validations(id,sheet_id,idempotency_key,cell_range,rule_type,operator,options,value,value2,formula,allow_blank,reject_input,show_dropdown,display_style,help_text,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16,$16,$17,$17)`, rule.ID, sheetID, rule.CreateKey, rule.Range, rule.RuleType, rule.Operator, options, nullableJSON(rule.Value), nullableJSON(rule.Value2), rule.Formula, rule.AllowBlank, rule.RejectInput, rule.ShowDropdown, rule.DisplayStyle, rule.HelpText, actor, now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO data_validations(id,sheet_id,idempotency_key,cell_range,rule_type,operator,options,source_range,value,value2,formula,allow_blank,reject_input,show_dropdown,display_style,help_text,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,$17,$17,$18,$18)`, rule.ID, sheetID, rule.CreateKey, rule.Range, rule.RuleType, rule.Operator, options, rule.SourceRange, nullableJSON(rule.Value), nullableJSON(rule.Value2), rule.Formula, rule.AllowBlank, rule.RejectInput, rule.ShowDropdown, rule.DisplayStyle, rule.HelpText, actor, now); err != nil {
 		return DataValidation{}, mapPostgresError(err)
 	}
 	rule.WorkbookVersion = currentVersion + 1
@@ -87,6 +87,9 @@ func (r *PostgresRepository) ListDataValidations(ctx context.Context, sheetID st
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	for index := range items {
+		items[index] = r.resolveValidationSource(ctx, r.pool, items[index])
+	}
 	if len(items) == 0 {
 		var exists bool
 		if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sheets WHERE id=$1)`, sheetID).Scan(&exists); err != nil {
@@ -104,7 +107,10 @@ func (r *PostgresRepository) GetDataValidation(ctx context.Context, id string) (
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataValidation{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return DataValidation{}, err
+	}
+	return r.resolveValidationSource(ctx, r.pool, item), nil
 }
 
 func (r *PostgresRepository) UpdateDataValidation(ctx context.Context, id, actor string, input UpdateDataValidationInput) (DataValidation, error) {
@@ -132,7 +138,7 @@ func (r *PostgresRepository) UpdateDataValidation(ctx context.Context, id, actor
 	updated.UpdatedAt = now
 	updated.WorkbookVersion = current.WorkbookVersion + 1
 	options, _ := json.Marshal(updated.Options)
-	command, err := tx.Exec(ctx, `UPDATE data_validations SET cell_range=$2,rule_type=$3,operator=$4,options=$5,value=$6,value2=$7,formula=$8,allow_blank=$9,reject_input=$10,show_dropdown=$11,display_style=$12,help_text=$13,revision=$14,updated_by=$15,updated_at=$16 WHERE id=$1 AND revision=$17`, id, updated.Range, updated.RuleType, updated.Operator, options, nullableJSON(updated.Value), nullableJSON(updated.Value2), updated.Formula, updated.AllowBlank, updated.RejectInput, updated.ShowDropdown, updated.DisplayStyle, updated.HelpText, updated.Revision, actor, now, current.Revision)
+	command, err := tx.Exec(ctx, `UPDATE data_validations SET cell_range=$2,rule_type=$3,operator=$4,options=$5,source_range=$18,value=$6,value2=$7,formula=$8,allow_blank=$9,reject_input=$10,show_dropdown=$11,display_style=$12,help_text=$13,revision=$14,updated_by=$15,updated_at=$16 WHERE id=$1 AND revision=$17`, id, updated.Range, updated.RuleType, updated.Operator, options, nullableJSON(updated.Value), nullableJSON(updated.Value2), updated.Formula, updated.AllowBlank, updated.RejectInput, updated.ShowDropdown, updated.DisplayStyle, updated.HelpText, updated.Revision, actor, now, current.Revision, updated.SourceRange)
 	if err != nil {
 		return DataValidation{}, err
 	}
@@ -218,7 +224,7 @@ func ensurePostgresValidationRangeAvailable(ctx context.Context, tx pgx.Tx, shee
 func scanDataValidation(row validationScanner) (DataValidation, error) {
 	var rule DataValidation
 	var options, value, value2 []byte
-	err := row.Scan(&rule.ID, &rule.WorkbookID, &rule.WorkbookVersion, &rule.SheetID, &rule.CreateKey, &rule.Range, &rule.RuleType, &rule.Operator, &options, &value, &value2, &rule.Formula, &rule.AllowBlank, &rule.RejectInput, &rule.ShowDropdown, &rule.DisplayStyle, &rule.HelpText, &rule.Revision, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt)
+	err := row.Scan(&rule.ID, &rule.WorkbookID, &rule.WorkbookVersion, &rule.SheetID, &rule.CreateKey, &rule.Range, &rule.RuleType, &rule.Operator, &options, &rule.SourceRange, &value, &value2, &rule.Formula, &rule.AllowBlank, &rule.RejectInput, &rule.ShowDropdown, &rule.DisplayStyle, &rule.HelpText, &rule.Revision, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt)
 	if err != nil {
 		return DataValidation{}, err
 	}
@@ -246,4 +252,39 @@ func insertDataValidationTx(ctx context.Context, tx pgx.Tx, rule DataValidation)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO data_validations(id,sheet_id,idempotency_key,cell_range,rule_type,operator,options,value,value2,formula,allow_blank,reject_input,show_dropdown,display_style,help_text,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, rule.ID, rule.SheetID, rule.CreateKey, rule.Range, rule.RuleType, rule.Operator, options, nullableJSON(rule.Value), nullableJSON(rule.Value2), rule.Formula, rule.AllowBlank, rule.RejectInput, rule.ShowDropdown, rule.DisplayStyle, rule.HelpText, rule.Revision, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt)
 	return err
+}
+
+// resolveValidationSource fills in what a range dropdown currently offers. The
+// options are never stored, so the rule cannot drift from the list it points
+// at; the cost is this read wherever the rule is used.
+func (r *PostgresRepository) resolveValidationSource(ctx context.Context, db queryer, rule DataValidation) DataValidation {
+	sheetName, selected, ok := ValidationSource(rule)
+	if !ok {
+		return rule
+	}
+	sourceSheetID := rule.SheetID
+	if sheetName != "" {
+		rows, err := db.Query(ctx, `SELECT id::text FROM sheets WHERE workbook_id=(SELECT workbook_id FROM sheets WHERE id=$1) AND upper(btrim(name))=upper(btrim($2)) ORDER BY position LIMIT 1`, rule.SheetID, sheetName)
+		if err != nil {
+			return rule
+		}
+		found := false
+		for rows.Next() {
+			if err := rows.Scan(&sourceSheetID); err != nil {
+				rows.Close()
+				return rule
+			}
+			found = true
+		}
+		rows.Close()
+		if !found {
+			return rule
+		}
+	}
+	cells, err := readRangeQuery(ctx, db, sourceSheetID, selected)
+	if err != nil {
+		return rule
+	}
+	rule.SourceOptions = ValidationOptionsFromCells(cells)
+	return rule
 }

@@ -18,7 +18,7 @@ import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type Dimen
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
-import { checkboxState,optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
+import { checkboxState,optionForValue,optionLabel,ruleOptions,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
 import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, FilterView, MutationResult, SheetLayout } from '../types'
@@ -962,7 +962,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   }
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
   const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=headerWidth+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=headerHeight+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
-  const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
+  const dropdown=!activeCell?.spill_source&&(activeValidation?.rule_type==='list'||activeValidation?.rule_type==='list_range')&&activeValidation.show_dropdown?activeValidation:undefined
   // A chart cell has no text, so what is announced is a description of it.
   const activeSparkline=parseSparkline(activeCell?.value)
   const textEditing=editing&&!dropdown
@@ -991,7 +991,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     <div className="grid-spacer" style={{width:headerWidth+columnAxis.extent,height:headerHeight+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={doubleClick} onContextMenu={openContextMenu}/></div>
     {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>{setMenu(undefined);focusGrid()}}/>}
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
-    {editing&&dropdown&&<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>{setEditing(false);focusGrid();void saveCell(option.value,'',activeRow,activeColumn)}}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>{setEditing(false);focusGrid()}}>취소</button></div>}
+    {editing&&dropdown&&<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{ruleOptions(dropdown)?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>{setEditing(false);focusGrid();void saveCell(option.value,'',activeRow,activeColumn)}}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>{setEditing(false);focusGrid()}}>취소</button></div>}
     <textarea ref={editorInput} className={`cell-editor${textEditing?'':' idle'}`} aria-label={`${selectionAddress} 셀 입력`} rows={1} spellCheck={false}
       style={textEditing?{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}:{left:inputLeft,top:inputTop}}
       value={textEditing?draft:''}

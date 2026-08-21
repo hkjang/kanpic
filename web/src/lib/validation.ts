@@ -7,7 +7,8 @@ export function validationForCell(rules:DataValidation[],row:number,column:numbe
   return rules.find(rule=>{const range=parseFilterRange(rule.range);return Boolean(range&&row>=range.startRow&&row<=range.endRow&&column>=range.startColumn&&column<=range.endColumn)})
 }
 
-export function optionForValue(rule:DataValidation,value:unknown){return rule.options?.find(option=>sameValue(option.value,value))}
+export function ruleOptions(rule:DataValidation){return rule.rule_type==='list_range'?rule.source_options:rule.options}
+export function optionForValue(rule:DataValidation,value:unknown){return ruleOptions(rule)?.find(option=>sameValue(option.value,value))}
 export function optionLabel(option:ValidationOption){return option.label?.trim()||String(option.value)}
 export function validationDraftValue(value:unknown){return value==null?'':String(value)}
 export function validationOptionInput(value:string,label:string,color:string):ValidationOption{return{value:parseFilterInput(value),...(label.trim()?{label:label.trim()}:{}),...(color?{color}: {})}}
@@ -15,11 +16,11 @@ export function validationOptionInput(value:string,label:string,color:string):Va
 export function validateClientValue(rule:DataValidation,value:unknown):{valid:boolean;deferred:boolean;message:string}{
   if(value==null||value==='')return{valid:rule.allow_blank,deferred:false,message:rule.help_text||'빈 값은 허용되지 않습니다.'}
   let valid=false,deferred=false
-  if(rule.rule_type==='list'||rule.rule_type==='checkbox')valid=Boolean(optionForValue(rule,value))
+  if(rule.rule_type==='list'||rule.rule_type==='list_range'||rule.rule_type==='checkbox')valid=Boolean(optionForValue(rule,value))
   else if(rule.rule_type==='number')valid=typeof value==='number'&&Number.isFinite(value)&&compare(value,Number(rule.value),Number(rule.value2),rule.operator)
   else if(rule.rule_type==='date'){const actual=dateValue(value),first=dateValue(rule.value),second=dateValue(rule.value2);valid=actual!==undefined&&first!==undefined&&compare(actual,first,second??0,rule.operator)}
   else{valid=true;deferred=true}
-  const fallback=rule.rule_type==='checkbox'?'체크 상태를 나타내는 두 값 중 하나여야 합니다.':rule.rule_type==='list'?'목록에 있는 값을 선택해야 합니다.':rule.rule_type==='number'?'숫자 검증 조건을 만족하지 않습니다.':rule.rule_type==='date'?'날짜 검증 조건을 만족하지 않습니다.':'사용자 지정 수식은 서버에서 검사됩니다.'
+  const fallback=rule.rule_type==='checkbox'?'체크 상태를 나타내는 두 값 중 하나여야 합니다.':rule.rule_type==='list'||rule.rule_type==='list_range'?'목록에 있는 값을 선택해야 합니다.':rule.rule_type==='number'?'숫자 검증 조건을 만족하지 않습니다.':rule.rule_type==='date'?'날짜 검증 조건을 만족하지 않습니다.':'사용자 지정 수식은 서버에서 검사됩니다.'
   return{valid,deferred,message:rule.help_text||fallback}
 }
 
