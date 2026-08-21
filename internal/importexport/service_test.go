@@ -1,10 +1,13 @@
 package importexport
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
@@ -541,5 +544,81 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 	}
 	if rule := byArea["D1:D20"]; rule.RuleType != "custom_formula" || rule.Formula != "=$A1>100" {
 		t.Fatalf("restored custom formula = %#v", rule)
+	}
+}
+
+// A workbook's charts are half of what people look at. Exporting the numbers
+// without them hands somebody a file where the report is missing.
+func TestXLSXExportCarriesCharts(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "charts", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	raw := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "chart-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: raw("분기")}, {Row: 1, Column: 2, Value: raw("매출")},
+		{Row: 2, Column: 1, Value: raw("Q1")}, {Row: 2, Column: 2, Value: raw(120)},
+		{Row: 3, Column: 1, Value: raw("Q2")}, {Row: 3, Column: 2, Value: raw(150)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	yes := true
+	if _, err := repository.CreateChart(ctx, wb.ID, "tester", workbook.CreateChartInput{
+		IdempotencyKey: "chart", SheetID: sheetID, SourceSheetID: sheetID, Type: "bar", Title: "분기 매출",
+		SourceRange: "A1:B3", FirstRowHeaders: &yes, FirstColumnLabels: &yes, LegendPosition: "bottom",
+		Position: &workbook.ChartPosition{X: 432, Y: 108, Width: 480, Height: 300},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// excelize can write charts but not read them back, so the file itself is
+	// inspected: the chart part has to exist and name the source cells.
+	archive, err := zip.NewReader(bytes.NewReader(exported.Data), int64(len(exported.Data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chartXML := ""
+	for _, entry := range archive.File {
+		if entry.Name != "xl/charts/chart1.xml" {
+			continue
+		}
+		handle, openErr := entry.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		content, readErr := io.ReadAll(handle)
+		handle.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		chartXML = string(content)
+	}
+	if chartXML == "" {
+		names := make([]string, 0, len(archive.File))
+		for _, entry := range archive.File {
+			names = append(names, entry.Name)
+		}
+		t.Fatalf("no chart part in the exported file: %v", names)
+	}
+	if !strings.Contains(chartXML, "barChart") {
+		t.Fatalf("chart is not a bar chart: %s", chartXML[:min(400, len(chartXML))])
+	}
+	// The series has to point at the source cells, not at nothing.
+	if !strings.Contains(chartXML, "$B$2:$B$3") {
+		t.Fatalf("series values missing from chart XML")
+	}
+	if !strings.Contains(chartXML, "$A$2:$A$3") {
+		t.Fatalf("series categories missing from chart XML")
+	}
+	if !strings.Contains(chartXML, "분기 매출") {
+		t.Fatalf("chart title missing from chart XML")
 	}
 }

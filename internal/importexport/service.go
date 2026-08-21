@@ -476,6 +476,37 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 			}
 		}
 	}
+	// Charts are added after every sheet exists, because a chart names the
+	// sheet its data lives on and Excel refuses a reference to a sheet that is
+	// not there yet.
+	sheetNames := make(map[string]string, len(wb.Sheets))
+	for index, sheet := range wb.Sheets {
+		sheetNames[sheet.ID] = sanitizeSheetName(sheet.Name, index)
+	}
+	charts, err := s.repository.ListCharts(ctx, wb.ID, "")
+	if err != nil {
+		return ExportedFile{}, err
+	}
+	for _, item := range charts {
+		target, known := sheetNames[item.SheetID]
+		source, sourceKnown := sheetNames[item.SourceSheetID]
+		if !known || !sourceKnown || item.SourceRange == "#REF!" {
+			continue
+		}
+		primary, combo := exportChart(item, source)
+		if primary == nil {
+			continue
+		}
+		if combo != nil {
+			if err := file.AddChart(target, anchorCell(item.Position), primary, combo); err != nil {
+				return ExportedFile{}, err
+			}
+			continue
+		}
+		if err := file.AddChart(target, anchorCell(item.Position), primary); err != nil {
+			return ExportedFile{}, err
+		}
+	}
 	var buffer bytes.Buffer
 	if err := file.Write(&buffer); err != nil {
 		return ExportedFile{}, err
