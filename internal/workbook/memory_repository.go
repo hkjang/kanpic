@@ -169,6 +169,19 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	// same normalisation a request does.
 	for position, imported := range input.Sheets {
 		sheetID := sheetIDs[position]
+		for index, rule := range imported.ConditionalFormats {
+			created, ok := importedConditionalInput(rule, index)
+			if !ok {
+				continue
+			}
+			normalized, _, err := NewConditionalFormat(sheetID, input.ActorID, created)
+			if err != nil {
+				continue
+			}
+			normalized.ID, normalized.WorkbookID = identity.New(), wb.ID
+			normalized.CreatedAt, normalized.UpdatedAt, normalized.Revision = now, now, 1
+			r.conditionalFormats[normalized.ID] = normalized
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {

@@ -256,6 +256,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		}
 		imported.Layout = readSheetLayout(file, sheetName, rowIndex, maxColumns)
 		imported.Validations = importValidations(file, sheetName)
+		imported.ConditionalFormats = importConditionalFormats(file, sheetName)
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
 	}
@@ -366,6 +367,47 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		}
 		// Input rules travel with the sheet: a file whose dropdowns are gone
 		// looks the same and behaves differently.
+		// Conditional formats are grouped by range: Excel stores one rule list
+		// per range, while kanpic stores each rule with its own.
+		conditionals, err := s.repository.ListConditionalFormats(ctx, sheet.ID)
+		if err != nil {
+			return ExportedFile{}, err
+		}
+		styleFor := func(raw json.RawMessage) *int {
+			definition := xlsxStyle(raw)
+			if definition == nil {
+				return nil
+			}
+			styleData, _ := json.Marshal(definition)
+			key := "cf:" + string(styleData)
+			styleID, exists := styleCache[key]
+			if !exists {
+				created, styleErr := file.NewStyle(definition)
+				if styleErr != nil {
+					return nil
+				}
+				styleCache[key] = created
+				styleID = created
+			}
+			return &styleID
+		}
+		byRange := make(map[string][]excelize.ConditionalFormatOptions)
+		rangeOrder := make([]string, 0, len(conditionals))
+		for _, rule := range conditionals {
+			options := exportConditionalFormat(rule, styleFor)
+			if options == nil {
+				continue
+			}
+			if _, seen := byRange[rule.Range]; !seen {
+				rangeOrder = append(rangeOrder, rule.Range)
+			}
+			byRange[rule.Range] = append(byRange[rule.Range], *options)
+		}
+		for _, area := range rangeOrder {
+			if err := file.SetConditionalFormat(name, area, byRange[area]); err != nil {
+				return ExportedFile{}, err
+			}
+		}
 		rules, err := s.repository.ListDataValidations(ctx, sheet.ID)
 		if err != nil {
 			return ExportedFile{}, err

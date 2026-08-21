@@ -445,3 +445,101 @@ func TestXLSXValidationsSurviveAnExportImportRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Conditional formats are how a sheet says which numbers matter. Exporting the
+// values without them hands somebody a table where nothing stands out.
+func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "conditional", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	raw := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	create := func(key string, input workbook.CreateConditionalFormatInput) {
+		t.Helper()
+		input.IdempotencyKey = key
+		if _, err := repository.CreateConditionalFormat(ctx, sheetID, "tester", input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create("value", workbook.CreateConditionalFormatInput{Range: "A1:A20", RuleType: "value", Operator: "greater_than", Value: raw(100), Style: raw(map[string]any{"background": "#fee2e2"})})
+	create("scale", workbook.CreateConditionalFormatInput{Range: "B1:B20", RuleType: "color_scale", MinColor: "#dcfce7", MaxColor: "#ef4444"})
+	create("bar", workbook.CreateConditionalFormatInput{Range: "C1:C20", RuleType: "data_bar", BarColor: "#38a3a5"})
+	create("custom", workbook.CreateConditionalFormatInput{Range: "D1:D20", RuleType: "custom_formula", Formula: `=$A1>100`, Style: raw(map[string]any{"background": "#dbeafe"})})
+
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	formats, err := file.GetConditionalFormats(file.GetSheetName(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make(map[string]string, len(formats))
+	for area, options := range formats {
+		if len(options) != 1 {
+			t.Fatalf("range %s carried %d rules", area, len(options))
+		}
+		kinds[area] = options[0].Type
+	}
+	expected := map[string]string{"A1:A20": "cell", "B1:B20": "2_color_scale", "C1:C20": "data_bar", "D1:D20": "formula"}
+	for area, kind := range expected {
+		if kinds[area] != kind {
+			t.Fatalf("range %s exported as %q, want %q (all: %#v)", area, kinds[area], kind, kinds)
+		}
+	}
+	// The comparison itself has to survive, not just the rule type.
+	for area, options := range formats {
+		if area == "A1:A20" && (options[0].Criteria != "greater than" || options[0].Value != "100") {
+			t.Fatalf("cell rule = %#v", options[0])
+		}
+		if area == "D1:D20" && options[0].Criteria != "$A1>100" {
+			t.Fatalf("formula rule = %#v", options[0])
+		}
+	}
+
+	// Reading the file back has to produce the same rules, and they have to
+	// reach the stored sheet rather than stopping at the parse result.
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "conditional-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.ListConditionalFormats(ctx, restored.Sheets[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 4 {
+		t.Fatalf("stored conditional formats = %#v", stored)
+	}
+	byArea := make(map[string]workbook.ConditionalFormat, len(stored))
+	for _, rule := range stored {
+		byArea[rule.Range] = rule
+	}
+	if rule := byArea["A1:A20"]; rule.RuleType != "value" || rule.Operator != "greater_than" || string(rule.Value) != "100" {
+		t.Fatalf("restored value rule = %#v", rule)
+	}
+	if rule := byArea["B1:B20"]; rule.RuleType != "color_scale" || rule.MinColor == "" || rule.MaxColor == "" {
+		t.Fatalf("restored colour scale = %#v", rule)
+	}
+	if rule := byArea["C1:C20"]; rule.RuleType != "data_bar" || rule.BarColor == "" {
+		t.Fatalf("restored data bar = %#v", rule)
+	}
+	if rule := byArea["D1:D20"]; rule.RuleType != "custom_formula" || rule.Formula != "=$A1>100" {
+		t.Fatalf("restored custom formula = %#v", rule)
+	}
+}

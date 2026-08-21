@@ -484,6 +484,10 @@ type ImportSheet struct {
 	// sheet accepts, so dropping them on import quietly widens what people can
 	// type into a form somebody designed.
 	Validations []ImportValidation `json:"validations,omitempty"`
+	// ConditionalFormats are the highlighting rules the file carried. They are
+	// how a sheet says which numbers matter, and a table without them looks
+	// uniformly unremarkable.
+	ConditionalFormats []ImportConditionalFormat `json:"conditional_formats,omitempty"`
 	// Layout carries what the file said about arrangement: hidden rows and
 	// columns, sizes, frozen panes and outline groups. An import that drops it
 	// flattens a workbook that was exported from here minutes earlier.
@@ -504,6 +508,22 @@ type ImportValidation struct {
 	AllowBlank  bool     `json:"allow_blank"`
 	RejectInput bool     `json:"reject_input"`
 	HelpText    string   `json:"help_text,omitempty"`
+}
+
+// ImportConditionalFormat is one highlighting rule read out of a file.
+type ImportConditionalFormat struct {
+	Range      string          `json:"range"`
+	RuleType   string          `json:"rule_type"`
+	Operator   string          `json:"operator,omitempty"`
+	Formula    string          `json:"formula,omitempty"`
+	Value      json.RawMessage `json:"value,omitempty"`
+	Value2     json.RawMessage `json:"value2,omitempty"`
+	Style      json.RawMessage `json:"style,omitempty"`
+	MinColor   string          `json:"min_color,omitempty"`
+	MidColor   string          `json:"mid_color,omitempty"`
+	MaxColor   string          `json:"max_color,omitempty"`
+	BarColor   string          `json:"bar_color,omitempty"`
+	StopIfTrue bool            `json:"stop_if_true,omitempty"`
 }
 
 type ImportWorkbookInput struct {

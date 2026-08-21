@@ -157,6 +157,31 @@ type conditionalFormatSource struct {
 	Cells []Cell
 }
 
+// importedConditionalInput turns the rule an imported file described into the
+// create input the normal path validates. Files go through the same door as
+// requests.
+func importedConditionalInput(imported ImportConditionalFormat, index int) (CreateConditionalFormatInput, bool) {
+	input := CreateConditionalFormatInput{
+		IdempotencyKey: fmt.Sprintf("import-conditional-%d", index),
+		Range:          strings.ToUpper(strings.TrimSpace(imported.Range)),
+		RuleType:       imported.RuleType,
+		Operator:       imported.Operator,
+		Formula:        imported.Formula,
+		Value:          imported.Value,
+		Value2:         imported.Value2,
+		Style:          imported.Style,
+		MinColor:       imported.MinColor,
+		MidColor:       imported.MidColor,
+		MaxColor:       imported.MaxColor,
+		BarColor:       imported.BarColor,
+		StopIfTrue:     imported.StopIfTrue,
+	}
+	if input.Range == "" || input.RuleType == "" {
+		return CreateConditionalFormatInput{}, false
+	}
+	return input, true
+}
+
 func NewConditionalFormat(sheetID, actor string, input CreateConditionalFormatInput) (ConditionalFormat, cellrange.Range, error) {
 	rule := ConditionalFormat{
 		SheetID: sheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Name: input.Name, Range: input.Range,

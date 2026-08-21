@@ -146,6 +146,21 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		}
 		// Input rules the file carried go through the same normalisation a
 		// request does, then straight into the sheet they belong to.
+		for index, rule := range imported.ConditionalFormats {
+			created, ok := importedConditionalInput(rule, index)
+			if !ok {
+				continue
+			}
+			normalized, _, ruleErr := NewConditionalFormat(sheet.ID, input.ActorID, created)
+			if ruleErr != nil {
+				continue
+			}
+			normalized.ID, normalized.Revision, normalized.CreatedAt, normalized.UpdatedAt = identity.New(), 1, now, now
+			normalized.CreatedBy, normalized.UpdatedBy = input.ActorID, input.ActorID
+			if err := insertConditionalFormatTx(ctx, tx, normalized); err != nil {
+				return Workbook{}, err
+			}
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {
