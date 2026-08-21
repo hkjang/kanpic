@@ -62,7 +62,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const functionCatalog=useFunctionCatalog()
@@ -530,7 +530,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(filling.current){const cell=pointCell(event);if(!cell)return;const next={startRow:Math.min(selection.startRow,cell.row),startColumn:Math.min(selection.startColumn,cell.column),endRow:Math.max(selection.endRow,cell.row),endColumn:Math.max(selection.endColumn,cell.column)};fillPreviewRef.current=next;setFillPreview(next);return}
     if(!dragging.current){
       const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
-      event.currentTarget.style.cursor=target?target.axis==='column'?'col-resize':'row-resize':onFillHandle(event)?'crosshair':'default'
+      event.currentTarget.style.cursor=formatBrush?'copy':target?target.axis==='column'?'col-resize':'row-resize':onFillHandle(event)?'crosshair':'default'
       // Hovering a cell that carries a note shows the note, which is the only
       // way to read one.
       const hovered=pointCell(event)
@@ -544,8 +544,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const cell=pointCell(event);if(cell)selectCell(cell.row,cell.column,true)
   }
   const finishGesture=(event:React.PointerEvent<HTMLCanvasElement>)=>{
+    // A selection made while the brush is loaded takes the copied format and
+    // the brush is put down, which is what one click of a format painter does.
+    if(formatBrush&&onPaintFormat&&(dragging.current||headerDrag.current))onPaintFormat(selectedBounds(useEditorStore.getState()))
     dragging.current=false;headerDrag.current=null;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined)
-    event.currentTarget.style.cursor='default'
+    event.currentTarget.style.cursor=formatBrush?'copy':'default'
     if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)
   }
   const pointerUp=(event:React.PointerEvent<HTMLCanvasElement>)=>{
