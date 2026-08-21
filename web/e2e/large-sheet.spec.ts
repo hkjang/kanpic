@@ -54,3 +54,27 @@ test('the column filter lists values that only appear far down the sheet', async
     return views[0]?.criteria
   }).toEqual([{column:1,operator:'values',values:['제주']}])
 })
+
+// Sorting has to cover the whole table. Working the block out from the rows in
+// memory sorted only the visible part, which scrambles a table against itself.
+test('quick sort covers the whole table, not the rows on screen', async ({ page, request }) => {
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`큰 시트 정렬 ${Date.now()}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id
+  const cells:Array<Record<string,unknown>>=[{row:1,column:1,value:'번호'}]
+  for(let row=2;row<=ROWS+1;row+=1)cells.push({row,column:1,value:ROWS+2-row})
+  await request.patch(`/api/v1/sheets/${sheet}/cells:paste`,{data:{idempotency_key:`seed-${Date.now()}`,cells}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.waitForSelector('.grid-canvas')
+  page.on('dialog',dialog=>void dialog.accept())
+  await page.locator('.name-box').fill('A2')
+  await page.keyboard.press('Enter')
+  await page.getByRole('menuitem',{name:'데이터'}).click()
+  await page.getByRole('menuitem',{name:'선택 열 기준 정렬 A → Z'}).click()
+
+  await expect.poll(async()=>{
+    const items=(await (await request.get(`/api/v1/sheets/${sheet}/ranges/A2:A${ROWS+1}`)).json()).items as Array<{row:number;value:number}>
+    const values=items.sort((first,second)=>first.row-second.row).map(item=>item.value)
+    return values.length===ROWS&&values.every((value,index)=>index===0||values[index-1]<=value)
+  },{timeout:15_000}).toBe(true)
+})

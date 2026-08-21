@@ -53,7 +53,7 @@ import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -200,7 +200,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const writable=()=>{const role=workbook.data?.access_role??'owner';if(role==='editor'||role==='owner')return true;denyWrite();return false}
   const applyFormat=async(patch:Record<string,unknown>,border?:BorderFormatCommand)=>{if(!activeSheet||!writable())return;const rows=editorSelection.endRow-editorSelection.startRow+1,columns=editorSelection.endColumn-editorSelection.startColumn+1;if(rows*columns>MAX_PASTE_CELLS){alert(`서식 적용은 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}const updatedAt=new Date().toISOString(),optimistic:Cell[]=[];for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1){const current=editor.cells.get(cellKey(row,column));optimistic.push({sheet_id:activeSheet.id,row,column,value:current?.value,formula:current?.formula,spill_source:current?.spill_source,style:patchStyle(current?.style,patch),updated_at:updatedAt})}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId:activeSheet.id,endpoint:'format',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`,...(Object.keys(patch).length>0?{style:patch}:{}),...(border?{border}:{})}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
   const changeMerge=async(merge:boolean)=>{if(!activeSheet||!writable())return;const rows=editorSelection.endRow-editorSelection.startRow+1,columns=editorSelection.endColumn-editorSelection.startColumn+1;if(merge&&rows*columns<2){alert('두 개 이상의 셀을 선택해 병합하세요.');return}if(rows*columns>MAX_PASTE_CELLS){alert(`셀 병합은 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`);return}const spill=spillInRange(editor.cells,editorSelection);if(spill){alert(`${spill.coordinate}은(는) ${spill.cell.spill_source} 배열 수식의 결과이므로 병합할 수 없습니다.`);return}if(merge){for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1)if(cellMerge(editor.cells.get(cellKey(row,column)))){alert('선택 범위가 기존 병합 셀과 겹칩니다. 먼저 병합을 해제하세요.');return}}const updatedAt=new Date().toISOString(),optimistic:Cell[]=[];for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1){const current=editor.cells.get(cellKey(row,column));optimistic.push({sheet_id:activeSheet.id,row,column,value:current?.value,formula:current?.formula,spill_source:current?.spill_source,style:applyMergeStyle(current?.style,editorSelection,merge),updated_at:updatedAt})}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey(),endpoint=merge?'merge':'unmerge';await enqueue({id,sheetId:activeSheet.id,endpoint,attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
-  const sortSelection=async(options:SortOptions)=>{if(!activeSheet||!writable())return;const spill=spillInRange(editor.cells,editorSelection);if(spill){const error=new Error(`${spill.coordinate}은(는) ${spill.cell.spill_source} 배열 수식의 결과이므로 정렬할 수 없습니다.`);alert(error.message);throw error}let optimistic:Cell[];try{optimistic=materializeSort(editor.cells,editorSelection,options,activeSheet.id)}catch(error){alert(error instanceof Error?error.message:'범위를 정렬하지 못했습니다.');throw error}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId:activeSheet.id,endpoint:'sort',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`,keys:options.keys,header_rows:options.headerRows,case_sensitive:options.caseSensitive}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
+  const sortSelection=async(options:SortOptions,target?:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>{if(!activeSheet||!writable())return;const editorSelection=target??selectedBounds(useEditorStore.getState());const spill=spillInRange(editor.cells,editorSelection);if(spill){const error=new Error(`${spill.coordinate}은(는) ${spill.cell.spill_source} 배열 수식의 결과이므로 정렬할 수 없습니다.`);alert(error.message);throw error}let optimistic:Cell[];try{optimistic=materializeSort(editor.cells,editorSelection,options,activeSheet.id)}catch(error){alert(error instanceof Error?error.message:'범위를 정렬하지 못했습니다.');throw error}editor.putCells(optimistic);editor.setSaveState(navigator.onLine?'saving':'offline');const id=newIdempotencyKey();await enqueue({id,sheetId:activeSheet.id,endpoint:'sort',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`,keys:options.keys,header_rows:options.headerRows,case_sensitive:options.caseSensitive}});await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})}
   const applyStructure=async(command:StructureCommand)=>{if(!activeSheet||!writable())return;if(!navigator.onLine){alert('행과 열 구조 변경은 서버에 연결된 상태에서만 사용할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),idempotencyKey=newIdempotencyKey();const result=await api<MutationResult>(`/api/v1/sheets/${activeSheet.id}/structure:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,base_version:latest.version,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});const targetRow=Math.max(1,command.axis==='row'?command.index:editorSelection.startRow),targetColumn=Math.max(1,command.axis==='column'?command.index:editorSelection.startColumn);editor.reset();editor.select(targetRow,targetColumn);updateVersion(result.server_version);editor.setSaveState('saved');await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]}),client.invalidateQueries({queryKey:['pivot-data']}),client.invalidateQueries({queryKey:['filter-views']}),client.invalidateQueries({queryKey:['filter-result']})])}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'행 또는 열을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
   const applySheetLayout=async(command:LayoutCommand)=>{if(!activeSheet||!writable())return;if(!navigator.onLine){alert('시트 레이아웃은 서버에 연결된 상태에서 변경할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),sheet=latest.sheets.find(item=>item.id===activeSheet.id);if(!sheet)throw new Error('시트를 찾을 수 없습니다.');const idempotencyKey=newIdempotencyKey();const result=await api<SheetLayoutResult>(`/api/v1/sheets/${activeSheet.id}/layout:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,expected_revision:sheet.layout?.revision??1,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});setActiveSheet(current=>current?.id===result.sheet_id?{...current,layout:result.layout}:current);updateVersion(result.server_version);editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'시트 레이아웃을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
   // Header drags, auto-fit and menu commands can fire back to back, so layout
@@ -321,55 +321,81 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   }
   // A one cell selection means the whole surrounding block, the way sheet-wide
   // cleanup and sorting behave elsewhere.
+  /**
+   * The block a data command should act on. The grid only holds the rows on
+   * screen, so working out the block from memory would sort or de-duplicate
+   * the visible part of a table and leave the rest behind. The used range is
+   * read from the server first.
+   */
+  const resolveWorkingBlock=async():Promise<{region:typeof editorSelection;cells:Map<string,Cell>}>=>{
+    const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
+    if(!activeSheet)return {region:editorSelection,cells:editor.cells}
+    const read=async(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>{
+      const label=`${address(range.startRow,range.startColumn)}:${address(range.endRow,range.endColumn)}`
+      const result=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+      return result?new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell])):undefined
+    }
+    if(!single){
+      const cells=await read(editorSelection)
+      return {region:editorSelection,cells:cells??editor.cells}
+    }
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1)return {region:editorSelection,cells:editor.cells}
+    const cells=await read({startRow:1,startColumn:1,endRow:Math.min(used.max_row,MAX_GRID_ROWS),endColumn:Math.min(Math.max(used.max_column,1),MAX_GRID_COLUMNS)})
+    if(!cells)return {region:editorSelection,cells:editor.cells}
+    return {region:dataRegion(cells,editorSelection.startRow,editorSelection.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}),cells}
+  }
+  /** The block for menu labels, which cannot wait for a read. */
   const workingRegion=()=>{
     const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
     return single?dataRegion(editor.cells,editorSelection.startRow,editorSelection.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}):editorSelection
   }
   const removeDuplicates=async()=>{
-    const region=workingRegion(),headerRows=looksLikeHeaderRow(editor.cells,region)?1:0
-    const preview=removeDuplicateRows(editor.cells,region,headerRows)
+    const {region,cells}=await resolveWorkingBlock(),headerRows=looksLikeHeaderRow(cells,region)?1:0
+    const preview=removeDuplicateRows(cells,region,headerRows)
     const label=`${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`
     if(preview.removed===0){alert(`${label} 범위에 중복된 행이 없습니다.`);return}
     if(!window.confirm(`${label} 범위에서 중복된 ${preview.removed}개 행을 삭제할까요?${headerRows?' 첫 행은 머리글로 유지합니다.':''}`))return
     await writeCells(preview.writes)
   }
   const trimSpaces=async()=>{
-    const region=workingRegion()
-    const preview=trimWhitespace(editor.cells,region)
+    const {region,cells}=await resolveWorkingBlock()
+    const preview=trimWhitespace(cells,region)
     if(preview.changed===0){alert('제거할 공백이 없습니다.');return}
     if(!window.confirm(`${preview.changed}개 셀의 앞뒤 공백과 중복 공백을 제거할까요?`))return
     await writeCells(preview.writes)
   }
   const splitColumn=async(delimiter:SplitDelimiter)=>{
-    const region=workingRegion()
-    const preview=splitTextToColumns(editor.cells,region,delimiter)
+    const {region,cells}=await resolveWorkingBlock()
+    const preview=splitTextToColumns(cells,region,delimiter)
     if(preview.columns<2){alert('선택한 열에서 구분할 수 있는 값을 찾지 못했습니다.');return}
-    if(splitWouldOverwrite(editor.cells,region,preview.columns)&&!window.confirm(`오른쪽 ${preview.columns-1}개 열의 기존 데이터를 덮어씁니다. 계속할까요?`))return
+    if(splitWouldOverwrite(cells,region,preview.columns)&&!window.confirm(`오른쪽 ${preview.columns-1}개 열의 기존 데이터를 덮어씁니다. 계속할까요?`))return
     await writeCells(preview.writes)
   }
   // A single cell selection means the whole surrounding block, so formatting a
   // table never requires selecting it by hand first.
   const applyTableStyle=async(themeID:string)=>{
     if(!writable())return
-    const region=workingRegion(),theme=TABLE_THEMES.find(item=>item.id===themeID)
+    const {region,cells}=await resolveWorkingBlock(),theme=TABLE_THEMES.find(item=>item.id===themeID)
     if(!theme)return
     const rows=region.endRow-region.startRow+1,columns=region.endColumn-region.startColumn+1
     if(rows*columns>MAX_PASTE_CELLS){alert(`테이블 서식은 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 적용할 수 있습니다.`);return}
     setTableTheme(themeID)
     editor.select(region.startRow,region.startColumn);editor.select(region.endRow,region.endColumn,true)
-    await writeCells(tableStyleCells(editor.cells,region,theme,tableOptions))
+    await writeCells(tableStyleCells(cells,region,theme,tableOptions))
   }
   const clearTableStyle=async()=>{
     if(!writable())return
-    const region=workingRegion()
-    await writeCells(clearTableStyleCells(editor.cells,region))
+    const {region,cells}=await resolveWorkingBlock()
+    await writeCells(clearTableStyleCells(cells,region))
   }
   const applyBorderPreset=(preset:BorderFormatCommand['preset'])=>applyFormat({},{preset,style:preset==='none'?'none':'thin',color:borderColor})
   const quickSort=async(direction:'asc'|'desc')=>quickSortColumn(editorSelection.startColumn,direction)
   /** Sorts the data region by one column, keeping its header row in place. */
   const quickSortColumn=async(column:number,direction:'asc'|'desc')=>{
-    const region=workingRegion()
-    await sortRegion({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(editor.cells,region)?1:0})
+    const {region,cells}=await resolveWorkingBlock()
+    await sortRegion({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(cells,region)?1:0})
   }
   // The canvas cannot be printed directly, so printing renders the used range
   // into a hidden document the browser can paginate.
