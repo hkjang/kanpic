@@ -22,6 +22,7 @@ import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
 import { FormatDialog,type BorderFormatCommand } from '../components/FormatDialog'
 import { NoteDialog } from '../components/NoteDialog'
+import { ColumnStatsPanel } from '../components/ColumnStatsPanel'
 import { LayoutDialog,type LayoutCommand } from '../components/LayoutDialog'
 import { NamedRangeDialog } from '../components/NamedRangeDialog'
 import { PivotDialog } from '../components/PivotDialog'
@@ -393,6 +394,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       case 'format-dialog':setFormatOpen(true);return
       case 'layout-dialog':setLayoutOpen(true);return
       case 'note':setNoteOpen(true);return
+      case 'column-stats':setRightPanel('stats');return
       case 'structure-dialog':setStructureOpen(true);return
       case 'clear-format':void clearFormat();return
       case 'find-replace':openSearch(true);return
@@ -679,6 +681,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
+      {kind:'item',label:'열 통계',onSelect:()=>setRightPanel('stats')},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'separator'},
       {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
@@ -745,6 +748,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
+        {rightPanel==='stats'&&<ColumnStatsPanel workbookId={workbookId} workbookVersion={serverVersion} sheetId={activeSheet.id} column={editor.activeColumn} onClose={()=>setRightPanel(null)}/>}
         {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
         {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
         {rightPanel==='conflicts'&&<ConflictPanel workbookId={workbookId} sheets={workbook.data.sheets} currentActor={session?.user?.id??'local-user'} onClose={()=>setRightPanel(null)} onNavigate={navigateToRange} onResolved={handleConflictResolved}/>}

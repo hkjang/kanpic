@@ -41,7 +41,7 @@ export type GridShortcut=
 
 /** Menu actions the editor page owns because they open dialogs or panels. */
 export type GridMenuCommand=
-  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'}
+  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'|'column-stats'}
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
   | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
@@ -827,6 +827,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       {kind:'item',label:`${label} 삭제`,icon:<Trash2/>,danger:true,disabled:readOnly||!onStructure,onSelect:()=>{if(window.confirm(`${label}을(를) 삭제할까요?`))void applyStructureCommand({axis,action:'delete',index:first,count})}},
       {kind:'item',label:`${label} 내용 지우기`,icon:<Eraser/>,disabled:readOnly,onSelect:()=>void clearSelection()},
       {kind:'separator'},
+      ...(isColumn?[{kind:'item',label:'이 열 통계 보기',icon:<BarChart3/>,disabled:!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'column-stats'})} as MenuItem]:[]),
       {kind:'item',label:isColumn?'열 너비 자동 맞춤':'행 높이 자동 맞춤',disabled:readOnly||!onLayout,onSelect:()=>autoFit({axis,index})},
       {kind:'item',label:isColumn?'열 너비 지정…':'행 높이 지정…',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
       {kind:'item',label:`${label} 숨기기`,icon:<EyeOff/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'hide',axis,start:first,count})},
