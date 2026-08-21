@@ -22,11 +22,10 @@ export type SubtotalPlan={
 // subtotals underneath it twice.
 const CODES:Record<SubtotalAggregation,number>={sum:109,average:101,count:103,max:104,min:105}
 const NAMES:Record<SubtotalAggregation,string>={sum:'합계',average:'평균',count:'개수',max:'최대',min:'최소'}
-// The grand total aggregates the data runs directly. SUBTOTAL over a span that
-// contains other subtotals would count those numbers twice, and the engine
-// sees values rather than the formulas that produced them, so it cannot tell
-// a subtotal apart from data.
-const PLAIN:Record<SubtotalAggregation,string>={sum:'SUM',average:'AVERAGE',count:'COUNT',max:'MAX',min:'MIN'}
+// SUBTOTAL over a span that contains other subtotals would count those numbers
+// twice: the engine sees values, not the formulas that produced them, so it
+// cannot tell a subtotal apart from data. Every total therefore names only the
+// runs of data it covers.
 // A grand total naming every run gets unreadable past a few dozen groups.
 export const MaxGrandTotalRuns=30
 export const subtotalName=(aggregation:SubtotalAggregation)=>NAMES[aggregation]
@@ -94,9 +93,51 @@ export function planSubtotals(cells:Map<string,Cell>,region:GridRegion,options:{
       if(column===region.startColumn){writes.push({row:grandRow,column,value:`전체 ${NAMES[aggregation]}`,formula:undefined});continue}
       if(!valueColumns.includes(column)){writes.push({row:grandRow,column,value:undefined,formula:undefined});continue}
       const ranges=placed.map(item=>`${address(item.start,column)}:${address(item.end,column)}`).join(',')
-      writes.push({row:grandRow,column,formula:`=${PLAIN[aggregation]}(${ranges})`,value:undefined})
+      // The grand total names the data runs rather than the span that contains
+      // the subtotals, so nothing is counted twice, and it stays a SUBTOTAL
+      // call so "remove subtotals" can recognise the row it added.
+      writes.push({row:grandRow,column,formula:`=SUBTOTAL(${CODES[aggregation]},${ranges})`,value:undefined})
     }
     offset+=1
   }
   return {runs,writes,groups,addedRows:offset,unsorted,lastRow:region.endRow+offset}
+}
+
+/** True when a cell carries one of the formulas a subtotal run writes. */
+export function isSubtotalFormula(formula:string|undefined){
+  return typeof formula==='string'&&/^=\s*SUBTOTAL\s*\(/i.test(formula.trim())
+}
+
+export type SubtotalRemoval={rows:Array<{row:number;label:string}>;writes:PastedCell[]}
+
+/**
+ * Plans the removal of the rows a subtotal run added. Rows are recognised by
+ * the formula they carry rather than by the label somebody may have edited.
+ */
+export function planRemoveSubtotals(cells:Map<string,Cell>,region:GridRegion):SubtotalRemoval{
+  const removed:Array<{row:number;label:string}>=[]
+  for(let row=region.startRow;row<=region.endRow;row+=1){
+    let found=false
+    for(let column=region.startColumn;column<=region.endColumn&&!found;column+=1)
+      if(isSubtotalFormula(cells.get(cellKey(row,column))?.formula))found=true
+    if(found)removed.push({row,label:cleanupText(cells.get(cellKey(row,region.startColumn)))})
+  }
+  if(removed.length===0)return {rows:[],writes:[]}
+  const drop=new Set(removed.map(item=>item.row))
+  const writes:PastedCell[]=[]
+  let target=region.startRow
+  for(let row=region.startRow;row<=region.endRow;row+=1){
+    if(drop.has(row))continue
+    if(target!==row)for(let column=region.startColumn;column<=region.endColumn;column+=1){
+      const cell=cells.get(cellKey(row,column))
+      writes.push({row:target,column,value:cell?.formula?undefined:cell?.value,formula:cell?.formula,style:cell?.style})
+    }
+    target+=1
+  }
+  // The rows freed at the bottom are emptied rather than left repeating the
+  // last rows of the table.
+  for(let row=target;row<=region.endRow;row+=1)
+    for(let column=region.startColumn;column<=region.endColumn;column+=1)
+      writes.push({row,column,value:undefined,formula:undefined})
+  return {rows:removed,writes}
 }

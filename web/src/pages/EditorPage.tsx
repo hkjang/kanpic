@@ -58,7 +58,7 @@ import { SplitDialog } from '../components/SplitDialog'
 import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
 import { SortScopeDialog } from '../components/SortScopeDialog'
 import { SubtotalDialog } from '../components/SubtotalDialog'
-import type { SubtotalPlan } from '../lib/subtotal'
+import { planRemoveSubtotals, type SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
@@ -95,7 +95,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -475,10 +475,18 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // Both cleanups preview before they write. Deduplication also needs to know
   // the table around the selection: shifting rows up in some columns and not
   // the others is how a tidy-up turns into scrambled data.
-  const openCleanup=async(mode:'duplicates'|'trim')=>{
+  const openCleanup=async(mode:'duplicates'|'trim'|'subtotals')=>{
     if(!writable())return
     const {region,cells}=await resolveWorkingBlock()
     const target:CleanupTarget={region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0}
+    // Removing subtotals has to see the rows the run added, which sit below
+    // the selection as often as inside it, so the whole table is resolved.
+    if(mode==='subtotals'){
+      const resolved=await resolveSheetBlock(region.startRow,region.startColumn)
+      if(resolved){target.region=resolved.region;target.cells=resolved.cells;target.headerRows=looksLikeHeaderRow(resolved.cells,resolved.region)?1:0}
+      setCleanup({mode,target})
+      return
+    }
     if(activeSheet){
       const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
       const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
@@ -496,7 +504,17 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     }
     setCleanup({mode,target})
   }
-  const applyCleanup=async(mode:'duplicates'|'trim',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+  const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+    if(mode==='subtotals'){
+      await writeCells(planRemoveSubtotals(cells,region).writes)
+      // The folds the run created have nothing left to fold, so they go with
+      // the rows: an outline control over plain data is a puzzle.
+      const groups=activeSheet?.layout?.row_groups??[]
+      for(const group of groups)
+        if(group.start>=region.startRow&&group.end<=region.endRow)
+          await applyLayout({action:'ungroup',axis:'row',start:group.start,count:group.end-group.start+1})
+      return
+    }
     const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):trimWhitespace(cells,region)
     await writeCells(preview.writes)
   }
@@ -903,6 +921,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       ]},
       {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
       {kind:'item',label:'부분합…',disabled:!canWrite,onSelect:()=>void openSubtotal()},
+      {kind:'item',label:'부분합 제거…',disabled:!canWrite,onSelect:()=>void openCleanup('subtotals')},
       {kind:'separator'},
       {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
