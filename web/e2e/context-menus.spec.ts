@@ -87,8 +87,8 @@ test('data cleanup removes duplicates and splits text into columns', async ({ pa
   await page.locator('.name-box').fill('A6')
   await page.keyboard.press('Enter')
   await page.getByRole('menuitem',{name:'데이터'}).click()
-  await page.getByRole('menuitem',{name:'텍스트를 열로 분할'}).click()
-  await page.getByRole('menuitem',{name:'자동 감지'}).click()
+  await page.getByRole('menuitem',{name:'텍스트를 열로 분할…'}).click()
+  await page.getByRole('dialog',{name:'텍스트를 열로 분할'}).getByRole('button',{name:'분할'}).click()
   await expect.poll(async()=>{
     const cells=await request.get(`/api/v1/sheets/${workbook.sheets[0].id}/ranges/A1:D20`).then(response=>response.json())
     return (cells.items??[]).find((cell:{row:number;column:number})=>cell.row===6&&cell.column===3)?.value

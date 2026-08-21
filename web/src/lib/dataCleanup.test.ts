@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { detectDelimiter, removeDuplicateRows, splitTextToColumns, splitWouldOverwrite, trimWhitespace } from './dataCleanup'
+import { detectDelimiter, removeDuplicateRows, splitLine, splitTextToColumns, splitWouldOverwrite, trimWhitespace } from './dataCleanup'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown]>){
@@ -61,5 +61,23 @@ describe('splitTextToColumns',()=>{
     const cells=grid([[1,1,'a,b'],[1,2,'기존']])
     expect(splitWouldOverwrite(cells,region(1,1,1,1),2)).toBe(true)
     expect(splitWouldOverwrite(cells,region(1,1,1,1),1)).toBe(false)
+  })
+})
+
+describe('splitLine',()=>{
+  it('keeps a quoted field together',()=>{
+    expect(splitLine('"서울, 강남",100,완료',',')).toEqual(['서울, 강남','100','완료'])
+  })
+
+  it('reads a doubled quote inside a quoted field as one quote',()=>{
+    expect(splitLine('"그는 ""안녕"" 이라고",2',',')).toEqual(['그는 "안녕" 이라고','2'])
+  })
+
+  it('leaves quotes that are part of the text alone',()=>{
+    expect(splitLine('15" 모니터,3',',')).toEqual(['15" 모니터','3'])
+  })
+
+  it('splits on a multi-character separator',()=>{
+    expect(splitLine('서울 :: 100 :: 완료',' :: ')).toEqual(['서울','100','완료'])
   })
 })

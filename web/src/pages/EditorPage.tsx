@@ -52,8 +52,9 @@ import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type PastedCell } fro
 import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
-import { dataRegion, looksLikeHeaderRow } from '../lib/dataRegion'
-import { removeDuplicateRows, splitTextToColumns, splitWouldOverwrite, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
+import { removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { SplitDialog } from '../components/SplitDialog'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
@@ -84,12 +85,13 @@ const FILL_COLORS:Array<{label:string;value:string|null}>=[
   {label:'없음',value:null},{label:'연회색',value:'#f1f5f7'},{label:'연빨강',value:'#fee2e2'},{label:'연주황',value:'#ffedd5'},
   {label:'연노랑',value:'#fef3c7'},{label:'연초록',value:'#dcfce7'},{label:'연파랑',value:'#dbeafe'},{label:'연보라',value:'#ede9fe'},
 ]
+const MAX_SPLIT_COLUMNS=20
 const MAX_PRINT_ROWS=20_000
 const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -419,11 +421,31 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(!window.confirm(`${preview.changed}개 셀의 앞뒤 공백과 중복 공백을 제거할까요?`))return
     await writeCells(preview.writes)
   }
-  const splitColumn=async(delimiter:SplitDelimiter)=>{
-    const {region,cells}=await resolveWorkingBlock()
+  // The dialog reads the block once and previews from it, so the numbers it
+  // shows and the split it performs come from the same snapshot.
+  const openSplitDialog=async()=>{
+    if(!writable())return
+    const block=await resolveWorkingBlock()
+    // The split lands to the right of the selection, so the columns it would
+    // overwrite are read too. Judging that from the selection alone would
+    // report "nothing to overwrite" while quietly replacing a neighbour.
+    if(activeSheet){
+      const first=block.region.startColumn,last=Math.min(MAX_GRID_COLUMNS,first+MAX_SPLIT_COLUMNS)
+      const label=`${address(block.region.startRow,first)}:${address(block.region.endRow,last)}`
+      const neighbours=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+      if(neighbours){
+        const cells=new Map(block.cells)
+        for(const cell of neighbours.items)cells.set(cellKey(cell.row,cell.column),cell)
+        setSplitTarget({region:block.region,cells})
+        return
+      }
+    }
+    setSplitTarget(block)
+  }
+  const splitColumn=async(delimiter:SplitDelimiter,block?:{region:GridRegion;cells:Map<string,Cell>})=>{
+    const {region,cells}=block??await resolveWorkingBlock()
     const preview=splitTextToColumns(cells,region,delimiter)
     if(preview.columns<2){alert('선택한 열에서 구분할 수 있는 값을 찾지 못했습니다.');return}
-    if(splitWouldOverwrite(cells,region,preview.columns)&&!window.confirm(`오른쪽 ${preview.columns-1}개 열의 기존 데이터를 덮어씁니다. 계속할까요?`))return
     await writeCells(preview.writes)
   }
   // A single cell selection means the whole surrounding block, so formatting a
@@ -649,7 +671,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void removeDuplicates()},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void trimSpaces()},
-    {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void splitColumn('auto')},
+    {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
     ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).slice(0,20).map(item=>({
       id:`workbook:${item.id}`,group:'워크북',label:item.title,
@@ -805,13 +827,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {kind:'item',label:'중복 항목 삭제',onSelect:()=>void removeDuplicates()},
         {kind:'item',label:'공백 제거',onSelect:()=>void trimSpaces()},
       ]},
-      {kind:'submenu',label:'텍스트를 열로 분할',disabled:!canWrite,items:[
-        {kind:'item',label:'자동 감지',onSelect:()=>void splitColumn('auto')},
-        {kind:'item',label:'쉼표',onSelect:()=>void splitColumn(',')},
-        {kind:'item',label:'세미콜론',onSelect:()=>void splitColumn(';')},
-        {kind:'item',label:'탭',onSelect:()=>void splitColumn('\t')},
-        {kind:'item',label:'공백',onSelect:()=>void splitColumn(' ')},
-      ]},
+      {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
       {kind:'separator'},
       {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
@@ -900,6 +916,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}
+      onApply={delimiter=>splitColumn(delimiter,splitTarget)}/>}
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     {linkOpen&&activeSheet&&workbook.data&&<LinkDialog workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress}
       onClose={()=>setLinkOpen(false)} onApply={formula=>{
