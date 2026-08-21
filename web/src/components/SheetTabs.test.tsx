@@ -14,7 +14,7 @@ function renderTabs(overrides:Partial<Parameters<typeof SheetTabs>[0]>={}){
     onDuplicate:vi.fn().mockResolvedValue(undefined),onMove:vi.fn().mockResolvedValue(undefined),onColor:vi.fn().mockResolvedValue(undefined),
     onHidden:vi.fn().mockResolvedValue(undefined),onDelete:vi.fn().mockResolvedValue(undefined),onManage:vi.fn(),onCopyTo:vi.fn(),
   }
-  render(<SheetTabs sheets={sheets} activeSheetId="s1" saveState="saved" saveLabel="저장됨" {...handlers} {...overrides}/>)
+  render(<SheetTabs sheets={sheets} activeSheetId="s1" version={1} saveState="saved" saveLabel="저장됨" {...handlers} {...overrides}/>)
   return handlers
 }
 

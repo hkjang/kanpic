@@ -18,6 +18,8 @@ const colors:Array<{value:string;label:string}>=[
 type Props={
   sheets:Sheet[]
   activeSheetId:string
+  /** Bumped by every mutation, so the summary re-reads what it needs. */
+  version:number
   saveState:'saved'|'saving'|'offline'|'conflict'|'error'
   saveLabel:string
   readOnly?:boolean
@@ -34,7 +36,7 @@ type Props={
   onManage?:()=>void
 }
 
-export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,readOnly=false,onStatusClick,onSelect,onCreate,onRename,onDuplicate,onMove,onColor,onHidden,onDelete,onCopyTo,onManage}:Props){
+export function SheetTabs({sheets,activeSheetId,version,saveState,saveLabel,readOnly=false,onStatusClick,onSelect,onCreate,onRename,onDuplicate,onMove,onColor,onHidden,onDelete,onCopyTo,onManage}:Props){
   const scroller=useRef<HTMLDivElement>(null)
   const dragged=useRef<string|undefined>(undefined)
   const [menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
@@ -124,7 +126,7 @@ export function SheetTabs({sheets,activeSheetId,saveState,saveLabel,readOnly=fal
     </div>}
     {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>setMenu(undefined)}/>}
     {error&&<span className="sheet-tabs-error">{error}</span>}
-    <SelectionSummary/>
+    <SelectionSummary sheetId={activeSheetId} version={version}/>
     <button className="sheet-status" disabled={!onStatusClick} onClick={onStatusClick}>{saveState==='offline'?<CloudOff/>:<Cloud/>} {saveLabel}</button>
   </div>
 }

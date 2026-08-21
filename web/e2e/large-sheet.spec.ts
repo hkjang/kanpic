@@ -1,0 +1,56 @@
+import { expect, test, type APIRequestContext } from '@playwright/test'
+
+/**
+ * The grid only loads the rows on screen. Anything that summarises or lists a
+ * whole column therefore has to read from the server — these tests exist
+ * because computing from the loaded cells produced confidently wrong totals.
+ */
+const ROWS=400
+
+async function tallSheet(request:APIRequestContext,title:string){
+  const workbook=await request.post('/api/v1/workbooks',{data:{title}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id
+  const cells=[{row:1,column:1,value:'지역'},{row:1,column:2,value:'매출'}]
+  for(let row=2;row<=ROWS+1;row+=1){
+    // The last rows hold a region that appears nowhere near the top of the sheet.
+    cells.push({row,column:1,value:row>ROWS-1?'제주':'서울'})
+    cells.push({row,column:2,value:100})
+  }
+  await request.patch(`/api/v1/sheets/${sheet}/cells:paste`,{data:{idempotency_key:`seed-${Date.now()}`,cells}})
+  return {workbook,sheet}
+}
+
+test('the selection summary totals the whole selection, not just the visible rows', async ({ page, request }) => {
+  const {workbook}=await tallSheet(request,`큰 시트 요약 ${Date.now()}`)
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.waitForSelector('.grid-canvas')
+  await page.locator('.name-box').fill(`B2:B${ROWS+1}`)
+  await page.keyboard.press('Enter')
+
+  // 400 rows of 100 each, far more than a screen holds.
+  await expect(page.locator('.selection-summary')).toContainText(`합계 ${(ROWS*100).toLocaleString('ko-KR')}`)
+  await expect(page.locator('.selection-summary')).toContainText(`개수 ${ROWS.toLocaleString('ko-KR')}`)
+})
+
+test('the column filter lists values that only appear far down the sheet', async ({ page, request }) => {
+  const {workbook,sheet}=await tallSheet(request,`큰 시트 필터 ${Date.now()}`)
+  await request.post(`/api/v1/sheets/${sheet}/filter-views`,{data:{
+    name:'기본 필터',range:`A1:B${ROWS+1}`,header_rows:1,active:true,criteria:[],idempotency_key:`filter-${Date.now()}`}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.waitForSelector('.grid-canvas')
+  const canvas=(await page.locator('.grid-canvas').boundingBox())!
+  await page.mouse.click(canvas.x+46+108-14,canvas.y+13)
+
+  const menu=page.getByRole('dialog',{name:'A열 필터'})
+  // 제주 only exists in the last rows, which are nowhere near the viewport.
+  await expect(menu.getByRole('checkbox',{name:/제주/})).toBeVisible()
+  await expect(menu.getByRole('checkbox',{name:/서울/})).toBeVisible()
+
+  await menu.getByRole('button',{name:'선택 해제'}).click()
+  await menu.getByRole('checkbox',{name:/제주/}).click()
+  await menu.getByRole('button',{name:'적용'}).click()
+  await expect.poll(async()=>{
+    const views=(await (await request.get(`/api/v1/sheets/${sheet}/filter-views`)).json()).items
+    return views[0]?.criteria
+  }).toEqual([{column:1,operator:'values',values:['제주']}])
+})
