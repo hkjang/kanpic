@@ -18,6 +18,7 @@ import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type Dimen
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
+import { cellLink } from '../lib/hyperlink'
 import { checkboxState,optionForValue,optionLabel,ruleOptions,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
@@ -251,7 +252,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       }
       const formulaError=typeof cell.value==='string'&&cell.value.startsWith('#')
       const fontSize=typeof style.font_size==='number'?style.font_size:12,fontFamily=typeof style.font_family==='string'?JSON.stringify(style.font_family):'Inter, Pretendard, sans-serif'
-      context.fillStyle=formulaError?'#c2413b':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.italic===true?'italic ':''}${style.bold||formulaError?'600':'400'} ${fontSize*zoom}px ${fontFamily}`
+      // A cell that carries a link is drawn the way a link is drawn everywhere
+      // else, so it reads as clickable without hovering it first.
+      const link=showFormulas?undefined:cellLink(cell)
+      context.fillStyle=formulaError?'#c2413b':link?'#1155cc':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.italic===true?'italic ':''}${style.bold||formulaError?'600':'400'} ${fontSize*zoom}px ${fontFamily}`
       const alignment=validation?.display_style==='chip'?'left':style.horizontal_align==='left'||style.horizontal_align==='center'||style.horizontal_align==='right'?style.horizontal_align:typeof cell.value==='number'?'right':'left'
       context.textAlign=alignment
       const text=showFormulas&&cell.formula?cell.formula:validationOption?optionLabel(validationOption):formatCellValue(cell.value,style),textX=alignment==='right'?x+width-7:alignment==='center'?x+width/2:x+(validation?.display_style==='chip'?10:7)
@@ -268,6 +272,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const drawWidth=textMode==='overflow'&&rotation===0?maxTextWidth+room.left+room.right:maxTextWidth
       context.save();context.beginPath();context.rect(x-room.left+1,y+1,Math.max(0,width-2+room.left+room.right),Math.max(0,height-2));context.clip()
       if(textMode==='wrap'&&rotation===0){const lines=wrapText(text,maxTextWidth,value=>context.measureText(value).width),lineHeight=Math.max(fontSize*zoom*1.25,12*zoom),visibleLines=Math.max(1,Math.floor((height-6)/lineHeight)),shown=lines.slice(0,visibleLines),blockHeight=shown.length*lineHeight,startY=vertical==='top'?y+3+lineHeight/2:vertical==='bottom'?y+height-3-blockHeight+lineHeight/2:y+(height-blockHeight)/2+lineHeight/2;shown.forEach((line,index)=>context.fillText(line,textX,startY+index*lineHeight,maxTextWidth))}else{context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(text,0,0,drawWidth);if(text&&(style.underline===true||style.strike===true)){const measured=Math.min(context.measureText(text).width,drawWidth),start=alignment==='right'?-measured:alignment==='center'?-measured/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+measured,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+measured,0);context.stroke()}}}
+      if(link&&text!==''){
+        const measured=Math.min(context.measureText(text).width,drawWidth)
+        const underlineX=alignment==='right'?textX-measured:alignment==='center'?textX-measured/2:textX
+        context.fillRect(underlineX,textY+fontSize*zoom*.55,measured,Math.max(1,zoom))
+      }
       context.restore();if(style.borders&&typeof style.borders==='object')paintCellBorders(context,style.borders as CellBorders,x,y,width,height,zoom)
       if(validation?.rule_type==='list'&&validation.show_dropdown&&validation.display_style!=='plain'){context.fillStyle='#52606d';context.beginPath();context.moveTo(x+width-13,y+height/2-2);context.lineTo(x+width-7,y+height/2-2);context.lineTo(x+width-10,y+height/2+2);context.closePath();context.fill()}
       if(validation){const checked=validateClientValue(validation,cell.value);if(!checked.valid&&!checked.deferred){context.fillStyle='#dc2626';context.beginPath();context.moveTo(x+width-9,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+9);context.closePath();context.fill()}}
@@ -965,6 +974,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const dropdown=!activeCell?.spill_source&&(activeValidation?.rule_type==='list'||activeValidation?.rule_type==='list_range')&&activeValidation.show_dropdown?activeValidation:undefined
   // A chart cell has no text, so what is announced is a description of it.
   const activeSparkline=parseSparkline(activeCell?.value)
+  // The chip is how a link is opened: a bare click still selects the cell, so
+  // moving around a sheet full of links never navigates away by accident.
+  const activeLink=editing?undefined:cellLink(activeCell)
   const textEditing=editing&&!dropdown
   const hint=textEditing?formulaHint(functionCatalog,draft,caret):undefined
   // Repeating an entry already in the column is the most common thing anybody
@@ -1041,6 +1053,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       {valueSuggestions.map((value,index)=><button key={value} role="option" aria-selected={index===suggestion} className={index===suggestion?'active':undefined}
         onMouseDown={event=>{event.preventDefault();chooseValue(value)}}>{value}</button>)}
       <small>Tab으로 채우기</small>
+    </div>}
+    {activeLink&&<div className="cell-link" style={{left:inputLeft,top:inputTop+inputHeight+2}}>
+      <a href={activeLink.href} target={activeLink.internal?undefined:'_blank'} rel="noreferrer noopener" title={activeLink.href}
+        onClick={event=>{if(activeLink.internal){event.preventDefault();window.location.assign(activeLink.href)}}}><Link2/> {activeLink.href}</a>
     </div>}
     {noteHover&&<div className="cell-note" role="tooltip" style={{left:noteHover.x,top:noteHover.y+2}}>{noteHover.text}</div>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.note?`, 메모 ${activeCell.note}`:''}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
