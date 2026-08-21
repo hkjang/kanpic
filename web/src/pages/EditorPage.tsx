@@ -78,6 +78,7 @@ const FILL_COLORS:Array<{label:string;value:string|null}>=[
   {label:'없음',value:null},{label:'연회색',value:'#f1f5f7'},{label:'연빨강',value:'#fee2e2'},{label:'연주황',value:'#ffedd5'},
   {label:'연노랑',value:'#fef3c7'},{label:'연초록',value:'#dcfce7'},{label:'연파랑',value:'#dbeafe'},{label:'연보라',value:'#ede9fe'},
 ]
+const MAX_PRINT_ROWS=20_000
 const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
@@ -327,6 +328,19 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
    * the visible part of a table and leave the rest behind. The used range is
    * read from the server first.
    */
+  /** Reads the sheet's used range from the server, bounded for printing. */
+  const readUsedCells=async()=>{
+    const empty={cells:editor.cells,rows:0,truncated:false}
+    if(!activeSheet)return empty
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1)return empty
+    const lastRow=Math.min(used.max_row,MAX_PRINT_ROWS),lastColumn=Math.min(Math.max(used.max_column,1),MAX_GRID_COLUMNS)
+    const label=`${address(1,1)}:${address(lastRow,lastColumn)}`
+    const result=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+    if(!result)return empty
+    return {cells:new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell])),rows:used.max_row,truncated:used.max_row>MAX_PRINT_ROWS}
+  }
   const resolveWorkingBlock=async():Promise<{region:typeof editorSelection;cells:Map<string,Cell>}>=>{
     const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
     if(!activeSheet)return {region:editorSelection,cells:editor.cells}
@@ -399,9 +413,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   }
   // The canvas cannot be printed directly, so printing renders the used range
   // into a hidden document the browser can paginate.
-  const printSheet=()=>{
+  const printSheet=async()=>{
     if(!activeSheet)return
-    const html=printableDocument(editor.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true})
+    // The grid holds only the rows on screen, so printing from memory would
+    // put a page of whatever was scrolled to in front of the reader.
+    const printed=await readUsedCells()
+    if(printed.truncated&&!window.confirm(`시트가 ${printed.rows.toLocaleString()}행입니다. 앞의 ${MAX_PRINT_ROWS.toLocaleString()}행만 인쇄합니다. 계속할까요?`))return
+    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
     document.body.appendChild(frame)
@@ -463,7 +481,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(primary&&event.code==='Slash'){event.preventDefault();setShortcutsOpen(true);return}
     if(primary&&key==='h'){event.preventDefault();openSearch(true);return}
     if(primary&&key==='k'){event.preventDefault();setQuickOpen(true);return}
-    if(primary&&key==='p'){event.preventDefault();printSheet();return}
+    if(primary&&key==='p'){event.preventDefault();void printSheet();return}
     if(event.key==='F11'&&!primary&&!event.shiftKey){event.preventDefault();toggleFullscreen();return}
     if(primary&&key==='f'){event.preventDefault();openSearch(false);return}
     if(primary&&event.code==='Backquote'){event.preventDefault();setShowFormulas(current=>!current);return}
@@ -586,7 +604,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:layout',group:'명령',label:'시트 레이아웃',icon:<Table2/>,keywords:'layout freeze 고정 레이아웃',run:()=>setLayoutOpen(true)},
     {id:'cmd:structure',group:'명령',label:'행과 열 관리',icon:<Table2/>,keywords:'row column 행 열',run:()=>setStructureOpen(true)},
     {id:'cmd:export',group:'명령',label:'XLSX로 내보내기',icon:<Download/>,keywords:'export xlsx 내보내기',run:()=>void exportWorkbook('xlsx')},
-    {id:'cmd:print',group:'명령',label:'인쇄',shortcut:'Ctrl+P',icon:<Download/>,keywords:'print 인쇄 출력',run:()=>printSheet()},
+    {id:'cmd:print',group:'명령',label:'인쇄',shortcut:'Ctrl+P',icon:<Download/>,keywords:'print 인쇄 출력',run:()=>void printSheet()},
     {id:'cmd:functions',group:'명령',label:'함수 목록',icon:<Search/>,keywords:'function 함수 수식',run:()=>setFunctionsOpen(true)},
     {id:'cmd:gridlines',group:'명령',label:showGridlines?'눈금선 숨기기':'눈금선 표시',icon:<Grid2X2/>,keywords:'gridline 눈금선 격자',run:()=>setShowGridlines(current=>!current)},
     {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
@@ -620,7 +638,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'separator'},
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
-      {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>printSheet()},
+      {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>void printSheet()},
       {kind:'separator'},
       {kind:'item',label:'공유 설정…',onSelect:()=>setShareOpen(true)},
       {kind:'item',label:'버전 이력',onSelect:()=>setRightPanel('history')},

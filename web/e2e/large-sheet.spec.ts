@@ -78,3 +78,27 @@ test('quick sort covers the whole table, not the rows on screen', async ({ page,
     return values.length===ROWS&&values.every((value,index)=>index===0||values[index-1]<=value)
   },{timeout:15_000}).toBe(true)
 })
+
+// Printing from memory produced a page of whatever happened to be scrolled to.
+test('printing covers the whole sheet, not the rows on screen', async ({ page, request }) => {
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`큰 시트 인쇄 ${Date.now()}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id
+  const cells:Array<Record<string,unknown>>=[{row:1,column:1,value:'항목'}]
+  for(let row=2;row<=ROWS+1;row+=1)cells.push({row,column:1,value:`항목 ${row-1}`})
+  await request.patch(`/api/v1/sheets/${sheet}/cells:paste`,{data:{idempotency_key:`seed-${Date.now()}`,cells}})
+
+  // The print dialog would block the run, so only the document is inspected.
+  await page.addInitScript(()=>{window.print=()=>{}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await page.waitForSelector('.grid-canvas')
+  await page.getByRole('menuitem',{name:'파일'}).click()
+  await page.getByRole('menuitem',{name:/인쇄/}).click()
+
+  await expect.poll(async()=>page.evaluate(()=>{
+    for(const frame of [...document.querySelectorAll('iframe')]){
+      const doc=frame.contentDocument
+      if(doc&&doc.querySelectorAll('tr').length>0)return doc.body.innerText.includes(`항목 ${400}`)
+    }
+    return false
+  }),{timeout:10_000}).toBe(true)
+})
