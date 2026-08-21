@@ -139,7 +139,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	importedCells := make(map[string]map[cellKey]Cell, len(input.Sheets))
 	sheets := make(map[string]Sheet, len(input.Sheets))
 	for position, imported := range input.Sheets {
-		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: defaultSheetLayout(), CreatedAt: now}
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: importedSheetLayout(imported.Layout), CreatedAt: now}
 		properties, _ := json.Marshal(sheetProperties{Color: imported.Color, Layout: sheet.Layout})
 		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, position, properties, now); err != nil {
 			return Workbook{}, mapPostgresError(err)

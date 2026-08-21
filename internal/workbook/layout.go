@@ -24,6 +24,18 @@ const (
 
 func defaultSheetLayout() SheetLayout { return SheetLayout{Revision: 1} }
 
+// importedSheetLayout accepts the layout an import describes, held to the same
+// limits a layout mutation is: a file is no more trusted than a request.
+func importedSheetLayout(layout *SheetLayout) SheetLayout {
+	if layout == nil {
+		return defaultSheetLayout()
+	}
+	normalized := normalizeSheetLayout(*layout)
+	normalized.Revision = 1
+	normalized.Slicers = nil
+	return normalized
+}
+
 func cloneSheetLayout(layout SheetLayout) SheetLayout {
 	layout.RowHeights = append([]DimensionSize(nil), layout.RowHeights...)
 	layout.ColumnWidths = append([]DimensionSize(nil), layout.ColumnWidths...)

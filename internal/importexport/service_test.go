@@ -292,3 +292,80 @@ func TestXLSXExportCarriesSheetLayout(t *testing.T) {
 		t.Fatalf("frozen panes = %#v, %v", panes, err)
 	}
 }
+
+// Exporting the arrangement and then ignoring it on the way back in would mean
+// a kanpic workbook loses its layout by making a round trip through its own
+// file format.
+func TestXLSXLayoutSurvivesAnExportImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "round trip", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "rt-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("머리글")}, {Row: 1, Column: 2, Value: value("값")},
+		{Row: 2, Column: 1, Value: value("숨긴 행")}, {Row: 2, Column: 2, Value: value(1)},
+		{Row: 3, Column: 1, Value: value("보이는 행")}, {Row: 3, Column: 2, Value: value(2)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	revision := int64(1)
+	apply := func(key string, mutation workbook.SheetLayoutMutation) {
+		t.Helper()
+		mutation.SheetID, mutation.ActorID, mutation.IdempotencyKey, mutation.ExpectedRevision = sheetID, "tester", key, revision
+		result, err := repository.ApplySheetLayout(ctx, mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision = result.Layout.Revision
+	}
+	apply("hide", workbook.SheetLayoutMutation{Action: "hide", Axis: "row", Start: 2, Count: 1})
+	apply("freeze", workbook.SheetLayoutMutation{Action: "freeze", FrozenRows: 1, FrozenColumns: 1})
+	apply("width", workbook.SheetLayoutMutation{Action: "resize", Axis: "column", Start: 2, Count: 1, Size: 208})
+
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sheets) != 1 || parsed.Sheets[0].Layout == nil {
+		t.Fatalf("imported sheets = %#v", parsed.Sheets)
+	}
+	layout := *parsed.Sheets[0].Layout
+	if len(layout.HiddenRows) != 1 || layout.HiddenRows[0].Start != 2 || layout.HiddenRows[0].End != 2 {
+		t.Fatalf("hidden rows = %#v", layout.HiddenRows)
+	}
+	if layout.FrozenRows != 1 || layout.FrozenColumns != 1 {
+		t.Fatalf("frozen panes = %d rows, %d columns", layout.FrozenRows, layout.FrozenColumns)
+	}
+	var width float64
+	for _, item := range layout.ColumnWidths {
+		if item.Index == 2 {
+			width = item.Size
+		}
+	}
+	if width < 200 || width > 216 {
+		t.Fatalf("column width came back as %v pixels", width)
+	}
+
+	// The layout has to reach the stored sheet, not just the parse result.
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "rt-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := restored.Sheets[0].Layout
+	if len(stored.HiddenRows) != 1 || stored.FrozenRows != 1 || stored.FrozenColumns != 1 {
+		t.Fatalf("stored layout = %#v", stored)
+	}
+}

@@ -254,6 +254,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		if parsed.Preview.TotalCells > MaxImportCells {
 			return ParsedWorkbook{}, errors.New("import exceeds one million stored cells")
 		}
+		imported.Layout = readSheetLayout(file, sheetName, rowIndex, maxColumns)
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
 	}

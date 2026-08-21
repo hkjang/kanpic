@@ -150,7 +150,7 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	state := &workbookState{workbook: wb, sheets: make(map[string]Sheet), cells: make(map[string]map[cellKey]Cell), idempotent: make(map[string]MutationResult)}
 	for position, imported := range input.Sheets {
-		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: defaultSheetLayout(), CreatedAt: now}
+		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: importedSheetLayout(imported.Layout), CreatedAt: now}
 		state.sheets[sheet.ID] = sheet
 		state.cells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {

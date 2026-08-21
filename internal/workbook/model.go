@@ -480,6 +480,10 @@ type ImportSheet struct {
 	Name  string      `json:"name"`
 	Color string      `json:"color,omitempty"`
 	Cells []CellInput `json:"cells"`
+	// Layout carries what the file said about arrangement: hidden rows and
+	// columns, sizes, frozen panes and outline groups. An import that drops it
+	// flattens a workbook that was exported from here minutes earlier.
+	Layout *SheetLayout `json:"layout,omitempty"`
 }
 
 type ImportWorkbookInput struct {
