@@ -18,7 +18,7 @@ import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type Dimen
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
-import { cellLink } from '../lib/hyperlink'
+import { cellLink, workbookRangeTarget } from '../lib/hyperlink'
 import { checkboxState,optionForValue,optionLabel,ruleOptions,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
@@ -38,6 +38,7 @@ export type GridShortcut=
   | {command:'focus-grid'}
   | {command:'commit-draft'}
   | {command:'insert-text';text:string}
+  | {command:'commit-text';text:string}
   | {command:'insert-function';name:string}
   | {command:'move-data-edge';direction:'up'|'down'|'left'|'right';extend:boolean}
   | {command:'move-page';direction:'up'|'down'|'left'|'right';extend:boolean}
@@ -64,7 +65,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
@@ -804,6 +805,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       case 'focus-grid':focusGrid();return
       case 'commit-draft':if(useEditorStore.getState().editing){focusGrid();commitAndMoveRef.current(1,0)}return
       case 'insert-text':if(readOnly){readOnlyNotice();return}setDraft(detail.text);setEditing(true);return
+      // A dialog that already collected everything writes the cell outright
+      // rather than leaving a half-typed formula waiting for Enter.
+      case 'commit-text':if(readOnly){readOnlyNotice();return}void commit(detail.text);return
       case 'insert-function':if(readOnly){readOnlyNotice();return}insertAggregate(detail.name);return
     }
   };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,focusGrid,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectCell,selectSpan,setDraft,setEditing])
@@ -1056,7 +1060,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     </div>}
     {activeLink&&<div className="cell-link" style={{left:inputLeft,top:inputTop+inputHeight+2}}>
       <a href={activeLink.href} target={activeLink.internal?undefined:'_blank'} rel="noreferrer noopener" title={activeLink.href}
-        onClick={event=>{if(activeLink.internal){event.preventDefault();window.location.assign(activeLink.href)}}}><Link2/> {activeLink.href}</a>
+        onClick={event=>{
+          if(!activeLink.internal)return
+          // A link into this workbook moves the selection instead of reloading:
+          // a reload would drop the editor's unsaved state to go two cells over.
+          const target=workbookRangeTarget(activeLink.href)
+          if(target&&onOpenRange&&onOpenRange(target.sheetId,target.range)){event.preventDefault();return}
+          event.preventDefault();window.location.assign(activeLink.href)
+        }}><Link2/> {activeLink.linkLabel}</a>
     </div>}
     {noteHover&&<div className="cell-note" role="tooltip" style={{left:noteHover.x,top:noteHover.y+2}}>{noteHover.text}</div>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.note?`, 메모 ${activeCell.note}`:''}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cellLink, safeLinkTarget } from './hyperlink'
+import { cellLink, safeLinkTarget, workbookRangeLink, workbookRangeTarget } from './hyperlink'
 
 const cell=(patch:Record<string,unknown>)=>({sheet_id:'s',row:1,column:1,...patch}) as never
 
@@ -35,5 +35,28 @@ describe('cellLink',()=>{
 
   it('leaves a nested HYPERLINK alone rather than guessing which branch wins',()=>{
     expect(cellLink(cell({formula:'=IF(A1,HYPERLINK("https://a.example"),HYPERLINK("https://b.example"))'}))).toBeUndefined()
+  })
+})
+
+describe('workbookRangeTarget',()=>{
+  it('reads the workbook, sheet and range out of an internal link',()=>{
+    const href=workbookRangeLink('wb-1','sheet-1','B2:C5')
+    expect(workbookRangeTarget(href)).toEqual({workbookId:'wb-1',sheetId:'sheet-1',range:'B2:C5'})
+  })
+
+  it('ignores links to somewhere else',()=>{
+    expect(workbookRangeTarget('https://elsewhere.example/workbooks/wb-1?range=A1')).toBeUndefined()
+    expect(workbookRangeTarget('/settings')).toBeUndefined()
+  })
+})
+
+describe('chip labels',()=>{
+  it('names an internal range link by its range instead of its URL',()=>{
+    const formula=`=HYPERLINK("${workbookRangeLink('wb-1','sheet-1','B2:C5')}","요약으로")`
+    expect(cellLink(cell({formula,value:'요약으로'}))?.linkLabel).toBe('이 워크북 · B2:C5')
+  })
+
+  it('shows the address itself for an outside link',()=>{
+    expect(cellLink(cell({formula:'=HYPERLINK("https://example.com","예시")'}))?.linkLabel).toBe('https://example.com')
   })
 })

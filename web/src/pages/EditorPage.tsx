@@ -16,6 +16,7 @@ import { ChartOverlay } from '../components/ChartOverlay'
 import { SlicerOverlay } from '../components/SlicerOverlay'
 import { ConnectionPanel } from '../components/ConnectionPanel'
 import { CellHistoryDialog } from '../components/CellHistoryDialog'
+import { LinkDialog } from '../components/LinkDialog'
 import { parseFilterRange } from '../lib/filter'
 import { ChartPanel } from '../components/ChartPanel'
 import '../components/ChartLauncher.css'
@@ -87,7 +88,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -483,12 +484,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     await api(`/api/v1/workbooks/${workbookId}`,{method:'DELETE'})
     window.location.href='/'
   }
-  const insertLink=()=>{
-    const url=window.prompt('링크 주소','https://')
-    if(!url?.trim())return
-    const label=window.prompt('표시할 텍스트 (선택)','')??''
-    gridShortcut({command:'insert-text',text:label.trim()?`=HYPERLINK("${url.trim()}","${label.trim().replace(/"/g,'""')}")`:`=HYPERLINK("${url.trim()}")`})
-  }
+  const insertLink=()=>setLinkOpen(true)
   const handleGridMenu=(command:GridMenuCommand)=>{
     switch(command.command){
       case 'sort-dialog':setSortOpen(true);return
@@ -871,7 +867,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
       }}/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
@@ -899,6 +895,12 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {linkOpen&&activeSheet&&workbook.data&&<LinkDialog workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress}
+      onClose={()=>setLinkOpen(false)} onApply={formula=>{
+        // The dialog already asked everything it needs, so the link lands in the
+        // cell rather than leaving a half-typed formula in the editor.
+        gridShortcut({command:'commit-text',text:formula})
+      }}/>}
     {historyCell&&activeSheet&&<CellHistoryDialog sheetId={activeSheet.id} address={historyCell} version={serverVersion} onClose={()=>setHistoryCell(undefined)}/>}
     {noteOpen&&<NoteDialog address={selectionAddress} note={editor.cells.get(cellKey(editor.activeRow,editor.activeColumn))?.note??''} onClose={()=>setNoteOpen(false)} onApply={applyNote}/>}
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}

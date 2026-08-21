@@ -1,6 +1,6 @@
 import type { Cell } from '../types'
 
-export type CellLink={href:string;label:string;internal:boolean}
+export type CellLink={href:string;label:string;internal:boolean;linkLabel:string}
 
 const SAFE_SCHEMES=['http://','https://','mailto:']
 
@@ -45,9 +45,40 @@ export function cellLink(cell:Cell|undefined):CellLink|undefined{
     const href=safeLinkTarget(unquote(matched[1]))
     if(!href)return undefined
     const label=matched[2]!==undefined?unquote(matched[2]):(cell.value==null?href:String(cell.value))
-    return {href,label:label||href,internal:internalLink(href)}
+    return withChipLabel({href,label:label||href,internal:internalLink(href),linkLabel:href})
   }
   if(typeof cell.value!=='string'||!BARE_URL.test(cell.value.trim()))return undefined
   const href=safeLinkTarget(cell.value)
-  return href?{href,label:cell.value.trim(),internal:internalLink(href)}:undefined
+  return href?withChipLabel({href,label:cell.value.trim(),internal:internalLink(href),linkLabel:href}):undefined
+}
+
+export type WorkbookTarget={workbookId:string;sheetId:string;range:string}
+
+/**
+ * The workbook, sheet and range an internal link points at, if it is one of
+ * the links "셀 링크 복사" produces. Recognising them is what lets a link to
+ * the same workbook move the selection instead of reloading the page.
+ */
+export function workbookRangeTarget(href:string):WorkbookTarget|undefined{
+  let url:URL
+  try{url=new URL(href,window.location.origin)}
+  catch{return undefined}
+  if(url.origin!==window.location.origin)return undefined
+  const matched=/^\/workbooks\/([^/?#]+)/.exec(url.pathname)
+  if(!matched)return undefined
+  return {workbookId:matched[1],sheetId:url.searchParams.get('sheet_id')??'',range:url.searchParams.get('range')??''}
+}
+
+/** The link "셀 링크 복사" would produce for a range. */
+export function workbookRangeLink(workbookId:string,sheetId:string,range:string){
+  const parameters=new URLSearchParams({sheet_id:sheetId,range})
+  return `${window.location.origin}/workbooks/${workbookId}?${parameters.toString()}`
+}
+
+// The chip shows a workbook range as "시트!범위" rather than the URL that
+// encodes it, because the URL says nothing a reader can act on.
+function withChipLabel(link:CellLink):CellLink{
+  const target=workbookRangeTarget(link.href)
+  if(!target||!target.range)return link
+  return {...link,linkLabel:`이 워크북 · ${target.range}`}
 }
