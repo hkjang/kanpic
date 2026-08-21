@@ -71,6 +71,7 @@ test('quick sort covers the whole table, not the rows on screen', async ({ page,
   await page.keyboard.press('Enter')
   await page.getByRole('menuitem',{name:'데이터'}).click()
   await page.getByRole('menuitem',{name:'선택 열 기준 정렬 A → Z'}).click()
+  await page.getByRole('dialog',{name:'정렬 범위 확인'}).getByRole('button',{name:'정렬'}).click()
 
   await expect.poll(async()=>{
     const items=(await (await request.get(`/api/v1/sheets/${sheet}/ranges/A2:A${ROWS+1}`)).json()).items as Array<{row:number;value:number}>

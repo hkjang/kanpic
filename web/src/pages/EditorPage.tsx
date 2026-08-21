@@ -56,6 +56,7 @@ import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegi
 import { removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
 import { SplitDialog } from '../components/SplitDialog'
 import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
+import { SortScopeDialog } from '../components/SortScopeDialog'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
@@ -92,7 +93,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -343,12 +344,31 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const handleReplaced=async(result:ReplaceResult)=>{updateVersion(result.server_version);editor.reset();editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}
   // Sorting a whole column keeps the surrounding data block together, so the
   // computed region is confirmed before the existing range sort runs.
-  const sortRegion=async(command:Extract<GridMenuCommand,{command:'sort-region'}>)=>{
-    const {region,column,direction,headerRows}=command
-    const label=`${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`
-    if(!window.confirm(`${label} 범위를 ${column}열 기준 ${direction==='asc'?'오름차순':'내림차순'}으로 정렬할까요?${headerRows?' 첫 행은 머리글로 유지합니다.':''}`))return
+  // The block a sort or a cleanup acts on is decided from what the server says
+  // the sheet holds, never from the rows the grid happens to have loaded: a
+  // window-sized region sorts the visible rows and leaves the rest behind.
+  const resolveSheetBlock=async(seedRow:number,seedColumn:number)=>{
+    if(!activeSheet)return undefined
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1)return undefined
+    const label=`A1:${address(Math.min(used.max_row,MAX_PRINT_ROWS),Math.min(Math.max(used.max_column,1),MAX_GRID_COLUMNS))}`
+    const read=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+    if(!read)return undefined
+    const cells=new Map(read.items.map(cell=>[cellKey(cell.row,cell.column),cell]))
+    const region=dataRegion(cells,seedRow,seedColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS})
+    return {region,cells}
+  }
+  const sortColumn=async(column:number,direction:'asc'|'desc')=>{
+    if(!writable())return
+    const seedRow=editorSelection.startRow
+    const block=await resolveSheetBlock(seedRow,column)
+    if(!block){alert('정렬할 데이터가 없습니다.');return}
+    setSortScope({column,direction,block,selection:{...editorSelection}})
+  }
+  const runSort=async(region:GridRegion,cells:Map<string,Cell>,column:number,direction:'asc'|'desc')=>{
     editor.select(region.startRow,region.startColumn);editor.select(region.endRow,region.endColumn,true)
-    await sortSelection({keys:[{column,direction}],headerRows,caseSensitive:false})
+    await sortSelection({keys:[{column,direction}],headerRows:looksLikeHeaderRow(cells,region)?1:0,caseSensitive:false},region)
   }
   // Cleanup and split rewrite whole blocks of cells at once, so they share the
   // queue the paste path already uses instead of writing cell by cell.
@@ -480,12 +500,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     await writeCells(clearTableStyleCells(cells,region))
   }
   const applyBorderPreset=(preset:BorderFormatCommand['preset'])=>applyFormat({},{preset,style:preset==='none'?'none':'thin',color:borderColor})
-  const quickSort=async(direction:'asc'|'desc')=>quickSortColumn(editorSelection.startColumn,direction)
-  /** Sorts the data region by one column, keeping its header row in place. */
-  const quickSortColumn=async(column:number,direction:'asc'|'desc')=>{
-    const {region,cells}=await resolveWorkingBlock()
-    await sortRegion({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(cells,region)?1:0})
-  }
+  const quickSort=async(direction:'asc'|'desc')=>sortColumn(editorSelection.startColumn,direction)
   // The canvas cannot be printed directly, so printing renders the used range
   // into a hidden document the browser can paginate.
   const printSheet=async()=>{
@@ -529,7 +544,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const handleGridMenu=(command:GridMenuCommand)=>{
     switch(command.command){
       case 'sort-dialog':setSortOpen(true);return
-      case 'sort-region':void sortRegion(command);return
+      case 'sort-column':void sortColumn(command.column,command.direction);return
       case 'filter':setFilterOpen(true);return
       case 'comment':setRightPanel('comments');return
       case 'named-range':setNamedRangeOpen(true);return
@@ -927,9 +942,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {columnFilter&&activeFilter&&<ColumnFilterMenu view={activeFilter} sheetId={activeSheet.id} version={serverVersion} column={columnFilter.column}
       label={address(1,columnFilter.column).replace(/\d+$/,'')} x={columnFilter.x} y={columnFilter.y}
       onClose={()=>setColumnFilter(undefined)}
-      onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
+      onSort={direction=>void sortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {sortScope&&<SortScopeDialog column={sortScope.column} direction={sortScope.direction} block={sortScope.block} selection={sortScope.selection}
+      onClose={()=>setSortScope(undefined)} onSort={(region,cells)=>runSort(region,cells,sortScope.column,sortScope.direction)}/>}
     {cleanup&&<CleanupDialog mode={cleanup.mode} target={cleanup.target} onClose={()=>setCleanup(undefined)}
       onApply={(region,cells,headerRows)=>applyCleanup(cleanup.mode,region,cells,headerRows)}/>}
     {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}

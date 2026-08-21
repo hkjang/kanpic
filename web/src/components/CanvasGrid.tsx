@@ -7,7 +7,7 @@ import { applySuggestion } from '../lib/formulaSuggest'
 import { suggestColumnValues } from '../lib/valueSuggest'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
-import { dataRegion, looksLikeHeaderRow, populatedCell } from '../lib/dataRegion'
+import { dataRegion, populatedCell } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
@@ -49,7 +49,7 @@ export type GridMenuCommand=
   | {command:'cell-history';row:number;column:number}
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
-  | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
+  | {command:'sort-column';column:number;direction:'asc'|'desc'}
   | {command:'column-filter';column:number;x:number;y:number}
 
 const RESIZE_HANDLE=4,MIN_ROW_HEIGHT=16,MAX_ROW_HEIGHT=400,MIN_COLUMN_WIDTH=32,MAX_COLUMN_WIDTH=600,DEFAULT_ROW_HEIGHT=27,DEFAULT_COLUMN_WIDTH=108
@@ -846,13 +846,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(target){autoFit(target);return}
     if(regionAt(x,y).kind==='cell'&&!activeCheckbox)editActiveCell()
   }
-  const sortByColumn=(column:number,direction:'asc'|'desc')=>{
-    let seed:number|undefined
-    cells.forEach(cell=>{if(cell.column===column&&(cell.value!=null||cell.formula)&&(seed===undefined||cell.row<seed))seed=cell.row})
-    if(seed===undefined){alert('정렬할 데이터가 없습니다.');return}
-    const region=dataRegion(cells,seed,column,{rows:TOTAL_ROWS,columns:TOTAL_COLUMNS})
-    onMenuCommand?.({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(cells,region)?1:0})
-  }
+  // The grid holds only the rows on screen, so the table to sort is worked out
+  // on the editor page from what the server says the sheet contains. Deciding
+  // it here would sort the visible window and leave the rest out of order.
+  const sortByColumn=(column:number,direction:'asc'|'desc')=>onMenuCommand?.({command:'sort-column',column,direction})
   const clipboardMenuItems=():MenuItem[]=>[
     {kind:'item',label:'잘라내기',shortcut:'Ctrl+X',icon:<Scissors/>,disabled:readOnly,onSelect:()=>void copySelection(true)},
     {kind:'item',label:'복사',shortcut:'Ctrl+C',icon:<Copy/>,onSelect:()=>void copySelection(false)},
