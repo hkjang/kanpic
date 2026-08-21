@@ -67,10 +67,10 @@ test('data cleanup removes duplicates and splits text into columns', async ({ pa
   ])
   await openEditor(page,workbook.id)
 
-  page.once('dialog',dialog=>dialog.accept())
   await page.getByRole('menuitem',{name:'데이터'}).click()
   await page.getByRole('menuitem',{name:'데이터 정리'}).click()
-  await page.getByRole('menuitem',{name:'중복 항목 삭제'}).click()
+  await page.getByRole('menuitem',{name:'중복 항목 삭제…'}).click()
+  await page.getByRole('dialog',{name:'중복 항목 삭제'}).getByRole('button',{name:'삭제'}).click()
   await expect.poll(async()=>{
     const cells=await request.get(`/api/v1/sheets/${workbook.sheets[0].id}/ranges/A1:D20`).then(response=>response.json())
     return (cells.items??[]).filter((cell:{value?:unknown})=>cell.value==='박지민').length

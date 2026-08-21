@@ -55,6 +55,7 @@ import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
 import { removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
 import { SplitDialog } from '../components/SplitDialog'
+import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
@@ -91,7 +92,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -406,19 +407,32 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
     return single?dataRegion(editor.cells,editorSelection.startRow,editorSelection.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}):editorSelection
   }
-  const removeDuplicates=async()=>{
-    const {region,cells}=await resolveWorkingBlock(),headerRows=looksLikeHeaderRow(cells,region)?1:0
-    const preview=removeDuplicateRows(cells,region,headerRows)
-    const label=`${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`
-    if(preview.removed===0){alert(`${label} 범위에 중복된 행이 없습니다.`);return}
-    if(!window.confirm(`${label} 범위에서 중복된 ${preview.removed}개 행을 삭제할까요?${headerRows?' 첫 행은 머리글로 유지합니다.':''}`))return
-    await writeCells(preview.writes)
-  }
-  const trimSpaces=async()=>{
+  // Both cleanups preview before they write. Deduplication also needs to know
+  // the table around the selection: shifting rows up in some columns and not
+  // the others is how a tidy-up turns into scrambled data.
+  const openCleanup=async(mode:'duplicates'|'trim')=>{
+    if(!writable())return
     const {region,cells}=await resolveWorkingBlock()
-    const preview=trimWhitespace(cells,region)
-    if(preview.changed===0){alert('제거할 공백이 없습니다.');return}
-    if(!window.confirm(`${preview.changed}개 셀의 앞뒤 공백과 중복 공백을 제거할까요?`))return
+    const target:CleanupTarget={region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0}
+    if(activeSheet){
+      const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+      const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+      if(used&&used.max_row>0){
+        const label=`A1:${address(Math.min(used.max_row,MAX_PRINT_ROWS),Math.min(Math.max(used.max_column,1),MAX_GRID_COLUMNS))}`
+        const sheetCells=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+        if(sheetCells){
+          const all=new Map(sheetCells.items.map(cell=>[cellKey(cell.row,cell.column),cell]))
+          const block=dataRegion(all,region.startRow,region.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS})
+          target.block=block
+          target.blockCells=all
+          target.headerRows=looksLikeHeaderRow(all,block)?1:0
+        }
+      }
+    }
+    setCleanup({mode,target})
+  }
+  const applyCleanup=async(mode:'duplicates'|'trim',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+    const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):trimWhitespace(cells,region)
     await writeCells(preview.writes)
   }
   // The dialog reads the block once and previews from it, so the numbers it
@@ -669,8 +683,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:functions',group:'명령',label:'함수 목록',icon:<Search/>,keywords:'function 함수 수식',run:()=>setFunctionsOpen(true)},
     {id:'cmd:gridlines',group:'명령',label:showGridlines?'눈금선 숨기기':'눈금선 표시',icon:<Grid2X2/>,keywords:'gridline 눈금선 격자',run:()=>setShowGridlines(current=>!current)},
     {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
-    {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void removeDuplicates()},
-    {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void trimSpaces()},
+    {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
+    {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
     ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).slice(0,20).map(item=>({
@@ -824,8 +838,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'separator'},
       {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
-        {kind:'item',label:'중복 항목 삭제',onSelect:()=>void removeDuplicates()},
-        {kind:'item',label:'공백 제거',onSelect:()=>void trimSpaces()},
+        {kind:'item',label:'중복 항목 삭제…',onSelect:()=>void openCleanup('duplicates')},
+        {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
       ]},
       {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
       {kind:'separator'},
@@ -916,6 +930,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {cleanup&&<CleanupDialog mode={cleanup.mode} target={cleanup.target} onClose={()=>setCleanup(undefined)}
+      onApply={(region,cells,headerRows)=>applyCleanup(cleanup.mode,region,cells,headerRows)}/>}
     {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}
       onApply={delimiter=>splitColumn(delimiter,splitTarget)}/>}
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
