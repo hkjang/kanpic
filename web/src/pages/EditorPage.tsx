@@ -22,6 +22,7 @@ import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
 import { FormatDialog,type BorderFormatCommand } from '../components/FormatDialog'
 import { NoteDialog } from '../components/NoteDialog'
+import { ColumnFilterMenu } from '../components/ColumnFilterMenu'
 import { ColumnStatsPanel } from '../components/ColumnStatsPanel'
 import { LayoutDialog,type LayoutCommand } from '../components/LayoutDialog'
 import { NamedRangeDialog } from '../components/NamedRangeDialog'
@@ -79,7 +80,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -339,9 +340,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     await writeCells(clearTableStyleCells(editor.cells,region))
   }
   const applyBorderPreset=(preset:BorderFormatCommand['preset'])=>applyFormat({},{preset,style:preset==='none'?'none':'thin',color:borderColor})
-  const quickSort=async(direction:'asc'|'desc')=>{
+  const quickSort=async(direction:'asc'|'desc')=>quickSortColumn(editorSelection.startColumn,direction)
+  /** Sorts the data region by one column, keeping its header row in place. */
+  const quickSortColumn=async(column:number,direction:'asc'|'desc')=>{
     const region=workingRegion()
-    await sortRegion({command:'sort-region',column:editorSelection.startColumn,direction,region,headerRows:looksLikeHeaderRow(editor.cells,region)?1:0})
+    await sortRegion({command:'sort-region',column,direction,region,headerRows:looksLikeHeaderRow(editor.cells,region)?1:0})
   }
   // The canvas cannot be printed directly, so printing renders the used range
   // into a hidden document the browser can paginate.
@@ -395,6 +398,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       case 'layout-dialog':setLayoutOpen(true);return
       case 'note':setNoteOpen(true);return
       case 'column-stats':setRightPanel('stats');return
+      case 'column-filter':setColumnFilter({column:command.column,x:command.x,y:command.y});return
       case 'structure-dialog':setStructureOpen(true);return
       case 'clear-format':void clearFormat();return
       case 'find-replace':openSearch(true);return
@@ -755,7 +759,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
       }}/></div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
@@ -774,6 +778,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {sortOpen&&<SortDialog range={editorSelection} onClose={()=>setSortOpen(false)} onSort={sortSelection}/>}
     {structureOpen&&<StructureDialog range={editorSelection} onClose={()=>setStructureOpen(false)} onApply={applyStructure}/>}
     {layoutOpen&&<LayoutDialog range={editorSelection} layout={activeSheet.layout} onClose={()=>setLayoutOpen(false)} onApply={applyLayout}/>}
+    {columnFilter&&activeFilter&&<ColumnFilterMenu view={activeFilter} cells={[...editor.cells.values()]} column={columnFilter.column}
+      label={address(1,columnFilter.column).replace(/\d+$/,'')} x={columnFilter.x} y={columnFilter.y}
+      onClose={()=>setColumnFilter(undefined)}
+      onSort={direction=>void quickSortColumn(columnFilter.column,direction)}
+      onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {noteOpen&&<NoteDialog address={selectionAddress} note={editor.cells.get(cellKey(editor.activeRow,editor.activeColumn))?.note??''} onClose={()=>setNoteOpen(false)} onApply={applyNote}/>}
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}
     {filterOpen&&<FilterDialog range={editorSelection} views={filterViews.data?.items??[]} result={filterResult.data} onClose={()=>setFilterOpen(false)} onCreate={createFilter} onUpdate={updateFilter} onDelete={deleteFilter}/>} 

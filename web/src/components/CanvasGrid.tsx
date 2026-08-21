@@ -21,7 +21,9 @@ import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outl
 import { checkboxState,optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, MutationResult, SheetLayout } from '../types'
+import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, FilterView, MutationResult, SheetLayout } from '../types'
+import { columnFiltered } from '../lib/columnFilter'
+import { parseFilterRange } from '../lib/filter'
 
 const ROW_HEADER_WIDTH=46
 const COLUMN_HEADER_HEIGHT=27
@@ -45,6 +47,7 @@ export type GridMenuCommand=
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
   | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
+  | {command:'column-filter';column:number;x:number;y:number}
 
 const RESIZE_HANDLE=4,MIN_ROW_HEIGHT=16,MAX_ROW_HEIGHT=400,MIN_COLUMN_WIDTH=32,MAX_COLUMN_WIDTH=600,DEFAULT_ROW_HEIGHT=27,DEFAULT_COLUMN_WIDTH=108
 
@@ -59,7 +62,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const functionCatalog=useFunctionCatalog()
@@ -85,6 +88,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const headerWidth=ROW_HEADER_WIDTH+rowOutline,headerHeight=COLUMN_HEADER_HEIGHT+columnOutline
   const frozenRows=Math.min(layout.frozen_rows??0,TOTAL_ROWS),frozenColumns=Math.min(layout.frozen_columns??0,TOTAL_COLUMNS)
   const activeCell=cells.get(cellKey(activeRow,activeColumn))
+  // The span the active filter covers, which is where the funnel buttons go.
+  const filterColumns=useMemo(()=>{
+    const range=filterView?parseFilterRange(filterView.range):undefined
+    return range?{start:range.startColumn,end:range.endColumn,headerRow:range.startRow}:undefined
+  },[filterView?.range])
   const activeValidation=validationForCell(validations,activeRow,activeColumn)
   // The checkbox under the cursor, which space, Enter and a click all flip.
   const activeCheckbox=activeValidation?checkboxState(activeValidation,activeCell?.value):undefined
@@ -138,7 +146,19 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle=selected&&wholeColumns?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(x,0,width,headerHeight)
       context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,showGridlines?size.height:headerHeight);context.stroke()
       if(selected){context.fillStyle='#0f766e';context.fillRect(x,headerHeight-2,width,2)}
-      context.fillStyle=selected?'#0b5c55':'#52606d';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='center';context.fillText(columnName(column),x+width/2,headerHeight/2)}
+      context.fillStyle=selected?'#0b5c55':'#52606d';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='center';context.fillText(columnName(column),x+width/2,headerHeight/2)
+      // A filtered range puts a funnel on every column it covers, filled in on
+      // the columns that actually restrict something.
+      if(filterColumns&&column>=filterColumns.start&&column<=filterColumns.end&&width>34){
+        const glyphX=x+width-14,glyphY=headerHeight/2
+        const restricted=columnFiltered(filterView,column)
+        context.fillStyle=restricted?'#0f766e':'#93a2aa'
+        context.beginPath()
+        context.moveTo(glyphX-5,glyphY-4);context.lineTo(glyphX+5,glyphY-4)
+        context.lineTo(glyphX+1,glyphY);context.lineTo(glyphX+1,glyphY+4)
+        context.lineTo(glyphX-1,glyphY+3);context.lineTo(glyphX-1,glyphY)
+        context.closePath();context.fill()
+      }}
     context.font=`${12*zoom}px Inter, Pretendard, sans-serif`
     for(const row of rows){const y=rowPosition(row),height=rowAxis.sizeOf(row);if(y+height<headerHeight||y>size.height)continue
       const selected=row>=selection.startRow&&row<=selection.endRow
@@ -467,6 +487,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();focusGrid();return
     }
     const region=regionAt(x,y)
+    if(region.kind==='column'&&filterColumns&&onMenuCommand&&region.index>=filterColumns.start&&region.index<=filterColumns.end){
+      const left=columnPositionOf(region.index),width=columnAxis.sizeOf(region.index)
+      if(width>34&&x>=left+width-22&&x<=left+width-4){
+        const rect=canvas.current!.getBoundingClientRect()
+        onMenuCommand({command:'column-filter',column:region.index,x:rect.left+left+width-22,y:rect.top+headerHeight+2})
+        focusGrid();return
+      }
+    }
     if(region.kind==='cell'&&!readOnly){
       // A click on a checkbox flips it in place, the way a checkbox behaves
       // everywhere else.
