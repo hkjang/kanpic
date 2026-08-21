@@ -3,7 +3,9 @@ package workbook
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"kanpic/internal/formula"
 	"kanpic/pkg/cellrange"
@@ -21,6 +23,7 @@ const MaxWorkbookImports = 50
 // resolution rules below live in exactly one place.
 type importReader interface {
 	importOwner(workbookID string) (string, error)
+	importTitle(workbookID string) (string, error)
 	importSheet(sourceWorkbookID, sheetName string) (string, error)
 	importReadable(sourceWorkbookID, ownerID string) (bool, error)
 	importCells(sheetID string, selected cellrange.Range) ([]Cell, error)
@@ -166,6 +169,92 @@ func resolveImportRequests(reader importReader, workbookID string, requests []fo
 		}
 		result[formula.ImportKey(request.Source, request.Range)] = importedBlock(cells, selected)
 	}
+	return result
+}
+
+// Connection is one IMPORTRANGE target as the connections panel shows it: what
+// it points at, whether it can be read right now, and which cells depend on it.
+type Connection struct {
+	Source     string   `json:"source"`
+	Range      string   `json:"range"`
+	WorkbookID string   `json:"workbook_id,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Status     string   `json:"status"`
+	Message    string   `json:"message,omitempty"`
+	Rows       int      `json:"rows,omitempty"`
+	Columns    int      `json:"columns,omitempty"`
+	Cells      []string `json:"cells"`
+}
+
+// WorkbookConnections is the list plus the moment it was checked, because the
+// status of a connection is only ever true as of a point in time.
+type WorkbookConnections struct {
+	WorkbookID  string       `json:"workbook_id"`
+	Items       []Connection `json:"items"`
+	CheckedAt   time.Time    `json:"checked_at"`
+	RefreshedAt *time.Time   `json:"refreshed_at,omitempty"`
+	Version     int64        `json:"version,omitempty"`
+}
+
+// MaxConnectionCells caps how many dependent cell addresses one connection
+// reports. The list is there to answer "where is this used", not to be a
+// complete index.
+const MaxConnectionCells = 20
+
+// describeConnections reports every IMPORTRANGE in the workbook with its
+// current state. It runs the same resolution the calculation runs, so the
+// panel cannot disagree with what the cells show.
+func describeConnections(reader importReader, workbookID string, sheets map[string]Sheet, cells map[string]map[cellKey]Cell, now time.Time) WorkbookConnections {
+	requests := collectImportRequests(cells, nil)
+	result := WorkbookConnections{WorkbookID: workbookID, Items: make([]Connection, 0, len(requests)), CheckedAt: now}
+	if len(requests) == 0 {
+		return result
+	}
+	users := make(map[string][]string, len(requests))
+	for sheetID, sheetCells := range cells {
+		name := sheets[sheetID].Name
+		for key, cell := range sheetCells {
+			for _, request := range formula.ImportRequests(cell.Formula) {
+				importKey := formula.ImportKey(request.Source, request.Range)
+				users[importKey] = append(users[importKey], name+"!"+cellrange.Address(key.row, key.column))
+			}
+		}
+	}
+	resolved := resolveImportRequests(reader, workbookID, requests)
+	titles := make(map[string]string)
+	for _, request := range requests {
+		importKey := formula.ImportKey(request.Source, request.Range)
+		item := Connection{Source: request.Source, Range: request.Range, Status: "ok"}
+		if sourceID, ok := parseImportSource(request.Source); ok {
+			item.WorkbookID = sourceID
+			title, cached := titles[sourceID]
+			if !cached {
+				title, _ = reader.importTitle(sourceID)
+				titles[sourceID] = title
+			}
+			item.Title = title
+		}
+		block := resolved[importKey]
+		if block.Err != nil {
+			item.Status = "error"
+			item.Message = block.Err.Message
+		} else {
+			item.Rows, item.Columns = block.Rows, block.Columns
+		}
+		addresses := users[importKey]
+		sort.Strings(addresses)
+		if len(addresses) > MaxConnectionCells {
+			addresses = addresses[:MaxConnectionCells]
+		}
+		item.Cells = addresses
+		result.Items = append(result.Items, item)
+	}
+	sort.Slice(result.Items, func(i, j int) bool {
+		if result.Items[i].Source == result.Items[j].Source {
+			return result.Items[i].Range < result.Items[j].Range
+		}
+		return result.Items[i].Source < result.Items[j].Source
+	})
 	return result
 }
 

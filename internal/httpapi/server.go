@@ -147,6 +147,8 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("POST /api/v1/comments/{commentId}/replies", s.createCommentReply)
 	mux.HandleFunc("PATCH /api/v1/comment-messages/{messageId}", s.updateCommentMessage)
 	mux.HandleFunc("DELETE /api/v1/comment-messages/{messageId}", s.deleteCommentMessage)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/connections", s.listConnections)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/connections:refresh", s.refreshConnections)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/charts", s.listCharts)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/charts", s.createChart)
 	mux.HandleFunc("GET /api/v1/charts/{chartId}", s.getChart)
@@ -1201,6 +1203,12 @@ func requiredScope(r *http.Request) string {
 		return "range.write"
 	}
 	if strings.Contains(path, "structure:apply") || strings.HasSuffix(path, "search:replace") {
+		return "range.write"
+	}
+	if strings.Contains(path, "/connections") {
+		if r.Method == http.MethodGet {
+			return "range.read"
+		}
 		return "range.write"
 	}
 	if strings.Contains(path, "/ranges/") {

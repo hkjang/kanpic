@@ -5,7 +5,7 @@ const MIN_WIDTH=320
 const MAX_WIDTH=960
 const GRID_WIDTH=320
 
-export type RightPanelKey='ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|'stats'
+export type RightPanelKey='ai'|'automation'|'history'|'comments'|'conflicts'|'charts'|'pivots'|'stats'|'connections'
 
 export const RIGHT_PANEL_CONFIG:Record<RightPanelKey,{label:string;defaultWidth:number}>={
   ai:{label:'AI 도우미',defaultWidth:460},
@@ -16,6 +16,7 @@ export const RIGHT_PANEL_CONFIG:Record<RightPanelKey,{label:string;defaultWidth:
   charts:{label:'차트',defaultWidth:400},
   pivots:{label:'피벗',defaultWidth:420},
   stats:{label:'열 통계',defaultWidth:380},
+  connections:{label:'데이터 연결',defaultWidth:400},
 }
 
 function availableMaxWidth(){

@@ -1,6 +1,7 @@
 package workbook
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -19,6 +20,14 @@ func (m memoryImportReader) importOwner(workbookID string) (string, error) {
 		return "", ErrNotFound
 	}
 	return state.workbook.OwnerID, nil
+}
+
+func (m memoryImportReader) importTitle(workbookID string) (string, error) {
+	state, ok := m.repository.workbooks[workbookID]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return state.workbook.Title, nil
 }
 
 func (m memoryImportReader) importReadable(sourceWorkbookID, ownerID string) (bool, error) {
@@ -67,6 +76,43 @@ func (m memoryImportReader) importCells(sheetID string, selected cellrange.Range
 			result = append(result, cell)
 		}
 	}
+	return result, nil
+}
+
+// connectionsLocked reports the workbook's IMPORTRANGE targets and their state.
+func (r *MemoryRepository) connectionsLocked(state *workbookState) WorkbookConnections {
+	return describeConnections(memoryImportReader{repository: r}, state.workbook.ID, state.sheets, state.cells, r.now())
+}
+
+// ListConnections reports every cross-workbook import and whether it can be
+// read right now.
+func (r *MemoryRepository) ListConnections(_ context.Context, workbookID string) (WorkbookConnections, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	state, ok := r.workbooks[workbookID]
+	if !ok || state.deletedAt != nil {
+		return WorkbookConnections{}, ErrNotFound
+	}
+	return r.connectionsLocked(state), nil
+}
+
+// RefreshConnections recalculates every formula so IMPORTRANGE re-reads its
+// sources, then reports what each connection looks like afterwards.
+func (r *MemoryRepository) RefreshConnections(_ context.Context, workbookID, actorID string) (WorkbookConnections, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, ok := r.workbooks[workbookID]
+	if !ok || state.deletedAt != nil {
+		return WorkbookConnections{}, ErrNotFound
+	}
+	if err := r.recalculateAllLocked(state); err != nil {
+		return WorkbookConnections{}, err
+	}
+	now := r.now()
+	state.workbook.Version++
+	state.workbook.UpdatedAt = now
+	result := r.connectionsLocked(state)
+	result.RefreshedAt, result.Version = &now, state.workbook.Version
 	return result, nil
 }
 

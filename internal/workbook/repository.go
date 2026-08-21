@@ -27,6 +27,10 @@ type Repository interface {
 	CreateWorkbook(context.Context, CreateWorkbookInput) (Workbook, error)
 	ListWorkbooks(context.Context, string, AccessPrincipal) ([]Workbook, error)
 
+	// Cross-workbook connections (IMPORTRANGE).
+	ListConnections(context.Context, string) (WorkbookConnections, error)
+	RefreshConnections(context.Context, string, string) (WorkbookConnections, error)
+
 	// Sharing, departments and access requests.
 	WorkbookIDForResource(context.Context, string, string) (string, error)
 	ResolveWorkbookAccess(context.Context, string, AccessPrincipal) (WorkbookAccess, error)

@@ -14,6 +14,7 @@ import { ContextMenu,type MenuItem } from '../components/ContextMenu'
 import { ChartDialog } from '../components/ChartDialog'
 import { ChartOverlay } from '../components/ChartOverlay'
 import { SlicerOverlay } from '../components/SlicerOverlay'
+import { ConnectionPanel } from '../components/ConnectionPanel'
 import { parseFilterRange } from '../lib/filter'
 import { ChartPanel } from '../components/ChartPanel'
 import '../components/ChartLauncher.css'
@@ -55,7 +56,7 @@ import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -238,6 +239,15 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const updateSlicer=async(slicer:Slicer)=>{await applyLayout({action:'slicer_update',slicer})}
   const removeSlicer=async(slicer:Slicer)=>{await applyLayout({action:'slicer_remove',slicer:{id:slicer.id}})}
   const exportWorkbook=async(format:'xlsx'|'csv')=>{const response=await fetch('/api/v1/exports',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({workbook_id:workbookId,sheet_id:activeSheet?.id,format})});if(!response.ok)return alert('파일을 내보내지 못했습니다.');const blob=await response.blob();const disposition=response.headers.get('Content-Disposition')||'';const encoded=disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];const basic=disposition.match(/filename="?([^";]+)"?/)?.[1];const name=encoded?decodeURIComponent(encoded):basic||`kanpic.${format}`;const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();URL.revokeObjectURL(link.href)}
+  // A refresh recalculates every formula on the server, so the editor takes
+  // the same route it takes after a version restore: drop what is loaded and
+  // read the new values back.
+  const handleConnectionsRefreshed=async(result:WorkbookConnections)=>{
+    if(!result.version)return
+    editor.reset()
+    updateVersion(result.version)
+    await client.invalidateQueries({queryKey:['workbook',workbookId]})
+  }
   const handleRestored=async(result:MutationResult)=>{editor.reset();updateVersion(result.server_version);await Promise.all([client.invalidateQueries({queryKey:['workbook',workbookId]}),client.invalidateQueries({queryKey:['conditional-formats']}),client.invalidateQueries({queryKey:['data-validations']}),client.invalidateQueries({queryKey:['named-ranges',workbookId]}),client.invalidateQueries({queryKey:['charts',workbookId]}),client.invalidateQueries({queryKey:['pivots',workbookId]})])}
   const handleConflictResolved=(result:CellConflictResolutionResult)=>{updateVersion(result.operation.server_version);if(!result.operation.duplicate&&result.operation.applied_cells>0)editor.recordOperation(result.operation.operation_id);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]})}
   const handleAIExecuted=(result:AIExecutionResult)=>{updateVersion(result.operation.server_version);editor.reset();editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['ai-actions',workbookId]});client.invalidateQueries({queryKey:['agent-runs',workbookId]})}
@@ -784,6 +794,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'열 통계',onSelect:()=>setRightPanel('stats')},
+      {kind:'item',label:'데이터 연결…',onSelect:()=>setRightPanel('connections')},
       {kind:'item',label:'범위 보호…',disabled:!canWrite,onSelect:()=>setProtectedOpen(true)},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'separator'},
@@ -862,6 +873,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
+        {rightPanel==='connections'&&<ConnectionPanel workbookId={workbookId} version={serverVersion} readOnly={readOnly} onClose={()=>setRightPanel(null)} onRefreshed={handleConnectionsRefreshed}/>}
         {rightPanel==='stats'&&<ColumnStatsPanel workbookId={workbookId} workbookVersion={serverVersion} sheetId={activeSheet.id} column={editor.activeColumn} onClose={()=>setRightPanel(null)}/>}
         {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
         {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
