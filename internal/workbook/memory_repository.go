@@ -149,8 +149,10 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	now := r.now()
 	wb := Workbook{ID: identity.New(), WorkspaceID: input.WorkspaceID, Title: title, OwnerID: input.OwnerID, Version: 1, CreatedAt: now, UpdatedAt: now, LinkAccess: LinkAccessRestricted, LinkRole: RoleViewer, ViewerCanCopy: true}
 	state := &workbookState{workbook: wb, sheets: make(map[string]Sheet), cells: make(map[string]map[cellKey]Cell), idempotent: make(map[string]MutationResult)}
+	sheetIDs := make([]string, 0, len(input.Sheets))
 	for position, imported := range input.Sheets {
 		sheet := Sheet{ID: identity.New(), WorkbookID: wb.ID, Name: strings.TrimSpace(imported.Name), Position: position, Color: imported.Color, Layout: importedSheetLayout(imported.Layout), CreatedAt: now}
+		sheetIDs = append(sheetIDs, sheet.ID)
 		state.sheets[sheet.ID] = sheet
 		state.cells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {
@@ -161,6 +163,24 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 			if !isEmptyCell(cell) {
 				state.cells[sheet.ID][cellKey{cell.Row, cell.Column}] = cell
 			}
+		}
+	}
+	// Validation rules travel with the sheet they came from, and go through the
+	// same normalisation a request does.
+	for position, imported := range input.Sheets {
+		sheetID := sheetIDs[position]
+		for index, rule := range imported.Validations {
+			created, ok := importedValidationInput(rule, index)
+			if !ok {
+				continue
+			}
+			normalized, _, err := NewDataValidation(sheetID, input.ActorID, created)
+			if err != nil {
+				continue
+			}
+			normalized.ID, normalized.WorkbookID = identity.New(), wb.ID
+			normalized.CreatedAt, normalized.UpdatedAt, normalized.Revision = now, now, 1
+			r.validations[normalized.ID] = normalized
 		}
 	}
 	currentSheetID := ""

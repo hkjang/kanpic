@@ -480,10 +480,30 @@ type ImportSheet struct {
 	Name  string      `json:"name"`
 	Color string      `json:"color,omitempty"`
 	Cells []CellInput `json:"cells"`
+	// Validations are the input rules the file carried. They change what the
+	// sheet accepts, so dropping them on import quietly widens what people can
+	// type into a form somebody designed.
+	Validations []ImportValidation `json:"validations,omitempty"`
 	// Layout carries what the file said about arrangement: hidden rows and
 	// columns, sizes, frozen panes and outline groups. An import that drops it
 	// flattens a workbook that was exported from here minutes earlier.
 	Layout *SheetLayout `json:"layout,omitempty"`
+}
+
+// ImportValidation is one input rule read out of an imported file, in the
+// shape the validation rules are normalized from.
+type ImportValidation struct {
+	Range       string   `json:"range"`
+	RuleType    string   `json:"rule_type"`
+	Operator    string   `json:"operator,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	SourceRange string   `json:"source_range,omitempty"`
+	Formula     string   `json:"formula,omitempty"`
+	Value       string   `json:"value,omitempty"`
+	Value2      string   `json:"value2,omitempty"`
+	AllowBlank  bool     `json:"allow_blank"`
+	RejectInput bool     `json:"reject_input"`
+	HelpText    string   `json:"help_text,omitempty"`
 }
 
 type ImportWorkbookInput struct {

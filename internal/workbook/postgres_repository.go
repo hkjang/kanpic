@@ -144,6 +144,23 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		if _, err := tx.Exec(ctx, `INSERT INTO sheets(id,workbook_id,name,position,properties,created_at) VALUES($1,$2,$3,$4,$5,$6)`, sheet.ID, wb.ID, sheet.Name, position, properties, now); err != nil {
 			return Workbook{}, mapPostgresError(err)
 		}
+		// Input rules the file carried go through the same normalisation a
+		// request does, then straight into the sheet they belong to.
+		for index, rule := range imported.Validations {
+			created, ok := importedValidationInput(rule, index)
+			if !ok {
+				continue
+			}
+			normalized, _, ruleErr := NewDataValidation(sheet.ID, input.ActorID, created)
+			if ruleErr != nil {
+				continue
+			}
+			normalized.ID, normalized.Revision, normalized.CreatedAt, normalized.UpdatedAt = identity.New(), 1, now, now
+			normalized.CreatedBy, normalized.UpdatedBy = input.ActorID, input.ActorID
+			if err := insertDataValidationTx(ctx, tx, normalized); err != nil {
+				return Workbook{}, err
+			}
+		}
 		importedCells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {
 			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}

@@ -340,6 +340,66 @@ func ValidationOptionsFromCells(cells []Cell) []ValidationOption {
 	return options
 }
 
+// importedValidationInput turns the rule an imported file described into the
+// create input the normal path validates. Files go through the same door as
+// requests: an unusable rule is refused, not stored.
+func importedValidationInput(imported ImportValidation, index int) (CreateDataValidationInput, bool) {
+	input := CreateDataValidationInput{
+		IdempotencyKey: fmt.Sprintf("import-validation-%d", index),
+		Range:          strings.ToUpper(strings.TrimSpace(imported.Range)),
+		RuleType:       imported.RuleType,
+		Operator:       imported.Operator,
+		SourceRange:    imported.SourceRange,
+		Formula:        imported.Formula,
+		HelpText:       imported.HelpText,
+		AllowBlank:     &imported.AllowBlank,
+		RejectInput:    &imported.RejectInput,
+	}
+	if input.Range == "" {
+		return CreateDataValidationInput{}, false
+	}
+	switch imported.RuleType {
+	case "list":
+		for _, option := range imported.Options {
+			encoded, err := json.Marshal(option)
+			if err != nil {
+				return CreateDataValidationInput{}, false
+			}
+			input.Options = append(input.Options, ValidationOption{Value: encoded})
+		}
+		dropdown := true
+		input.ShowDropdown = &dropdown
+	case "list_range":
+		dropdown := true
+		input.ShowDropdown = &dropdown
+	case "number", "date":
+		input.Value = importedValidationValue(imported.Value, imported.RuleType)
+		input.Value2 = importedValidationValue(imported.Value2, imported.RuleType)
+	case "custom_formula":
+	default:
+		return CreateDataValidationInput{}, false
+	}
+	return input, true
+}
+
+// importedValidationValue keeps a number a number and a date a string, which is
+// how the rules compare them.
+func importedValidationValue(text, ruleType string) json.RawMessage {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if ruleType == "number" {
+		if number, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			encoded, _ := json.Marshal(number)
+			return encoded
+		}
+		return nil
+	}
+	encoded, _ := json.Marshal(trimmed)
+	return encoded
+}
+
 func ValidateCellInputs(rules []DataValidation, existing map[cellKey]Cell, expanded, submitted []CellInput) ([]ValidationViolation, error) {
 	prospective := make(map[cellKey]Cell, len(existing)+len(expanded))
 	for key, cell := range existing {

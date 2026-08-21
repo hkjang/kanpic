@@ -369,3 +369,79 @@ func TestXLSXLayoutSurvivesAnExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("stored layout = %#v", stored)
 	}
 }
+
+// A workbook's input rules are part of how it behaves. A file whose dropdowns
+// are gone looks identical and accepts anything.
+func TestXLSXValidationsSurviveAnExportImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "validations", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	raw := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.CreateDataValidation(ctx, sheetID, "tester", workbook.CreateDataValidationInput{
+		IdempotencyKey: "list", Range: "A1:A10", RuleType: "list",
+		Options: []workbook.ValidationOption{{Value: raw("승인")}, {Value: raw("대기")}, {Value: raw("거절")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateDataValidation(ctx, sheetID, "tester", workbook.CreateDataValidationInput{
+		IdempotencyKey: "number", Range: "B1:B10", RuleType: "number", Operator: "greater_or_equal", Value: raw(0),
+		HelpText: "0 이상만 입력하세요.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := parsed.Sheets[0].Validations
+	if len(rules) != 2 {
+		t.Fatalf("imported validations = %#v", rules)
+	}
+	byRange := make(map[string]workbook.ImportValidation, len(rules))
+	for _, rule := range rules {
+		byRange[rule.Range] = rule
+	}
+	list, found := byRange["A1:A10"]
+	if !found || list.RuleType != "list" || len(list.Options) != 3 || list.Options[0] != "승인" {
+		t.Fatalf("list rule = %#v", list)
+	}
+	number, found := byRange["B1:B10"]
+	if !found || number.RuleType != "number" || number.Operator != "greater_or_equal" || number.Value != "0" {
+		t.Fatalf("number rule = %#v", number)
+	}
+
+	// The rules have to reach the stored sheet, not just the parse result.
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "validation-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.ListDataValidations(ctx, restored.Sheets[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored validations = %#v", stored)
+	}
+	for _, rule := range stored {
+		if rule.Range == "A1:A10" && (rule.RuleType != "list" || len(rule.Options) != 3) {
+			t.Fatalf("stored list rule = %#v", rule)
+		}
+		if rule.Range == "B1:B10" && (rule.RuleType != "number" || rule.Operator != "greater_or_equal") {
+			t.Fatalf("stored number rule = %#v", rule)
+		}
+	}
+}

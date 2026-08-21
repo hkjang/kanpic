@@ -255,6 +255,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 			return ParsedWorkbook{}, errors.New("import exceeds one million stored cells")
 		}
 		imported.Layout = readSheetLayout(file, sheetName, rowIndex, maxColumns)
+		imported.Validations = importValidations(file, sheetName)
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
 	}
@@ -362,6 +363,19 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		}
 		if err := applySheetLayout(file, name, sheet.Layout); err != nil {
 			return ExportedFile{}, err
+		}
+		// Input rules travel with the sheet: a file whose dropdowns are gone
+		// looks the same and behaves differently.
+		rules, err := s.repository.ListDataValidations(ctx, sheet.ID)
+		if err != nil {
+			return ExportedFile{}, err
+		}
+		for _, rule := range rules {
+			if dv := exportValidation(rule); dv != nil {
+				if err := file.AddDataValidation(name, dv); err != nil {
+					return ExportedFile{}, err
+				}
+			}
 		}
 		cells, err := s.repository.ReadAllCells(ctx, sheet.ID)
 		if err != nil {
