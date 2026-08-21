@@ -177,6 +177,20 @@ func ValidateBorderCommand(command BorderCommand) error {
 	return nil
 }
 
+// MaxNoteLength keeps a hover note to something a tooltip can show.
+const MaxNoteLength = 1000
+
+// applyCellNote keeps everything about a cell and changes only its note, so
+// annotating a cell never disturbs the value or the formula behind it.
+func applyCellNote(current Cell, input CellInput, note string) CellInput {
+	input.Value = cloneJSON(current.Value)
+	input.Formula = current.Formula
+	input.Style = cloneJSON(current.Style)
+	input.SpillSource = current.SpillSource
+	input.Note = note
+	return input
+}
+
 func applyCellFormatting(current Cell, input CellInput, patch json.RawMessage, border *BorderCommand) (CellInput, error) {
 	style := cloneJSON(current.Style)
 	var err error
@@ -196,6 +210,7 @@ func applyCellFormatting(current Cell, input CellInput, patch json.RawMessage, b
 	input.Formula = current.Formula
 	input.Style = style
 	input.SpillSource = current.SpillSource
+	input.Note = current.Note
 	return input, nil
 }
 

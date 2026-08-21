@@ -16,7 +16,8 @@ func cellsEqual(left, right Cell) bool {
 	return bytes.Equal(bytes.TrimSpace(left.Value), bytes.TrimSpace(right.Value)) &&
 		left.Formula == right.Formula &&
 		bytes.Equal(bytes.TrimSpace(left.Style), bytes.TrimSpace(right.Style)) &&
-		left.SpillSource == right.SpillSource
+		left.SpillSource == right.SpillSource &&
+		left.Note == right.Note
 }
 
 func submittedCoordinates(inputs []CellInput) []CellCoordinate {
@@ -28,7 +29,7 @@ func submittedCoordinates(inputs []CellInput) []CellCoordinate {
 }
 
 func inputFromCell(row, column int, cell Cell) CellInput {
-	return CellInput{SheetID: cell.SheetID, Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: cloneJSON(cell.Style), SpillSource: cell.SpillSource}
+	return CellInput{SheetID: cell.SheetID, Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: cloneJSON(cell.Style), Note: cell.Note, SpillSource: cell.SpillSource}
 }
 
 type scopedCellKey struct {
@@ -79,7 +80,7 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 			input.SpillSource = ""
 		}
 		submittedKeys[scoped] = struct{}{}
-		cell := Cell{SheetID: currentSheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource}
+		cell := Cell{SheetID: currentSheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource}
 		if isEmptyCell(cell) {
 			delete(prospective[currentSheetID], key)
 		} else {

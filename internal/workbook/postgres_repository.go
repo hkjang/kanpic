@@ -1176,7 +1176,7 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 		}
 		for _, input := range inputs {
 			coordinate := coordinateKey(input.Row, input.Column)
-			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				delete(payload, coordinate)
 			} else {
@@ -1218,6 +1218,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		}
 	}
 	formatMutation := len(mutation.StylePatch) > 0 || mutation.Border != nil
+	noteMutation := mutation.NotePatch != nil
 	for _, cell := range mutation.Cells {
 		if cell.Row < 1 || cell.Column < 1 {
 			return MutationResult{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
@@ -1338,6 +1339,12 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 				continue
 			}
 		}
+		if noteMutation {
+			if current.Note == *mutation.NotePatch {
+				continue
+			}
+			input = applyCellNote(current, input, *mutation.NotePatch)
+		}
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
@@ -1393,7 +1400,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 			coordinate := coordinateKey(input.Row, input.Column)
 			operationKey := operationCoordinateKey(block.sheetID, input.Row, input.Column)
 			before[operationKey] = payload[coordinate]
-			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+			cell := Cell{SheetID: block.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				delete(payload, coordinate)
 			} else {

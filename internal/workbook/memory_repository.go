@@ -756,7 +756,7 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	now := r.now()
 	for _, input := range expanded {
 		key := cellKey{input.Row, input.Column}
-		cell := Cell{SheetID: input.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+		cell := Cell{SheetID: input.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 		if isEmptyCell(cell) {
 			delete(nextCells[input.SheetID], key)
 		} else {
@@ -844,6 +844,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		}
 	}
 	formatMutation := len(mutation.StylePatch) > 0 || mutation.Border != nil
+	noteMutation := mutation.NotePatch != nil
 	if !formatMutation {
 		for _, input := range mutation.Cells {
 			if err := ValidateCellStyle(input); err != nil {
@@ -907,6 +908,12 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				continue
 			}
 		}
+		if noteMutation {
+			if current.Note == *mutation.NotePatch {
+				continue
+			}
+			input = applyCellNote(current, input, *mutation.NotePatch)
+		}
 		input.SheetID = mutation.SheetID
 		effective = append(effective, input)
 	}
@@ -946,7 +953,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		scoped := scopedCellKey{sheetID: sheetID, cellKey: coord}
 		current := state.cells[sheetID][coord]
 		before[scoped] = cloneCell(current)
-		cell := Cell{SheetID: sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+		cell := Cell{SheetID: sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 		if isEmptyCell(cell) {
 			delete(state.cells[sheetID], coord)
 		} else {
@@ -1416,7 +1423,7 @@ func memoryConflictDetails(operations []operation, sheetID string, key cellKey, 
 }
 
 func isEmptyCell(cell Cell) bool {
-	return len(bytes.TrimSpace(cell.Value)) == 0 && cell.Formula == "" && len(bytes.TrimSpace(cell.Style)) == 0 && cell.SpillSource == ""
+	return len(bytes.TrimSpace(cell.Value)) == 0 && cell.Formula == "" && len(bytes.TrimSpace(cell.Style)) == 0 && cell.SpillSource == "" && cell.Note == ""
 }
 
 func cloneJSON(value json.RawMessage) json.RawMessage {

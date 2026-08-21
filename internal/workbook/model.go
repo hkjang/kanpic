@@ -114,7 +114,11 @@ type Cell struct {
 	Formula     string          `json:"formula,omitempty"`
 	Style       json.RawMessage `json:"style,omitempty"`
 	SpillSource string          `json:"spill_source,omitempty"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// Note is the small annotation a reader sees on hover. It belongs to the
+	// cell rather than to a comment thread, so it travels with the cell when
+	// rows move and never starts a conversation.
+	Note      string    `json:"note,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type CellInput struct {
@@ -124,6 +128,7 @@ type CellInput struct {
 	Value       json.RawMessage `json:"value,omitempty"`
 	Formula     string          `json:"formula,omitempty"`
 	Style       json.RawMessage `json:"style,omitempty"`
+	Note        string          `json:"note,omitempty"`
 	SpillSource string          `json:"-"`
 }
 
@@ -135,6 +140,9 @@ type CellMutation struct {
 	IdempotencyKey      string          `json:"idempotency_key"`
 	Cells               []CellInput     `json:"cells"`
 	StylePatch          json.RawMessage `json:"-"`
+	// NotePatch sets the note on the listed cells and leaves everything else
+	// alone, the way StylePatch does for formatting.
+	NotePatch           *string         `json:"-"`
 	Border              *BorderCommand  `json:"-"`
 	Expected            map[string]Cell `json:"-"`
 	OperationType       string          `json:"-"`

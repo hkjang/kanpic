@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, StickyNote, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
@@ -41,7 +41,7 @@ export type GridShortcut=
 
 /** Menu actions the editor page owns because they open dialogs or panels. */
 export type GridMenuCommand=
-  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'}
+  | {command:'sort-dialog'|'filter'|'comment'|'named-range'|'conditional-format'|'data-validation'|'chart'|'pivot'|'format-dialog'|'layout-dialog'|'structure-dialog'|'clear-format'|'find-replace'|'note'}
   | {command:'agent';mode:'summarize'|'formula'|'explain'|'fix'|'clean'|'format'|'chart'|'agent';request:string}
   | {command:'merge';merge:boolean}
   | {command:'sort-region';column:number;direction:'asc'|'desc';region:{startRow:number;startColumn:number;endRow:number;endColumn:number};headerRows:number}
@@ -64,6 +64,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const functionCatalog=useFunctionCatalog()
   const [caret,setCaret]=useState(0),[suggestion,setSuggestion]=useState(0)
+  const [noteHover,setNoteHover]=useState<{row:number;column:number;text:string;x:number;y:number}>()
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const editor=useEditorStore()
@@ -221,6 +222,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.restore();if(style.borders&&typeof style.borders==='object')paintCellBorders(context,style.borders as CellBorders,x,y,width,height,zoom)
       if(validation?.rule_type==='list'&&validation.show_dropdown&&validation.display_style!=='plain'){context.fillStyle='#52606d';context.beginPath();context.moveTo(x+width-13,y+height/2-2);context.lineTo(x+width-7,y+height/2-2);context.lineTo(x+width-10,y+height/2+2);context.closePath();context.fill()}
       if(validation){const checked=validateClientValue(validation,cell.value);if(!checked.valid&&!checked.deferred){context.fillStyle='#dc2626';context.beginPath();context.moveTo(x+width-9,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+9);context.closePath();context.fill()}}
+      if(cell.note){
+        // The corner marker is the only sign a note is attached; hovering the
+        // cell shows the text itself.
+        context.fillStyle='#e0a428'
+        context.beginPath();context.moveTo(x+width-8,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+8);context.closePath();context.fill()
+      }
       if(cell.spill_source){context.save();context.setLineDash([2,2]);context.strokeStyle='#38a3a5';context.lineWidth=1;context.strokeRect(Math.round(x)+2,Math.round(y)+2,Math.round(width)-4,Math.round(height)-4);context.restore()}
     }
     const renderCells=new Map(cells);conditionalCells.forEach(item=>{const key=cellKey(item.row,item.column);if(!renderCells.has(key))renderCells.set(key,{sheet_id:sheetId,row:item.row,column:item.column,updated_at:''})})
@@ -377,6 +384,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const pointerPosition=(event:{clientX:number;clientY:number})=>{const rect=canvas.current!.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}}
   const pointCell=(event:React.PointerEvent<HTMLCanvasElement>)=>{const{x,y}=pointerPosition(event);if(x<headerWidth||y<headerHeight)return;return{row:axisIndexAtViewport(rowAxis,y-headerHeight,scroll.top,frozenRows),column:axisIndexAtViewport(columnAxis,x-headerWidth,scroll.left,frozenColumns)}}
   const geometry:GridGeometry={rowAxis,columnAxis,scroll,frozenRows,frozenColumns,headerWidth:headerWidth,headerHeight:headerHeight}
+  const rowPositionOf=(row:number)=>headerHeight+axisViewportPosition(rowAxis,row,scroll.top,frozenRows)
+  const columnPositionOf=(column:number)=>headerWidth+axisViewportPosition(columnAxis,column,scroll.left,frozenColumns)
   const regionAt=(x:number,y:number)=>pointerRegion(geometry,x,y)
   /** The outline control under the pointer, if the pointer is in the gutter. */
   const outlineControlAt=(x:number,y:number):{axis:'row'|'column';group:DimensionGroup}|undefined=>{
@@ -461,6 +470,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(!dragging.current){
       const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
       event.currentTarget.style.cursor=target?target.axis==='column'?'col-resize':'row-resize':onFillHandle(event)?'crosshair':'default'
+      // Hovering a cell that carries a note shows the note, which is the only
+      // way to read one.
+      const hovered=pointCell(event)
+      const note=hovered?cells.get(cellKey(hovered.row,hovered.column))?.note:undefined
+      if(note&&hovered){
+        if(noteHover?.row!==hovered.row||noteHover?.column!==hovered.column)
+          setNoteHover({row:hovered.row,column:hovered.column,text:note,x:columnPositionOf(hovered.column),y:rowPositionOf(hovered.row)+rowAxis.sizeOf(hovered.row)})
+      }else if(noteHover)setNoteHover(undefined)
       return
     }
     const cell=pointCell(event);if(cell)selectCell(cell.row,cell.column,true)
@@ -748,6 +765,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         {kind:'item',label:'차트 만들기…',icon:<BarChart3/>,onSelect:()=>onMenuCommand?.({command:'chart'})},
         {kind:'item',label:'피벗 테이블 만들기…',icon:<Table2/>,onSelect:()=>onMenuCommand?.({command:'pivot'})},
         {kind:'item',label:'댓글 추가',icon:<MessageSquarePlus/>,onSelect:()=>onMenuCommand?.({command:'comment'})},
+        {kind:'item',label:activeCell?.note?'메모 편집…':'메모 삽입…',icon:<StickyNote/>,disabled:readOnly,onSelect:()=>onMenuCommand?.({command:'note'})},
       ]},
 	  {kind:'submenu',label:'Workbook Agent',icon:<Bot/>,disabled:!onMenuCommand,items:[
 		{kind:'item',label:'Agent에게 질문',onSelect:()=>onMenuCommand?.({command:'agent',mode:'agent',request:''})},
@@ -899,6 +917,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         onMouseDown={event=>{event.preventDefault();chooseValue(value)}}>{value}</button>)}
       <small>Tab으로 채우기</small>
     </div>}
-    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
+    {noteHover&&<div className="cell-note" role="tooltip" style={{left:noteHover.x,top:noteHover.y+2}}>{noteHover.text}</div>}
+    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.note?`, 메모 ${activeCell.note}`:''}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

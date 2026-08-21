@@ -21,6 +21,7 @@ import { ConditionalFormatDialog } from '../components/ConditionalFormatDialog'
 import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
 import { FormatDialog,type BorderFormatCommand } from '../components/FormatDialog'
+import { NoteDialog } from '../components/NoteDialog'
 import { LayoutDialog,type LayoutCommand } from '../components/LayoutDialog'
 import { NamedRangeDialog } from '../components/NamedRangeDialog'
 import { PivotDialog } from '../components/PivotDialog'
@@ -77,7 +78,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -228,6 +229,23 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
 	}catch(reason){const current=useEditorStore.getState();current.setSaveState(current.conflicts?'conflict':'error',current.conflicts);throw reason}
   }
   const handleAutomationExecuted=(result:AutomationExecutionResult)=>{updateVersion(result.operation.server_version);editor.setSaveState('saved');client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['automations',workbookId]})}
+  /**
+   * Writes the hover note on the selection. The note lives on the cell, so it
+   * is sent on its own path that leaves values and formatting untouched.
+   */
+  const applyNote=async(note:string)=>{
+    if(!activeSheet||!writable())return
+    const updatedAt=new Date().toISOString(),optimistic:Cell[]=[]
+    for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1){
+      const current=editor.cells.get(cellKey(row,column))
+      optimistic.push({sheet_id:activeSheet.id,row,column,value:current?.value,formula:current?.formula,spill_source:current?.spill_source,style:current?.style,note:note||undefined,updated_at:updatedAt})
+    }
+    editor.putCells(optimistic)
+    editor.setSaveState(navigator.onLine?'saving':'offline')
+    const id=newIdempotencyKey()
+    await enqueue({id,sheetId:activeSheet.id,endpoint:'note',attempts:0,createdAt:Date.now(),body:{base_version:serverVersion,idempotency_key:id,client_id:collaborationClientId(),range:`${address(editorSelection.startRow,editorSelection.startColumn)}:${address(editorSelection.endRow,editorSelection.endColumn)}`,note}})
+    await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
+  }
   const clearFormat=()=>applyFormat(Object.fromEntries(CLEARABLE_STYLE_KEYS.map(key=>[key,null])))
   const hideSelection=(axis:'row'|'column')=>applyLayout(axis==='row'
     ?{action:'hide',axis,start:editorSelection.startRow,count:editorSelection.endRow-editorSelection.startRow+1}
@@ -374,6 +392,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       case 'pivot':setPivotDialog(null);return
       case 'format-dialog':setFormatOpen(true);return
       case 'layout-dialog':setLayoutOpen(true);return
+      case 'note':setNoteOpen(true);return
       case 'structure-dialog':setStructureOpen(true);return
       case 'clear-format':void clearFormat();return
       case 'find-replace':openSearch(true);return
@@ -740,6 +759,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {sortOpen&&<SortDialog range={editorSelection} onClose={()=>setSortOpen(false)} onSort={sortSelection}/>}
     {structureOpen&&<StructureDialog range={editorSelection} onClose={()=>setStructureOpen(false)} onApply={applyStructure}/>}
     {layoutOpen&&<LayoutDialog range={editorSelection} layout={activeSheet.layout} onClose={()=>setLayoutOpen(false)} onApply={applyLayout}/>}
+    {noteOpen&&<NoteDialog address={selectionAddress} note={editor.cells.get(cellKey(editor.activeRow,editor.activeColumn))?.note??''} onClose={()=>setNoteOpen(false)} onApply={applyNote}/>}
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}
     {filterOpen&&<FilterDialog range={editorSelection} views={filterViews.data?.items??[]} result={filterResult.data} onClose={()=>setFilterOpen(false)} onCreate={createFilter} onUpdate={updateFilter} onDelete={deleteFilter}/>} 
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 

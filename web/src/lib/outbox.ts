@@ -1,7 +1,7 @@
 export type OutboxOperation = {
   id: string
   sheetId: string
-  endpoint?: 'batch'|'paste'|'fill'|'format'|'merge'|'unmerge'|'sort'
+  endpoint?: 'batch'|'paste'|'fill'|'format'|'note'|'merge'|'unmerge'|'sort'
   body: Record<string, unknown>
   attempts: number
   createdAt: number
@@ -50,7 +50,7 @@ export async function flushOutbox(onApplied?: (operation:OutboxOperation, result
   for (const item of items) {
     try {
       const action=item.endpoint==='paste'?'paste':item.endpoint==='fill'?'fill':'batch'
-      const rangeAction=item.endpoint==='format'||item.endpoint==='merge'||item.endpoint==='unmerge'||item.endpoint==='sort'
+      const rangeAction=item.endpoint==='format'||item.endpoint==='note'||item.endpoint==='merge'||item.endpoint==='unmerge'||item.endpoint==='sort'
       const path=rangeAction?`/api/v1/sheets/${item.sheetId}/ranges:${item.endpoint}`:`/api/v1/sheets/${item.sheetId}/cells:${action}`
       const response = await fetch(path, { method:'PATCH', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item.body) })
       if (!response.ok) {

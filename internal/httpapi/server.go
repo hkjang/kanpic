@@ -177,6 +177,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/structure:apply", s.applyStructure)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/layout:apply", s.applySheetLayout)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:format", s.formatRange)
+	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:note", s.noteRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:merge", s.mergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:sort", s.sortRange)
@@ -530,6 +531,16 @@ type rangeFormatRequest struct {
 	Border         *workbook.BorderCommand `json:"border,omitempty"`
 }
 
+// rangeNoteRequest annotates a range. The note replaces whatever was there,
+// and an empty note removes it.
+type rangeNoteRequest struct {
+	BaseVersion    int64  `json:"base_version"`
+	IdempotencyKey string `json:"idempotency_key"`
+	ClientID       string `json:"client_id"`
+	Range          string `json:"range"`
+	Note           string `json:"note"`
+}
+
 type rangeMergeRequest struct {
 	BaseVersion    int64  `json:"base_version"`
 	IdempotencyKey string `json:"idempotency_key"`
@@ -597,6 +608,48 @@ func (s *Server) applyRangeFormat(ctx context.Context, sheetID, actor string, in
 	}
 	result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, ClientID: input.ClientID, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells, StylePatch: input.Style, Border: input.Border, OperationType: "range.format"})
 	return result, cells, err
+}
+
+// noteRange writes the hover note on every cell of a range, leaving the values
+// and the formatting untouched.
+func (s *Server) noteRange(w http.ResponseWriter, r *http.Request) {
+	var input rangeNoteRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		s.writeError(w, r, fmt.Errorf("%w: invalid range", workbook.ErrInvalid))
+		return
+	}
+	rows, columns := selected.End.Row-selected.Start.Row+1, selected.End.Column-selected.Start.Column+1
+	if rows < 1 || columns < 1 || rows > workbook.MaxPasteCells || columns > workbook.MaxPasteCells || rows > workbook.MaxPasteCells/columns {
+		s.writeError(w, r, fmt.Errorf("%w: annotated range must contain 1 to %d cells", workbook.ErrInvalid, workbook.MaxPasteCells))
+		return
+	}
+	note := strings.TrimSpace(input.Note)
+	if len([]rune(note)) > workbook.MaxNoteLength {
+		s.writeError(w, r, fmt.Errorf("%w: a note can hold %d characters", workbook.ErrInvalid, workbook.MaxNoteLength))
+		return
+	}
+	cells := make([]workbook.CellInput, 0, rows*columns)
+	for row := selected.Start.Row; row <= selected.End.Row; row++ {
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			cells = append(cells, workbook.CellInput{Row: row, Column: column})
+		}
+	}
+	result, err := s.repository.ApplyCells(r.Context(), workbook.CellMutation{
+		SheetID: r.PathValue("sheetId"), ActorID: actorID(r), ClientID: input.ClientID, BaseVersion: input.BaseVersion,
+		IdempotencyKey: input.IdempotencyKey, Cells: cells, NotePatch: &note, OperationType: "range.note",
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if !result.Duplicate && result.AppliedCells > 0 {
+		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) mergeRange(w http.ResponseWriter, r *http.Request) {

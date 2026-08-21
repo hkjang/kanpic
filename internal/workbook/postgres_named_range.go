@@ -299,7 +299,7 @@ func (r *PostgresRepository) recalculateWorkbookFormulasTx(ctx context.Context, 
 		}
 		for _, input := range inputs {
 			coordinate := coordinateKey(input.Row, input.Column)
-			cell := Cell{SheetID: key.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+			cell := Cell{SheetID: key.sheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				delete(payload, coordinate)
 			} else {

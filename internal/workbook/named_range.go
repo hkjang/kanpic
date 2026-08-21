@@ -303,7 +303,7 @@ func (r *MemoryRepository) recalculateAllLocked(state *workbookState) error {
 	now := r.now()
 	for _, input := range expanded {
 		key := cellKey{input.Row, input.Column}
-		cell := Cell{SheetID: input.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), SpillSource: input.SpillSource, UpdatedAt: now}
+		cell := Cell{SheetID: input.SheetID, Row: input.Row, Column: input.Column, Value: cloneJSON(input.Value), Formula: input.Formula, Style: cloneJSON(input.Style), Note: input.Note, SpillSource: input.SpillSource, UpdatedAt: now}
 		if isEmptyCell(cell) {
 			delete(state.cells[input.SheetID], key)
 		} else {
