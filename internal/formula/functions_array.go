@@ -204,6 +204,10 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			return nil, true, err
 		}
 		return evaluateSubtotal(code, arguments[1:])
+	case "QUERY":
+		return evaluateQuery(arguments)
+	case "SPARKLINE":
+		return evaluateSparkline(arguments)
 	case "XLOOKUP":
 		return evaluateExtendedLookup(arguments)
 	case "XMATCH":

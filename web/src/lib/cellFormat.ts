@@ -4,6 +4,8 @@ export type CellBorders=Partial<Record<'top'|'right'|'bottom'|'left',BorderSide>
 
 export function formatCellValue(value:unknown,style?:Record<string,unknown>,locale='ko-KR'){
   if(value==null)return''
+  // A chart value belongs on the canvas, never in a text cell or an input.
+  if(typeof value==='object')return''
   const format=typeof style?.number_format==='string'?style.number_format.trim():''
   if(!format||format.toLowerCase()==='general')return String(value)
   if(format==='@')return String(value)

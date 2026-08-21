@@ -221,6 +221,8 @@ var catalog = []FunctionDoc{
 	{"TOROW", "배열", "TOROW(범위1, …)", "범위를 한 행으로 펼칩니다."},
 	{"ARRAY_CONSTRAIN", "배열", "ARRAY_CONSTRAIN(범위, 행 수, 열 수)", "배열을 지정한 크기로 자릅니다."},
 	{"ARRAYFORMULA", "배열", "ARRAYFORMULA(수식)", "범위 전체에 수식을 한 번에 적용합니다."},
+	{"QUERY", "배열", "QUERY(범위, 질의, [머리글 행 수])", "select·where·group by·order by로 표를 조회합니다. 열은 범위 안 순서대로 A, B, C…입니다."},
+	{"SPARKLINE", "배열", "SPARKLINE(범위, [옵션])", "셀 안에 선·막대·승패 미니 차트를 그립니다."},
 }
 
 // Catalog lists every function the evaluator understands, in menu order.

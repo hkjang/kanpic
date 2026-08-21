@@ -16,6 +16,7 @@ import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '
 import { enqueue, flushOutbox } from '../lib/outbox'
 import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis } from '../lib/dimensionAxis'
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
+import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
@@ -141,6 +142,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle=typeof style.background==='string'?style.background:'#fff';context.fillRect(x+1,y+1,width-2,height-2)
       if(conditional?.data_bar){context.save();context.globalAlpha=.3;context.fillStyle=conditional.data_bar.color;context.fillRect(x+3,y+4,Math.max(0,(width-6)*conditional.data_bar.ratio),Math.max(0,height-8));context.restore()}
       if(validation?.display_style==='chip'&&validationOption?.color){context.fillStyle=validationOption.color;context.beginPath();context.roundRect(x+4,y+4,width-8,height-8,6);context.fill()}
+      // A SPARKLINE result is a chart rather than text, so it is painted into
+      // the cell and nothing else is written there.
+      const sparkline=showFormulas?undefined:parseSparkline(cell.value)
+      if(sparkline){
+        drawSparkline(context,sparkline,x,y,width,height,zoom)
+        if(style.borders&&typeof style.borders==='object')paintCellBorders(context,style.borders as CellBorders,x,y,width,height,zoom)
+        return
+      }
       const formulaError=typeof cell.value==='string'&&cell.value.startsWith('#')
       const fontSize=typeof style.font_size==='number'?style.font_size:12,fontFamily=typeof style.font_family==='string'?JSON.stringify(style.font_family):'Inter, Pretendard, sans-serif'
       context.fillStyle=formulaError?'#c2413b':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.italic===true?'italic ':''}${style.bold||formulaError?'600':'400'} ${fontSize*zoom}px ${fontFamily}`
@@ -745,6 +754,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
   const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=HEADER_WIDTH+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=HEADER_HEIGHT+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
+  // A chart cell has no text, so what is announced is a description of it.
+  const activeSparkline=parseSparkline(activeCell?.value)
   const textEditing=editing&&!dropdown
   const hint=textEditing?formulaHint(functionCatalog,draft,caret):undefined
   // Repeating an entry already in the column is the most common thing anybody
@@ -813,6 +824,6 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         onMouseDown={event=>{event.preventDefault();chooseValue(value)}}>{value}</button>)}
       <small>Tab으로 채우기</small>
     </div>}
-    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
+    <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

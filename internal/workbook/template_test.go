@@ -61,8 +61,12 @@ func TestTemplateCatalogIsWellFormed(t *testing.T) {
 					continue
 				}
 				formulas++
-				if strings.Contains(cell.Formula, "{") {
-					t.Errorf("%s left an unexpanded placeholder: %s", template.ID, cell.Formula)
+				// Braces are also array literal syntax, so only the template
+				// placeholders themselves count as unexpanded.
+				for _, placeholder := range []string{"{r}", "{p}", "{first}", "{last}"} {
+					if strings.Contains(cell.Formula, placeholder) {
+						t.Errorf("%s left an unexpanded placeholder: %s", template.ID, cell.Formula)
+					}
 				}
 				for _, name := range formulaNames(cell.Formula) {
 					if _, ok := known[name]; !ok {

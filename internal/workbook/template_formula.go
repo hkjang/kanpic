@@ -218,6 +218,44 @@ var formulaTemplates = []Template{
 			).
 			format(formatMoney, 2),
 	),
+	tmpl("formula-query", "QUERY 데이터 조회", "수식·함수", "QUERY 한 줄로 거르고 묶고 정렬하며, 셀 안 미니 차트로 추세를 함께 봅니다.",
+		sheet("판매").tab("#0f766e").cols(130, 90, 90, 90, 90, 90, 90, 120).
+			title("제품별 월 판매").note("맨 오른쪽 추세 열은 SPARKLINE으로 그린 셀 안 미니 차트입니다.").
+			head("제품", "1월", "2월", "3월", "4월", "5월", "6월", "추세").
+			rows(
+				row("무선 마우스", 120, 140, 90, 160, 210, 180, "=SPARKLINE(B{r}:G{r})"),
+				row("기계식 키보드", 80, 60, 95, 70, 50, 40, "=SPARKLINE(B{r}:G{r})"),
+				row("27인치 모니터", 30, 45, 40, 60, 80, 110, "=SPARKLINE(B{r}:G{r})"),
+				row("USB-C 허브", 55, 20, 35, 25, 45, 60, "=SPARKLINE(B{r}:G{r},{\"charttype\",\"column\";\"color\",\"#5268a6\"})"),
+			).
+			format(formatNumber, 2, 3, 4, 5, 6, 7).
+			total("합계", "=SUM(B{first}:B{last})", "=SUM(C{first}:C{last})", "=SUM(D{first}:D{last})", "=SUM(E{first}:E{last})", "=SUM(F{first}:F{last})", "=SUM(G{first}:G{last})", nil),
+		sheet("주문").tab("#5268a6").cols(110, 100, 110, 120, 110, 110, 110, 110).
+			title("주문 원본").note("아래 표를 고치면 '조회' 시트의 QUERY 결과가 함께 바뀝니다.").
+			head("일자", "지역", "채널", "제품", "수량", "매출").
+			rows(
+				row("2026-07-02", "서울", "온라인", "무선 마우스", 62, 4200000),
+				row("2026-07-05", "부산", "오프라인", "기계식 키보드", 24, 1850000),
+				row("2026-07-09", "서울", "오프라인", "27인치 모니터", 41, 3100000),
+				row("2026-07-14", "대구", "온라인", "USB-C 허브", 15, 970000),
+				row("2026-07-18", "서울", "온라인", "27인치 모니터", 88, 5600000),
+				row("2026-07-23", "부산", "온라인", "무선 마우스", 33, 2450000),
+				row("2026-07-27", "대구", "오프라인", "기계식 키보드", 19, 1320000),
+				row("2026-07-30", "서울", "온라인", "USB-C 허브", 55, 3800000),
+			).
+			format(formatDate, 1).format(formatNumber, 5).format(formatMoney, 6).
+			summary(row("주문 건수", "=COUNTA(A{first}:A{last})")),
+		sheet("조회").tab("#8b5cf6").cols(150, 130, 110, 60, 380, 110, 110, 110).
+			title("QUERY 데이터 조회").note("아래 한 줄의 수식이 머리글까지 포함한 표 전체를 펼칩니다. 열 이름은 범위 안 순서대로 A, B, C…이며, '주문' 시트에서 B열이 지역, E열이 매출입니다.").
+			rows(
+				row("=QUERY('주문'!B3:F11,\"select A, sum(E), count(A) group by A order by sum(E) desc\",1)", nil, nil, nil,
+					"QUERY('주문'!B3:F11,\"select A, sum(E), count(A) group by A order by sum(E) desc\",1)"),
+				row(nil, nil, nil, nil, "지역별로 묶어 매출 합계와 건수를 구하고 합계가 큰 순으로 정렬합니다."),
+				row(nil, nil, nil, nil, "where로 거르기: select A, sum(E) where C = '온라인' group by A"),
+				row(nil, nil, nil, nil, "정렬과 자르기: select A, E order by E desc limit 3"),
+				row(nil, nil, nil, nil, "이름 바꾸기: select A, sum(E) group by A label sum(E) '매출 합계'"),
+			),
+	),
 	tmpl("formula-logic", "논리·오류 처리", "수식·함수", "IFS·SWITCH로 조건을 정리하고 IFERROR·IFNA로 오류를 감춥니다.",
 		sheet("논리").tab("#8b5cf6").cols(120, 110, 110, 120, 130, 240).
 			title("논리·오류 처리").note("점수와 코드에 따라 등급과 안내 문구를 자동으로 정합니다.").
