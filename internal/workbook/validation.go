@@ -152,6 +152,38 @@ func NormalizeDataValidation(rule DataValidation) (DataValidation, cellrange.Ran
 			rule.Value2 = nil
 		}
 		rule.Options, rule.Formula, rule.ShowDropdown, rule.DisplayStyle = nil, "", false, "plain"
+	case "checkbox":
+		rule.Operator = "in_list"
+		// A checkbox is TRUE/FALSE unless the sheet uses its own pair of values,
+		// which is how a "예/아니오" column stays a checkbox.
+		if len(rule.Options) == 0 {
+			checked, _ := json.Marshal(true)
+			unchecked, _ := json.Marshal(false)
+			rule.Options = []ValidationOption{{Value: checked}, {Value: unchecked}}
+		}
+		if len(rule.Options) != 2 {
+			return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: checkbox validation needs exactly two values: checked and unchecked", ErrInvalid)
+		}
+		for index := range rule.Options {
+			option := &rule.Options[index]
+			option.Label = strings.TrimSpace(option.Label)
+			option.Color = strings.ToLower(strings.TrimSpace(option.Color))
+			value, err := decodeValidationValue(option.Value)
+			if err != nil || value == nil || !validationScalar(value) {
+				return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: checkbox values must be non-null JSON scalars", ErrInvalid)
+			}
+			if option.Label == "" {
+				option.Label = validationText(value)
+			}
+			if option.Color != "" && !validHexColor(option.Color) {
+				return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: checkbox colors must be #RRGGBB", ErrInvalid)
+			}
+		}
+		if validationCanonical(mustDecodeValidationValue(rule.Options[0].Value)) == validationCanonical(mustDecodeValidationValue(rule.Options[1].Value)) {
+			return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: the checked and unchecked values must differ", ErrInvalid)
+		}
+		rule.Value, rule.Value2, rule.Formula = nil, nil, ""
+		rule.ShowDropdown, rule.DisplayStyle = false, "plain"
 	case "custom_formula":
 		if rule.Operator == "" {
 			rule.Operator = "custom"
@@ -164,7 +196,7 @@ func NormalizeDataValidation(rule DataValidation) (DataValidation, cellrange.Ran
 		}
 		rule.Options, rule.Value, rule.Value2, rule.ShowDropdown, rule.DisplayStyle = nil, nil, nil, false, "plain"
 	default:
-		return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be list, number, date, or custom_formula", ErrInvalid)
+		return DataValidation{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be list, checkbox, number, date, or custom_formula", ErrInvalid)
 	}
 	return rule, selected, nil
 }
@@ -306,7 +338,7 @@ func validateCellValue(rule DataValidation, selected cellrange.Range, row, colum
 	}
 	valid := false
 	switch rule.RuleType {
-	case "list":
+	case "list", "checkbox":
 		for _, option := range rule.Options {
 			expected, _ := decodeValidationValue(option.Value)
 			if compareFilterValues(actual, expected, true) == 0 {
@@ -373,6 +405,8 @@ func defaultValidationMessage(rule DataValidation) string {
 	switch rule.RuleType {
 	case "list":
 		return "목록에 있는 값을 선택해야 합니다."
+	case "checkbox":
+		return "체크 상태를 나타내는 두 값 중 하나여야 합니다."
 	case "number":
 		return "숫자 검증 조건을 만족하지 않습니다."
 	case "date":
@@ -382,6 +416,13 @@ func defaultValidationMessage(rule DataValidation) string {
 	default:
 		return "데이터 검증 조건을 만족하지 않습니다."
 	}
+}
+
+// mustDecodeValidationValue is used where the value has already been checked,
+// so a decoding failure would be a programming error rather than bad input.
+func mustDecodeValidationValue(raw json.RawMessage) any {
+	value, _ := decodeValidationValue(raw)
+	return value
 }
 
 func decodeValidationValue(raw json.RawMessage) (any, error) {

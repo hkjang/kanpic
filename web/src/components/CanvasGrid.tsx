@@ -18,7 +18,7 @@ import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type Dimen
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
-import { optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
+import { checkboxState,optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
 import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, MutationResult, SheetLayout } from '../types'
@@ -86,6 +86,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const frozenRows=Math.min(layout.frozen_rows??0,TOTAL_ROWS),frozenColumns=Math.min(layout.frozen_columns??0,TOTAL_COLUMNS)
   const activeCell=cells.get(cellKey(activeRow,activeColumn))
   const activeValidation=validationForCell(validations,activeRow,activeColumn)
+  // The checkbox under the cursor, which space, Enter and a click all flip.
+  const activeCheckbox=activeValidation?checkboxState(activeValidation,activeCell?.value):undefined
   const activeText=activeCell?.formula || (activeCell?.value == null?'':String(activeCell.value))
 
   // Menu driven inserts move the active cell and seed the editor in one step,
@@ -194,6 +196,28 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle=typeof style.background==='string'?style.background:'#fff';context.fillRect(x+1,y+1,width-2,height-2)
       if(conditional?.data_bar){context.save();context.globalAlpha=.3;context.fillStyle=conditional.data_bar.color;context.fillRect(x+3,y+4,Math.max(0,(width-6)*conditional.data_bar.ratio),Math.max(0,height-8));context.restore()}
       if(validation?.display_style==='chip'&&validationOption?.color){context.fillStyle=validationOption.color;context.beginPath();context.roundRect(x+4,y+4,width-8,height-8,6);context.fill()}
+      // A checkbox cell is drawn as a box, which is the only way the state is
+      // readable at a glance and clickable without opening an editor.
+      const checkbox=validation&&!showFormulas?checkboxState(validation,cell.value):undefined
+      if(checkbox){
+        const size=Math.min(14*zoom,height-6,width-6)
+        const boxX=Math.round(x+(width-size)/2),boxY=Math.round(y+(height-size)/2)
+        context.fillStyle=checkbox.checked?'#0f766e':'#ffffff'
+        context.strokeStyle=checkbox.checked?'#0f766e':'#98a6ad'
+        context.lineWidth=1
+        context.beginPath();context.roundRect(boxX+.5,boxY+.5,size-1,size-1,3);context.fill();context.stroke()
+        if(checkbox.checked){
+          context.strokeStyle='#ffffff';context.lineWidth=Math.max(1.5,size/8)
+          context.beginPath()
+          context.moveTo(boxX+size*0.24,boxY+size*0.52)
+          context.lineTo(boxX+size*0.43,boxY+size*0.72)
+          context.lineTo(boxX+size*0.77,boxY+size*0.29)
+          context.stroke()
+        }
+        if(cell.note){context.fillStyle='#e0a428';context.beginPath();context.moveTo(x+width-8,y+1);context.lineTo(x+width-1,y+1);context.lineTo(x+width-1,y+8);context.closePath();context.fill()}
+        if(style.borders&&typeof style.borders==='object')paintCellBorders(context,style.borders as CellBorders,x,y,width,height,zoom)
+        return
+      }
       // A SPARKLINE result is a chart rather than text, so it is painted into
       // the cell and nothing else is written there.
       const sparkline=showFormulas?undefined:parseSparkline(cell.value)
@@ -441,6 +465,13 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();focusGrid();return
     }
     const region=regionAt(x,y)
+    if(region.kind==='cell'&&!readOnly){
+      // A click on a checkbox flips it in place, the way a checkbox behaves
+      // everywhere else.
+      const rule=validationForCell(validations,region.row,region.column)
+      const state=rule?checkboxState(rule,cells.get(cellKey(region.row,region.column))?.value):undefined
+      if(state){selectCell(region.row,region.column);focusGrid();void saveCell(state.next,'',region.row,region.column);return}
+    }
     if(region.kind==='corner'){selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});focusGrid();return}
     if(region.kind==='column'||region.kind==='row'){
       const anchor=event.shiftKey?(region.kind==='column'?anchorColumn:anchorRow):region.index
@@ -544,6 +575,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     else if(primary&&event.key==='End'){selectCell(TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
     else if(event.key==='Home'){selectCell(activeRow,columnAxis.firstVisibleAtOrAfter(1),event.shiftKey);event.preventDefault()}
     else if(event.key==='End'){moveDataEdge('right',event.shiftKey);event.preventDefault()}
+    else if(event.key===' '&&activeCheckbox){event.preventDefault();void saveCell(activeCheckbox.next,'',activeRow,activeColumn)}
+    else if(event.key==='Enter'&&activeCheckbox){event.preventDefault();void saveCell(activeCheckbox.next,'',activeRow,activeColumn)}
     else if(event.key==='Enter'||event.key==='F2'){editActiveCell();event.preventDefault()}
     else if(event.key==='ArrowDown'){selectCell(rowAxis.nextVisible(activeRow,1),activeColumn,event.shiftKey);event.preventDefault()}
     else if(event.key==='ArrowUp'){selectCell(rowAxis.nextVisible(activeRow,-1),activeColumn,event.shiftKey);event.preventDefault()}
@@ -719,7 +752,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const doubleClick=(event:React.MouseEvent<HTMLCanvasElement>)=>{
     const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
     if(target){autoFit(target);return}
-    if(regionAt(x,y).kind==='cell')editActiveCell()
+    if(regionAt(x,y).kind==='cell'&&!activeCheckbox)editActiveCell()
   }
   const sortByColumn=(column:number,direction:'asc'|'desc')=>{
     let seed:number|undefined
