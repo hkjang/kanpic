@@ -409,6 +409,13 @@ func transformStructuralPosition(position int, change StructuralChange) (int, bo
 	return position, true
 }
 
+// TransformInterval moves a row or column span through an insertion or a
+// deletion. It is exported so sheet features that own their own spans — the
+// outline groups, for one — follow exactly the rules formulas follow.
+func TransformInterval(start, end int, change StructuralChange) (int, int, bool) {
+	return transformStructuralInterval(start, end, change)
+}
+
 func transformStructuralInterval(start, end int, change StructuralChange) (int, int, bool) {
 	if start > end {
 		start, end = end, start

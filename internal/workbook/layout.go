@@ -28,6 +28,8 @@ func cloneSheetLayout(layout SheetLayout) SheetLayout {
 	layout.ColumnWidths = append([]DimensionSize(nil), layout.ColumnWidths...)
 	layout.HiddenRows = append([]DimensionRange(nil), layout.HiddenRows...)
 	layout.HiddenColumns = append([]DimensionRange(nil), layout.HiddenColumns...)
+	layout.RowGroups = append([]DimensionGroup(nil), layout.RowGroups...)
+	layout.ColumnGroups = append([]DimensionGroup(nil), layout.ColumnGroups...)
 	return layout
 }
 
@@ -44,6 +46,8 @@ func normalizeSheetLayout(layout SheetLayout) SheetLayout {
 	layout.ColumnWidths = normalizeDimensionSizes(layout.ColumnWidths, formula.MaxColumns, MinColumnWidth, MaxColumnWidth, DefaultColumnWidth)
 	layout.HiddenRows = normalizeDimensionRanges(layout.HiddenRows, formula.MaxRows)
 	layout.HiddenColumns = normalizeDimensionRanges(layout.HiddenColumns, formula.MaxColumns)
+	layout.RowGroups = normalizeDimensionGroups(layout.RowGroups, formula.MaxRows)
+	layout.ColumnGroups = normalizeDimensionGroups(layout.ColumnGroups, formula.MaxColumns)
 	if layout.FrozenRows < 0 || layout.FrozenRows > formula.MaxRows {
 		layout.FrozenRows = 0
 	}
@@ -132,7 +136,7 @@ func normalizeSheetLayoutMutation(input SheetLayoutMutation) (SheetLayoutMutatio
 			return SheetLayoutMutation{}, fmt.Errorf("%w: frozen rows must be at most %d and frozen columns at most %d", ErrInvalid, MaxFrozenRows, MaxFrozenColumns)
 		}
 		return input, nil
-	case "resize", "reset_size", "hide", "show", "show_all":
+	case "resize", "reset_size", "hide", "show", "show_all", "group", "ungroup", "collapse", "expand":
 	default:
 		return SheetLayoutMutation{}, fmt.Errorf("%w: unsupported layout action", ErrInvalid)
 	}
@@ -168,10 +172,27 @@ func applySheetLayoutMutation(current SheetLayout, input SheetLayoutMutation) (S
 		next.Revision++
 		return next, nil
 	}
-	if input.Axis == "row" {
-		next.RowHeights, next.HiddenRows = applyDimensionMutation(next.RowHeights, next.HiddenRows, input, DefaultRowHeight)
-	} else {
-		next.ColumnWidths, next.HiddenColumns = applyDimensionMutation(next.ColumnWidths, next.HiddenColumns, input, DefaultColumnWidth)
+	switch input.Action {
+	case "group", "ungroup", "collapse", "expand":
+		limit, groups := formula.MaxRows, next.RowGroups
+		if input.Axis == "column" {
+			limit, groups = formula.MaxColumns, next.ColumnGroups
+		}
+		updated, err := applyGroupMutation(groups, input, limit)
+		if err != nil {
+			return SheetLayout{}, err
+		}
+		if input.Axis == "row" {
+			next.RowGroups = updated
+		} else {
+			next.ColumnGroups = updated
+		}
+	default:
+		if input.Axis == "row" {
+			next.RowHeights, next.HiddenRows = applyDimensionMutation(next.RowHeights, next.HiddenRows, input, DefaultRowHeight)
+		} else {
+			next.ColumnWidths, next.HiddenColumns = applyDimensionMutation(next.ColumnWidths, next.HiddenColumns, input, DefaultColumnWidth)
+		}
 	}
 	if len(next.RowHeights) > MaxLayoutEntries || len(next.ColumnWidths) > MaxLayoutEntries || len(mergeDimensionRanges(next.HiddenRows, formula.MaxRows)) > MaxLayoutEntries || len(mergeDimensionRanges(next.HiddenColumns, formula.MaxColumns)) > MaxLayoutEntries {
 		return SheetLayout{}, fmt.Errorf("%w: sheet layout exceeds the %d-entry limit", ErrInvalid, MaxLayoutEntries)
@@ -232,6 +253,9 @@ func transformLayoutForStructure(layout SheetLayout, input StructuralMutation) S
 		var rangeChanged bool
 		layout.HiddenRows, rangeChanged = transformDimensionRanges(layout.HiddenRows, input)
 		changed = changed || rangeChanged
+		var groupChanged bool
+		layout.RowGroups, groupChanged = transformDimensionGroups(layout.RowGroups, input)
+		changed = changed || groupChanged
 		frozen := transformFrozenCount(layout.FrozenRows, input)
 		changed = changed || frozen != layout.FrozenRows
 		layout.FrozenRows = frozen
@@ -240,6 +264,9 @@ func transformLayoutForStructure(layout SheetLayout, input StructuralMutation) S
 		var rangeChanged bool
 		layout.HiddenColumns, rangeChanged = transformDimensionRanges(layout.HiddenColumns, input)
 		changed = changed || rangeChanged
+		var groupChanged bool
+		layout.ColumnGroups, groupChanged = transformDimensionGroups(layout.ColumnGroups, input)
+		changed = changed || groupChanged
 		frozen := transformFrozenCount(layout.FrozenColumns, input)
 		changed = changed || frozen != layout.FrozenColumns
 		layout.FrozenColumns = frozen
@@ -317,4 +344,161 @@ func transformFrozenCount(count int, mutation StructuralMutation) int {
 		deletedInside = 0
 	}
 	return max(0, count-deletedInside)
+}
+
+// MaxGroupDepth matches what a spreadsheet outline is usable at: past a few
+// levels the controls stop being readable.
+const MaxGroupDepth = 8
+
+// MaxGroups bounds one sheet's outline so a runaway client cannot fill the
+// layout blob with grouping.
+const MaxGroups = 200
+
+// normalizeDimensionGroups drops empty and out-of-bounds groups, removes exact
+// duplicates, and works out how deeply each one is nested so the client can
+// indent the controls without repeating the calculation.
+func normalizeDimensionGroups(input []DimensionGroup, limit int) []DimensionGroup {
+	seen := make(map[[2]int]DimensionGroup, len(input))
+	for _, group := range input {
+		if group.Start < 1 {
+			group.Start = 1
+		}
+		if group.End > limit {
+			group.End = limit
+		}
+		if group.Start >= group.End {
+			// A single row or column is not worth an outline control.
+			continue
+		}
+		key := [2]int{group.Start, group.End}
+		if existing, duplicate := seen[key]; duplicate {
+			group.Collapsed = group.Collapsed || existing.Collapsed
+		}
+		seen[key] = group
+	}
+	groups := make([]DimensionGroup, 0, len(seen))
+	for _, group := range seen {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Start == groups[j].Start {
+			return groups[i].End > groups[j].End
+		}
+		return groups[i].Start < groups[j].Start
+	})
+	if len(groups) > MaxGroups {
+		groups = groups[:MaxGroups]
+	}
+	for index := range groups {
+		depth := 0
+		for other := range groups {
+			if other == index {
+				continue
+			}
+			if encloses(groups[other], groups[index]) {
+				depth++
+			}
+		}
+		groups[index].Depth = depth
+	}
+	return groups
+}
+
+// encloses reports whether outer wholly contains inner without being the same
+// range, which is what makes one group a level deeper than another.
+func encloses(outer, inner DimensionGroup) bool {
+	if outer.Start == inner.Start && outer.End == inner.End {
+		return false
+	}
+	return outer.Start <= inner.Start && outer.End >= inner.End
+}
+
+// applyGroupMutation adds, removes, collapses or expands one outline group.
+func applyGroupMutation(groups []DimensionGroup, input SheetLayoutMutation, limit int) ([]DimensionGroup, error) {
+	end := input.Start + input.Count - 1
+	switch input.Action {
+	case "group":
+		if input.Count < 2 {
+			return nil, fmt.Errorf("%w: a group needs at least two %ss", ErrInvalid, input.Axis)
+		}
+		next := normalizeDimensionGroups(append(append([]DimensionGroup(nil), groups...), DimensionGroup{Start: input.Start, End: end}), limit)
+		for _, group := range next {
+			if group.Depth >= MaxGroupDepth {
+				return nil, fmt.Errorf("%w: groups can be nested %d levels deep", ErrInvalid, MaxGroupDepth)
+			}
+		}
+		if len(next) > MaxGroups {
+			return nil, fmt.Errorf("%w: a sheet can hold %d groups", ErrInvalid, MaxGroups)
+		}
+		return next, nil
+	case "ungroup":
+		// The innermost group covering the range is the one being removed, so
+		// ungrouping a nested selection peels one level at a time.
+		target, found := innermostGroup(groups, input.Start, end)
+		if !found {
+			return nil, fmt.Errorf("%w: no group covers that range", ErrInvalid)
+		}
+		next := make([]DimensionGroup, 0, len(groups))
+		for _, group := range groups {
+			if group.Start == target.Start && group.End == target.End {
+				continue
+			}
+			next = append(next, group)
+		}
+		return normalizeDimensionGroups(next, limit), nil
+	case "collapse", "expand":
+		target, found := innermostGroup(groups, input.Start, end)
+		if !found {
+			return nil, fmt.Errorf("%w: no group covers that range", ErrInvalid)
+		}
+		next := append([]DimensionGroup(nil), groups...)
+		for index := range next {
+			if next[index].Start == target.Start && next[index].End == target.End {
+				next[index].Collapsed = input.Action == "collapse"
+			}
+		}
+		return normalizeDimensionGroups(next, limit), nil
+	}
+	return groups, nil
+}
+
+// innermostGroup finds the smallest group that covers the range, which is what
+// a click on a control inside nested groups should act on.
+func innermostGroup(groups []DimensionGroup, start, end int) (DimensionGroup, bool) {
+	var best DimensionGroup
+	found := false
+	for _, group := range groups {
+		if group.Start > start || group.End < end {
+			continue
+		}
+		if !found || group.End-group.Start < best.End-best.Start {
+			best, found = group, true
+		}
+	}
+	return best, found
+}
+
+// transformDimensionGroups moves the outline with the rows or columns it wraps,
+// dropping a group whose range is deleted entirely.
+func transformDimensionGroups(input []DimensionGroup, mutation StructuralMutation) ([]DimensionGroup, bool) {
+	result := make([]DimensionGroup, 0, len(input))
+	changed := false
+	for _, group := range input {
+		start, end, exists := transformGroupInterval(group.Start, group.End, mutation)
+		if !exists {
+			changed = true
+			continue
+		}
+		if start != group.Start || end != group.End {
+			changed = true
+		}
+		group.Start, group.End = start, end
+		result = append(result, group)
+	}
+	return result, changed
+}
+
+func transformGroupInterval(start, end int, mutation StructuralMutation) (int, int, bool) {
+	change := formula.StructuralChange{Axis: mutation.Axis, Action: mutation.Action, Index: mutation.Index, Count: mutation.Count}
+	return formula.TransformInterval(start, end, change)
 }

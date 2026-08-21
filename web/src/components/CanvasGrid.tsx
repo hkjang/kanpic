@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, ChevronsUpDown, Clipboard, ClipboardPaste, Copy, Eraser, EyeOff, Filter, Link2, MessageSquarePlus, Palette, PanelTop, Rows3, Scissors, Table2, Trash2 } from 'lucide-react'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
@@ -17,13 +17,14 @@ import { enqueue, flushOutbox } from '../lib/outbox'
 import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis } from '../lib/dimensionAxis'
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
+import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
 import { optionForValue,optionLabel,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, MutationResult, SheetLayout } from '../types'
+import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, MutationResult, SheetLayout } from '../types'
 
-const HEADER_WIDTH=46
-const HEADER_HEIGHT=27
+const ROW_HEADER_WIDTH=46
+const COLUMN_HEADER_HEIGHT=27
 const TOTAL_ROWS=MAX_GRID_ROWS
 const TOTAL_COLUMNS=MAX_GRID_COLUMNS
 
@@ -71,8 +72,16 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const collaborators=useCollaborationStore(state=>state.users)
   const sendCursor=useCollaborationStore(state=>state.sendCursor),sendSelection=useCollaborationStore(state=>state.sendSelection)
   const hiddenRowsKey=hiddenRows.join(','),layoutKey=JSON.stringify(layout),conditionalRulesKey=conditionalFormats.map(rule=>`${rule.id}:${rule.revision}`).join(',')
-  const rowAxis=useMemo(()=>createDimensionAxis({total:TOTAL_ROWS,defaultSize:27,sizes:layout.row_heights,hiddenRanges:layout.hidden_rows,hiddenIndexes:hiddenRows,zoom}),[hiddenRowsKey,layoutKey,zoom])
-  const columnAxis=useMemo(()=>createDimensionAxis({total:TOTAL_COLUMNS,defaultSize:108,sizes:layout.column_widths,hiddenRanges:layout.hidden_columns,zoom}),[layoutKey,zoom])
+  // A collapsed group folds its rows away without touching the ranges the user
+  // hid by hand, so expanding it never reveals more than it hid.
+  const collapsedRows=useMemo(()=>collapsedIndexes(layout.row_groups),[layoutKey])
+  const collapsedColumns=useMemo(()=>collapsedIndexes(layout.column_groups),[layoutKey])
+  const rowAxis=useMemo(()=>createDimensionAxis({total:TOTAL_ROWS,defaultSize:27,sizes:layout.row_heights,hiddenRanges:layout.hidden_rows,hiddenIndexes:[...hiddenRows,...collapsedRows],zoom}),[hiddenRowsKey,layoutKey,zoom])
+  const columnAxis=useMemo(()=>createDimensionAxis({total:TOTAL_COLUMNS,defaultSize:108,sizes:layout.column_widths,hiddenRanges:layout.hidden_columns,hiddenIndexes:[...collapsedColumns],zoom}),[layoutKey,zoom])
+  // The outline gutter sits between the sheet edge and the headers, one step
+  // per level of nesting, and is absent entirely when nothing is grouped.
+  const rowOutline=outlineSize(layout.row_groups),columnOutline=outlineSize(layout.column_groups)
+  const headerWidth=ROW_HEADER_WIDTH+rowOutline,headerHeight=COLUMN_HEADER_HEIGHT+columnOutline
   const frozenRows=Math.min(layout.frozen_rows??0,TOTAL_ROWS),frozenColumns=Math.min(layout.frozen_columns??0,TOTAL_COLUMNS)
   const activeCell=cells.get(cellKey(activeRow,activeColumn))
   const activeValidation=validationForCell(validations,activeRow,activeColumn)
@@ -91,9 +100,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   useEffect(()=>{dragging.current=false;filling.current=false;fillPreviewRef.current=undefined;setFillPreview(undefined)},[sheetId])
   useEffect(()=>{const rejected=(event:Event)=>{const detail=(event as CustomEvent<{message?:string}>).detail;setSaveState('error');setRefreshToken(value=>value+1);alert(detail?.message??'서버가 변경을 거부했습니다. 최신 값을 다시 불러옵니다.')};window.addEventListener('kanpic:outbox-rejected',rejected);return()=>window.removeEventListener('kanpic:outbox-rejected',rejected)},[setSaveState])
   useEffect(()=>{if(!viewport.current)return;const observer=new ResizeObserver(([entry])=>setSize({width:Math.floor(entry.contentRect.width),height:Math.floor(entry.contentRect.height)}));observer.observe(viewport.current);return()=>observer.disconnect()},[])
-  useEffect(()=>{const element=viewport.current;if(!element)return;let left=element.scrollLeft,top=element.scrollTop;const bodyWidth=Math.max(1,element.clientWidth-HEADER_WIDTH),bodyHeight=Math.max(1,element.clientHeight-HEADER_HEIGHT),frozenWidth=columnAxis.offsetOf(frozenColumns+1),frozenHeight=rowAxis.offsetOf(frozenRows+1);if(activeColumn>frozenColumns){const start=columnAxis.offsetOf(activeColumn),end=start+columnAxis.sizeOf(activeColumn),visibleStart=left+frozenWidth,visibleEnd=left+bodyWidth;if(start<visibleStart)left=Math.max(0,start-frozenWidth);else if(end>visibleEnd)left=Math.max(0,end-bodyWidth)}if(activeRow>frozenRows){const start=rowAxis.offsetOf(activeRow),end=start+rowAxis.sizeOf(activeRow),visibleStart=top+frozenHeight,visibleEnd=top+bodyHeight;if(start<visibleStart)top=Math.max(0,start-frozenHeight);else if(end>visibleEnd)top=Math.max(0,end-bodyHeight)}if(left!==element.scrollLeft||top!==element.scrollTop){element.scrollLeft=left;element.scrollTop=top;setScroll({left,top})}},[activeRow,activeColumn,sheetId,rowAxis,columnAxis,frozenRows,frozenColumns])
+  useEffect(()=>{const element=viewport.current;if(!element)return;let left=element.scrollLeft,top=element.scrollTop;const bodyWidth=Math.max(1,element.clientWidth-headerWidth),bodyHeight=Math.max(1,element.clientHeight-headerHeight),frozenWidth=columnAxis.offsetOf(frozenColumns+1),frozenHeight=rowAxis.offsetOf(frozenRows+1);if(activeColumn>frozenColumns){const start=columnAxis.offsetOf(activeColumn),end=start+columnAxis.sizeOf(activeColumn),visibleStart=left+frozenWidth,visibleEnd=left+bodyWidth;if(start<visibleStart)left=Math.max(0,start-frozenWidth);else if(end>visibleEnd)left=Math.max(0,end-bodyWidth)}if(activeRow>frozenRows){const start=rowAxis.offsetOf(activeRow),end=start+rowAxis.sizeOf(activeRow),visibleStart=top+frozenHeight,visibleEnd=top+bodyHeight;if(start<visibleStart)top=Math.max(0,start-frozenHeight);else if(end>visibleEnd)top=Math.max(0,end-bodyHeight)}if(left!==element.scrollLeft||top!==element.scrollTop){element.scrollLeft=left;element.scrollTop=top;setScroll({left,top})}},[activeRow,activeColumn,sheetId,rowAxis,columnAxis,frozenRows,frozenColumns])
 
-  const visibleRange=useMemo(()=>{const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1),startRow=rowAxis.firstVisibleAtOrAfter(Math.max(frozenRows+1,rowAxis.indexAtOffset(scroll.top+frozenHeight))),startColumn=columnAxis.firstVisibleAtOrAfter(Math.max(frozenColumns+1,columnAxis.indexAtOffset(scroll.left+frozenWidth))),endRow=rowAxis.lastVisibleAtOrBefore(rowAxis.indexAtOffset(scroll.top+Math.max(frozenHeight,size.height-HEADER_HEIGHT)+100*zoom)),endColumn=columnAxis.lastVisibleAtOrBefore(columnAxis.indexAtOffset(scroll.left+Math.max(frozenWidth,size.width-HEADER_WIDTH)+250*zoom));return{startRow,startColumn,endRow:Math.max(startRow,endRow),endColumn:Math.max(startColumn,endColumn)}},[scroll,size,rowAxis,columnAxis,frozenRows,frozenColumns,zoom])
+  const visibleRange=useMemo(()=>{const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1),startRow=rowAxis.firstVisibleAtOrAfter(Math.max(frozenRows+1,rowAxis.indexAtOffset(scroll.top+frozenHeight))),startColumn=columnAxis.firstVisibleAtOrAfter(Math.max(frozenColumns+1,columnAxis.indexAtOffset(scroll.left+frozenWidth))),endRow=rowAxis.lastVisibleAtOrBefore(rowAxis.indexAtOffset(scroll.top+Math.max(frozenHeight,size.height-headerHeight)+100*zoom)),endColumn=columnAxis.lastVisibleAtOrBefore(columnAxis.indexAtOffset(scroll.left+Math.max(frozenWidth,size.width-headerWidth)+250*zoom));return{startRow,startColumn,endRow:Math.max(startRow,endRow),endColumn:Math.max(startColumn,endColumn)}},[scroll,size,rowAxis,columnAxis,frozenRows,frozenColumns,zoom])
   useEffect(()=>{const controller=new AbortController(),ranges=[visibleRange];if(frozenRows>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:visibleRange.startColumn,endColumn:visibleRange.endColumn});if(frozenColumns>0)ranges.push({startRow:visibleRange.startRow,endRow:visibleRange.endRow,startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)});if(frozenRows>0&&frozenColumns>0)ranges.push({startRow:rowAxis.firstVisibleAtOrAfter(1),endRow:rowAxis.lastVisibleAtOrBefore(frozenRows),startColumn:columnAxis.firstVisibleAtOrAfter(1),endColumn:columnAxis.lastVisibleAtOrBefore(frozenColumns)});for(const selected of ranges){if(selected.endRow<selected.startRow||selected.endColumn<selected.startColumn)continue;const range=`${address(selected.startRow,selected.startColumn)}:${address(selected.endRow,selected.endColumn)}`;api<{items:Cell[]}>(`/api/v1/sheets/${sheetId}/ranges/${range}`,{signal:controller.signal}).then(result=>replaceRange(result.items,selected.startRow,selected.startColumn,selected.endRow,selected.endColumn)).catch(()=>{})}return()=>controller.abort()},[sheetId,version,refreshToken,visibleRange.startRow,visibleRange.startColumn,visibleRange.endRow,visibleRange.endColumn,frozenRows,frozenColumns,rowAxis,columnAxis,replaceRange])
   useEffect(()=>{
     if(conditionalFormats.length===0){setConditionalCells(new Map());return}
@@ -113,29 +122,71 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     element.width=size.width*ratio;element.height=size.height*ratio;element.style.width=`${size.width}px`;element.style.height=`${size.height}px`
     const context=element.getContext('2d');if(!context)return
     context.scale(ratio,ratio);context.fillStyle='#fff';context.fillRect(0,0,size.width,size.height);context.font=`${12*zoom}px Inter, Pretendard, sans-serif`;context.textBaseline='middle'
-    const rowPosition=(row:number)=>HEADER_HEIGHT+axisViewportPosition(rowAxis,row,scroll.top,frozenRows),columnPosition=(column:number)=>HEADER_WIDTH+axisViewportPosition(columnAxis,column,scroll.left,frozenColumns)
+    const rowPosition=(row:number)=>headerHeight+axisViewportPosition(rowAxis,row,scroll.top,frozenRows),columnPosition=(column:number)=>headerWidth+axisViewportPosition(columnAxis,column,scroll.left,frozenColumns)
     const rowVisible=(row:number)=>!rowAxis.isHidden(row)&&(row<=frozenRows||row>=visibleRange.startRow&&row<=visibleRange.endRow),columnVisible=(column:number)=>!columnAxis.isHidden(column)&&(column<=frozenColumns||column>=visibleRange.startColumn&&column<=visibleRange.endColumn)
     const geometry=(startRow:number,startColumn:number,endRow:number,endColumn:number)=>{if(rowAxis.countVisible(startRow,endRow)===0||columnAxis.countVisible(startColumn,endColumn)===0)return;const firstRow=rowAxis.firstVisibleAtOrAfter(startRow),lastRow=rowAxis.lastVisibleAtOrBefore(endRow),firstColumn=columnAxis.firstVisibleAtOrAfter(startColumn),lastColumn=columnAxis.lastVisibleAtOrBefore(endColumn),x=columnPosition(firstColumn),y=rowPosition(firstRow);return{x,y,width:columnPosition(lastColumn)+columnAxis.sizeOf(lastColumn)-x,height:rowPosition(lastRow)+rowAxis.sizeOf(lastRow)-y}}
     const mainRows=indexesIn(rowAxis,visibleRange.startRow,visibleRange.endRow),mainColumns=indexesIn(columnAxis,visibleRange.startColumn,visibleRange.endColumn),frozenRowIndexes=indexesIn(rowAxis,1,frozenRows),frozenColumnIndexes=indexesIn(columnAxis,1,frozenColumns)
     const rows=[...mainRows,...frozenRowIndexes],columns=[...mainColumns,...frozenColumnIndexes]
-    context.fillStyle='#f7f9fb';context.fillRect(0,0,size.width,HEADER_HEIGHT);context.fillRect(0,0,HEADER_WIDTH,size.height)
+    context.fillStyle='#f7f9fb';context.fillRect(0,0,size.width,headerHeight);context.fillRect(0,0,headerWidth,size.height)
     context.strokeStyle='#e4e8ec';context.lineWidth=1
     const wholeColumns=selection.startRow<=1&&selection.endRow>=TOTAL_ROWS,wholeRows=selection.startColumn<=1&&selection.endColumn>=TOTAL_COLUMNS
-    for(const column of columns){const x=columnPosition(column),width=columnAxis.sizeOf(column);if(x+width<HEADER_WIDTH||x>size.width)continue
+    for(const column of columns){const x=columnPosition(column),width=columnAxis.sizeOf(column);if(x+width<headerWidth||x>size.width)continue
       const selected=column>=selection.startColumn&&column<=selection.endColumn
-      context.fillStyle=selected&&wholeColumns?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(x,0,width,HEADER_HEIGHT)
-      context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,showGridlines?size.height:HEADER_HEIGHT);context.stroke()
-      if(selected){context.fillStyle='#0f766e';context.fillRect(x,HEADER_HEIGHT-2,width,2)}
-      context.fillStyle=selected?'#0b5c55':'#52606d';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='center';context.fillText(columnName(column),x+width/2,HEADER_HEIGHT/2)}
+      context.fillStyle=selected&&wholeColumns?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(x,0,width,headerHeight)
+      context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,showGridlines?size.height:headerHeight);context.stroke()
+      if(selected){context.fillStyle='#0f766e';context.fillRect(x,headerHeight-2,width,2)}
+      context.fillStyle=selected?'#0b5c55':'#52606d';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='center';context.fillText(columnName(column),x+width/2,headerHeight/2)}
     context.font=`${12*zoom}px Inter, Pretendard, sans-serif`
-    for(const row of rows){const y=rowPosition(row),height=rowAxis.sizeOf(row);if(y+height<HEADER_HEIGHT||y>size.height)continue
+    for(const row of rows){const y=rowPosition(row),height=rowAxis.sizeOf(row);if(y+height<headerHeight||y>size.height)continue
       const selected=row>=selection.startRow&&row<=selection.endRow
-      context.fillStyle=selected&&wholeRows?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(0,y,HEADER_WIDTH,height)
-      context.beginPath();context.moveTo(0,Math.round(y)+.5);context.lineTo(showGridlines?size.width:HEADER_WIDTH,Math.round(y)+.5);context.stroke()
-      if(selected){context.fillStyle='#0f766e';context.fillRect(HEADER_WIDTH-2,y,2,height)}
-      context.fillStyle=selected?'#0b5c55':'#73808c';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='right';context.fillText(String(row),HEADER_WIDTH-8,y+height/2)}
+      context.fillStyle=selected&&wholeRows?'#c7e3dd':selected?'#e6f2ef':'#f7f9fb';context.fillRect(0,y,headerWidth,height)
+      context.beginPath();context.moveTo(0,Math.round(y)+.5);context.lineTo(showGridlines?size.width:headerWidth,Math.round(y)+.5);context.stroke()
+      if(selected){context.fillStyle='#0f766e';context.fillRect(headerWidth-2,y,2,height)}
+      context.fillStyle=selected?'#0b5c55':'#73808c';context.font=`${selected?'600 ':''}${12*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='right';context.fillText(String(row),headerWidth-8,y+height/2)}
     context.font=`${12*zoom}px Inter, Pretendard, sans-serif`
-    context.save();context.beginPath();context.rect(HEADER_WIDTH,HEADER_HEIGHT,size.width-HEADER_WIDTH,size.height-HEADER_HEIGHT);context.clip()
+    // The outline gutter: a bracket for every group and a box to fold it.
+    const paintOutline=(axis:'row'|'column')=>{
+      const groups=axis==='row'?layout.row_groups:layout.column_groups
+      if(!groups||groups.length===0)return
+      const indexes=axis==='row'?rows:columns
+      const depth=Math.max(...groups.map(group=>group.depth))
+      context.save()
+      context.fillStyle='#f2f5f6'
+      if(axis==='row')context.fillRect(0,headerHeight,rowOutline,size.height-headerHeight)
+      else context.fillRect(headerWidth,0,size.width-headerWidth,columnOutline)
+      context.strokeStyle='#8fa3ab';context.lineWidth=1
+      for(const index of indexes){
+        const start=axis==='row'?rowPosition(index):columnPosition(index)
+        const span=axis==='row'?rowAxis.sizeOf(index):columnAxis.sizeOf(index)
+        const middle=Math.round(start+span/2)+.5
+        for(let level=0;level<=depth;level++){
+          const line=Math.round(level*OUTLINE_STEP+OUTLINE_STEP/2)+.5
+          const control=controlAt(groups,index,level)
+          const covered=groupsAt(groups,index).some(group=>group.depth===level)
+          if(!covered&&!control)continue
+          context.beginPath()
+          if(axis==='row'){
+            if(!control){context.moveTo(line,start);context.lineTo(line,start+span)}
+            else{context.moveTo(line,start);context.lineTo(line,middle)}
+          }else{
+            if(!control){context.moveTo(start,line);context.lineTo(start+span,line)}
+            else{context.moveTo(start,line);context.lineTo(middle,line)}
+          }
+          context.stroke()
+          if(!control)continue
+          const boxX=axis==='row'?line-5:middle-5,boxY=axis==='row'?middle-5:line-5
+          context.fillStyle='#fff';context.fillRect(boxX,boxY,10,10)
+          context.strokeRect(boxX+.5,boxY+.5,9,9)
+          context.beginPath();context.moveTo(boxX+2.5,boxY+5);context.lineTo(boxX+7.5,boxY+5)
+          if(control.collapsed){context.moveTo(boxX+5,boxY+2.5);context.lineTo(boxX+5,boxY+7.5)}
+          context.stroke()
+          context.fillStyle='#f2f5f6'
+        }
+      }
+      context.restore()
+    }
+    paintOutline('row');paintOutline('column')
+    context.save();context.beginPath();context.rect(headerWidth,headerHeight,size.width-headerWidth,size.height-headerHeight);context.clip()
     const mergedRanges=new Map<string,{range:MergeRange;representative:Cell}>()
     const drawCell=(cell:Cell,x:number,y:number,width:number,height:number)=>{
       const conditional=conditionalCells.get(cellKey(cell.row,cell.column)),style={...(cell.style??{}),...(conditional?.style??{})},validation=validationForCell(validations,cell.row,cell.column),validationOption=validation?.rule_type==='list'?optionForValue(validation,cell.value):undefined
@@ -194,10 +245,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(user.client_id===collaborationClientId()||user.cursor?.sheet_id!==sheetId)return
       const cursor=user.cursor;if(rowAxis.isHidden(cursor.row)||columnAxis.isHidden(cursor.column))return
       const x=columnPosition(cursor.column),y=rowPosition(cursor.row),cellWidth=columnAxis.sizeOf(cursor.column),cellHeight=rowAxis.sizeOf(cursor.row)
-      if(x+cellWidth<HEADER_WIDTH||y+cellHeight<HEADER_HEIGHT||x>size.width||y>size.height)return
+      if(x+cellWidth<headerWidth||y+cellHeight<headerHeight||x>size.width||y>size.height)return
       const color=presenceColor(user.client_id);context.strokeStyle=color;context.lineWidth=2;context.strokeRect(Math.round(x)+2,Math.round(y)+2,Math.round(cellWidth)-4,Math.round(cellHeight)-4);context.fillStyle=color;context.font=`600 ${9*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='left'
       const label=userLabels?.[user.actor_id?.toLowerCase()??'']||user.actor_id||'사용자',labelWidth=Math.min(cellWidth,context.measureText(label).width+10)
-      context.fillRect(x+1,Math.max(HEADER_HEIGHT,y-15*zoom),labelWidth,14*zoom);context.fillStyle='#fff';context.fillText(label,x+5,Math.max(HEADER_HEIGHT+7*zoom,y-8*zoom),labelWidth-8)
+      context.fillRect(x+1,Math.max(headerHeight,y-15*zoom),labelWidth,14*zoom);context.fillStyle='#fff';context.fillText(label,x+5,Math.max(headerHeight+7*zoom,y-8*zoom),labelWidth-8)
     })
     if(fillPreview){const box=geometry(fillPreview.startRow,fillPreview.startColumn,fillPreview.endRow,fillPreview.endColumn);if(box){context.fillStyle='rgba(15,118,110,.045)';context.fillRect(box.x,box.y,box.width,box.height);context.save();context.setLineDash([5,3]);context.strokeStyle='#0f766e';context.lineWidth=1;context.strokeRect(Math.round(box.x)+1,Math.round(box.y)+1,Math.round(box.width)-2,Math.round(box.height)-2);context.restore()}}
     const selectionBox=geometry(selection.startRow,selection.startColumn,selection.endRow,selection.endColumn)
@@ -205,8 +256,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     const activeMerge=cellMerge(activeCell),activeStartRow=activeMerge?.startRow??activeRow,activeStartColumn=activeMerge?.startColumn??activeColumn,activeEndRow=activeMerge?.endRow??activeRow,activeEndColumn=activeMerge?.endColumn??activeColumn
     const activeBox=geometry(activeStartRow,activeStartColumn,activeEndRow,activeEndColumn)
     if(activeBox){context.strokeStyle='#0f766e';context.lineWidth=2;context.strokeRect(Math.round(activeBox.x)+1,Math.round(activeBox.y)+1,Math.round(activeBox.width)-2,Math.round(activeBox.height)-2)}if(selectionBox){context.fillStyle='#0f766e';context.fillRect(selectionBox.x+selectionBox.width-4,selectionBox.y+selectionBox.height-4,6,6)}context.restore()
-    const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1);context.strokeStyle='#98a9ad';context.lineWidth=2;if(frozenRows>0){context.beginPath();context.moveTo(0,HEADER_HEIGHT+frozenHeight+.5);context.lineTo(size.width,HEADER_HEIGHT+frozenHeight+.5);context.stroke()}if(frozenColumns>0){context.beginPath();context.moveTo(HEADER_WIDTH+frozenWidth+.5,0);context.lineTo(HEADER_WIDTH+frozenWidth+.5,size.height);context.stroke()}
-    context.fillStyle='#edf7f5';context.fillRect(0,0,HEADER_WIDTH,HEADER_HEIGHT);context.strokeStyle='#d9dfe5';context.strokeRect(.5,.5,HEADER_WIDTH-.5,HEADER_HEIGHT-.5)
+    const frozenHeight=rowAxis.offsetOf(frozenRows+1),frozenWidth=columnAxis.offsetOf(frozenColumns+1);context.strokeStyle='#98a9ad';context.lineWidth=2;if(frozenRows>0){context.beginPath();context.moveTo(0,headerHeight+frozenHeight+.5);context.lineTo(size.width,headerHeight+frozenHeight+.5);context.stroke()}if(frozenColumns>0){context.beginPath();context.moveTo(headerWidth+frozenWidth+.5,0);context.lineTo(headerWidth+frozenWidth+.5,size.height);context.stroke()}
+    context.fillStyle='#edf7f5';context.fillRect(0,0,headerWidth,headerHeight);context.strokeStyle='#d9dfe5';context.strokeRect(.5,.5,headerWidth-.5,headerHeight-.5)
     if(resizePreview){
       context.save();context.strokeStyle='#0f766e';context.lineWidth=2;context.setLineDash([6,4])
       if(resizePreview.axis==='column'){const x=columnPosition(resizePreview.index)+resizePreview.size*zoom;context.beginPath();context.moveTo(Math.round(x)+.5,0);context.lineTo(Math.round(x)+.5,size.height)}
@@ -215,8 +266,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const label=`${Math.round(resizePreview.size)}px`
       context.font=`600 ${10*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='left'
       const labelWidth=context.measureText(label).width+12
-      const labelX=resizePreview.axis==='column'?Math.min(size.width-labelWidth-4,columnPosition(resizePreview.index)+resizePreview.size*zoom+6):HEADER_WIDTH+6
-      const labelY=resizePreview.axis==='column'?HEADER_HEIGHT+6:Math.min(size.height-22,rowPosition(resizePreview.index)+resizePreview.size*zoom+6)
+      const labelX=resizePreview.axis==='column'?Math.min(size.width-labelWidth-4,columnPosition(resizePreview.index)+resizePreview.size*zoom+6):headerWidth+6
+      const labelY=resizePreview.axis==='column'?headerHeight+6:Math.min(size.height-22,rowPosition(resizePreview.index)+resizePreview.size*zoom+6)
       context.fillStyle='#0f766e';context.beginPath();context.roundRect(labelX,labelY,labelWidth,18,5);context.fill()
       context.fillStyle='#fff';context.fillText(label,labelX+6,labelY+9)
     }
@@ -324,9 +375,27 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   // through a ref instead of a stale closure over the draft.
   commitAndMoveRef.current=commitAndMove
   const pointerPosition=(event:{clientX:number;clientY:number})=>{const rect=canvas.current!.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}}
-  const pointCell=(event:React.PointerEvent<HTMLCanvasElement>)=>{const{x,y}=pointerPosition(event);if(x<HEADER_WIDTH||y<HEADER_HEIGHT)return;return{row:axisIndexAtViewport(rowAxis,y-HEADER_HEIGHT,scroll.top,frozenRows),column:axisIndexAtViewport(columnAxis,x-HEADER_WIDTH,scroll.left,frozenColumns)}}
-  const geometry:GridGeometry={rowAxis,columnAxis,scroll,frozenRows,frozenColumns,headerWidth:HEADER_WIDTH,headerHeight:HEADER_HEIGHT}
+  const pointCell=(event:React.PointerEvent<HTMLCanvasElement>)=>{const{x,y}=pointerPosition(event);if(x<headerWidth||y<headerHeight)return;return{row:axisIndexAtViewport(rowAxis,y-headerHeight,scroll.top,frozenRows),column:axisIndexAtViewport(columnAxis,x-headerWidth,scroll.left,frozenColumns)}}
+  const geometry:GridGeometry={rowAxis,columnAxis,scroll,frozenRows,frozenColumns,headerWidth:headerWidth,headerHeight:headerHeight}
   const regionAt=(x:number,y:number)=>pointerRegion(geometry,x,y)
+  /** The outline control under the pointer, if the pointer is in the gutter. */
+  const outlineControlAt=(x:number,y:number):{axis:'row'|'column';group:DimensionGroup}|undefined=>{
+    if(x<rowOutline&&y>=headerHeight&&layout.row_groups?.length){
+      const level=Math.floor(x/OUTLINE_STEP)
+      const index=axisIndexAtViewport(rowAxis,y-headerHeight,scroll.top,frozenRows)
+      const group=controlAt(layout.row_groups,index,level)
+      if(group)return{axis:'row',group}
+    }
+    if(y<columnOutline&&x>=headerWidth&&layout.column_groups?.length){
+      const level=Math.floor(y/OUTLINE_STEP)
+      const index=axisIndexAtViewport(columnAxis,x-headerWidth,scroll.left,frozenColumns)
+      const group=controlAt(layout.column_groups,index,level)
+      if(group)return{axis:'column',group}
+    }
+    return undefined
+  }
+  const toggleGroup=(axis:'row'|'column',group:DimensionGroup)=>
+    void applyLayoutCommand({action:group.collapsed?'expand':'collapse',axis,start:group.start,count:group.end-group.start+1})
   const resizeTargetAt=(x:number,y:number)=>resizeHandleAt(geometry,x,y,RESIZE_HANDLE)
   const wholeColumnsSelected=selection.startRow<=1&&selection.endRow>=TOTAL_ROWS,wholeRowsSelected=selection.startColumn<=1&&selection.endColumn>=TOTAL_COLUMNS
   // Dragging a boundary inside a whole-row or whole-column selection resizes
@@ -336,7 +405,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     if(target.axis==='row'&&wholeRowsSelected&&target.index>=selection.startRow&&target.index<=selection.endRow)return{start:selection.startRow,count:selection.endRow-selection.startRow+1}
     return{start:target.index,count:1}
   }
-  const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(readOnly)return false;if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=HEADER_WIDTH+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=HEADER_HEIGHT+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
+  const onFillHandle=(event:React.PointerEvent<HTMLCanvasElement>)=>{if(readOnly)return false;if(rowAxis.hidden.length>0||columnAxis.hidden.length>0)return false;const{x,y}=pointerPosition(event),handleX=headerWidth+axisViewportPosition(columnAxis,selection.endColumn,scroll.left,frozenColumns)+columnAxis.sizeOf(selection.endColumn),handleY=headerHeight+axisViewportPosition(rowAxis,selection.endRow,scroll.top,frozenRows)+rowAxis.sizeOf(selection.endRow);return Math.abs(x-handleX)<=8&&Math.abs(y-handleY)<=8}
   const applyLayoutCommand=useCallback(async(command:LayoutCommand)=>{if(!onLayout)return;try{await onLayout(command)}catch{/* the editor page reports layout failures */}},[onLayout])
   const applyStructureCommand=useCallback(async(command:StructureCommand)=>{if(!onStructure)return;try{await onStructure(command)}catch{/* the editor page reports structure failures */}},[onStructure])
   // Selecting another cell must save what is being typed. The selection change
@@ -352,6 +421,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     setMenu(undefined)
     flushEdit()
     const{x,y}=pointerPosition(event),target=onLayout?resizeTargetAt(x,y):undefined
+    // A click on an outline control folds or unfolds before anything else is
+    // considered, because the control sits over the header area.
+    const control=onLayout?outlineControlAt(x,y):undefined
+    if(control){toggleGroup(control.axis,control.group);focusGrid();return}
     if(target){
       const axis=target.axis==='column'?columnAxis:rowAxis,span=resizeSpan(target),size=Math.round(axis.sizeOf(target.index)/zoom)
       resizeDrag.current={axis:target.axis,index:target.index,origin:target.axis==='column'?event.clientX:event.clientY,start:span.start,count:span.count,size}
@@ -380,8 +453,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
     if(headerDrag.current){
       const{x,y}=pointerPosition(event),header=headerDrag.current
-      if(header.axis==='column'){const index=axisIndexAtViewport(columnAxis,Math.max(0,x-HEADER_WIDTH),scroll.left,frozenColumns);selectSpan(1,Math.min(header.anchor,index),TOTAL_ROWS,Math.max(header.anchor,index),{row:1,column:index})}
-      else{const index=axisIndexAtViewport(rowAxis,Math.max(0,y-HEADER_HEIGHT),scroll.top,frozenRows);selectSpan(Math.min(header.anchor,index),1,Math.max(header.anchor,index),TOTAL_COLUMNS,{row:index,column:1})}
+      if(header.axis==='column'){const index=axisIndexAtViewport(columnAxis,Math.max(0,x-headerWidth),scroll.left,frozenColumns);selectSpan(1,Math.min(header.anchor,index),TOTAL_ROWS,Math.max(header.anchor,index),{row:1,column:index})}
+      else{const index=axisIndexAtViewport(rowAxis,Math.max(0,y-headerHeight),scroll.top,frozenRows);selectSpan(Math.min(header.anchor,index),1,Math.max(header.anchor,index),TOTAL_COLUMNS,{row:index,column:1})}
       return
     }
     if(filling.current){const cell=pointCell(event);if(!cell)return;const next={startRow:Math.min(selection.startRow,cell.row),startColumn:Math.min(selection.startColumn,cell.column),endRow:Math.max(selection.endRow,cell.row),endColumn:Math.max(selection.endColumn,cell.column)};fillPreviewRef.current=next;setFillPreview(next);return}
@@ -462,8 +535,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     else if(event.key==='ContextMenu'||(event.shiftKey&&event.key==='F10')){
       const rect=canvas.current?.getBoundingClientRect()
       setMenu({
-        x:(rect?.left??0)+HEADER_WIDTH+axisViewportPosition(columnAxis,activeColumn,scroll.left,frozenColumns)+10,
-        y:(rect?.top??0)+HEADER_HEIGHT+axisViewportPosition(rowAxis,activeRow,scroll.top,frozenRows)+10,
+        x:(rect?.left??0)+headerWidth+axisViewportPosition(columnAxis,activeColumn,scroll.left,frozenColumns)+10,
+        y:(rect?.top??0)+headerHeight+axisViewportPosition(rowAxis,activeRow,scroll.top,frozenRows)+10,
         items:cellMenuItems(selection),label:'셀 메뉴',
       })
       event.preventDefault()
@@ -530,12 +603,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   // Moves by one visible screen, matching the Page Up and Page Down keys.
   const movePage=useCallback((direction:'up'|'down'|'left'|'right',extend:boolean)=>{
     if(direction==='up'||direction==='down'){
-      const step=Math.max(1,Math.floor(Math.max(1,size.height-HEADER_HEIGHT-rowAxis.offsetOf(frozenRows+1))/Math.max(8,rowAxis.sizeOf(activeRow))))
+      const step=Math.max(1,Math.floor(Math.max(1,size.height-headerHeight-rowAxis.offsetOf(frozenRows+1))/Math.max(8,rowAxis.sizeOf(activeRow))))
       let row=activeRow
       for(let index=0;index<step;index+=1){const next=rowAxis.nextVisible(row,direction==='down'?1:-1);if(next===row)break;row=next}
       selectCell(row,activeColumn,extend);return
     }
-    const step=Math.max(1,Math.floor(Math.max(1,size.width-HEADER_WIDTH-columnAxis.offsetOf(frozenColumns+1))/Math.max(16,columnAxis.sizeOf(activeColumn))))
+    const step=Math.max(1,Math.floor(Math.max(1,size.width-headerWidth-columnAxis.offsetOf(frozenColumns+1))/Math.max(16,columnAxis.sizeOf(activeColumn))))
     let column=activeColumn
     for(let index=0;index<step;index+=1){const next=columnAxis.nextVisible(column,direction==='right'?1:-1);if(next===column)break;column=next}
     selectCell(activeRow,column,extend)
@@ -706,6 +779,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       {kind:'item',label:isColumn?'열 너비 자동 맞춤':'행 높이 자동 맞춤',disabled:readOnly||!onLayout,onSelect:()=>autoFit({axis,index})},
       {kind:'item',label:isColumn?'열 너비 지정…':'행 높이 지정…',disabled:readOnly||!onMenuCommand,onSelect:()=>onMenuCommand?.({command:'layout-dialog'})},
       {kind:'item',label:`${label} 숨기기`,icon:<EyeOff/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'hide',axis,start:first,count})},
+      {kind:'item',label:`${label} 그룹화`,icon:<ChevronsDownUp/>,disabled:readOnly||!onLayout||count<2,onSelect:()=>void applyLayoutCommand({action:'group',axis,start:first,count})},
+      {kind:'item',label:'그룹 해제',icon:<ChevronsUpDown/>,disabled:readOnly||!onLayout||!innermostGroup(isColumn?layout.column_groups:layout.row_groups,first,first+count-1),onSelect:()=>void applyLayoutCommand({action:'ungroup',axis,start:first,count})},
       {kind:'item',label:`모든 ${unit} 표시`,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'show_all',axis})},
       {kind:'item',label:isColumn?`${columnName(index)}열까지 고정`:`${index}행까지 고정`,icon:<PanelTop/>,disabled:readOnly||!onLayout,onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:isColumn?frozenRows:index,frozen_columns:isColumn?index:frozenColumns})},
       {kind:'item',label:'고정 해제',disabled:readOnly||!onLayout||(frozenRows===0&&frozenColumns===0),onSelect:()=>void applyLayoutCommand({action:'freeze',frozen_rows:0,frozen_columns:0})},
@@ -752,7 +827,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     setMenu({x:event.clientX,y:event.clientY,items:cellMenuItems(range),label:'셀 메뉴'})
   }
   const activeMerge=cellMerge(activeCell),inputStartRow=activeMerge?.startRow??activeRow,inputStartColumn=activeMerge?.startColumn??activeColumn,inputEndRow=activeMerge?.endRow??activeRow,inputEndColumn=activeMerge?.endColumn??activeColumn
-  const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=HEADER_WIDTH+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=HEADER_HEIGHT+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
+  const inputVisibleStart=rowAxis.firstVisibleAtOrAfter(inputStartRow),inputVisibleColumn=columnAxis.firstVisibleAtOrAfter(inputStartColumn),inputLeft=headerWidth+axisViewportPosition(columnAxis,inputVisibleColumn,scroll.left,frozenColumns),inputTop=headerHeight+axisViewportPosition(rowAxis,inputVisibleStart,scroll.top,frozenRows),inputWidth=columnAxis.rangeSize(inputStartColumn,inputEndColumn),inputHeight=rowAxis.rangeSize(inputStartRow,inputEndRow)
   const dropdown=!activeCell?.spill_source&&activeValidation?.rule_type==='list'&&activeValidation.show_dropdown?activeValidation:undefined
   // A chart cell has no text, so what is announced is a description of it.
   const activeSparkline=parseSparkline(activeCell?.value)
@@ -779,7 +854,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   }
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
   return <div className="grid-viewport" ref={viewport} tabIndex={0} onFocus={event=>{if(event.target===event.currentTarget)focusGrid()}} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
-    <div className="grid-spacer" style={{width:HEADER_WIDTH+columnAxis.extent,height:HEADER_HEIGHT+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={doubleClick} onContextMenu={openContextMenu}/></div>
+    <div className="grid-spacer" style={{width:headerWidth+columnAxis.extent,height:headerHeight+rowAxis.extent}}><canvas ref={canvas} className="grid-canvas" data-conditional-cells={conditionalCells.size} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel} onDoubleClick={doubleClick} onContextMenu={openContextMenu}/></div>
     {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>{setMenu(undefined);focusGrid()}}/>}
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
     {editing&&dropdown&&<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>{setEditing(false);focusGrid();void saveCell(option.value,'',activeRow,activeColumn)}}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>{setEditing(false);focusGrid()}}>취소</button></div>}

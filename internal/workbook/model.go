@@ -64,8 +64,20 @@ type SheetLayout struct {
 	ColumnWidths  []DimensionSize  `json:"column_widths,omitempty"`
 	HiddenRows    []DimensionRange `json:"hidden_rows,omitempty"`
 	HiddenColumns []DimensionRange `json:"hidden_columns,omitempty"`
+	RowGroups     []DimensionGroup `json:"row_groups,omitempty"`
+	ColumnGroups  []DimensionGroup `json:"column_groups,omitempty"`
 	FrozenRows    int              `json:"frozen_rows"`
 	FrozenColumns int              `json:"frozen_columns"`
+}
+
+// DimensionGroup folds a run of rows or columns away behind one control, which
+// is how a long model keeps its detail without showing all of it at once.
+// Groups may nest; Depth is derived from how many groups enclose this one.
+type DimensionGroup struct {
+	Start     int  `json:"start"`
+	End       int  `json:"end"`
+	Collapsed bool `json:"collapsed"`
+	Depth     int  `json:"depth"`
 }
 
 type SheetLayoutMutation struct {
