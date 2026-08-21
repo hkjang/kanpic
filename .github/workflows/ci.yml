@@ -14,6 +14,8 @@ jobs:
           fetch-depth: 0
       - name: Enforce hkjang commit identity
         run: ./scripts/check-commit-identities.sh HEAD
+      - name: Check release docs agree
+        run: ./scripts/check-release-docs.sh
 
   test:
     runs-on: ubuntu-latest

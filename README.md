@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.58.0
+VERSION=v0.59.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -44,6 +44,7 @@ API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이�
 ## 개발 검증
 
 ```bash
+./scripts/check-release-docs.sh   # README의 VERSION과 최신 릴리즈 노트가 맞는지
 go test ./...
 cd web && npm ci && npm test && npm run build
 

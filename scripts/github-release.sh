@@ -3,6 +3,9 @@ set -euo pipefail
 
 release_version="${1:-v0.1.0}"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Everything that can be checked cheaply is checked before the build, because
+# a published tag cannot be quietly corrected afterwards.
+"$project_root/scripts/release-preflight.sh" "$release_version"
 "$project_root/scripts/release.sh" "$release_version"
 notes_file="$(mktemp)"
 trap 'rm -f "$notes_file"' EXIT
