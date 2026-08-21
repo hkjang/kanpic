@@ -359,6 +359,9 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 				return ExportedFile{}, err
 			}
 		}
+		if err := applySheetLayout(file, name, sheet.Layout); err != nil {
+			return ExportedFile{}, err
+		}
 		cells, err := s.repository.ReadAllCells(ctx, sheet.ID)
 		if err != nil {
 			return ExportedFile{}, err

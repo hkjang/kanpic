@@ -220,3 +220,75 @@ func mustCellRange(t *testing.T, value string) cellrange.Range {
 	}
 	return selected
 }
+
+// A sheet carries arrangement as well as data: what is hidden, how wide the
+// columns are, where the panes are frozen, which rows fold away. Exporting the
+// cells alone hands somebody a file that looks nothing like the sheet.
+func TestXLSXExportCarriesSheetLayout(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "layout", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "layout-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("머리글")},
+		{Row: 2, Column: 1, Value: value("숨긴 행")},
+		{Row: 3, Column: 1, Value: value("보이는 행")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	revision := int64(1)
+	apply := func(key string, mutation workbook.SheetLayoutMutation) {
+		t.Helper()
+		mutation.SheetID, mutation.ActorID, mutation.IdempotencyKey, mutation.ExpectedRevision = sheetID, "tester", key, revision
+		result, err := repository.ApplySheetLayout(ctx, mutation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision = result.Layout.Revision
+	}
+	apply("hide", workbook.SheetLayoutMutation{Action: "hide", Axis: "row", Start: 2, Count: 1})
+	apply("width", workbook.SheetLayoutMutation{Action: "resize", Axis: "column", Start: 1, Count: 1, Size: 208})
+	apply("height", workbook.SheetLayoutMutation{Action: "resize", Axis: "row", Start: 3, Count: 1, Size: 48})
+	apply("freeze", workbook.SheetLayoutMutation{Action: "freeze", FrozenRows: 1, FrozenColumns: 0})
+	apply("group", workbook.SheetLayoutMutation{Action: "group", Axis: "row", Start: 2, Count: 2})
+
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	sheet := file.GetSheetName(0)
+
+	if visible, err := file.GetRowVisible(sheet, 2); err != nil || visible {
+		t.Fatalf("hidden row exported as visible: %v, %v", visible, err)
+	}
+	if visible, err := file.GetRowVisible(sheet, 3); err != nil || !visible {
+		t.Fatalf("visible row exported as hidden: %v, %v", visible, err)
+	}
+	// 208px is about 29 characters at the default font, and 48px is 36 points.
+	if width, err := file.GetColWidth(sheet, "A"); err != nil || width < 28 || width > 30 {
+		t.Fatalf("column width = %v, %v", width, err)
+	}
+	if height, err := file.GetRowHeight(sheet, 3); err != nil || height < 35 || height > 37 {
+		t.Fatalf("row height = %v, %v", height, err)
+	}
+	if level, err := file.GetRowOutlineLevel(sheet, 2); err != nil || level != 1 {
+		t.Fatalf("outline level = %v, %v", level, err)
+	}
+	if level, err := file.GetRowOutlineLevel(sheet, 1); err != nil || level != 0 {
+		t.Fatalf("header row should not be part of the group: %v, %v", level, err)
+	}
+	panes, err := file.GetPanes(sheet)
+	if err != nil || !panes.Freeze || panes.YSplit != 1 {
+		t.Fatalf("frozen panes = %#v, %v", panes, err)
+	}
+}
