@@ -157,7 +157,7 @@ test('the format and insert menus reach font size, fill colour and functions', a
   await page.getByRole('menuitem',{name:'삽입'}).click()
   await page.getByRole('menuitem',{name:'함수'}).click()
   await page.getByRole('menuitem',{name:'MEDIAN',exact:true}).click()
-  await expect(page.locator('input.cell-editor')).toHaveValue('=MEDIAN(A1:A3)')
+  await expect(page.locator('.cell-editor')).toHaveValue('=MEDIAN(A1:A3)')
   await page.keyboard.press('Enter')
   await expect.poll(async()=>{
     const range=await request.get(`/api/v1/sheets/${sheet}/ranges/A1:D20`).then(response=>response.json())

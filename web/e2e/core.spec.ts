@@ -320,13 +320,13 @@ test('undoes and redoes an acknowledged cell operation', async ({ page }) => {
 
   const canvas = page.locator('canvas.grid-canvas')
   await canvas.dblclick({ position: { x: 70, y: 42 } })
-  await page.locator('input.cell-editor').fill('2')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('2')
+  await page.locator('.cell-editor').press('Enter')
   await expect.poll(valueAtA1).toBe(2)
 
   await canvas.dblclick({ position: { x: 70, y: 42 } })
-  await page.locator('input.cell-editor').fill('3')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('3')
+  await page.locator('.cell-editor').press('Enter')
   await expect.poll(valueAtA1).toBe(3)
 
   const undo = page.getByRole('button', { name: '실행 취소' })
@@ -451,8 +451,8 @@ test('formats a selected range without changing values or formulas and resends o
   const canvas = page.locator('canvas.grid-canvas')
   const edit = async (position:{x:number;y:number}, value:string) => {
     await canvas.dblclick({ position })
-    await page.locator('input.cell-editor').fill(value)
-    await page.locator('input.cell-editor').press('Enter')
+    await page.locator('.cell-editor').fill(value)
+    await page.locator('.cell-editor').press('Enter')
   }
   const range = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:A2`).then(response => response.json())
 
@@ -622,7 +622,7 @@ test('merges cells without data loss and supports undo redo and offline unmerge'
   const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   const sheetId=workbook.sheets[0].id as string
   const canvas=page.locator('canvas.grid-canvas')
-  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('.cell-editor').fill(value);await page.locator('.cell-editor').press('Enter')}
   const cells=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B2`).then(response=>response.json())
 
   await edit({x:70,y:42},'merged title')
@@ -924,7 +924,7 @@ test('spills FILTER results and protects generated cells in the editor', async (
   const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   const sheetId=workbook.sheets[0].id as string
   const canvas=page.locator('canvas.grid-canvas')
-  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('.cell-editor').fill(value);await page.locator('.cell-editor').press('Enter')}
   const range=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/D1:E2`).then(response=>response.json())
 
   await edit({x:70,y:42},'a')
@@ -944,8 +944,8 @@ test('spills FILTER results and protects generated cells in the editor', async (
   await canvas.click({position:{x:390,y:69}})
   await page.keyboard.press('F2')
   await expect(page.locator('.name-box')).toHaveValue('D1')
-  await expect(page.locator('input.cell-editor')).toHaveValue('=FILTER(A1:B3,B1:B3>=20)')
-  await page.locator('input.cell-editor').press('Escape')
+  await expect(page.locator('.cell-editor')).toHaveValue('=FILTER(A1:B3,B1:B3>=20)')
+  await page.locator('.cell-editor').press('Escape')
 
   await canvas.click({position:{x:390,y:69}})
   const dialogPromise=page.waitForEvent('dialog')
@@ -974,15 +974,15 @@ test('recalculates cross-sheet formulas entered in the editor and preserves them
   await page.getByRole('button',{name:'Sales Report',exact:true}).click()
   const canvas=page.locator('canvas.grid-canvas')
   await canvas.dblclick({position:{x:208,y:42}})
-  await page.locator('input.cell-editor').fill(`='Sheet1'!A1*2`)
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill(`='Sheet1'!A1*2`)
+  await page.locator('.cell-editor').press('Enter')
   const reportValue=async()=>page.request.get(`/api/v1/sheets/${reportSheet.id}/ranges/B1`).then(response=>response.json()).then(body=>body.items[0])
   await expect.poll(async()=>(await reportValue())?.value).toBe(20)
 
   await page.getByRole('button',{name:'Sheet1',exact:true}).click()
   await canvas.dblclick({position:{x:70,y:42}})
-  await page.locator('input.cell-editor').fill('25')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('25')
+  await page.locator('.cell-editor').press('Enter')
   await expect.poll(async()=>(await reportValue())?.value).toBe(50)
 
   await page.getByRole('button',{name:'Sheet1 시트 메뉴'}).click()
@@ -1012,8 +1012,8 @@ test('creates named ranges from the name box and keeps formulas valid through re
   await nameBox.press('Enter')
   const canvas=page.locator('canvas.grid-canvas')
   await canvas.dblclick({position:{x:208,y:42}})
-  await page.locator('input.cell-editor').fill('=SUM(Sales_Data)')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('=SUM(Sales_Data)')
+  await page.locator('.cell-editor').press('Enter')
   const formulaCell=async()=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json()).then(body=>body.items[0])
   await expect.poll(async()=>(await formulaCell())?.value).toBe(30)
 
@@ -1049,8 +1049,8 @@ test('synchronizes presence and edits between two browser tabs', async ({ page, 
 
   const firstCanvas = page.locator('canvas.grid-canvas')
   await firstCanvas.dblclick({ position: { x: 70, y: 42 } })
-  await page.locator('input.cell-editor').fill('17')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('17')
+  await page.locator('.cell-editor').press('Enter')
   await expect(second.getByLabel('수식 입력창')).toHaveValue('17')
 
   await second.close()
@@ -1071,8 +1071,8 @@ test('creates a named version and restores it with an automatic backup', async (
   const editA1 = async (value:string) => {
     const canvas = page.locator('canvas.grid-canvas')
     await canvas.dblclick({ position: { x: 70, y: 42 } })
-    await page.locator('input.cell-editor').fill(value)
-    await page.locator('input.cell-editor').press('Enter')
+    await page.locator('.cell-editor').fill(value)
+    await page.locator('.cell-editor').press('Enter')
   }
 
   await editA1('10')
@@ -1104,8 +1104,8 @@ test('selects a range and pastes copied formulas with relative references', asyn
   const canvas = page.locator('canvas.grid-canvas')
   const edit = async (position:{x:number;y:number},value:string) => {
     await canvas.dblclick({ position })
-    await page.locator('input.cell-editor').fill(value)
-    await page.locator('input.cell-editor').press('Enter')
+    await page.locator('.cell-editor').fill(value)
+    await page.locator('.cell-editor').press('Enter')
   }
   await edit({x:70,y:42},'2')
   await edit({x:170,y:42},'=A1*2')
@@ -1134,7 +1134,7 @@ test('drags the fill handle for numeric series and relative formulas with undo a
   const workbook=await page.request.get(`/api/v1/workbooks/${workbookId}`).then(response=>response.json())
   const sheetId=workbook.sheets[0].id as string
   const canvas=page.locator('canvas.grid-canvas')
-  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('input.cell-editor').fill(value);await page.locator('input.cell-editor').press('Enter')}
+  const edit=async(position:{x:number;y:number},value:string)=>{await canvas.dblclick({position});await page.locator('.cell-editor').fill(value);await page.locator('.cell-editor').press('Enter')}
   const dragFill=async(handle:{x:number;y:number},target:{x:number;y:number})=>{const box=await canvas.boundingBox();if(!box)throw new Error('canvas is not visible');await page.mouse.move(box.x+handle.x,box.y+handle.y);await page.mouse.down();await page.mouse.move(box.x+target.x,box.y+target.y,{steps:6});await page.mouse.up()}
   const values=async(range:string)=>page.request.get(`/api/v1/sheets/${sheetId}/ranges/${range}`).then(response=>response.json())
 
@@ -1194,8 +1194,8 @@ test('applies display, wrapping, alignment and atomic outer borders from the for
   const sheetId=workbook.sheets[0].id as string
   const canvas=page.locator('canvas.grid-canvas')
   await canvas.dblclick({position:{x:70,y:42}})
-  await page.locator('input.cell-editor').fill('0.125')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('0.125')
+  await page.locator('.cell-editor').press('Enter')
   const nameBox=page.getByLabel('이름 상자')
   await nameBox.fill('A1:B2')
   await nameBox.press('Enter')
@@ -1239,8 +1239,8 @@ test('manages the complete sheet lifecycle without losing copied cells', async (
 
   const canvas=page.locator('canvas.grid-canvas')
   await canvas.dblclick({position:{x:70,y:42}})
-  await page.locator('input.cell-editor').fill('9')
-  await page.locator('input.cell-editor').press('Enter')
+  await page.locator('.cell-editor').fill('9')
+  await page.locator('.cell-editor').press('Enter')
   await page.getByRole('button',{name:'Raw Data 시트 메뉴'}).click()
   await page.getByRole('menuitem',{name:'복제'}).click()
   await expect(page.getByRole('button',{name:'Raw Data 복사본 시트 메뉴'})).toBeVisible()

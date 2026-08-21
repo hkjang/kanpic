@@ -31,8 +31,8 @@ test('an IME composition starting on the grid keeps every syllable', async ({ pa
   // first syllable used to be swallowed as the raw latin key because no editor
   // existed yet, which turned 안녕 into dㅏ녕.
   await page.evaluate(()=>{
-    const input=document.querySelector('input.cell-editor') as HTMLInputElement
-    const setValue=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')!.set!
+    const input=document.querySelector('.cell-editor') as HTMLTextAreaElement
+    const setValue=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value')!.set!
     input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
     for(const [text,done] of [['ㅇ',false],['아',false],['안',false],['안ㄴ',false],['안녀',false],['안녕',true]] as Array<[string,boolean]>){
       setValue.call(input,text)
@@ -40,7 +40,7 @@ test('an IME composition starting on the grid keeps every syllable', async ({ pa
       if(done)input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:text}))
     }
   })
-  await expect(page.locator('input.cell-editor')).toHaveValue('안녕')
+  await expect(page.locator('.cell-editor')).toHaveValue('안녕')
   await page.keyboard.press('Enter')
   await expect.poll(async()=>(await valuesOf(request,sheet))['1,1'],{timeout:10_000}).toBe('안녕')
 })
@@ -109,7 +109,7 @@ test('an edit is saved when the selection moves by click or by the formula bar',
   // Double click keeps the existing text, and clicking another cell saves it
   // instead of throwing the edit away.
   await page.mouse.dblclick(box.x+80,box.y+42)
-  await expect(page.locator('input.cell-editor')).toHaveValue('원본')
+  await expect(page.locator('.cell-editor')).toHaveValue('원본')
   await page.keyboard.type('추가')
   await page.mouse.click(box.x+220,box.y+42)
   await expect.poll(async()=>(await valuesOf(request,sheet))['1,1'],{timeout:10_000}).toBe('원본추가')

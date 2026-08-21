@@ -731,7 +731,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
     ]}/>}
-    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><input aria-label="수식 입력창" value={editor.editing?editor.draft:formula} readOnly={readOnly}
+    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><textarea className="formula-input" rows={1} spellCheck={false} aria-label="수식 입력창" value={editor.editing?editor.draft:formula} readOnly={readOnly}
       onFocus={()=>{
         if(readOnly||editor.editing)return
         const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source)
@@ -741,6 +741,17 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onChange={event=>{if(!readOnly){editor.setDraft(event.target.value);editor.setEditing(true)}}}
       onKeyDown={event=>{
         if(event.nativeEvent.isComposing)return
+        // Alt+Enter writes a line break here too, so a multi-line cell can be
+        // edited from the formula bar without losing its breaks.
+        if(event.key==='Enter'&&event.altKey){
+          event.preventDefault()
+          const field=event.currentTarget
+          const at=field.selectionStart??editor.draft.length,to=field.selectionEnd??at
+          const next=editor.draft.slice(0,at)+'\n'+editor.draft.slice(to)
+          editor.setDraft(next);editor.setEditing(true)
+          requestAnimationFrame(()=>field.setSelectionRange(at+1,at+1))
+          return
+        }
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
       }}/></div>

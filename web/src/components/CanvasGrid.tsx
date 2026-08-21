@@ -60,7 +60,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
 }
 
 export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void}) {
-  const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLInputElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
+  const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const functionCatalog=useFunctionCatalog()
   const [caret,setCaret]=useState(0),[suggestion,setSuggestion]=useState(0)
@@ -234,7 +234,9 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const text=showFormulas&&cell.formula?cell.formula:validationOption?optionLabel(validationOption):formatCellValue(cell.value,style),textX=alignment==='right'?x+width-7:alignment==='center'?x+width/2:x+(validation?.display_style==='chip'?10:7)
       const vertical=style.vertical_align==='top'||style.vertical_align==='bottom'||style.vertical_align==='middle'?style.vertical_align:'middle'
       const textY=vertical==='top'?y+Math.max(4,fontSize*zoom/2+3):vertical==='bottom'?y+height-Math.max(4,fontSize*zoom/2+3):y+height/2
-      const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,width-12),textMode=style.text_mode==='wrap'||style.wrap===true?'wrap':style.text_mode==='clip'?'clip':'overflow'
+      // A value with a line break in it is wrapped whether or not wrapping was
+      // asked for; drawing it on one line would hide the break entirely.
+      const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,width-12),textMode=style.text_mode==='wrap'||style.wrap===true||text.includes('\n')?'wrap':style.text_mode==='clip'?'clip':'overflow'
       // Overflowing text spills across empty neighbours and is cut off at the
       // first cell that holds something, instead of being condensed to fit.
       const room=textMode==='overflow'&&rotation===0
@@ -910,7 +912,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>{setMenu(undefined);focusGrid()}}/>}
     {dropdown&&!editing&&<button className="cell-dropdown-trigger" aria-label={`${selectionAddress} 드롭다운 열기`} title={dropdown.help_text||'드롭다운 선택'} style={{left:inputLeft+inputWidth-23,top:inputTop,width:22,height:inputHeight}} onClick={()=>setEditing(true)}>▾</button>}
     {editing&&dropdown&&<div className="cell-dropdown" role="listbox" aria-label={`${selectionAddress} 드롭다운`} style={{left:inputLeft,top:inputTop+inputHeight,minWidth:Math.max(inputWidth,180)}}>{dropdown.options?.map((option,index)=><button role="option" aria-selected={optionForValue(dropdown,activeCell?.value)===option} aria-label={`드롭다운 값 ${optionLabel(option)}`} key={index} onClick={()=>{setEditing(false);focusGrid();void saveCell(option.value,'',activeRow,activeColumn)}}><i style={{background:option.color||'#e5e7eb'}}/><span>{optionLabel(option)}</span></button>)}<button className="cell-dropdown-cancel" onClick={()=>{setEditing(false);focusGrid()}}>취소</button></div>}
-    <input ref={editorInput} className={`cell-editor${textEditing?'':' idle'}`} aria-label={`${selectionAddress} 셀 입력`}
+    <textarea ref={editorInput} className={`cell-editor${textEditing?'':' idle'}`} aria-label={`${selectionAddress} 셀 입력`} rows={1} spellCheck={false}
       style={textEditing?{left:inputLeft,top:inputTop,width:inputWidth,height:inputHeight}:{left:inputLeft,top:inputTop}}
       value={textEditing?draft:''}
       onCompositionStart={()=>{composing.current=true}}
@@ -939,6 +941,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           if(event.key==='ArrowUp'){event.preventDefault();setSuggestion((suggestion-1+valueSuggestions.length)%valueSuggestions.length);return}
           if(event.key==='Tab'){event.preventDefault();chooseValue(valueSuggestions[suggestion]);return}
           if(event.key==='Escape'){event.preventDefault();setSuggestion(-1);return}
+        }
+        if(event.key==='Enter'&&event.altKey){
+          event.preventDefault()
+          const field=editorInput.current
+          const at=field?.selectionStart??draft.length,to=field?.selectionEnd??at
+          const next=draft.slice(0,at)+'\n'+draft.slice(to)
+          setDraft(next);setCaret(at+1)
+          requestAnimationFrame(()=>field?.setSelectionRange(at+1,at+1))
+          return
         }
         if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}
         else if(event.key==='Enter'){event.preventDefault();commitAndMove(event.shiftKey?-1:1,0)}
