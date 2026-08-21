@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"kanpic/pkg/identity"
 )
 
 func (r *MemoryRepository) CreateFilterView(_ context.Context, sheetID, actorID string, input CreateFilterViewInput) (FilterView, error) {
@@ -25,7 +23,7 @@ func (r *MemoryRepository) CreateFilterView(_ context.Context, sheetID, actorID 
 		}
 	}
 	now := r.now()
-	view, _, err := NormalizeFilterView(FilterView{ID: identity.New(), SheetID: sheetID, ActorID: actorID, CreateKey: input.IdempotencyKey, Name: input.Name, Range: input.Range, HeaderRows: input.HeaderRows, Criteria: cloneFilterCriteria(input.Criteria), Active: input.Active, CreatedAt: now, UpdatedAt: now})
+	view, _, err := filterViewFromInput(sheetID, actorID, now, input)
 	if err != nil {
 		return FilterView{}, err
 	}

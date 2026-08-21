@@ -3021,3 +3021,132 @@ func mustRange(t *testing.T, value string) cellrange.Range {
 	}
 	return selected
 }
+
+// TestPostgresEntityFieldsSurviveARoundTrip writes every optional field of the
+// entities that own their own tables and reads each one back from the database.
+// Two shipped bugs had the same shape — a new field reached the struct and the
+// API but never the INSERT — and neither was visible without a read-back:
+// the create response was built in memory and looked right.
+func TestPostgresEntityFieldsSurviveARoundTrip(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "round trip", WorkspaceID: "integration", OwnerID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheetID := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "owner", BaseVersion: book.Version, IdempotencyKey: "round-trip-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"항목"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"값"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"가"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`10`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"나"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`20`)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	yes := true
+	chart, err := repository.CreateChart(ctx, book.ID, "owner", workbook.CreateChartInput{
+		IdempotencyKey: "rt-chart", SheetID: sheetID, SourceSheetID: sheetID, Type: "combo", Title: "왕복",
+		SourceRange: "A1:B3", FirstRowHeaders: &yes, FirstColumnLabels: &yes, LegendPosition: "bottom",
+		XAxisTitle: "가로", YAxisTitle: "세로", SecondaryAxis: &yes,
+		Position: &workbook.ChartPosition{X: 11, Y: 22, Width: 333, Height: 244},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedChart, err := repository.GetChart(ctx, chart.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedChart.Type != "combo" || !storedChart.SecondaryAxis || storedChart.LegendPosition != "bottom" ||
+		storedChart.XAxisTitle != "가로" || storedChart.YAxisTitle != "세로" ||
+		storedChart.Position != (workbook.ChartPosition{X: 11, Y: 22, Width: 333, Height: 244}) {
+		t.Fatalf("chart round trip = %#v", storedChart)
+	}
+
+	protection, err := repository.CreateProtectedRange(ctx, sheetID, "owner", workbook.CreateProtectedRangeInput{
+		IdempotencyKey: "rt-protection", Scope: "sheet", Exceptions: []string{"B2:B9"},
+		Description: "왕복 보호", Editors: []string{"mate"}, WarningOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protections, err := repository.ListProtectedRanges(ctx, sheetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedProtection workbook.ProtectedRange
+	for _, item := range protections {
+		if item.ID == protection.ID {
+			storedProtection = item
+		}
+	}
+	if storedProtection.Scope != "sheet" || len(storedProtection.Exceptions) != 1 || storedProtection.Exceptions[0] != "B2:B9" ||
+		!storedProtection.WarningOnly || storedProtection.Description != "왕복 보호" || len(storedProtection.Editors) != 1 {
+		t.Fatalf("protection round trip = %#v", storedProtection)
+	}
+
+	rule, err := repository.CreateConditionalFormat(ctx, sheetID, "owner", workbook.CreateConditionalFormatInput{
+		IdempotencyKey: "rt-conditional", Name: "왕복 규칙", Range: "A2:B3", RuleType: "custom_formula",
+		Formula: `=$B2>15`, Style: json.RawMessage(`{"background":"#dcfce7"}`), Priority: 7, StopIfTrue: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedRule, err := repository.GetConditionalFormat(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedRule.RuleType != "custom_formula" || storedRule.Formula != `=$B2>15` || storedRule.Priority != 7 || !storedRule.StopIfTrue {
+		t.Fatalf("conditional format round trip = %#v", storedRule)
+	}
+
+	view, err := repository.CreateFilterView(ctx, sheetID, "owner", workbook.CreateFilterViewInput{
+		IdempotencyKey: "rt-filter", Name: "왕복 필터", Range: "A1:B3", HeaderRows: 1, Active: true,
+		Criteria: []workbook.FilterCriterion{{Column: 2, Operator: "greater_than", Value: json.RawMessage(`15`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedView, err := repository.GetFilterView(ctx, view.ID, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !storedView.Active || storedView.HeaderRows != 1 || len(storedView.Criteria) != 1 || storedView.Criteria[0].Operator != "greater_than" {
+		t.Fatalf("filter view round trip = %#v", storedView)
+	}
+
+	// A slicer lives in the sheet layout rather than a table of its own, so the
+	// round trip that matters is the layout blob.
+	layout, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{
+		SheetID: sheetID, ActorID: "owner", IdempotencyKey: "rt-slicer", ExpectedRevision: 1, Action: "slicer_add",
+		Slicer: &workbook.Slicer{FilterViewID: view.ID, Column: 2, Title: "왕복 슬라이서", Position: workbook.ChartPosition{X: 5, Y: 6, Width: 210, Height: 250}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedSlicers []workbook.Slicer
+	for _, sheet := range stored.Sheets {
+		if sheet.ID == sheetID {
+			storedSlicers = sheet.Layout.Slicers
+		}
+	}
+	if len(storedSlicers) != 1 || storedSlicers[0].Title != "왕복 슬라이서" || storedSlicers[0].Column != 2 ||
+		storedSlicers[0].FilterViewID != view.ID || storedSlicers[0].Position.Width != 210 {
+		t.Fatalf("slicer round trip = %#v (layout %#v)", storedSlicers, layout.Layout)
+	}
+}

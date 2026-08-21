@@ -8,6 +8,9 @@ import (
 	"strings"
 
 	"kanpic/pkg/cellrange"
+	"time"
+
+	"kanpic/pkg/identity"
 )
 
 const (
@@ -21,6 +24,16 @@ var filterOperators = map[string]struct{}{
 	"starts_with": {}, "ends_with": {}, "greater_than": {}, "greater_or_equal": {},
 	"less_than": {}, "less_or_equal": {}, "is_blank": {}, "is_not_blank": {},
 	"background_color": {}, "text_color": {},
+}
+
+// filterViewFromInput builds the filter view a create request describes. Both
+// repositories call it so a new field cannot reach one and not the other.
+func filterViewFromInput(sheetID, actorID string, now time.Time, input CreateFilterViewInput) (FilterView, cellrange.Range, error) {
+	return NormalizeFilterView(FilterView{
+		ID: identity.New(), SheetID: sheetID, ActorID: actorID, CreateKey: input.IdempotencyKey,
+		Name: input.Name, Range: input.Range, HeaderRows: input.HeaderRows,
+		Criteria: cloneFilterCriteria(input.Criteria), Active: input.Active, CreatedAt: now, UpdatedAt: now,
+	})
 }
 
 func NormalizeFilterView(view FilterView) (FilterView, cellrange.Range, error) {

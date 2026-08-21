@@ -74,6 +74,15 @@ func normalizeNamedRangeAddress(value string) (string, error) {
 	return start + ":" + end, nil
 }
 
+// namedRangeFromInput builds the name a create request describes so both
+// repositories agree on every field it carries.
+func namedRangeFromInput(workbookID, key, actor string, input CreateNamedRangeInput) (NamedRange, error) {
+	return normalizeNamedRange(NamedRange{
+		WorkbookID: workbookID, SheetID: input.SheetID, CreateKey: key,
+		Name: input.Name, Range: input.Range, CreatedBy: actor, UpdatedBy: actor,
+	})
+}
+
 func normalizeNamedRange(input NamedRange) (NamedRange, error) {
 	name, err := normalizeNamedRangeName(input.Name)
 	if err != nil {
@@ -125,7 +134,7 @@ func (r *MemoryRepository) CreateNamedRange(_ context.Context, workbookID, actor
 	if len(r.namedRangesForWorkbookLocked(workbookID)) >= MaxNamedRanges {
 		return NamedRange{}, fmt.Errorf("%w: a workbook may contain at most %d named ranges", ErrInvalid, MaxNamedRanges)
 	}
-	item, err := normalizeNamedRange(NamedRange{WorkbookID: workbookID, SheetID: input.SheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Name: input.Name, Range: input.Range, CreatedBy: actor, UpdatedBy: actor})
+	item, err := namedRangeFromInput(workbookID, strings.TrimSpace(input.IdempotencyKey), actor, input)
 	if err != nil {
 		return NamedRange{}, err
 	}

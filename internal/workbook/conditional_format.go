@@ -139,7 +139,7 @@ func conditionalSourceRange(rule ConditionalFormat) cellrange.Range {
 		}
 		selected = conditionalUnion(selected, cellrange.Range{
 			Start: referenced.Start,
-			End:   cellrange.Position{Row: min(formula.MaxRows, referenced.End.Row + height), Column: min(formula.MaxColumns, referenced.End.Column + width)},
+			End:   cellrange.Position{Row: min(formula.MaxRows, referenced.End.Row+height), Column: min(formula.MaxColumns, referenced.End.Column+width)},
 		})
 	}
 	return selected

@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-
-	"kanpic/pkg/identity"
 )
 
 type filterScanner interface {
@@ -41,7 +39,7 @@ func (r *PostgresRepository) CreateFilterView(ctx context.Context, sheetID, acto
 		return FilterView{}, ErrNotFound
 	}
 	now := r.now()
-	view, _, err := NormalizeFilterView(FilterView{ID: identity.New(), SheetID: sheetID, ActorID: actorID, CreateKey: input.IdempotencyKey, Name: input.Name, Range: input.Range, HeaderRows: input.HeaderRows, Criteria: cloneFilterCriteria(input.Criteria), Active: input.Active, CreatedAt: now, UpdatedAt: now})
+	view, _, err := filterViewFromInput(sheetID, actorID, now, input)
 	if err != nil {
 		return FilterView{}, err
 	}

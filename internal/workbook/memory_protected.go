@@ -29,11 +29,7 @@ func (r *MemoryRepository) CreateProtectedRange(_ context.Context, sheetID, acto
 			return cloneProtectedRange(existing), nil
 		}
 	}
-	rule, _, err := NormalizeProtectedRange(ProtectedRange{
-		SheetID: sheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Range: input.Range, Scope: input.Scope, Exceptions: input.Exceptions,
-		Description: input.Description, Editors: input.Editors, WarningOnly: input.WarningOnly,
-		CreatedBy: actor, UpdatedBy: actor,
-	})
+	rule, err := protectedFromInput(sheetID, strings.TrimSpace(input.IdempotencyKey), actor, input)
 	if err != nil {
 		return ProtectedRange{}, err
 	}

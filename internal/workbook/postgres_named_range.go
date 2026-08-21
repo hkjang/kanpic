@@ -48,7 +48,7 @@ func (r *PostgresRepository) CreateNamedRange(ctx context.Context, workbookID, a
 	if count >= MaxNamedRanges {
 		return NamedRange{}, fmt.Errorf("%w: a workbook may contain at most %d named ranges", ErrInvalid, MaxNamedRanges)
 	}
-	item, err := normalizeNamedRange(NamedRange{WorkbookID: workbookID, SheetID: input.SheetID, CreateKey: createKey, Name: input.Name, Range: input.Range, CreatedBy: actor, UpdatedBy: actor})
+	item, err := namedRangeFromInput(workbookID, createKey, actor, input)
 	if err != nil {
 		return NamedRange{}, err
 	}

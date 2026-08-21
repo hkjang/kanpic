@@ -126,6 +126,17 @@ func protectionCovers(selected cellrange.Range, exceptions []cellrange.Range, ro
 	return true
 }
 
+// protectedFromInput builds the protection a create request describes so both
+// repositories agree on what a new field means.
+func protectedFromInput(sheetID, key, actor string, input CreateProtectedRangeInput) (ProtectedRange, error) {
+	rule, _, err := NormalizeProtectedRange(ProtectedRange{
+		SheetID: sheetID, CreateKey: key, Range: input.Range, Scope: input.Scope, Exceptions: input.Exceptions,
+		Description: input.Description, Editors: input.Editors, WarningOnly: input.WarningOnly,
+		CreatedBy: actor, UpdatedBy: actor,
+	})
+	return rule, err
+}
+
 // MayEditProtected reports whether an actor is allowed to write inside a
 // protected range. The workbook owner always is: protection guards a shared
 // model from its collaborators, not the owner from their own sheet.

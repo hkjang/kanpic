@@ -49,18 +49,7 @@ func (r *PostgresRepository) CreateChart(ctx context.Context, workbookID, actor 
 	if count >= MaxChartsPerWorkbook {
 		return Chart{}, fmt.Errorf("%w: a workbook may contain at most %d charts", ErrInvalid, MaxChartsPerWorkbook)
 	}
-	headers, labels := true, true
-	if input.FirstRowHeaders != nil {
-		headers = *input.FirstRowHeaders
-	}
-	if input.FirstColumnLabels != nil {
-		labels = *input.FirstColumnLabels
-	}
-	position := defaultChartPosition()
-	if input.Position != nil {
-		position = *input.Position
-	}
-	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := chartFromInput(workbookID, key, actor, input)
 	if err != nil {
 		return Chart{}, err
 	}

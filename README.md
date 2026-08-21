@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.52.0
+VERSION=v0.53.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -46,7 +46,12 @@ API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이�
 ```bash
 go test ./...
 cd web && npm ci && npm test && npm run build
+
+# PostgreSQL이 필요한 통합 테스트(저장 왕복 검증 포함)
+POSTGRES_DSN=postgres://... go test -tags integration ./internal/integration/
 ```
+
+통합 테스트에는 **저장 왕복 검증**이 포함됩니다. 차트·보호 범위·조건부 서식·필터 뷰·슬라이서의 모든 선택 필드를 값을 넣어 만든 뒤 데이터베이스에서 다시 읽어 비교합니다. 새 필드가 구조체와 API에는 도달했지만 INSERT 문에는 빠지는 실수는 생성 응답만 보면 정상으로 보이기 때문에, 반드시 읽어 와서 확인합니다.
 
 CSV·TSV·XLSX는 홈 화면에서 미리보기 후 원자적으로 가져올 수 있습니다. 편집기에서는 시트 간 참조와 이름 범위를 포함한 수식을 사용할 수 있고, `IMPORTRANGE` 로 다른 워크북의 범위를 가져올 수 있으며(가져오는 워크북 소유자의 읽기 권한으로 판정, **데이터 › 데이터 연결** 패널에서 원본 상태 확인과 일괄 새로 고침 제공), 행·열 삽입/삭제/이동 시 수식·병합·이름 범위·검증·필터·댓글 참조가 함께 이동하며 변경 직전 복구 버전이 자동 생성됩니다. 행 높이·열 너비·행/열 숨김·고정 영역도 PostgreSQL에 버전 관리되며 공동 편집자에게 동기화됩니다. 표시 형식, 가로·세로 정렬, 텍스트 넘침·자르기·자동 줄바꿈, 회전 및 범위 테두리는 값과 수식을 보존하는 원자적 서식 작업으로 저장되며 실행 취소할 수 있습니다. XLSX Import/Export는 이 공통 서식 모델을 사용해 글꼴·색상·채우기·정렬·줄바꿈·표시 형식·테두리를 왕복 변환합니다. `Ctrl/⌘+F` 또는 `Ctrl/⌘+K`로 서버에 저장된 워크북 전체의 값·수식을 검색하고 다른 시트의 결과 셀로 바로 이동할 수 있습니다. 대소문자 구분, 셀 전체 일치, 정규식, 수식 제외와 현재 시트 범위를 조합할 수 있고 `Ctrl/⌘+H`의 찾기 및 바꾸기는 변경 대상 셀 수를 미리 확인한 뒤 시트별 원자적·실행 취소 가능한 작업으로 반영합니다. 같은 기능은 REST `GET /api/v1/workbooks/{workbookId}/search`, `POST /api/v1/workbooks/{workbookId}/search:replace`와 MCP `spreadsheet.workbook.search`, `spreadsheet.workbook.replace`로 제공됩니다.
 

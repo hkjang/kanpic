@@ -146,13 +146,13 @@ type CellInput struct {
 }
 
 type CellMutation struct {
-	SheetID             string          `json:"sheet_id"`
-	ActorID             string          `json:"actor_id"`
-	ClientID            string          `json:"client_id"`
-	BaseVersion         int64           `json:"base_version"`
-	IdempotencyKey      string          `json:"idempotency_key"`
-	Cells               []CellInput     `json:"cells"`
-	StylePatch          json.RawMessage `json:"-"`
+	SheetID        string          `json:"sheet_id"`
+	ActorID        string          `json:"actor_id"`
+	ClientID       string          `json:"client_id"`
+	BaseVersion    int64           `json:"base_version"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Cells          []CellInput     `json:"cells"`
+	StylePatch     json.RawMessage `json:"-"`
 	// NotePatch sets the note on the listed cells and leaves everything else
 	// alone, the way StylePatch does for formatting.
 	NotePatch           *string         `json:"-"`

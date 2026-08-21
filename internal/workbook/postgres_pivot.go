@@ -48,11 +48,7 @@ func (r *PostgresRepository) CreatePivot(ctx context.Context, workbookID, actor 
 	if count >= MaxPivotsPerWorkbook {
 		return Pivot{}, fmt.Errorf("%w: a workbook may contain at most %d pivots", ErrInvalid, MaxPivotsPerWorkbook)
 	}
-	headers := true
-	if input.FirstRowHeaders != nil {
-		headers = *input.FirstRowHeaders
-	}
-	item, err := normalizePivot(Pivot{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Name: input.Name, SourceRange: input.SourceRange, FirstRowHeaders: headers, Rows: input.Rows, Columns: input.Columns, Values: input.Values, Filters: input.Filters, CalculatedFields: input.CalculatedFields, RefreshMode: input.RefreshMode, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := pivotFromInput(workbookID, key, actor, input)
 	if err != nil {
 		return Pivot{}, err
 	}

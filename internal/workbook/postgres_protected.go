@@ -77,10 +77,7 @@ func (r *PostgresRepository) CreateProtectedRange(ctx context.Context, sheetID, 
 	if count >= MaxProtectedRanges {
 		return ProtectedRange{}, fmt.Errorf("%w: a sheet can hold %d protected ranges", ErrInvalid, MaxProtectedRanges)
 	}
-	rule, _, err := NormalizeProtectedRange(ProtectedRange{
-		SheetID: sheetID, CreateKey: key, Range: input.Range, Scope: input.Scope, Exceptions: input.Exceptions, Description: input.Description,
-		Editors: input.Editors, WarningOnly: input.WarningOnly, CreatedBy: actor, UpdatedBy: actor,
-	})
+	rule, err := protectedFromInput(sheetID, key, actor, input)
 	if err != nil {
 		return ProtectedRange{}, err
 	}

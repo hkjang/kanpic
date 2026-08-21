@@ -162,6 +162,22 @@ var pivotGroups = map[string]struct{}{"none": {}, "year": {}, "quarter": {}, "mo
 var pivotAggregations = map[string]struct{}{"sum": {}, "average": {}, "count": {}, "min": {}, "max": {}}
 var pivotFilterOperators = map[string]struct{}{"equals": {}, "not_equals": {}, "contains": {}, "greater_than": {}, "greater_or_equal": {}, "less_than": {}, "less_or_equal": {}, "in": {}, "is_blank": {}, "not_blank": {}}
 
+// pivotFromInput builds the pivot a create request describes. Both repositories
+// call it so a new field cannot reach one storage path and not the other.
+func pivotFromInput(workbookID, key, actor string, input CreatePivotInput) (Pivot, error) {
+	headers := true
+	if input.FirstRowHeaders != nil {
+		headers = *input.FirstRowHeaders
+	}
+	return normalizePivot(Pivot{
+		WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key,
+		Name: input.Name, SourceRange: input.SourceRange, FirstRowHeaders: headers,
+		Rows: input.Rows, Columns: input.Columns, Values: input.Values, Filters: input.Filters,
+		CalculatedFields: input.CalculatedFields, RefreshMode: input.RefreshMode,
+		CreatedBy: actor, UpdatedBy: actor,
+	}, false)
+}
+
 func normalizePivot(item Pivot, allowBroken bool) (Pivot, error) {
 	item.SheetID, item.SourceSheetID = strings.TrimSpace(item.SheetID), strings.TrimSpace(item.SourceSheetID)
 	item.Name, item.SourceRange = strings.TrimSpace(item.Name), strings.ToUpper(strings.TrimSpace(item.SourceRange))
@@ -807,11 +823,7 @@ func (r *MemoryRepository) CreatePivot(_ context.Context, workbookID, actor stri
 	if len(r.pivotsForWorkbookLocked(workbookID, "")) >= MaxPivotsPerWorkbook {
 		return Pivot{}, fmt.Errorf("%w: a workbook may contain at most %d pivots", ErrInvalid, MaxPivotsPerWorkbook)
 	}
-	headers := true
-	if input.FirstRowHeaders != nil {
-		headers = *input.FirstRowHeaders
-	}
-	item, err := normalizePivot(Pivot{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Name: input.Name, SourceRange: input.SourceRange, FirstRowHeaders: headers, Rows: input.Rows, Columns: input.Columns, Values: input.Values, Filters: input.Filters, CalculatedFields: input.CalculatedFields, RefreshMode: input.RefreshMode, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := pivotFromInput(workbookID, key, actor, input)
 	if err != nil {
 		return Pivot{}, err
 	}

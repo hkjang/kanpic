@@ -58,29 +58,29 @@ func (p *ChartPosition) UnmarshalJSON(data []byte) error {
 }
 
 type Chart struct {
-	ID                string        `json:"id"`
-	WorkbookID        string        `json:"workbook_id"`
-	WorkbookVersion   int64         `json:"workbook_version"`
-	SheetID           string        `json:"sheet_id"`
-	SourceSheetID     string        `json:"source_sheet_id,omitempty"`
-	CreateKey         string        `json:"-"`
-	Type              string        `json:"type"`
-	Title             string        `json:"title"`
-	SourceRange       string        `json:"source_range"`
-	FirstRowHeaders   bool          `json:"first_row_headers"`
-	FirstColumnLabels bool          `json:"first_column_labels"`
-	LegendPosition    string        `json:"legend_position"`
-	XAxisTitle        string        `json:"x_axis_title,omitempty"`
-	YAxisTitle        string        `json:"y_axis_title,omitempty"`
+	ID                string `json:"id"`
+	WorkbookID        string `json:"workbook_id"`
+	WorkbookVersion   int64  `json:"workbook_version"`
+	SheetID           string `json:"sheet_id"`
+	SourceSheetID     string `json:"source_sheet_id,omitempty"`
+	CreateKey         string `json:"-"`
+	Type              string `json:"type"`
+	Title             string `json:"title"`
+	SourceRange       string `json:"source_range"`
+	FirstRowHeaders   bool   `json:"first_row_headers"`
+	FirstColumnLabels bool   `json:"first_column_labels"`
+	LegendPosition    string `json:"legend_position"`
+	XAxisTitle        string `json:"x_axis_title,omitempty"`
+	YAxisTitle        string `json:"y_axis_title,omitempty"`
 	// SecondaryAxis puts a combination chart's line series on its own scale,
 	// which is the only way a ratio and an amount share one picture.
 	SecondaryAxis bool          `json:"secondary_axis"`
 	Position      ChartPosition `json:"position"`
-	Revision          int64         `json:"revision"`
-	CreatedBy         string        `json:"created_by"`
-	UpdatedBy         string        `json:"updated_by"`
-	CreatedAt         time.Time     `json:"created_at"`
-	UpdatedAt         time.Time     `json:"updated_at"`
+	Revision      int64         `json:"revision"`
+	CreatedBy     string        `json:"created_by"`
+	UpdatedBy     string        `json:"updated_by"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
 type CreateChartInput struct {
@@ -131,6 +131,31 @@ type ChartData struct {
 	WorkbookVersion int64         `json:"workbook_version"`
 	Series          []ChartSeries `json:"series"`
 	Warning         string        `json:"warning,omitempty"`
+}
+
+// chartFromInput builds the chart a create request describes. Both repositories
+// call it so a new field cannot reach one storage path and not the other:
+// that mistake has shipped twice, and it looks like data silently reverting.
+func chartFromInput(workbookID, key, actor string, input CreateChartInput) (Chart, error) {
+	headers, labels := true, true
+	if input.FirstRowHeaders != nil {
+		headers = *input.FirstRowHeaders
+	}
+	if input.FirstColumnLabels != nil {
+		labels = *input.FirstColumnLabels
+	}
+	position := defaultChartPosition()
+	if input.Position != nil {
+		position = *input.Position
+	}
+	return normalizeChart(Chart{
+		WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key,
+		Type: input.Type, Title: input.Title, SourceRange: input.SourceRange,
+		FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition,
+		XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle,
+		SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis,
+		Position:      position, CreatedBy: actor, UpdatedBy: actor,
+	}, false)
 }
 
 func defaultChartPosition() ChartPosition {
@@ -227,18 +252,7 @@ func (r *MemoryRepository) CreateChart(_ context.Context, workbookID, actor stri
 	if len(r.chartsForWorkbookLocked(workbookID, "")) >= MaxChartsPerWorkbook {
 		return Chart{}, fmt.Errorf("%w: a workbook may contain at most %d charts", ErrInvalid, MaxChartsPerWorkbook)
 	}
-	headers, labels := true, true
-	if input.FirstRowHeaders != nil {
-		headers = *input.FirstRowHeaders
-	}
-	if input.FirstColumnLabels != nil {
-		labels = *input.FirstColumnLabels
-	}
-	position := defaultChartPosition()
-	if input.Position != nil {
-		position = *input.Position
-	}
-	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := chartFromInput(workbookID, key, actor, input)
 	if err != nil {
 		return Chart{}, err
 	}
