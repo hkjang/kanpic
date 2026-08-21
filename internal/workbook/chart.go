@@ -20,7 +20,8 @@ const (
 	MaxChartSourceCells  = 10_000
 )
 
-var chartTypes = map[string]struct{}{"bar": {}, "line": {}, "area": {}, "pie": {}, "scatter": {}, "histogram": {}}
+var chartTypes = map[string]struct{}{"bar": {}, "line": {}, "area": {}, "pie": {}, "scatter": {}, "histogram": {},
+	"stacked_bar": {}, "stacked_area": {}, "combo": {}}
 var chartLegendPositions = map[string]struct{}{"none": {}, "top": {}, "right": {}, "bottom": {}, "left": {}}
 
 type ChartPosition struct {
@@ -71,7 +72,10 @@ type Chart struct {
 	LegendPosition    string        `json:"legend_position"`
 	XAxisTitle        string        `json:"x_axis_title,omitempty"`
 	YAxisTitle        string        `json:"y_axis_title,omitempty"`
-	Position          ChartPosition `json:"position"`
+	// SecondaryAxis puts a combination chart's line series on its own scale,
+	// which is the only way a ratio and an amount share one picture.
+	SecondaryAxis bool          `json:"secondary_axis"`
+	Position      ChartPosition `json:"position"`
 	Revision          int64         `json:"revision"`
 	CreatedBy         string        `json:"created_by"`
 	UpdatedBy         string        `json:"updated_by"`
@@ -91,6 +95,7 @@ type CreateChartInput struct {
 	LegendPosition    string         `json:"legend_position,omitempty"`
 	XAxisTitle        string         `json:"x_axis_title,omitempty"`
 	YAxisTitle        string         `json:"y_axis_title,omitempty"`
+	SecondaryAxis     *bool          `json:"secondary_axis,omitempty"`
 	Position          *ChartPosition `json:"position,omitempty"`
 }
 
@@ -104,6 +109,7 @@ type UpdateChartInput struct {
 	FirstColumnLabels *bool          `json:"first_column_labels,omitempty"`
 	LegendPosition    *string        `json:"legend_position,omitempty"`
 	XAxisTitle        *string        `json:"x_axis_title,omitempty"`
+	SecondaryAxis     *bool          `json:"secondary_axis,omitempty"`
 	YAxisTitle        *string        `json:"y_axis_title,omitempty"`
 	Position          *ChartPosition `json:"position,omitempty"`
 	ExpectedRevision  *int64         `json:"expected_revision,omitempty"`
@@ -140,6 +146,9 @@ func normalizeChart(item Chart, allowBrokenReference bool) (Chart, error) {
 	item.LegendPosition = strings.ToLower(strings.TrimSpace(item.LegendPosition))
 	item.XAxisTitle = strings.TrimSpace(item.XAxisTitle)
 	item.YAxisTitle = strings.TrimSpace(item.YAxisTitle)
+	if item.Type != "combo" {
+		item.SecondaryAxis = false
+	}
 	if item.SheetID == "" {
 		return Chart{}, fmt.Errorf("%w: sheet_id is required", ErrInvalid)
 	}
@@ -147,7 +156,7 @@ func normalizeChart(item Chart, allowBrokenReference bool) (Chart, error) {
 		return Chart{}, fmt.Errorf("%w: source_sheet_id is required", ErrInvalid)
 	}
 	if _, found := chartTypes[item.Type]; !found {
-		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, or histogram", ErrInvalid)
+		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, histogram, stacked_bar, stacked_area, or combo", ErrInvalid)
 	}
 	if len([]rune(item.Title)) > 200 || len([]rune(item.XAxisTitle)) > 100 || len([]rune(item.YAxisTitle)) > 100 {
 		return Chart{}, fmt.Errorf("%w: chart title or axis title is too long", ErrInvalid)
@@ -229,7 +238,7 @@ func (r *MemoryRepository) CreateChart(_ context.Context, workbookID, actor stri
 	if input.Position != nil {
 		position = *input.Position
 	}
-	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
 	if err != nil {
 		return Chart{}, err
 	}
@@ -342,6 +351,9 @@ func (r *MemoryRepository) UpdateChart(_ context.Context, id, actor string, inpu
 	}
 	if input.YAxisTitle != nil {
 		updated.YAxisTitle = *input.YAxisTitle
+	}
+	if input.SecondaryAxis != nil {
+		updated.SecondaryAxis = *input.SecondaryAxis
 	}
 	if input.Position != nil {
 		updated.Position = *input.Position

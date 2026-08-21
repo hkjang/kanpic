@@ -14,7 +14,7 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const chartColumns = `c.id::text,c.workbook_id::text,w.version,c.sheet_id::text,coalesce(c.source_sheet_id::text,''),c.idempotency_key,c.chart_type,c.title,c.source_range,c.first_row_headers,c.first_column_labels,c.legend_position,c.x_axis_title,c.y_axis_title,c.position_x,c.position_y,c.width,c.height,c.revision,c.created_by,c.updated_by,c.created_at,c.updated_at`
+const chartColumns = `c.id::text,c.workbook_id::text,w.version,c.sheet_id::text,coalesce(c.source_sheet_id::text,''),c.idempotency_key,c.chart_type,c.title,c.source_range,c.first_row_headers,c.first_column_labels,c.legend_position,c.x_axis_title,c.y_axis_title,c.secondary_axis,c.position_x,c.position_y,c.width,c.height,c.revision,c.created_by,c.updated_by,c.created_at,c.updated_at`
 
 type chartScanner interface{ Scan(...any) error }
 
@@ -60,7 +60,7 @@ func (r *PostgresRepository) CreateChart(ctx context.Context, workbookID, actor 
 	if input.Position != nil {
 		position = *input.Position
 	}
-	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
+	item, err := normalizeChart(Chart{WorkbookID: workbookID, SheetID: input.SheetID, SourceSheetID: input.SourceSheetID, CreateKey: key, Type: input.Type, Title: input.Title, SourceRange: input.SourceRange, FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition, XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle, SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis, Position: position, CreatedBy: actor, UpdatedBy: actor}, false)
 	if err != nil {
 		return Chart{}, err
 	}
@@ -202,6 +202,9 @@ func (r *PostgresRepository) UpdateChart(ctx context.Context, id, actor string, 
 	if input.XAxisTitle != nil {
 		updated.XAxisTitle = *input.XAxisTitle
 	}
+	if input.SecondaryAxis != nil {
+		updated.SecondaryAxis = *input.SecondaryAxis
+	}
 	if input.YAxisTitle != nil {
 		updated.YAxisTitle = *input.YAxisTitle
 	}
@@ -217,7 +220,7 @@ func (r *PostgresRepository) UpdateChart(ctx context.Context, id, actor string, 
 	}
 	now := r.now()
 	updated.Revision, updated.UpdatedBy, updated.UpdatedAt = current.Revision+1, actor, now
-	if _, err := tx.Exec(ctx, `UPDATE charts SET sheet_id=$2,source_sheet_id=$3,chart_type=$4,title=$5,source_range=$6,first_row_headers=$7,first_column_labels=$8,legend_position=$9,x_axis_title=$10,y_axis_title=$11,position_x=$12,position_y=$13,width=$14,height=$15,revision=$16,updated_by=$17,updated_at=$18 WHERE id=$1`, id, updated.SheetID, updated.SourceSheetID, updated.Type, updated.Title, updated.SourceRange, updated.FirstRowHeaders, updated.FirstColumnLabels, updated.LegendPosition, updated.XAxisTitle, updated.YAxisTitle, updated.Position.X, updated.Position.Y, updated.Position.Width, updated.Position.Height, updated.Revision, actor, now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE charts SET sheet_id=$2,source_sheet_id=$3,chart_type=$4,title=$5,source_range=$6,first_row_headers=$7,first_column_labels=$8,legend_position=$9,x_axis_title=$10,y_axis_title=$11,secondary_axis=$19,position_x=$12,position_y=$13,width=$14,height=$15,revision=$16,updated_by=$17,updated_at=$18 WHERE id=$1`, id, updated.SheetID, updated.SourceSheetID, updated.Type, updated.Title, updated.SourceRange, updated.FirstRowHeaders, updated.FirstColumnLabels, updated.LegendPosition, updated.XAxisTitle, updated.YAxisTitle, updated.Position.X, updated.Position.Y, updated.Position.Width, updated.Position.Height, updated.Revision, actor, now, updated.SecondaryAxis); err != nil {
 		return Chart{}, mapPostgresError(err)
 	}
 	updated.WorkbookVersion = current.WorkbookVersion + 1
@@ -272,7 +275,7 @@ func validatePostgresChartSheets(ctx context.Context, tx pgx.Tx, item Chart) err
 
 func scanChart(row chartScanner) (Chart, error) {
 	var item Chart
-	err := row.Scan(&item.ID, &item.WorkbookID, &item.WorkbookVersion, &item.SheetID, &item.SourceSheetID, &item.CreateKey, &item.Type, &item.Title, &item.SourceRange, &item.FirstRowHeaders, &item.FirstColumnLabels, &item.LegendPosition, &item.XAxisTitle, &item.YAxisTitle, &item.Position.X, &item.Position.Y, &item.Position.Width, &item.Position.Height, &item.Revision, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.WorkbookID, &item.WorkbookVersion, &item.SheetID, &item.SourceSheetID, &item.CreateKey, &item.Type, &item.Title, &item.SourceRange, &item.FirstRowHeaders, &item.FirstColumnLabels, &item.LegendPosition, &item.XAxisTitle, &item.YAxisTitle, &item.SecondaryAxis, &item.Position.X, &item.Position.Y, &item.Position.Width, &item.Position.Height, &item.Revision, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
@@ -281,7 +284,7 @@ func insertChartTx(ctx context.Context, tx pgx.Tx, item Chart) error {
 	if item.SourceSheetID == "" {
 		source = nil
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO charts(id,workbook_id,sheet_id,source_sheet_id,idempotency_key,chart_type,title,source_range,first_row_headers,first_column_labels,legend_position,x_axis_title,y_axis_title,position_x,position_y,width,height,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, item.ID, item.WorkbookID, item.SheetID, source, item.CreateKey, item.Type, item.Title, item.SourceRange, item.FirstRowHeaders, item.FirstColumnLabels, item.LegendPosition, item.XAxisTitle, item.YAxisTitle, item.Position.X, item.Position.Y, item.Position.Width, item.Position.Height, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt)
+	_, err := tx.Exec(ctx, `INSERT INTO charts(id,workbook_id,sheet_id,source_sheet_id,idempotency_key,chart_type,title,source_range,first_row_headers,first_column_labels,legend_position,x_axis_title,y_axis_title,secondary_axis,position_x,position_y,width,height,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`, item.ID, item.WorkbookID, item.SheetID, source, item.CreateKey, item.Type, item.Title, item.SourceRange, item.FirstRowHeaders, item.FirstColumnLabels, item.LegendPosition, item.XAxisTitle, item.YAxisTitle, item.SecondaryAxis, item.Position.X, item.Position.Y, item.Position.Width, item.Position.Height, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt)
 	return mapPostgresError(err)
 }
 
