@@ -312,6 +312,8 @@ type ProtectedRange struct {
 	SheetID     string    `json:"sheet_id"`
 	CreateKey   string    `json:"-"`
 	Range       string    `json:"range"`
+	Scope       string    `json:"scope"`
+	Exceptions  []string  `json:"exceptions,omitempty"`
 	Description string    `json:"description,omitempty"`
 	Editors     []string  `json:"editors"`
 	WarningOnly bool      `json:"warning_only"`
@@ -326,6 +328,8 @@ type CreateProtectedRangeInput struct {
 	IdempotencyKey string   `json:"idempotency_key"`
 	SheetID        string   `json:"sheet_id"`
 	Range          string   `json:"range"`
+	Scope          string   `json:"scope,omitempty"`
+	Exceptions     []string `json:"exceptions,omitempty"`
 	Description    string   `json:"description"`
 	Editors        []string `json:"editors"`
 	WarningOnly    bool     `json:"warning_only"`
@@ -334,6 +338,8 @@ type CreateProtectedRangeInput struct {
 type UpdateProtectedRangeInput struct {
 	ExpectedRevision *int64    `json:"expected_revision,omitempty"`
 	Range            *string   `json:"range,omitempty"`
+	Scope            *string   `json:"scope,omitempty"`
+	Exceptions       *[]string `json:"exceptions,omitempty"`
 	Description      *string   `json:"description,omitempty"`
 	Editors          *[]string `json:"editors,omitempty"`
 	WarningOnly      *bool     `json:"warning_only,omitempty"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -132,4 +133,56 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// A sheet protection locks everything except the ranges it names, which is how
+// a locked model keeps its input cells usable.
+func TestSheetProtectionLeavesExceptionsEditable(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "시트 보호", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	if _, err := repository.PutWorkbookShare(ctx, book.ID, ShareInput{PrincipalType: "user", PrincipalID: "bob", Role: RoleEditor}); err != nil {
+		t.Fatal(err)
+	}
+	rule, err := repository.CreateProtectedRange(ctx, sheet, "alice", CreateProtectedRangeInput{
+		IdempotencyKey: "sheet-lock", Scope: "sheet", Exceptions: []string{"b2:c4", "E1:E1"}, Description: "확정된 모델",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.Scope != "sheet" || rule.Range != SheetProtectionRange || len(rule.Exceptions) != 2 || rule.Exceptions[0] != "B2:C4" {
+		t.Fatalf("rule = %#v", rule)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	// An input cell inside an exception stays editable for a collaborator.
+	applied, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "bob", BaseVersion: current.Version, IdempotencyKey: "inside", Cells: []CellInput{{Row: 3, Column: 3, Value: json.RawMessage(`5`)}}})
+	if err != nil {
+		t.Fatalf("exception cell should be writable: %v", err)
+	}
+	// Anywhere else on the sheet is refused with the sheet-wide message.
+	_, err = repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "bob", BaseVersion: applied.ServerVersion, IdempotencyKey: "outside", Cells: []CellInput{{Row: 9, Column: 9, Value: json.RawMessage(`1`)}}})
+	var failure *ProtectionFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("protected write error = %v", err)
+	}
+	if !strings.Contains(failure.Violations[0].Message, "이 시트는") || !strings.Contains(failure.Violations[0].Message, "확정된 모델") {
+		t.Fatalf("message = %q", failure.Violations[0].Message)
+	}
+	// The owner is never locked out of their own sheet.
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: applied.ServerVersion, IdempotencyKey: "owner", Cells: []CellInput{{Row: 9, Column: 9, Value: json.RawMessage(`1`)}}}); err != nil {
+		t.Fatalf("owner write = %v", err)
+	}
+	// Inserting a row moves the editable window with the rows it protects.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "shift", Axis: "row", Action: "insert", Index: 1, Count: 1}); err != nil {
+		t.Fatal(err)
+	}
+	rules, _ := repository.ListProtectedRanges(ctx, sheet)
+	if len(rules) != 1 || rules[0].Exceptions[0] != "B3:C5" {
+		t.Fatalf("exceptions after insert = %#v", rules)
+	}
 }

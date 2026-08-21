@@ -12,14 +12,15 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const protectedColumns = `p.id::text,p.sheet_id::text,p.idempotency_key,p.cell_range,p.description,p.editors,p.warning_only,p.revision,p.created_by,p.updated_by,p.created_at,p.updated_at`
+const protectedColumns = `p.id::text,p.sheet_id::text,p.idempotency_key,p.cell_range,p.scope,p.exceptions,p.description,p.editors,p.warning_only,p.revision,p.created_by,p.updated_by,p.created_at,p.updated_at`
 
 type protectedScanner interface{ Scan(...any) error }
 
 func scanProtectedRange(row protectedScanner) (ProtectedRange, error) {
 	var rule ProtectedRange
 	var editors []byte
-	if err := row.Scan(&rule.ID, &rule.SheetID, &rule.CreateKey, &rule.Range, &rule.Description, &editors, &rule.WarningOnly,
+	var exceptions []byte
+	if err := row.Scan(&rule.ID, &rule.SheetID, &rule.CreateKey, &rule.Range, &rule.Scope, &exceptions, &rule.Description, &editors, &rule.WarningOnly,
 		&rule.Revision, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 		return ProtectedRange{}, err
 	}
@@ -27,7 +28,20 @@ func scanProtectedRange(row protectedScanner) (ProtectedRange, error) {
 	if len(editors) > 0 {
 		_ = json.Unmarshal(editors, &rule.Editors)
 	}
+	if len(exceptions) > 0 {
+		_ = json.Unmarshal(exceptions, &rule.Exceptions)
+	}
 	return rule, nil
+}
+
+// protectionExceptionsJSON keeps the column a JSON array rather than null, so
+// reading a row never has to tell "no exceptions" from "column missing".
+func protectionExceptionsJSON(items []string) []byte {
+	if items == nil {
+		items = []string{}
+	}
+	encoded, _ := json.Marshal(items)
+	return encoded
 }
 
 func (r *PostgresRepository) CreateProtectedRange(ctx context.Context, sheetID, actor string, input CreateProtectedRangeInput) (ProtectedRange, error) {
@@ -64,7 +78,7 @@ func (r *PostgresRepository) CreateProtectedRange(ctx context.Context, sheetID, 
 		return ProtectedRange{}, fmt.Errorf("%w: a sheet can hold %d protected ranges", ErrInvalid, MaxProtectedRanges)
 	}
 	rule, _, err := NormalizeProtectedRange(ProtectedRange{
-		SheetID: sheetID, CreateKey: key, Range: input.Range, Description: input.Description,
+		SheetID: sheetID, CreateKey: key, Range: input.Range, Scope: input.Scope, Exceptions: input.Exceptions, Description: input.Description,
 		Editors: input.Editors, WarningOnly: input.WarningOnly, CreatedBy: actor, UpdatedBy: actor,
 	})
 	if err != nil {
@@ -73,8 +87,8 @@ func (r *PostgresRepository) CreateProtectedRange(ctx context.Context, sheetID, 
 	now := r.now()
 	rule.ID, rule.Revision, rule.CreatedAt, rule.UpdatedAt = identity.New(), 1, now, now
 	editors, _ := json.Marshal(rule.Editors)
-	if _, err := tx.Exec(ctx, `INSERT INTO protected_ranges(id,sheet_id,idempotency_key,cell_range,description,editors,warning_only,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,1,$8,$8,$9,$9)`,
-		rule.ID, sheetID, rule.CreateKey, rule.Range, rule.Description, editors, rule.WarningOnly, actor, now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO protected_ranges(id,sheet_id,idempotency_key,cell_range,scope,exceptions,description,editors,warning_only,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$10,$11,$5,$6,$7,1,$8,$8,$9,$9)`,
+		rule.ID, sheetID, rule.CreateKey, rule.Range, rule.Description, editors, rule.WarningOnly, actor, now, rule.Scope, protectionExceptionsJSON(rule.Exceptions)); err != nil {
 		return ProtectedRange{}, mapPostgresError(err)
 	}
 	if err := bumpWorkbookVersionForSheet(ctx, tx, sheetID); err != nil {
@@ -120,6 +134,12 @@ func (r *PostgresRepository) UpdateProtectedRange(ctx context.Context, id, actor
 	if input.Range != nil {
 		updated.Range = *input.Range
 	}
+	if input.Scope != nil {
+		updated.Scope = *input.Scope
+	}
+	if input.Exceptions != nil {
+		updated.Exceptions = *input.Exceptions
+	}
 	if input.Description != nil {
 		updated.Description = *input.Description
 	}
@@ -136,8 +156,8 @@ func (r *PostgresRepository) UpdateProtectedRange(ctx context.Context, id, actor
 	now := r.now()
 	normalized.Revision, normalized.UpdatedBy, normalized.UpdatedAt = current.Revision+1, actor, now
 	editors, _ := json.Marshal(normalized.Editors)
-	if _, err := tx.Exec(ctx, `UPDATE protected_ranges SET cell_range=$2,description=$3,editors=$4,warning_only=$5,revision=$6,updated_by=$7,updated_at=$8 WHERE id=$1`,
-		id, normalized.Range, normalized.Description, editors, normalized.WarningOnly, normalized.Revision, actor, now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE protected_ranges SET cell_range=$2,scope=$9,exceptions=$10,description=$3,editors=$4,warning_only=$5,revision=$6,updated_by=$7,updated_at=$8 WHERE id=$1`,
+		id, normalized.Range, normalized.Description, editors, normalized.WarningOnly, normalized.Revision, actor, now, normalized.Scope, protectionExceptionsJSON(normalized.Exceptions)); err != nil {
 		return ProtectedRange{}, mapPostgresError(err)
 	}
 	if err := bumpWorkbookVersionForSheet(ctx, tx, normalized.SheetID); err != nil {
