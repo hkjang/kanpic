@@ -60,6 +60,9 @@ func (p *parser) referenceFunction(name string, arguments []node) (node, bool, e
 		}
 		result, err := p.buildRangeAt(sheetID, startRow, startColumn, startRow+height-1, startColumn+width-1)
 		return result, true, err
+	case "IMPORTRANGE":
+		result, err := p.evaluateImportRange(arguments)
+		return result, true, err
 	case "INDIRECT":
 		if len(arguments) < 1 || len(arguments) > 2 {
 			return nil, true, argError(name)
@@ -232,7 +235,7 @@ func constantIntegers(arguments []node) ([]int, bool) {
 
 // volatileFunctions recalculate on every change because their result does not
 // depend only on the cells they name.
-var volatileFunctions = []string{"INDIRECT(", "OFFSET(", "RAND(", "RANDBETWEEN(", "TODAY(", "NOW("}
+var volatileFunctions = []string{"INDIRECT(", "OFFSET(", "RAND(", "RANDBETWEEN(", "TODAY(", "NOW(", "IMPORTRANGE("}
 
 // IsVolatile reports whether a formula has to be recalculated whenever
 // anything in the workbook changes.

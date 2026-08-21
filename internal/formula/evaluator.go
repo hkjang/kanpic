@@ -44,6 +44,14 @@ func NewScopedWithNames(currentSheet string, sheets map[string]string, namedRang
 	return &Evaluator{scope: newScope(currentSheet, sheets, namedRanges)}
 }
 
+// WithImports supplies the cross-workbook blocks IMPORTRANGE calls asked for.
+// They are fetched and permission-checked before evaluation, so the evaluator
+// itself stays a pure function of what it was handed.
+func (e *Evaluator) WithImports(imports map[string]ImportedRange) *Evaluator {
+	e.scope.Imports = imports
+	return e
+}
+
 func (e *Evaluator) Dependencies(input string) ([]string, *Error) {
 	parser, err := e.newParser(input, e.scope.CurrentSheet, "")
 	if err != nil {

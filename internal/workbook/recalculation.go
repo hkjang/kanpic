@@ -50,7 +50,11 @@ func parseCoordinateKey(value string) (CellCoordinate, error) {
 	return CellCoordinate{Row: row, Column: column}, nil
 }
 
-func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, namedRanges map[string]formula.NamedRange) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
+// recalculateCellInputs recalculates the formulas a mutation disturbs. imports
+// carries the cross-workbook blocks IMPORTRANGE asked for; it is nil on the
+// paths that have no repository to fetch them with, and those formulas then
+// report that the source could not be reached rather than showing stale data.
+func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, namedRanges map[string]formula.NamedRange, imports map[string]formula.ImportedRange) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
 	prospective := cloneAllCells(existing)
 	if prospective[currentSheetID] == nil {
 		return nil, nil, nil, ErrNotFound
@@ -114,7 +118,7 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		sheetNames[sheet.Name] = sheetID
 		sheetIDs[strings.ToUpper(sheetID)] = sheetID
 	}
-	evaluator := formula.NewScopedWithNames("", sheetNames, namedRanges)
+	evaluator := formula.NewScopedWithNames("", sheetNames, namedRanges).WithImports(imports)
 	forcedSpills := make(map[string]*formula.Error)
 	recalculatedSet := make(map[scopedCellKey]struct{})
 	formulaErrors := make(map[scopedCellKey]CellFormulaError)

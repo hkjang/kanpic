@@ -16,6 +16,9 @@ type Scope struct {
 	// Anchor is the address of the cell being parsed, which is what ROW() and
 	// COLUMN() report when they are called without an argument.
 	Anchor string
+	// Imports holds the cross-workbook blocks IMPORTRANGE asked for, fetched
+	// and permission-checked by the workbook layer before evaluation starts.
+	Imports map[string]ImportedRange
 }
 
 // SheetExtent is the largest row and column a sheet has content in.

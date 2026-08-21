@@ -168,7 +168,7 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 		currentSheetID = sheetID
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nil)
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nil, nil)
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -749,7 +749,7 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 		currentSheetID = id
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(nextSheets, nextCells, currentSheetID, nil, true, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)))
+	expanded, _, _, err := recalculateCellInputs(nextSheets, nextCells, currentSheetID, nil, true, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), r.importsForLocked(state.workbook.ID, nextCells, nil))
 	if err != nil {
 		for id, item := range removedRanges {
 			r.namedRanges[id] = item
@@ -940,7 +940,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)))
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), r.importsForLocked(state.workbook.ID, state.cells, effective))
 		if err != nil {
 			return MutationResult{}, err
 		}

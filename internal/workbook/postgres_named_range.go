@@ -282,7 +282,7 @@ func (r *PostgresRepository) recalculateWorkbookFormulasTx(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges))
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, nil))
 	if err != nil {
 		return err
 	}

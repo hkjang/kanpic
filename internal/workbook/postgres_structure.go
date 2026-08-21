@@ -217,7 +217,7 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 	if err != nil {
 		return MutationResult{}, err
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(sheets, nextCells, target.ID, nil, true, formulaNamedRanges(namedRanges))
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(sheets, nextCells, target.ID, nil, true, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, nextCells, nil))
 	if err != nil {
 		return MutationResult{}, err
 	}

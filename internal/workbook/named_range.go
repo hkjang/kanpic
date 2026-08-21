@@ -296,7 +296,7 @@ func (r *MemoryRepository) recalculateAllLocked(state *workbookState) error {
 		currentSheetID = sheetID
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)))
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), r.importsForLocked(state.workbook.ID, state.cells, nil))
 	if err != nil {
 		return err
 	}

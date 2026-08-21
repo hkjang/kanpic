@@ -155,7 +155,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		wb.Sheets = append(wb.Sheets, sheet)
 		sheets[sheet.ID] = sheet
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nil)
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nil, nil)
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -1159,7 +1159,7 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	if err != nil {
 		return err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges))
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, nil))
 	if err != nil {
 		return err
 	}
@@ -1376,7 +1376,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		if rangeErr != nil {
 			return MutationResult{}, rangeErr
 		}
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, formulaNamedRanges(namedRanges))
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, effective))
 		if err != nil {
 			return MutationResult{}, err
 		}
