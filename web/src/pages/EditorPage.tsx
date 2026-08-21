@@ -53,10 +53,12 @@ import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '..
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
-import { removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { cleanupText, removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
 import { SplitDialog } from '../components/SplitDialog'
 import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
 import { SortScopeDialog } from '../components/SortScopeDialog'
+import { SubtotalDialog } from '../components/SubtotalDialog'
+import type { SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printableDocument } from '../lib/printSheet'
 import { useCollaborationStore } from '../state/collaboration'
@@ -93,7 +95,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -374,6 +376,33 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     let first=row
     while(first-1>=1&&numbers.has(first-1))first-=1
     return first===row?undefined:first
+  }
+  // Subtotals rewrite the block and push whatever sits under it down, so the
+  // rows below are read for the warning the same way the split dialog reads
+  // the columns to its right.
+  const openSubtotal=async()=>{
+    if(!writable())return
+    const seed=await resolveWorkingBlock()
+    const resolved=await resolveSheetBlock(seed.region.startRow,seed.region.startColumn)
+    const region=resolved?.region??seed.region
+    const cells=resolved?.cells??seed.cells
+    let occupiedBelow=0
+    for(let row=region.endRow+1;row<=region.endRow+40;row+=1){
+      let filled=false
+      for(let column=region.startColumn;column<=region.endColumn&&!filled;column+=1)
+        if(cleanupText(cells.get(cellKey(row,column)))!=='')filled=true
+      if(filled)occupiedBelow+=1
+    }
+    setSubtotal({region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0,occupiedBelow})
+  }
+  const applySubtotals=async(plan:SubtotalPlan)=>{
+    await writeCells(plan.writes)
+    // Each group folds away behind its own subtotal row, which is what makes a
+    // long report readable once the totals are in place.
+    for(const group of plan.groups){
+      if(group.end<=group.start)continue
+      await applyLayout({action:'group',axis:'row',start:group.start,count:group.end-group.start+1})
+    }
   }
   const sortColumn=async(column:number,direction:'asc'|'desc')=>{
     if(!writable())return
@@ -873,6 +902,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
       ]},
       {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
+      {kind:'item',label:'부분합…',disabled:!canWrite,onSelect:()=>void openSubtotal()},
       {kind:'separator'},
       {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
@@ -961,6 +991,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onSort={direction=>void sortColumn(columnFilter.column,direction)}
       onApply={async criteria=>{await updateFilter(activeFilter.id,{criteria})}}/>}
     {protectedOpen&&activeSheet&&<ProtectedRangeDialog range={editorSelection} rules={protections.data?.items??[]} onClose={()=>setProtectedOpen(false)} onCreate={createProtection} onDelete={deleteProtection}/>}
+    {subtotal&&<SubtotalDialog region={subtotal.region} cells={subtotal.cells} headerRows={subtotal.headerRows} occupiedBelow={subtotal.occupiedBelow}
+      onClose={()=>setSubtotal(undefined)} onApply={applySubtotals}/>}
     {sortScope&&<SortScopeDialog column={sortScope.column} direction={sortScope.direction} block={sortScope.block} selection={sortScope.selection}
       onClose={()=>setSortScope(undefined)} onSort={(region,cells)=>runSort(region,cells,sortScope.column,sortScope.direction)}/>}
     {cleanup&&<CleanupDialog mode={cleanup.mode} target={cleanup.target} onClose={()=>setCleanup(undefined)}
