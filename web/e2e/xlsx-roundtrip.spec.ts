@@ -25,8 +25,8 @@ test('a workbook survives a round trip through XLSX, and the import says what it
   await page.locator('input[type="file"]').setInputFiles({name:`왕복 ${stamp}.xlsx`,mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:bytes})
   const modal=page.locator('.import-modal')
   await expect(modal).toBeVisible()
-  // 이름 정의는 아직 가져오지 못한다. 조용히 버리지 말고 그렇다고 말해야 한다.
-  await expect(modal.locator('.import-warnings')).toContainText('이름 정의 1개')
+  // kanpic이 다 읽을 수 있는 파일이므로 버린다고 경고할 것이 없어야 한다.
+  await expect(modal.locator('.import-warnings')).toHaveCount(0)
   await modal.getByRole('button',{name:'워크북으로 가져오기'}).click()
   await expect(page.locator('.grid-canvas')).toBeVisible()
 
@@ -38,6 +38,8 @@ test('a workbook survives a round trip through XLSX, and the import says what it
   expect(importedSheet.layout.hidden_rows??[]).toEqual([])
   const cells=await request.get(`/api/v1/sheets/${importedSheet.id}/ranges/A1:C2`).then(response=>response.json())
   expect(cells.items.find((cell:{row:number;column:number})=>cell.row===2&&cell.column===1)).toMatchObject({note:'협력사 확정 단가'})
+  const names=await request.get(`/api/v1/workbooks/${importedId}/named-ranges`).then(response=>response.json())
+  expect(names.items).toMatchObject([{name:'단가',range:'C1:C2',sheet_id:importedSheet.id}])
 
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
   await request.delete(`/api/v1/workbooks/${importedId}`)

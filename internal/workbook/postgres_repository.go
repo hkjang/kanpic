@@ -189,7 +189,19 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		wb.Sheets = append(wb.Sheets, sheet)
 		sheets[sheet.ID] = sheet
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nil, nil)
+	// The names have to exist before the first recalculation, or every formula
+	// that uses one is evaluated as #NAME? and stored that way.
+	sheetIDsByName := make(map[string]string, len(wb.Sheets))
+	for _, sheet := range wb.Sheets {
+		sheetIDsByName[sheet.Name] = sheet.ID
+	}
+	importedNames := buildImportedNamedRanges(wb.ID, input.ActorID, input.NamedRanges, sheetIDsByName, now)
+	for _, item := range importedNames {
+		if _, err := tx.Exec(ctx, `INSERT INTO named_ranges(id,workbook_id,sheet_id,idempotency_key,name,cell_range,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,1,$7,$7,$8,$8)`, item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.Name, item.Range, input.ActorID, now); err != nil {
+			return Workbook{}, mapPostgresError(err)
+		}
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, formulaNamedRanges(importedNames), nil)
 	if err != nil {
 		return Workbook{}, err
 	}

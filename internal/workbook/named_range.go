@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"kanpic/internal/formula"
@@ -152,6 +153,39 @@ func (r *MemoryRepository) CreateNamedRange(_ context.Context, workbookID, actor
 	item.WorkbookVersion = state.workbook.Version
 	r.namedRanges[item.ID] = item
 	return cloneNamedRange(item), nil
+}
+
+// buildImportedNamedRanges turns the names a file carried into stored ones,
+// resolving each file-level sheet name to the sheet the import just created.
+// A name kanpic cannot hold is dropped rather than failing the whole import:
+// the preview already told the reader which ones would not survive.
+func buildImportedNamedRanges(workbookID, actor string, imported []ImportNamedRange, sheetIDsByName map[string]string, now time.Time) []NamedRange {
+	if len(imported) == 0 {
+		return nil
+	}
+	items := make([]NamedRange, 0, len(imported))
+	taken := make(map[string]struct{}, len(imported))
+	for index, source := range imported {
+		if len(items) >= MaxNamedRanges {
+			break
+		}
+		sheetID, known := sheetIDsByName[source.SheetName]
+		if !known {
+			continue
+		}
+		item, err := namedRangeFromInput(workbookID, fmt.Sprintf("import:%d", index), actor, CreateNamedRangeInput{Name: source.Name, SheetID: sheetID, Range: source.Range})
+		if err != nil {
+			continue
+		}
+		key := strings.ToUpper(item.Name)
+		if _, duplicate := taken[key]; duplicate {
+			continue
+		}
+		taken[key] = struct{}{}
+		item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
+		items = append(items, item)
+	}
+	return items
 }
 
 func (r *MemoryRepository) ListNamedRanges(_ context.Context, workbookID string) ([]NamedRange, error) {

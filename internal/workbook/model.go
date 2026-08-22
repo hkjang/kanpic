@@ -554,6 +554,18 @@ type ImportWorkbookInput struct {
 	FileName       string        `json:"file_name"`
 	Format         string        `json:"format"`
 	Sheets         []ImportSheet `json:"sheets"`
+	// NamedRanges are workbook-scoped, so they arrive beside the sheets rather
+	// than inside one. They have to exist before the first recalculation or
+	// every formula that uses a name lands as #NAME?.
+	NamedRanges []ImportNamedRange `json:"named_ranges,omitempty"`
+}
+
+// ImportNamedRange is a name a file carried. The file addresses its sheet by
+// name, which is the only handle that exists before the import assigns IDs.
+type ImportNamedRange struct {
+	Name      string `json:"name"`
+	SheetName string `json:"sheet_name"`
+	Range     string `json:"range"`
 }
 
 type FilterCriterion struct {

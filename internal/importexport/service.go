@@ -62,10 +62,11 @@ type Preview struct {
 }
 
 type ParsedWorkbook struct {
-	Title   string
-	Format  string
-	Sheets  []workbook.ImportSheet
-	Preview Preview
+	Title       string
+	Format      string
+	Sheets      []workbook.ImportSheet
+	NamedRanges []workbook.ImportNamedRange
+	Preview     Preview
 }
 
 type ImportRequest struct {
@@ -106,7 +107,7 @@ func (s *Service) Import(ctx context.Context, request ImportRequest) (workbook.W
 	if err != nil {
 		return workbook.Workbook{}, err
 	}
-	return s.repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{WorkspaceID: request.WorkspaceID, Title: parsed.Title, OwnerID: request.ActorID, ActorID: request.ActorID, IdempotencyKey: request.IdempotencyKey, FileName: request.FileName, Format: parsed.Format, Sheets: parsed.Sheets})
+	return s.repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{WorkspaceID: request.WorkspaceID, Title: parsed.Title, OwnerID: request.ActorID, ActorID: request.ActorID, IdempotencyKey: request.IdempotencyKey, FileName: request.FileName, Format: parsed.Format, Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges})
 }
 
 func Parse(fileName string, data []byte, maxExpanded int64) (ParsedWorkbook, error) {
@@ -302,14 +303,91 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
 	}
-	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, file)...)
+	known := make(map[string]struct{}, len(sheetNames))
+	for _, sheetName := range sheetNames {
+		known[sheetName] = struct{}{}
+	}
+	named, skippedNames := importDefinedNames(file, known)
+	parsed.NamedRanges = named
+	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, skippedNames)...)
 	return parsed, nil
+}
+
+// importDefinedNames carries workbook-scoped Excel names over. A name whose
+// target is not a plain range on a sheet in this file - a print area, a
+// constant, a formula, a reference into another workbook - has no kanpic
+// equivalent, so it is counted and reported rather than approximated.
+func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, int) {
+	definitions := file.GetDefinedName()
+	if len(definitions) == 0 {
+		return nil, 0
+	}
+	named := make([]workbook.ImportNamedRange, 0, len(definitions))
+	skipped := 0
+	seen := make(map[string]struct{}, len(definitions))
+	for _, definition := range definitions {
+		// A sheet-scoped name means something different from a workbook-scoped
+		// one, and kanpic only has the workbook-scoped kind. excelize reports
+		// that scope as the literal "Workbook".
+		if definition.Scope != "Workbook" || strings.HasPrefix(definition.Name, "_xlnm.") {
+			skipped++
+			continue
+		}
+		sheetName, area, ok := splitDefinedNameTarget(definition.RefersTo)
+		if !ok {
+			skipped++
+			continue
+		}
+		if _, exists := sheetNames[sheetName]; !exists {
+			skipped++
+			continue
+		}
+		key := strings.ToUpper(definition.Name)
+		if _, duplicate := seen[key]; duplicate {
+			skipped++
+			continue
+		}
+		seen[key] = struct{}{}
+		named = append(named, workbook.ImportNamedRange{Name: definition.Name, SheetName: sheetName, Range: area})
+	}
+	return named, skipped
+}
+
+// splitDefinedNameTarget reads the sheet and the A1 range out of a RefersTo
+// such as `Sheet1!$C$1:$C$2` or `'2분기 실적'!$A$1`.
+func splitDefinedNameTarget(refersTo string) (string, string, bool) {
+	target := strings.TrimSpace(refersTo)
+	target = strings.TrimPrefix(target, "=")
+	if target == "" || strings.ContainsAny(target, "[]") {
+		return "", "", false
+	}
+	// A quoted sheet name doubles any apostrophe it contains, so the closing
+	// quote is the last one before the "!" that separates sheet from range.
+	separator := strings.LastIndex(target, "!")
+	if separator <= 0 || separator == len(target)-1 {
+		return "", "", false
+	}
+	sheetName, area := target[:separator], strings.ReplaceAll(target[separator+1:], "$", "")
+	if strings.HasPrefix(sheetName, "'") {
+		if !strings.HasSuffix(sheetName, "'") || len(sheetName) < 3 {
+			return "", "", false
+		}
+		sheetName = strings.ReplaceAll(sheetName[1:len(sheetName)-1], "''", "'")
+	}
+	// A name pointing at a union, a constant or a formula is not a range.
+	if sheetName == "" || strings.ContainsAny(area, "!,+-*/() '\"") {
+		return "", "", false
+	}
+	if _, err := cellrange.Parse(area); err != nil {
+		return "", "", false
+	}
+	return sheetName, area, true
 }
 
 // unsupportedXLSXParts names what the file carries and the import does not. The
 // reader already knows: a workbook that arrives without its charts and its
 // names looks like the import worked and reads like a different workbook.
-func unsupportedXLSXParts(archive *zip.Reader, file *excelize.File) []string {
+func unsupportedXLSXParts(archive *zip.Reader, skippedNames int) []string {
 	counts := map[string]int{}
 	for _, entry := range archive.File {
 		switch {
@@ -326,8 +404,8 @@ func unsupportedXLSXParts(archive *zip.Reader, file *excelize.File) []string {
 		}
 	}
 	warnings := make([]string, 0, 5)
-	if names := file.GetDefinedName(); len(names) > 0 {
-		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다. 이름을 쓰는 수식은 #NAME? 이 됩니다.", len(names)))
+	if skippedNames > 0 {
+		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다. 시트 하나에만 적용되는 이름, 인쇄 영역, 다른 파일을 가리키는 이름은 kanpic에 대응이 없습니다.", skippedNames))
 	}
 	if counts["chart"] > 0 {
 		warnings = append(warnings, fmt.Sprintf("차트 %d개는 가져오지 않습니다. 원본 데이터 범위는 그대로 들어옵니다.", counts["chart"]))

@@ -201,7 +201,17 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 		currentSheetID = sheetID
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nil, nil)
+	// The names have to exist before the first recalculation, or every formula
+	// that uses one is evaluated as #NAME? and cached that way.
+	sheetIDsByName := make(map[string]string, len(input.Sheets))
+	for position, imported := range input.Sheets {
+		sheetIDsByName[strings.TrimSpace(imported.Name)] = sheetIDs[position]
+	}
+	importedNames := buildImportedNamedRanges(wb.ID, input.ActorID, input.NamedRanges, sheetIDsByName, now)
+	for _, item := range importedNames {
+		r.namedRanges[item.ID] = item
+	}
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, formulaNamedRanges(importedNames), nil)
 	if err != nil {
 		return Workbook{}, err
 	}

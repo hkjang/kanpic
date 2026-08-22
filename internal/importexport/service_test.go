@@ -919,13 +919,108 @@ func TestXLSXExportCarriesNamedRanges(t *testing.T) {
 	if len(names) != 1 || names[0].Name != "단가" || names[0].RefersTo != "Sheet1!$C$1:$C$2" {
 		t.Fatalf("defined names = %#v", names)
 	}
-	// Import does not keep them yet, so the preview has to say so rather than
-	// letting the name disappear without a word.
 	parsed, err := Parse(exported.Name, exported.Data, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Preview.Warnings) != 1 || !strings.Contains(parsed.Preview.Warnings[0], "이름 정의 1개") {
+	if len(parsed.NamedRanges) != 1 || parsed.NamedRanges[0].Name != "단가" || parsed.NamedRanges[0].Range != "C1:C2" || parsed.NamedRanges[0].SheetName != "Sheet1" {
+		t.Fatalf("parsed names = %#v", parsed.NamedRanges)
+	}
+	if len(parsed.Preview.Warnings) != 0 {
+		t.Fatalf("a name the import keeps must not be reported as dropped: %#v", parsed.Preview.Warnings)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "name-import", Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.ListNamedRanges(ctx, restored.ID)
+	if err != nil || len(stored) != 1 || stored[0].Name != "단가" || stored[0].Range != "C1:C2" || stored[0].SheetID != restored.Sheets[0].ID {
+		t.Fatalf("stored names = %#v, %v", stored, err)
+	}
+}
+
+// A name has to exist before the import recalculates, or every formula using
+// it is evaluated as #NAME? and that answer is what gets stored.
+func TestXLSXImportResolvesFormulasThatUseAnImportedName(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "named formula", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	if _, err := repository.CreateNamedRange(ctx, wb.ID, "tester", workbook.CreateNamedRangeInput{IdempotencyKey: "nf-1", SheetID: sheetID, Name: "단가", Range: "C1:C2"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := repository.GetWorkbook(ctx, wb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: current.Version, IdempotencyKey: "nf-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 3, Value: value(1500)}, {Row: 2, Column: 3, Value: value(3200)},
+		{Row: 4, Column: 1, Formula: "=SUM(단가)"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "nf-import", Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A4")
+	cells, err := repository.ReadRange(ctx, restored.Sheets[0].ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "4700" {
+		t.Fatalf("named formula after the round trip = %#v, %v", cells, err)
+	}
+}
+
+// Excel names that kanpic has no equivalent for still have to be reported, or
+// the file arrives short of what it carried and nothing says so.
+func TestXLSXImportReportsNamesItCannotKeep(t *testing.T) {
+	t.Parallel()
+	file := excelize.NewFile()
+	defer file.Close()
+	name := file.GetSheetName(0)
+	if err := file.SetCellValue(name, "A1", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range []*excelize.DefinedName{
+		{Name: "쓸_수_있는_이름", RefersTo: name + "!$A$1:$A$3"},
+		{Name: "_xlnm.Print_Area", RefersTo: name + "!$A$1:$B$2"},
+		{Name: "시트_전용", RefersTo: name + "!$A$1", Scope: name},
+	} {
+		if err := file.SetDefinedName(definition); err != nil {
+			t.Fatalf("%s: %v", definition.Name, err)
+		}
+	}
+	var buffer bytes.Buffer
+	if err := file.Write(&buffer); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("names.xlsx", buffer.Bytes(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.NamedRanges) != 1 || parsed.NamedRanges[0].Name != "쓸_수_있는_이름" {
+		t.Fatalf("kept names = %#v", parsed.NamedRanges)
+	}
+	if len(parsed.Preview.Warnings) != 1 || !strings.Contains(parsed.Preview.Warnings[0], "이름 정의 2개") {
 		t.Fatalf("import warnings = %#v", parsed.Preview.Warnings)
 	}
 }

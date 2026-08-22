@@ -17,7 +17,11 @@ test('selecting a range shows its total, average and count', async ({ page, requ
   // A single cell says nothing the grid does not already show.
   await expect(summary).toBeHidden()
 
-  await page.getByLabel('A1 셀 입력').press('Control+Shift+ArrowDown')
+  // 범위 확장 단축키는 시트에 이미 들어온 값으로 끝을 찾는다. 셀이 도착하기
+  // 전에 누르면 선택이 짧게 끝나므로, 값이 왔다는 것을 먼저 확인한다.
+  await page.getByLabel('A1 셀 입력').press('Shift+ArrowDown')
+  await expect(summary).toContainText('합계 2,000')
+  await page.keyboard.press('Control+Shift+ArrowDown')
   await expect(summary).toContainText('합계 4,000')
   await expect(summary).toContainText('평균 1,333.33')
   await expect(summary).toContainText('개수 4')
@@ -29,7 +33,9 @@ test('selecting a range shows its total, average and count', async ({ page, requ
   await maximum.click()
   await expect(summary).toContainText('최대 2,000')
   await page.reload()
-  await page.getByLabel('A1 셀 입력').press('Control+Shift+ArrowDown')
+  await page.getByLabel('A1 셀 입력').press('Shift+ArrowDown')
+  await expect(summary).toContainText('최대 1,200')
+  await page.keyboard.press('Control+Shift+ArrowDown')
   await expect(summary).toContainText('최대 2,000')
 })
 
