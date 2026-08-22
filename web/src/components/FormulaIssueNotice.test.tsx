@@ -26,4 +26,22 @@ describe('FormulaIssueNotice', () => {
     fireEvent.click(screen.getByRole('button',{name:'보기'}))
     expect(onOpen).toHaveBeenCalledWith(issue)
   })
+
+  // 행·열 삭제는 실행 취소로 되살릴 수 없다. 회수 경로를 알려 주지 않으면
+  // 사용자는 지워진 줄을 손으로 다시 입력한다.
+  it('offers to revert a deletion even when no formula broke', () => {
+    const onRevert=vi.fn()
+    const backup={versionId:'v-1',summary:'행 3'}
+    render(<FormulaIssueNotice issues={[]} backup={backup} onOpen={()=>{}} onRevert={onRevert} onClose={()=>{}}/>)
+    expect(screen.getByRole('status')).toHaveTextContent('행 3을(를) 삭제했습니다')
+    expect(screen.getByRole('status')).toHaveTextContent('실행 취소로는 되돌릴 수 없습니다')
+    fireEvent.click(screen.getByRole('button',{name:'되돌리기'}))
+    expect(onRevert).toHaveBeenCalledWith(backup)
+  })
+
+  it('offers both the broken cell and the way back when a deletion did both', () => {
+    render(<FormulaIssueNotice issues={[issue]} backup={{versionId:'v-1',summary:'행 3'}} onOpen={()=>{}} onRevert={()=>{}} onClose={()=>{}}/>)
+    expect(screen.getByRole('button',{name:'보기'})).toBeInTheDocument()
+    expect(screen.getByRole('button',{name:'되돌리기'})).toBeInTheDocument()
+  })
 })
