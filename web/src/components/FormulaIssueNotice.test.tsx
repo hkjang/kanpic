@@ -44,4 +44,13 @@ describe('FormulaIssueNotice', () => {
     expect(screen.getByRole('button',{name:'보기'})).toBeInTheDocument()
     expect(screen.getByRole('button',{name:'되돌리기'})).toBeInTheDocument()
   })
+
+  // 셀 변경 트리거가 실패해도 편집한 사람은 아무것도 보지 못했다. 편집은
+  // 저장되었으므로 실패를 알리되 편집이 취소된 것처럼 읽히면 안 된다.
+  it('names the automation this edit set off and failed', () => {
+    render(<FormulaIssueNotice issues={[]} automations={[{automation_id:'a-1',run_id:'r-1',message:'automation exceeds the 1 cell limit'}]} onOpen={()=>{}} onClose={()=>{}}/>)
+    expect(screen.getByRole('status')).toHaveTextContent('자동화가 실패했습니다')
+    expect(screen.getByRole('status')).toHaveTextContent('1 cell limit')
+    expect(screen.getByRole('status')).toHaveTextContent('이 편집은 저장되었습니다')
+  })
 })

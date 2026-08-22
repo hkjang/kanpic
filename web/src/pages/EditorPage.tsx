@@ -1094,7 +1094,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {rightPanel==='pivots'&&<PivotPanel pivots={pivots.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setPivotDialog(null)} onEdit={item=>setPivotDialog(item)} onOpen={setPivotResult} onRefresh={refreshPivot} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
       </ResizableRightPanel>}
     </div>
-    <FormulaIssueNotice issues={editor.formulaIssues} dropped={editor.droppedCells} backup={editor.editBackup} onClose={()=>editor.clearFormulaIssues()}
+    <FormulaIssueNotice issues={editor.formulaIssues} dropped={editor.droppedCells} automations={editor.automationFailures} backup={editor.editBackup} onClose={()=>editor.clearFormulaIssues()}
       onRevert={async backup=>{
         // 행·열 삭제는 서버가 셀 단위로 되돌리지 못한다. 삭제 직전에 남겨 둔
         // 자동 백업으로 복원하는 것이 유일한 회수 경로다.

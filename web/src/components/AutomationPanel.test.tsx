@@ -344,6 +344,28 @@ describe('AutomationPanel',()=>{
     fireEvent.click(screen.getByRole('button',{name:/저장 후 검증/}))
     expect(await screen.findByText(/POST \/api\/v1\/automations\/webhook-1:webhook/)).toBeInTheDocument()
   })
+
+  // 자동화 실행은 관리자 설정이고 기본값이 꺼짐이다. 패널이 그 사실을 말하지
+  // 않으면 저장도 검증도 통과한 자동화가 왜 안 도는지 알 길이 없었다.
+  it('says that execution is switched off and refuses to offer the run button',async()=>{
+    const failing:Automation={...automation,id:'automation-2',name:'예약 갱신',trigger:{type:'schedule',cron:'0 * * * *',timezone:'Asia/Seoul'},next_run_at:'2026-08-02T01:00:00Z',last_failure:{run_id:'run-9',trigger_type:'schedule',message:'automation exceeds the 1 cell limit',at:'2026-08-02T00:30:00Z'}}
+    const fetchMock=vi.fn(async(input:RequestInfo|URL)=>{
+      const path=String(input)
+      if(path==='/api/v1/workbooks/book-1/automations')return json({items:[automation,failing],execution_enabled:false})
+      if(path==='/api/v1/automations/automation-1:test')return json(preview)
+      if(path==='/api/v1/automations/automation-1/runs?limit=12')return json({items:[]})
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock)
+    renderPanel()
+    expect(await screen.findByText('자동화 실행이 꺼져 있습니다')).toBeInTheDocument()
+    // 돌지 않는 자동화의 "다음 실행 …"은 사실이 아니다.
+    expect(screen.queryByText(/다음 실행/)).not.toBeInTheDocument()
+    expect(screen.getByText(/마지막 실행 실패/)).toHaveTextContent('1 cell limit')
+    fireEvent.click(screen.getAllByRole('button',{name:/검증/})[0])
+    await screen.findByText('실행 미리보기')
+    expect(screen.getByRole('button',{name:/검토한 자동화 실행/})).toBeDisabled()
+  })
 })
 
 function json(value:unknown,status=200){return new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}})}

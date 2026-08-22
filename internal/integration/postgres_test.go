@@ -3274,3 +3274,120 @@ func TestPostgresFirstFormulaSeesTheWholeSheet(t *testing.T) {
 		t.Fatalf("A300 = %#v, %v (the first formula did not see the other sheet)", read, err)
 	}
 }
+
+// A cell-change trigger runs with nobody watching. When one failed before it
+// reached a run row, the failure existed only in the server log: the panel's
+// history stayed empty and the editor who typed the cell was told nothing. The
+// admin switch was invisible the same way — definitions saved and previewed
+// while every trigger silently did nothing.
+func TestPostgresAutomationOverviewReportsTheGlobalSwitchAndFailedTriggers(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("automation-visibility-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "automation visibility", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheetID := book.Sheets[0].ID
+	config := staticAISettings{"automation.enabled": true, "automation.max_cells_per_run": float64(1000), "automation.max_runs_per_hour": float64(1000)}
+	service := automation.NewService(pool, config, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	item, err := service.Create(ctx, book.ID, actor, automation.CreateInput{
+		Name: "A열 감시", Enabled: true, IdempotencyKey: "visibility-create",
+		Trigger: automation.TriggerDefinition{Type: automation.TriggerCellChange, SheetID: sheetID, Range: "A1:A5"},
+		Action:  automation.ActionDefinition{Type: automation.ActionSetValue, SheetID: sheetID, Range: "C1:C5", Value: json.RawMessage(`"복사됨"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	change := func(row int, value string, baseVersion int64, key string) workbook.MutationResult {
+		t.Helper()
+		result, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, BaseVersion: baseVersion, IdempotencyKey: key, Cells: []workbook.CellInput{{Row: row, Column: 1, Value: json.RawMessage(value)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := change(1, `10`, book.Version, "visibility-first")
+	if _, err := service.TriggerCellChange(ctx, first, []workbook.CellInput{{Row: 1, Column: 1}}, actor); err != nil {
+		t.Fatalf("healthy trigger: %v", err)
+	}
+	if first, err := service.ListRuns(ctx, item.ID, 10); err != nil || len(first) != 1 || first[0].Status != automation.StatusSucceeded {
+		t.Fatalf("healthy run history: %#v, %v", first, err)
+	}
+	healthy, err := service.Overview(ctx, book.ID)
+	if err != nil || !healthy.ExecutionEnabled || len(healthy.Items) != 1 || healthy.Items[0].LastFailure != nil {
+		t.Fatalf("overview after a successful run: %#v, %v", healthy, err)
+	}
+
+	// Lowering the limit after the definition was saved is the realistic way an
+	// automation starts failing: the definition itself is still valid.
+	config["automation.max_cells_per_run"] = float64(1)
+	current, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Clearing the target puts the five cells back in play; an unchanged target
+	// would only ever be skipped, never refused.
+	cleared := make([]workbook.CellInput, 0, 5)
+	for row := 1; row <= 5; row++ {
+		cleared = append(cleared, workbook.CellInput{Row: row, Column: 3})
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: actor, BaseVersion: current.Version, IdempotencyKey: "visibility-clear", Cells: cleared}); err != nil {
+		t.Fatal(err)
+	}
+	if current, err = repository.GetWorkbook(ctx, book.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := change(2, `20`, current.Version, "visibility-second")
+	results, triggerErr := service.TriggerCellChange(ctx, second, []workbook.CellInput{{Row: 2, Column: 1}}, actor)
+	if triggerErr == nil {
+		t.Fatal("a run over the cell limit should report an error")
+	}
+	if len(results) != 1 || results[0].Run.Status != automation.StatusFailed || !strings.Contains(results[0].Run.ErrorMessage, "1 cell limit") {
+		t.Fatalf("failed run handed back to the caller: %#v", results)
+	}
+	runs, err := service.ListRuns(ctx, item.ID, 10)
+	if err != nil || len(runs) != 2 || runs[0].Status != automation.StatusFailed {
+		t.Fatalf("run history: %#v, %v", runs, err)
+	}
+	// The insert used to drop error_message, so history showed "실패" with no reason.
+	if !strings.Contains(runs[0].ErrorMessage, "1 cell limit") || runs[0].TriggerOperationID != second.OperationID {
+		t.Fatalf("recorded failure: %#v", runs[0])
+	}
+	broken, err := service.Overview(ctx, book.ID)
+	if err != nil || broken.Items[0].LastFailure == nil || !strings.Contains(broken.Items[0].LastFailure.Message, "1 cell limit") || broken.Items[0].LastFailure.TriggerType != automation.TriggerCellChange {
+		t.Fatalf("overview after a failed run: %#v, %v", broken, err)
+	}
+
+	// A later success means the automation recovered; the panel must stop warning.
+	config["automation.max_cells_per_run"] = float64(1000)
+	if current, err = repository.GetWorkbook(ctx, book.ID); err != nil {
+		t.Fatal(err)
+	}
+	third := change(3, `30`, current.Version, "visibility-third")
+	if _, err := service.TriggerCellChange(ctx, third, []workbook.CellInput{{Row: 3, Column: 1}}, actor); err != nil {
+		t.Fatalf("recovered trigger: %v", err)
+	}
+	recovered, err := service.Overview(ctx, book.ID)
+	if err != nil || recovered.Items[0].LastFailure != nil {
+		t.Fatalf("overview after recovery: %#v, %v", recovered, err)
+	}
+
+	config["automation.enabled"] = false
+	off, err := service.Overview(ctx, book.ID)
+	if err != nil || off.ExecutionEnabled {
+		t.Fatalf("overview with execution switched off: %#v, %v", off, err)
+	}
+}

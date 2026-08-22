@@ -717,11 +717,12 @@ func (s *Server) sortRange(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	var failures []automationFailure
 	if !result.Duplicate && result.AppliedCells > 0 {
 		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
-		s.triggerCellAutomations(r, result, cells)
+		failures = s.triggerCellAutomations(r, result, cells)
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, cellMutationResponse{MutationResult: result, AutomationFailures: failures})
 }
 
 func (s *Server) applyRangeSort(ctx context.Context, sheetID, actor string, input rangeSortRequest) (workbook.MutationResult, []workbook.CellInput, error) {
@@ -758,11 +759,12 @@ func (s *Server) applyCellsWithLimit(w http.ResponseWriter, r *http.Request, lim
 		s.writeError(w, r, err)
 		return
 	}
+	var failures []automationFailure
 	if !result.Duplicate {
 		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, input.Cells, result)
-		s.triggerCellAutomations(r, result, input.Cells)
+		failures = s.triggerCellAutomations(r, result, input.Cells)
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, cellMutationResponse{MutationResult: result, AutomationFailures: failures})
 }
 
 func (s *Server) undoOperation(w http.ResponseWriter, r *http.Request) {

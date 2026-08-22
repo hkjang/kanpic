@@ -211,6 +211,10 @@ func (f *fakeAutomationService) Undo(_ context.Context, _ string, input automati
 	f.run.Status, f.run.UndoOperationID, f.run.UndoOperation = automation.StatusUndone, operation.OperationID, &operation
 	return automation.ExecutionResult{Run: f.run, Operation: operation}, nil
 }
+func (f *fakeAutomationService) Overview(ctx context.Context, workbookID string) (automation.Overview, error) {
+	items, err := f.List(ctx, workbookID)
+	return automation.Overview{Items: items, ExecutionEnabled: true}, err
+}
 func (f *fakeAutomationService) TriggerCellChange(ctx context.Context, _ workbook.MutationResult, _ []workbook.CellInput, _ string) ([]automation.ExecutionResult, error) {
 	f.triggerCalls++
 	f.triggerContextErr = ctx.Err()

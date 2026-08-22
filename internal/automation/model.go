@@ -66,8 +66,27 @@ type Automation struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
 	NextRunAt      *time.Time        `json:"next_run_at,omitempty"`
+	LastFailure    *RunFailure       `json:"last_failure,omitempty"`
 	Duplicate      bool              `json:"duplicate,omitempty"`
 	idempotencyKey string
+}
+
+// RunFailure is the latest run of an automation when that run failed. A
+// trigger fires without anyone watching, so the panel needs the failure on the
+// definition itself rather than only inside each automation's run history.
+type RunFailure struct {
+	RunID       string    `json:"run_id"`
+	TriggerType string    `json:"trigger_type"`
+	Message     string    `json:"message"`
+	At          time.Time `json:"at"`
+}
+
+// Overview is what the automation panel reads. ExecutionEnabled reports the
+// admin-level switch: with it off, definitions still save and preview but no
+// trigger ever runs, and without this the panel cannot say so.
+type Overview struct {
+	Items            []Automation `json:"items"`
+	ExecutionEnabled bool         `json:"execution_enabled"`
 }
 
 type CreateInput struct {
@@ -165,6 +184,7 @@ type ExecutionResult struct {
 type ServiceAPI interface {
 	Create(context.Context, string, string, CreateInput) (Automation, error)
 	List(context.Context, string) ([]Automation, error)
+	Overview(context.Context, string) (Overview, error)
 	Get(context.Context, string) (Automation, error)
 	Update(context.Context, string, string, UpdateInput) (Automation, error)
 	Delete(context.Context, string, string, int64) error

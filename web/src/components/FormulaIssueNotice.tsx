@@ -8,28 +8,34 @@ import type { MutationResult } from '../types'
  * 열두 곳이 `#REF!` 가 되어도 화면은 아무 말이 없었다. 편집을 막지 않도록
  * 대화상자가 아니라 옆으로 비켜선 안내로 둔다.
  */
-export function FormulaIssueNotice({issues,dropped=[],backup,onOpen,onRevert,onClose}:{
+export function FormulaIssueNotice({issues,dropped=[],automations=[],backup,onOpen,onRevert,onClose}:{
   issues:MutationResult['formula_errors']
   /** 다른 사람이 그 행이나 열을 지워 자리를 잃은 편집. */
   dropped?:NonNullable<MutationResult['dropped_cells']>
+  /** 이 편집이 실행시킨 자동화 중 실패한 것. 서버 로그에만 남던 실패다. */
+  automations?:NonNullable<MutationResult['automation_failures']>
   /** 되돌릴 수 없는 편집 직전의 자동 백업. 행·열 삭제에만 붙는다. */
   backup?:{versionId:string;summary:string}
   onOpen:(issue:MutationResult['formula_errors'][number])=>void
   onRevert?:(backup:{versionId:string;summary:string})=>void
   onClose:()=>void
 }){
-  if(issues.length===0&&dropped.length===0&&!backup)return null
+  if(issues.length===0&&dropped.length===0&&automations.length===0&&!backup)return null
   const first=issues[0]
   const explanation=first?explainFormulaError(first.code):undefined
   return <div className="formula-issue" role="status">
     <AlertTriangle/>
     <div>
-      <strong>{dropped.length>0
+      <strong>{automations.length>0
+        ?automations.length>1?`자동화 ${automations.length}개가 실패했습니다`:'자동화가 실패했습니다'
+        :dropped.length>0
         ?`편집 ${dropped.length}곳이 반영되지 않았습니다`
         :issues.length>0
           ?issues.length>1?`이 편집으로 수식 ${issues.length}곳이 오류가 되었습니다`:'이 편집으로 수식 한 곳이 오류가 되었습니다'
           :`${backup?.summary}을(를) 삭제했습니다`}</strong>
-      <small>{dropped.length>0
+      <small>{automations.length>0
+        ?`${automations[0].message} · 이 편집은 저장되었습니다.`
+        :dropped.length>0
         ?`${dropped.map(cell=>address(cell.row,cell.column)).slice(0,3).join(', ')}: 저장하는 사이에 다른 사람이 그 행이나 열을 지웠습니다.`
         :first
           ?`${address(first.row,first.column)} ${first.code}${explanation?` · ${explanation.summary}`:''}`

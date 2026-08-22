@@ -132,6 +132,49 @@ func (s *Service) List(ctx context.Context, workbookID string) ([]Automation, er
 	return items, rows.Err()
 }
 
+// Overview answers the automation panel: the definitions, whichever of them
+// last failed, and whether the admin switch lets any of them run at all.
+func (s *Service) Overview(ctx context.Context, workbookID string) (Overview, error) {
+	items, err := s.List(ctx, workbookID)
+	if err != nil {
+		return Overview{}, err
+	}
+	config, err := s.config(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	failures, err := s.latestFailures(ctx, workbookID)
+	if err != nil {
+		return Overview{}, err
+	}
+	for index := range items {
+		if failure, ok := failures[items[index].ID]; ok {
+			items[index].LastFailure = &failure
+		}
+	}
+	return Overview{Items: items, ExecutionEnabled: config.Enabled}, nil
+}
+
+// latestFailures reports only automations whose most recent run failed: a later
+// success means the automation recovered and the panel should stop warning.
+func (s *Service) latestFailures(ctx context.Context, workbookID string) (map[string]RunFailure, error) {
+	rows, err := s.pool.Query(ctx, `SELECT a.id::text,r.id::text,r.trigger_type,r.error_message,r.started_at FROM automations a JOIN LATERAL (SELECT id,trigger_type,status,error_message,started_at FROM automation_runs WHERE automation_id=a.id ORDER BY started_at DESC,id LIMIT 1) r ON true WHERE a.workbook_id=$1 AND a.deleted_at IS NULL AND r.status=$2`, workbookID, StatusFailed)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	failures := make(map[string]RunFailure)
+	for rows.Next() {
+		var automationID string
+		var failure RunFailure
+		if err := rows.Scan(&automationID, &failure.RunID, &failure.TriggerType, &failure.Message, &failure.At); err != nil {
+			return nil, err
+		}
+		failures[automationID] = failure
+	}
+	return failures, rows.Err()
+}
+
 func (s *Service) Get(ctx context.Context, id string) (Automation, error) {
 	return scanAutomation(s.pool.QueryRow(ctx, `SELECT `+definitionColumns+` FROM automations WHERE id=$1 AND deleted_at IS NULL`, id))
 }
@@ -408,7 +451,7 @@ func (s *Service) insertRun(ctx context.Context, run Run, hourlyLimit int) (bool
 			}
 		}
 	}
-	command, err := tx.Exec(ctx, `INSERT INTO automation_runs(id,automation_id,workbook_id,actor_id,idempotency_key,trigger_type,trigger_operation_id,scheduled_for,trigger_key_id,payload_digest,payload_bytes,status,counts_toward_rate,base_version,action_snapshot,cells_snapshot,expected_snapshot,started_at,completed_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8,nullif($9,'')::uuid,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$18) ON CONFLICT(automation_id,actor_id,idempotency_key) DO NOTHING`, run.ID, run.AutomationID, run.WorkbookID, run.ActorID, run.idempotencyKey, run.TriggerType, run.TriggerOperationID, run.ScheduledFor, run.TriggerKeyID, run.PayloadDigest, run.PayloadBytes, run.Status, !run.excludedFromRate, run.BaseVersion, actionJSON, cellsJSON, expectedJSON, run.StartedAt, run.CompletedAt)
+	command, err := tx.Exec(ctx, `INSERT INTO automation_runs(id,automation_id,workbook_id,actor_id,idempotency_key,trigger_type,trigger_operation_id,scheduled_for,trigger_key_id,payload_digest,payload_bytes,status,counts_toward_rate,base_version,action_snapshot,cells_snapshot,expected_snapshot,error_message,started_at,completed_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,nullif($7,'')::uuid,$8,nullif($9,'')::uuid,$10,$11,$12,$13,$14,$15,$16,$17,$20,$18,$19,$18) ON CONFLICT(automation_id,actor_id,idempotency_key) DO NOTHING`, run.ID, run.AutomationID, run.WorkbookID, run.ActorID, run.idempotencyKey, run.TriggerType, run.TriggerOperationID, run.ScheduledFor, run.TriggerKeyID, run.PayloadDigest, run.PayloadBytes, run.Status, !run.excludedFromRate, run.BaseVersion, actionJSON, cellsJSON, expectedJSON, run.StartedAt, run.CompletedAt, run.ErrorMessage)
 	if err != nil {
 		return false, err
 	}
@@ -536,6 +579,14 @@ func (s *Service) TriggerCellChange(ctx context.Context, mutation workbook.Mutat
 		result, runErr := s.Run(ctx, item.ID, RunInput{ActorID: actorID, ClientID: "automation:" + item.ID, IdempotencyKey: "trigger:" + mutation.OperationID, ExpectedRevision: item.Revision, TriggerType: TriggerCellChange, TriggerOperationID: mutation.OperationID})
 		if runErr != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", item.ID, runErr))
+			// Nobody is watching a cell-change trigger, so a failure that never
+			// reached a run row would exist only in the server log. Record it and
+			// hand it back so the editor can say which automation broke.
+			if failed, recordErr := s.recordTriggerFailure(ctx, item, mutation, actorID, runErr); recordErr != nil {
+				errs = append(errs, fmt.Errorf("record %s failure: %w", item.ID, recordErr))
+			} else if failed.ID != "" {
+				results = append(results, ExecutionResult{Run: failed})
+			}
 			continue
 		}
 		results = append(results, result)
@@ -646,6 +697,31 @@ func (s *Service) RunScheduler(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// recordTriggerFailure writes the failed run a cell-change trigger never got to
+// create. Rate-limit refusals collapse into one row per hour: they repeat on
+// every keystroke, and recording each one would undo the limit it reports.
+func (s *Service) recordTriggerFailure(ctx context.Context, item Automation, mutation workbook.MutationResult, actorID string, runErr error) (Run, error) {
+	if errors.Is(runErr, ErrNoChanges) || errors.Is(runErr, ErrDisabled) || errors.Is(runErr, ErrNotFound) {
+		return Run{}, nil
+	}
+	now := s.now()
+	run := Run{ID: identity.New(), AutomationID: item.ID, WorkbookID: item.WorkbookID, ActorID: actorID, TriggerType: TriggerCellChange, TriggerOperationID: mutation.OperationID, Status: StatusFailed, BaseVersion: mutation.ServerVersion, Action: item.Action, ErrorMessage: trimLength(runErr.Error(), 2000), StartedAt: now, CompletedAt: &now, UpdatedAt: now, cells: []workbook.CellInput{}, expected: map[string]workbook.Cell{}, idempotencyKey: "trigger-failed:" + mutation.OperationID, excludedFromRate: true}
+	if errors.Is(runErr, ErrRate) {
+		run.TriggerOperationID, run.idempotencyKey = "", "trigger-rate:"+now.UTC().Format("2006-01-02T15")
+	}
+	created, err := s.insertRun(ctx, run, 0)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Run{}, nil
+		}
+		return Run{}, err
+	}
+	if !created {
+		return Run{}, nil
+	}
+	return run, nil
 }
 
 func (s *Service) recordScheduledFailure(ctx context.Context, item Automation, due time.Time, runErr error) (Run, error) {

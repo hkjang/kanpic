@@ -21,12 +21,12 @@ import (
 const maxAutomationWebhookPayload = 1 << 20
 
 func (s *Server) listAutomations(w http.ResponseWriter, r *http.Request) {
-	items, err := s.automations.List(r.Context(), r.PathValue("workbookId"))
+	overview, err := s.automations.Overview(r.Context(), r.PathValue("workbookId"))
 	if err != nil {
 		s.writeAutomationError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, overview)
 }
 
 func (s *Server) createAutomation(w http.ResponseWriter, r *http.Request) {
@@ -224,13 +224,27 @@ func (s *Server) undoAutomationRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) triggerCellAutomations(r *http.Request, result workbook.MutationResult, cells []workbook.CellInput) {
-	s.triggerCellAutomationsContext(r.Context(), result, cells, actorID(r))
+// automationFailure rides back on the write that set an automation off. The
+// trigger runs before the response is written, so the editor can name the
+// broken automation instead of leaving the failure in the server log alone.
+type automationFailure struct {
+	AutomationID string `json:"automation_id"`
+	RunID        string `json:"run_id"`
+	Message      string `json:"message"`
 }
 
-func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor string) {
+type cellMutationResponse struct {
+	workbook.MutationResult
+	AutomationFailures []automationFailure `json:"automation_failures,omitempty"`
+}
+
+func (s *Server) triggerCellAutomations(r *http.Request, result workbook.MutationResult, cells []workbook.CellInput) []automationFailure {
+	return s.triggerCellAutomationsContext(r.Context(), result, cells, actorID(r))
+}
+
+func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor string) []automationFailure {
 	if s.automations == nil || result.Duplicate || result.AppliedCells == 0 {
-		return
+		return nil
 	}
 	triggerContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -238,9 +252,18 @@ func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workb
 	if err != nil {
 		s.logger.Error("cell-change automation failed", "operation_id", result.OperationID, "workbook_id", result.WorkbookID, "error", err)
 	}
+	failures := make([]automationFailure, 0, len(runs))
 	for _, run := range runs {
+		if run.Run.Status == automation.StatusFailed {
+			failures = append(failures, automationFailure{AutomationID: run.Run.AutomationID, RunID: run.Run.ID, Message: run.Run.ErrorMessage})
+			continue
+		}
 		s.publishAutomationResult(run.Run.ActorID, "automation:"+run.Run.AutomationID, run)
 	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return failures
 }
 
 func (s *Server) publishAutomationResult(actor, clientID string, result automation.ExecutionResult) {
