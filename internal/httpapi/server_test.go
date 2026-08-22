@@ -2629,3 +2629,73 @@ func TestUserDirectoryManagesRolesStatusAndSharing(t *testing.T) {
 	request[map[string]any](t, server, http.MethodPost, "/api/v1/admin/users/nara.kim/roles", map[string]any{"role": "bad role"}, http.StatusBadRequest)
 	request[map[string]any](t, server, http.MethodGet, "/api/v1/admin/users/missing", nil, http.StatusNotFound)
 }
+
+// What each role may do is the kind of rule that is easy to state and easy to
+// let slip: one new endpoint that forgets its check, and a reader can rewrite
+// somebody's sheet. This walks the whole matrix rather than one example of it.
+func TestEachRoleIsAllowedExactlyWhatItsRoleSays(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	book := requestAs[workbook.Workbook](t, server, "owner", http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "권한 매트릭스"}, http.StatusCreated)
+	sheetID := book.Sheets[0].ID
+	requestAs[map[string]any](t, server, "owner", http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"idempotency_key": "matrix-seed", "cells": []map[string]any{{"row": 1, "column": 1, "value": "원본"}, {"row": 2, "column": 1, "value": "둘"}, {"row": 3, "column": 1, "value": "셋"}},
+	}, http.StatusOK)
+	for _, share := range []struct{ actor, role string }{{"reader", "viewer"}, {"noter", "commenter"}, {"writer", "editor"}} {
+		requestAs[map[string]any](t, server, "owner", http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares",
+			map[string]any{"principal_id": share.actor, "principal_type": "user", "role": share.role}, http.StatusOK)
+	}
+
+	// Each attempt is written once and tried as each role. The expected status
+	// is spelled out per role so a change to any of them has to be deliberate.
+	attempts := []struct {
+		name                           string
+		method, path                   string
+		body                           func(actor string) map[string]any
+		viewer, commenter, editor, own int
+	}{
+		{"read the workbook", http.MethodGet, "/api/v1/workbooks/" + book.ID, nil,
+			http.StatusOK, http.StatusOK, http.StatusOK, http.StatusOK},
+		{"write a cell", http.MethodPatch, "/api/v1/sheets/" + sheetID + "/cells:batch",
+			func(actor string) map[string]any {
+				return map[string]any{"idempotency_key": "cell-" + actor, "cells": []map[string]any{{"row": 1, "column": 2, "value": actor}}}
+			}, http.StatusForbidden, http.StatusForbidden, http.StatusOK, http.StatusOK},
+		{"write a comment", http.MethodPost, "/api/v1/workbooks/" + book.ID + "/comments",
+			func(actor string) map[string]any {
+				return map[string]any{"sheet_id": sheetID, "range": "A1", "content": actor, "idempotency_key": "note-" + actor}
+			}, http.StatusForbidden, http.StatusCreated, http.StatusCreated, http.StatusCreated},
+		{"create a named range", http.MethodPost, "/api/v1/workbooks/" + book.ID + "/named-ranges",
+			func(actor string) map[string]any {
+				return map[string]any{"name": "범위" + actor, "sheet_id": sheetID, "range": "A1:A2", "idempotency_key": "name-" + actor}
+			}, http.StatusForbidden, http.StatusForbidden, http.StatusCreated, http.StatusCreated},
+		{"add a sheet", http.MethodPost, "/api/v1/workbooks/" + book.ID + "/sheets",
+			func(actor string) map[string]any { return map[string]any{"name": "시트-" + actor} },
+			http.StatusForbidden, http.StatusForbidden, http.StatusCreated, http.StatusCreated},
+	}
+	for _, attempt := range attempts {
+		for _, role := range []struct {
+			actor  string
+			status int
+		}{{"reader", attempt.viewer}, {"noter", attempt.commenter}, {"writer", attempt.editor}, {"owner", attempt.own}} {
+			var body map[string]any
+			if attempt.body != nil {
+				body = attempt.body(role.actor)
+			}
+			t.Run(attempt.name+" as "+role.actor, func(t *testing.T) {
+				requestAs[map[string]any](t, server, role.actor, attempt.method, attempt.path, body, role.status)
+			})
+		}
+	}
+
+	// Sharing and deleting the workbook are the editor's only capabilities the
+	// owner can take away, and one flag takes both away at once.
+	requestAs[map[string]any](t, server, "writer", http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares",
+		map[string]any{"principal_id": "guest", "principal_type": "user", "role": "viewer"}, http.StatusOK)
+	requestAs[map[string]any](t, server, "owner", http.MethodPatch, "/api/v1/workbooks/"+book.ID+"/sharing",
+		map[string]any{"sharing_locked": true}, http.StatusOK)
+	requestAs[map[string]any](t, server, "writer", http.MethodPut, "/api/v1/workbooks/"+book.ID+"/shares",
+		map[string]any{"principal_id": "guest2", "principal_type": "user", "role": "viewer"}, http.StatusForbidden)
+	requestAs[map[string]any](t, server, "writer", http.MethodDelete, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
+}
