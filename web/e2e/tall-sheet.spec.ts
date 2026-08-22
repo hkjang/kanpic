@@ -37,3 +37,32 @@ test('rows past ten thousand are reachable, editable and sortable', async ({ pag
   await expect(page.getByRole('dialog').first()).toContainText('12,000행이 정렬됩니다')
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 열 쪽도 같았다. 서버는 엑셀과 같은 XFD열까지 받는데 편집기는 500번째
+// 열(SF)에서 끊겨, 그 너머에 저장된 값은 화면에서 볼 수 없었다.
+test('columns past the five hundredth are reachable and editable', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`넓은 시트 ${stamp}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`wide-${stamp}`,cells:[
+    {row:1,column:1,value:'첫 열'},{row:1,column:703,value:'AAA에 저장된 값'},
+  ]}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  const nameBox=page.getByLabel('이름 상자')
+  await nameBox.fill('AAA1')
+  await nameBox.press('Enter')
+  // 예전에는 여기서 SF1에 멈췄다.
+  await expect(nameBox).toHaveValue('AAA1')
+  await expect(page.getByLabel('수식 입력창')).toHaveValue('AAA에 저장된 값')
+
+  // 엑셀의 마지막 열까지 닿고, 그 너머는 잡아 둔다.
+  await nameBox.fill('XFD1')
+  await nameBox.press('Enter')
+  await expect(nameBox).toHaveValue('XFD1')
+  await nameBox.fill('XFE1')
+  await nameBox.press('Enter')
+  await expect(nameBox).toHaveValue('XFD1')
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

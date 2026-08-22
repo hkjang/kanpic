@@ -14,7 +14,13 @@ export const MAX_SORT_CELLS = 60_000
 // 엑셀과 같은 1,048,576행은 확대 상태에서 그 한계를 넘어 스크롤 위치가
 // 조용히 어긋난다.
 export const MAX_GRID_ROWS = 200_000
-export const MAX_GRID_COLUMNS = 500
+// 편집기가 보여 주는 열의 수. 서버는 엑셀과 같은 16,384열(XFD)까지 받고
+// 저장하지만, 500번째 열(SF) 너머는 화면에서 닿을 수 없었다. 이름 상자에
+// SG1을 넣으면 SF1로 잘렸다.
+//
+// 행과 달리 여기서는 타협할 이유가 없다. 16,384열 × 108px × 최대 확대
+// 2배는 약 354만 px로, 브라우저의 요소 크기 한계에서 한참 멀다.
+export const MAX_GRID_COLUMNS = 16_384
 
 export type ClipboardCell = {
   rowOffset:number
