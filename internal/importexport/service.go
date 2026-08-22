@@ -591,6 +591,10 @@ func detectDelimiter(data []byte) rune {
 	return best
 }
 func parseScalar(value string) any {
+	// A delimited file that came from a spreadsheet keeps formula-looking text
+	// behind an apostrophe. Reading it as part of the value turns a phone
+	// number into '+82-10-1234-5678 on the way back in.
+	value = unguardDelimitedValue(value)
 	lower := strings.ToLower(value)
 	if lower == "true" {
 		return true
@@ -674,9 +678,49 @@ func safeDelimitedValue(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &value) != nil {
 		return ""
 	}
-	text := fmt.Sprint(value)
-	if _, isString := value.(string); isString && text != "" && strings.ContainsRune("=+-@", rune(text[0])) {
+	text := delimitedNumberText(value)
+	if _, isString := value.(string); isString && needsDelimitedGuard(text) {
 		return "'" + text
+	}
+	return text
+}
+
+// delimitedNumberText writes a number the way a spreadsheet does. The default
+// formatting turns 12345678901234 into 1.2345678901234e+13, which reads back
+// as the same number here but is not what anyone opening the file expects to
+// see. Values too large or too small to write plainly keep the exponent
+// rather than becoming a wall of zeroes.
+func delimitedNumberText(value any) string {
+	number, isNumber := value.(float64)
+	if !isNumber {
+		return fmt.Sprint(value)
+	}
+	plain := strconv.FormatFloat(number, 'f', -1, 64)
+	if len(plain) <= 21 {
+		return plain
+	}
+	return strconv.FormatFloat(number, 'g', -1, 64)
+}
+
+// A leading =, +, - or @ makes a spreadsheet treat the cell as a formula when
+// the file is opened, so those values go out behind an apostrophe. Text that
+// already looks guarded is guarded again, which is what lets the reader take
+// exactly one apostrophe off and land back on the value that was written.
+func needsDelimitedGuard(text string) bool {
+	if text == "" {
+		return false
+	}
+	if strings.ContainsRune("=+-@", rune(text[0])) {
+		return true
+	}
+	return text[0] == '\'' && len(text) > 1 && strings.ContainsRune("=+-@", rune(text[1]))
+}
+
+// unguardDelimitedValue undoes that. Without it a phone number written as
+// +82-10-1234-5678 comes back from its own export as '+82-10-1234-5678.
+func unguardDelimitedValue(text string) string {
+	if len(text) > 1 && text[0] == '\'' && needsDelimitedGuard(text[1:]) {
+		return text[1:]
 	}
 	return text
 }

@@ -699,3 +699,71 @@ func TestXLSXImportReadsSizesAgainstTheRealDefault(t *testing.T) {
 		t.Fatalf("row heights = %#v, want only row 1", layout.RowHeights)
 	}
 }
+
+// The apostrophe that keeps a spreadsheet from running =1+1 when the file is
+// opened is a wrapper, not part of the value. Leaving it on the way back in
+// means kanpic's own export corrupts its own import: every phone number that
+// starts with + gains a character.
+func TestDelimitedGuardSurvivesItsOwnRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"=1+1", "+82-10-1234-5678", "-보통 글자", "@handle", "'=1+1", "그냥 글자", "'tis"} {
+		guarded := value
+		if needsDelimitedGuard(value) {
+			guarded = "'" + value
+		}
+		if back := unguardDelimitedValue(guarded); back != value {
+			t.Errorf("%q went out as %q and came back as %q", value, guarded, back)
+		}
+	}
+}
+
+// The same thing through the real reader and writer.
+func TestCSVRoundTripKeepsFormulaLookingText(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	phone, _ := json.Marshal("+82-10-1234-5678")
+	formulaText, _ := json.Marshal("=1+1")
+	wb, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{Title: "연락처", ActorID: "tester", OwnerID: "tester", IdempotencyKey: "guard-1", FileName: "contacts.csv", Format: "csv",
+		Sheets: []workbook.ImportSheet{{Name: "Sheet1", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: phone}, {Row: 1, Column: 2, Value: formulaText}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "csv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The guard is still on the wire: opening this file must not run anything.
+	if !strings.Contains(string(exported.Data), "'+82-10-1234-5678") || !strings.Contains(string(exported.Data), "'=1+1") {
+		t.Fatalf("exported csv lost its guard: %s", exported.Data)
+	}
+	parsed, err := Parse("contacts.csv", exported.Data, DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[int]string, 2)
+	for _, cell := range parsed.Sheets[0].Cells {
+		values[cell.Column] = string(cell.Value)
+	}
+	if values[1] != `"+82-10-1234-5678"` || values[2] != `"=1+1"` {
+		t.Fatalf("round trip = %#v", values)
+	}
+}
+
+// A whole number should look like one in the file. Default formatting turns
+// 12,345,678,901,234 into 1.2345678901234e+13, which every other spreadsheet
+// writes plainly.
+func TestDelimitedExportWritesPlainNumbers(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[float64]string{
+		12345678901234: "12345678901234",
+		-1234:          "-1234",
+		3.14159:        "3.14159",
+		0:              "0",
+		1e300:          "1e+300",
+	} {
+		if text := delimitedNumberText(value); text != want {
+			t.Errorf("%v wrote as %q, want %q", value, text, want)
+		}
+	}
+}
