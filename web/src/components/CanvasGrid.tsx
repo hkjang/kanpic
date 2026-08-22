@@ -13,6 +13,7 @@ import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, t
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
+import { parsePastedNumber } from '../lib/clipboardNumber'
 import { clipboardHtml } from '../lib/clipboardHtmlOut'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
@@ -58,7 +59,20 @@ export type GridMenuCommand=
 const RESIZE_HANDLE=4,MIN_ROW_HEIGHT=16,MAX_ROW_HEIGHT=400,MIN_COLUMN_WIDTH=32,MAX_COLUMN_WIDTH=600,DEFAULT_ROW_HEIGHT=27,DEFAULT_COLUMN_WIDTH=108
 
 function columnName(column:number){let value=column,result='';while(value){value--;result=String.fromCharCode(65+value%26)+result;value=Math.floor(value/26)}return result}
-function parsedValue(raw:string):unknown{if(raw==='')return undefined;if(raw.toLowerCase()==='true')return true;if(raw.toLowerCase()==='false')return false;if(Number.isFinite(Number(raw))&&raw.trim()!=='')return Number(raw);return raw}
+/**
+ * 입력한 글자가 무엇인지 정한다. 스프레드시트는 `1,234` 나 `12%` 를 글자가
+ * 아니라 숫자로 받고 보이던 모습은 표시 형식으로 남긴다. 그렇지 않으면
+ * 합계에 들어가지 않는다.
+ */
+function parsedValue(raw:string):{value:unknown;numberFormat?:string}{
+  if(raw==='')return {value:undefined}
+  if(raw.toLowerCase()==='true')return {value:true}
+  if(raw.toLowerCase()==='false')return {value:false}
+  if(Number.isFinite(Number(raw))&&raw.trim()!=='')return {value:Number(raw)}
+  const number=parsePastedNumber(raw)
+  if(number)return {value:number.value,numberFormat:number.numberFormat}
+  return {value:raw}
+}
 function parsedAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
 function formulaPreview(value:unknown){if(!Array.isArray(value))return value;const first=value[0];return Array.isArray(first)?first[0]:first}
 const DEFAULT_LAYOUT:SheetLayout={revision:1,frozen_rows:0,frozen_columns:0}
@@ -381,11 +395,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     await flushOutbox(handleApplied)
   },[cells,handleApplied,putCells,setSaveState,sheetId,version,validations,readOnly,readOnlyNotice])
 
-  const saveCell=useCallback(async(value:unknown,formula:string,row:number,column:number)=>{
+  const saveCell=useCallback(async(value:unknown,formula:string,row:number,column:number,numberFormat?:string)=>{
     if(readOnly){readOnlyNotice();return false}
     const current=cells.get(cellKey(row,column))
     if(current?.spill_source){setSaveState('error');alert(`${address(row,column)}은(는) ${current.spill_source} 배열 수식의 결과입니다. 원본 수식 셀을 편집하세요.`);return false}
-    const style=current?.style,input={row,column,value,formula,style}
+    // 입력한 모습을 되살리는 표시 형식은 셀에 이미 형식이 있으면 덮지 않는다.
+    // 서식을 지정해 둔 칸에 값을 넣는 것은 서식을 바꾸겠다는 뜻이 아니다.
+    const existing=current?.style as Record<string,unknown>|undefined
+    const style=numberFormat&&typeof existing?.number_format!=='string'?{...(existing??{}),number_format:numberFormat}:existing
+    const input={row,column,value,formula,style}
     const checked=validateClientInputs(validations,[input])
     if(checked.rejected.length){setSaveState('error');alert(`${address(row,column)}: ${checked.rejected[0].message}`);return false}
     if(checked.warnings.length&&!confirm(`${address(row,column)} 값이 데이터 검증 조건을 만족하지 않습니다. 그래도 입력할까요?`))return false
@@ -398,7 +416,8 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
 
   const commit=useCallback(async(raw:string,row=activeRow,column=activeColumn)=>{
     const formula=raw.startsWith('=')?raw:''
-    let value:unknown=formula?undefined:parsedValue(raw)
+    const parsed=formula?{value:undefined,numberFormat:undefined}:parsedValue(raw)
+    let value:unknown=parsed.value
     if(formula&&navigator.onLine){
       // Formula evaluation happens before the outbox write. Mark that gap as
       // saving so workbook-wide actions can wait for the draft to be durable.
@@ -407,7 +426,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       cells.forEach(candidate=>{formulaCells[address(candidate.row,candidate.column)]=candidate.value})
       try{const evaluated=await api<{value?:unknown;error?:{code:string}}>(`/api/v1/formulas:evaluate`,{method:'POST',body:JSON.stringify({formula,cells:formulaCells})});value=evaluated.error?.code??formulaPreview(evaluated.value)}catch{value='#ERROR!'}
     }
-    return saveCell(value,formula,row,column)
+    return saveCell(value,formula,row,column,parsed.numberFormat)
   },[activeRow,activeColumn,cells,saveCell,setSaveState])
 
   useEffect(()=>{const sync=()=>flushOutbox(handleApplied);window.addEventListener('online',sync);const timer=window.setInterval(sync,3000);sync();return()=>{window.removeEventListener('online',sync);window.clearInterval(timer)}},[handleApplied])
@@ -426,7 +445,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const fillFrom=useCallback(async(source:FillRange)=>{try{const inputs=materializeFill(selectionPayload(source),selection);await queueCells(inputs,'fill')}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위를 채우지 못했습니다.')}},[queueCells,selection,selectionPayload,setSaveState])
   const fillDown=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.startRow,endColumn:selection.endColumn}),[fillFrom,selection])
   const fillRight=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.endRow,endColumn:selection.startColumn}),[fillFrom,selection])
-  const fillDraft=useCallback(async(raw:string)=>{try{const formula=raw.startsWith('=')?raw:undefined,current=cells.get(cellKey(activeRow,activeColumn)),payload:KanpicClipboard={version:1,sourceRow:activeRow,sourceColumn:activeColumn,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:formula?undefined:parsedValue(raw),formula,style:stripMergeStyle(current?.style)}]},inputs=[{row:activeRow,column:activeColumn,value:formula?undefined:parsedValue(raw),formula,style:current?.style},...materializeFill(payload,selection)];await queueCells(inputs,'fill');setEditing(false)}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위에 값을 채우지 못했습니다.')}},[activeColumn,activeRow,cells,queueCells,selection,setEditing,setSaveState])
+  const fillDraft=useCallback(async(raw:string)=>{try{const formula=raw.startsWith('=')?raw:undefined,current=cells.get(cellKey(activeRow,activeColumn)),parsed=formula?{value:undefined,numberFormat:undefined}:parsedValue(raw),existing=current?.style as Record<string,unknown>|undefined,style=parsed.numberFormat&&typeof existing?.number_format!=='string'?{...(existing??{}),number_format:parsed.numberFormat}:existing,payload:KanpicClipboard={version:1,sourceRow:activeRow,sourceColumn:activeColumn,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:parsed.value,formula,style:stripMergeStyle(style)}]},inputs=[{row:activeRow,column:activeColumn,value:parsed.value,formula,style},...materializeFill(payload,selection)];await queueCells(inputs,'fill');setEditing(false)}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위에 값을 채우지 못했습니다.')}},[activeColumn,activeRow,cells,queueCells,selection,setEditing,setSaveState])
 
   const selectCell=useCallback((row:number,column:number,extend=false)=>{
     let nextRow=Math.max(1,Math.min(TOTAL_ROWS,row)),nextColumn=Math.max(1,Math.min(TOTAL_COLUMNS,column));if(rowAxis.isHidden(nextRow))nextRow=row>=activeRow?rowAxis.firstVisibleAtOrAfter(nextRow):rowAxis.lastVisibleAtOrBefore(nextRow);if(columnAxis.isHidden(nextColumn))nextColumn=column>=activeColumn?columnAxis.firstVisibleAtOrAfter(nextColumn):columnAxis.lastVisibleAtOrBefore(nextColumn)
