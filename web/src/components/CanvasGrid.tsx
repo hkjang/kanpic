@@ -108,8 +108,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   // so the pending draft survives the sync that normally mirrors the cell text.
   const pendingDraft=useRef<{row:number;column:number;text:string}|undefined>(undefined)
   useEffect(()=>{
-    const pending=pendingDraft.current
+    // 로컬에서 옮겨 심은 입력과, 다른 사람의 구조 변경 때문에 자리가 밀린
+    // 입력은 같은 문제다. 둘 다 이 동기화를 넘겨야 살아남는다.
+    const carried=useEditorStore.getState().carriedDraft
+    const pending=pendingDraft.current??carried
     pendingDraft.current=undefined
+    if(carried)useEditorStore.getState().carryDraft(undefined)
     if(pending&&pending.row===activeRow&&pending.column===activeColumn){setDraft(pending.text);return}
     setDraft(activeText)
   },[activeText,activeRow,activeColumn])

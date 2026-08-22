@@ -7,6 +7,7 @@ import { AutomationPanel } from '../components/AutomationPanel'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from '../components/FormulaAutocomplete'
 import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
+import { survivesChange, transformSelection } from '../lib/structureTransform'
 import { FormulaIssueNotice } from '../components/FormulaIssueNotice'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
 import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
@@ -112,6 +113,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const functionCatalog=useFunctionCatalog()
   const formulaInput=useRef<HTMLTextAreaElement|null>(null)
+  // 협업 이벤트 처리기는 소켓 연결과 함께 고정되므로 활성 시트를 참조로 읽는다.
+  const activeSheetRef=useRef<string|undefined>(undefined)
   const [formulaCaret,setFormulaCaret]=useState(0),[formulaSuggestion,setFormulaSuggestion]=useState(0)
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
@@ -130,7 +133,33 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const collaboratorDirectory=useUserDirectory(Object.values(collaborators).map(user=>user.actor_id))
   const collaboratorLabels=Object.fromEntries(Object.values(collaborators).map(user=>[(user.actor_id??'').toLowerCase(),userLabel(user.actor_id??'',collaboratorDirectory)]))
   const updateVersion=useCallback((value:number)=>setServerVersion(current=>Math.max(current,value)),[])
-  const handleCollaborationVersion=useCallback((value:number,event:ServerEvent)=>{updateVersion(value);const data=event.data as {structural?:boolean}|undefined;if(data?.structural&&event.client_id!==collaborationClientId())useEditorStore.getState().reset();client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['cell-conflicts',workbookId]});client.invalidateQueries({queryKey:['data-validations']});client.invalidateQueries({queryKey:['conditional-formats']});client.invalidateQueries({queryKey:['named-ranges',workbookId]});client.invalidateQueries({queryKey:['charts',workbookId]});client.invalidateQueries({queryKey:['pivots',workbookId]});client.invalidateQueries({queryKey:['pivot-data']});client.invalidateQueries({queryKey:['filter-views']});client.invalidateQueries({queryKey:['filter-result']})},[client,updateVersion,workbookId])
+  const handleCollaborationVersion=useCallback((value:number,event:ServerEvent)=>{updateVersion(value);const data=event.data as {structural?:boolean;sheet_id?:string;axis?:'row'|'column';action?:'insert'|'delete'|'move';index?:number;count?:number;destination?:number}|undefined;
+    if(data?.structural&&event.client_id!==collaborationClientId()){
+      // 셀을 다시 읽어야 하므로 초기화는 필요하다. 하지만 초기화는 선택
+      // 위치와 입력 중이던 내용까지 지운다. 다른 사람이 행을 하나 지웠다고
+      // 내 화면이 맨 위로 튀고 치던 값이 사라질 이유는 없다.
+      const store=useEditorStore.getState()
+      const keep={activeRow:store.activeRow,activeColumn:store.activeColumn,anchorRow:store.anchorRow,anchorColumn:store.anchorColumn}
+      const sameSheet=!data.sheet_id||data.sheet_id===activeSheetRef.current
+      const change=sameSheet&&data.axis&&data.action&&data.index&&data.count
+        ?{axis:data.axis,action:data.action,index:data.index,count:data.count,destination:data.destination}
+        :undefined
+      // 셀은 주소가 밀렸으니 다시 읽어야 하지만, 전체 초기화는 편집을 끝내
+      // 버려 치고 있던 값이 사라진다. 들고 있던 셀만 버린다.
+      store.clearCells()
+      const moved=change?transformSelection(keep,change):keep
+      if(moved.activeRow!==keep.activeRow||moved.activeColumn!==keep.activeColumn||moved.anchorRow!==keep.anchorRow||moved.anchorColumn!==keep.anchorColumn){
+        const draft=store.draft,editing=store.editing
+        store.select(moved.anchorRow,moved.anchorColumn)
+        store.select(moved.activeRow,moved.activeColumn,true)
+        // 입력 중이던 값은 겨냥한 셀이 살아남았을 때만 되돌린다. 사라진
+        // 셀의 자리를 물려받은 셀에 그 값을 쓰면 남의 데이터를 덮어쓴다.
+        if(editing&&(!change||survivesChange(keep.activeRow,keep.activeColumn,change))){
+          store.carryDraft({row:moved.activeRow,column:moved.activeColumn,text:draft})
+          store.setDraft(draft);store.setEditing(true)
+        }
+      }
+    }client.invalidateQueries({queryKey:['workbook',workbookId]});client.invalidateQueries({queryKey:['cell-conflicts',workbookId]});client.invalidateQueries({queryKey:['data-validations']});client.invalidateQueries({queryKey:['conditional-formats']});client.invalidateQueries({queryKey:['named-ranges',workbookId]});client.invalidateQueries({queryKey:['charts',workbookId]});client.invalidateQueries({queryKey:['pivots',workbookId]});client.invalidateQueries({queryKey:['pivot-data']});client.invalidateQueries({queryKey:['filter-views']});client.invalidateQueries({queryKey:['filter-result']})},[client,updateVersion,workbookId])
   const handleCollaborationEvent=useCallback((event:ServerEvent)=>{if(event.type==='comment.changed'){client.invalidateQueries({queryKey:['comments',workbookId]});client.invalidateQueries({queryKey:['mention-notifications']})}if(event.type==='operation.conflict'){client.invalidateQueries({queryKey:['cell-conflicts',workbookId]});setRightPanel('conflicts')}},[client,workbookId])
   useEffect(()=>{if(workbook.data){
     setServerVersion(workbook.data.version)
@@ -148,6 +177,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // Keep whatever the user is typing: only mirror the selection into the name
   // box when it does not have focus.
   useEffect(()=>{if(document.activeElement!==nameBoxRef.current)setNameBoxValue(selectionAddress)},[selectionAddress])
+  useEffect(()=>{activeSheetRef.current=activeSheet?.id},[activeSheet?.id])
   useEffect(()=>{connect(workbookId,handleCollaborationVersion,handleCollaborationEvent);return()=>disconnect()},[connect,disconnect,handleCollaborationEvent,handleCollaborationVersion,workbookId])
   useEffect(()=>{if(activeSheet&&collaborationStatus==='connected'){sendCursor({sheet_id:activeSheet.id,row:editor.activeRow,column:editor.activeColumn});sendSelection({sheet_id:activeSheet.id,start:{row:editorSelection.startRow,column:editorSelection.startColumn},end:{row:editorSelection.endRow,column:editorSelection.endColumn}})}},[activeSheet,collaborationStatus,sendCursor,sendSelection])
   useEffect(()=>{if(editor.conflicts>0)client.invalidateQueries({queryKey:['cell-conflicts',workbookId]})},[client,editor.conflicts,workbookId])

@@ -31,6 +31,19 @@ type EditorState = {
   setDraft:(draft:string)=>void
   setZoom:(zoom:number)=>void
   putCells:(cells:Cell[])=>void
+  /**
+   * 화면에 들고 있던 셀만 버립니다. 다른 사람이 행을 지우면 주소가 밀려서
+   * 다시 읽어야 하지만, 그렇다고 내 선택 위치와 입력 중이던 값까지 버릴
+   * 이유는 없습니다. 전체 초기화는 편집을 끝내 버려 입력이 사라집니다.
+   */
+  clearCells:()=>void
+  /**
+   * 선택이 옮겨간 뒤에도 살려 둘 입력. 그리드는 선택이 바뀌면 입력창을 그
+   * 셀의 값으로 다시 채우는데, 다른 사람이 행을 지워 내 자리가 밀린 경우에는
+   * 치고 있던 값이 그대로 따라가야 한다.
+   */
+  carriedDraft?:{row:number;column:number;text:string}
+  carryDraft:(carried:{row:number;column:number;text:string}|undefined)=>void
   replaceRange:(cells:Cell[],startRow:number,startColumn:number,endRow:number,endColumn:number)=>void
   putCell:(cell:Cell)=>void
   setSaveState:(saveState:SaveState,conflicts?:number)=>void
@@ -60,6 +73,8 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   putCells:(cells)=>set((state)=>{const next=new Map(state.cells);cells.forEach((cell)=>next.set(key(cell.row,cell.column),cell));return{cells:next}}),
   replaceRange:(incoming,startRow,startColumn,endRow,endColumn)=>set((state)=>{const cells=new Map(state.cells);for(const [address,cell] of cells){if(cell.row>=startRow&&cell.row<=endRow&&cell.column>=startColumn&&cell.column<=endColumn)cells.delete(address)}incoming.forEach(cell=>cells.set(key(cell.row,cell.column),cell));return{cells}}),
   putCell:(cell)=>set((state)=>{const cells=new Map(state.cells);cells.set(key(cell.row,cell.column),cell);return{cells}}),
+  clearCells:()=>set({cells:new Map()}),
+  carryDraft:(carriedDraft)=>set({carriedDraft}),
   setSaveState:(saveState,conflicts=0)=>set({saveState,conflicts}),
   // 오류가 없는 편집은 이전 안내를 지운다. 고친 뒤에도 경고가 남아 있으면
   // 무엇이 지금 문제인지 알 수 없다.

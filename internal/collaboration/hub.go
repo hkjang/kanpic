@@ -171,6 +171,9 @@ func (h *Hub) PublishStructure(result workbook.MutationResult, actorID, clientID
 		"action":       result.StructuralAction,
 		"index":        result.StructuralIndex,
 		"count":        result.StructuralCount,
+		// 옮기기는 자리바꿈이라 도착 위치를 알아야 다른 화면의 선택을
+		// 같은 데이터 위에 남겨 둘 수 있다.
+		"destination": result.StructuralDestination,
 	}}, "")
 }
 
