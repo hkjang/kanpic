@@ -19,7 +19,7 @@ func evaluateConditionalExtra(name string, arguments []any) (any, bool, error) {
 			return nil, true, err
 		}
 		valueRange := criteriaRange
-		if len(arguments) == 3 {
+		if len(arguments) == 3 && !omitted(arguments[2]) {
 			if valueRange, err = toArray(arguments[2]); err != nil {
 				return nil, true, err
 			}

@@ -22,7 +22,7 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#VALUE!", name+" requires a number")
 		}
 		factor := 1.0
-		if len(values) == 2 {
+		if len(values) == 2 && !omitted(values[1]) {
 			if factor, ok = toNumber(values[1]); !ok {
 				return nil, true, formulaError("#VALUE!", name+" requires a number")
 			}
@@ -49,7 +49,7 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#VALUE!", "TRUNC requires a number")
 		}
 		digits := 0.0
-		if len(values) == 2 {
+		if len(values) == 2 && !omitted(values[1]) {
 			digits, _ = toNumber(values[1])
 		}
 		factor := math.Pow(10, digits)
@@ -72,7 +72,7 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#NUM!", "LOG requires a positive number")
 		}
 		base := 10.0
-		if len(values) == 2 {
+		if len(values) == 2 && !omitted(values[1]) {
 			if base, ok = toNumber(values[1]); !ok || base <= 0 || base == 1 {
 				return nil, true, formulaError("#NUM!", "LOG base must be positive and not 1")
 			}

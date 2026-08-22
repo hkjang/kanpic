@@ -88,7 +88,7 @@ func evaluateText(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#VALUE!", name+" requires a number")
 		}
 		digits := 2
-		if len(values) >= 2 {
+		if len(values) >= 2 && !omitted(values[1]) {
 			supplied, err := integerValue(values[1], name)
 			if err != nil {
 				return nil, true, err
@@ -256,6 +256,134 @@ func groupDigits(whole string) string {
 // evaluateTextArray covers the text functions that produce or consume a range.
 func evaluateTextArray(name string, arguments []any) (any, bool, error) {
 	switch name {
+	case "TEXTBEFORE", "TEXTAFTER":
+		if len(arguments) < 2 || len(arguments) > 6 {
+			return nil, true, argError(name)
+		}
+		text := display(scalarOrFirst(arguments[0]))
+		delimiters := textDelimiters(arguments[1])
+		if len(delimiters) == 0 {
+			return nil, true, formulaError("#VALUE!", name+" needs a delimiter")
+		}
+		instance := 1
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
+			supplied, err := integerValue(scalarOrFirst(arguments[2]), name)
+			if err != nil {
+				return nil, true, err
+			}
+			instance = supplied
+		}
+		if instance == 0 {
+			return nil, true, formulaError("#VALUE!", name+" instance cannot be zero")
+		}
+		insensitive := false
+		if len(arguments) >= 4 && !omitted(arguments[3]) {
+			mode, err := integerValue(scalarOrFirst(arguments[3]), name)
+			if err != nil {
+				return nil, true, err
+			}
+			insensitive = mode == 1
+		}
+		matchEnd := false
+		if len(arguments) >= 5 && !omitted(arguments[4]) {
+			mode, err := integerValue(scalarOrFirst(arguments[4]), name)
+			if err != nil {
+				return nil, true, err
+			}
+			matchEnd = mode == 1
+		}
+		found := delimiterPositions(text, delimiters, insensitive)
+		if matchEnd {
+			// The end of the text counts as one more delimiter, which is how
+			// `TEXTAFTER(text, ",", -1, , 1)` returns an empty tail instead of
+			// an error when the text ends on a separator.
+			found = append(found, [2]int{len(text), 0})
+		}
+		position := instance - 1
+		if instance < 0 {
+			position = len(found) + instance
+		}
+		if position < 0 || position >= len(found) {
+			if len(arguments) == 6 && !omitted(arguments[5]) {
+				return scalarOrFirst(arguments[5]), true, nil
+			}
+			return nil, true, formulaError("#N/A", name+" did not find the delimiter")
+		}
+		if name == "TEXTBEFORE" {
+			return text[:found[position][0]], true, nil
+		}
+		return text[found[position][0]+found[position][1]:], true, nil
+	case "TEXTSPLIT":
+		if len(arguments) < 2 || len(arguments) > 6 {
+			return nil, true, argError(name)
+		}
+		text := display(scalarOrFirst(arguments[0]))
+		columnDelimiters := textDelimiters(arguments[1])
+		rowDelimiters := []string{}
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
+			rowDelimiters = textDelimiters(arguments[2])
+		}
+		if len(columnDelimiters) == 0 && len(rowDelimiters) == 0 {
+			return nil, true, formulaError("#VALUE!", "TEXTSPLIT needs a delimiter")
+		}
+		ignoreEmpty := false
+		if len(arguments) >= 4 && !omitted(arguments[3]) {
+			flag, err := booleanValue(scalarOrFirst(arguments[3]), name)
+			if err != nil {
+				return nil, true, err
+			}
+			ignoreEmpty = flag
+		}
+		insensitive := false
+		if len(arguments) >= 5 && !omitted(arguments[4]) {
+			mode, err := integerValue(scalarOrFirst(arguments[4]), name)
+			if err != nil {
+				return nil, true, err
+			}
+			insensitive = mode == 1
+		}
+		var padding any
+		if len(arguments) == 6 && !omitted(arguments[5]) {
+			padding = scalarOrFirst(arguments[5])
+		}
+		lines := []string{text}
+		if len(rowDelimiters) > 0 {
+			lines = splitOnDelimiters(text, rowDelimiters, insensitive)
+		}
+		rows := make([][]any, 0, len(lines))
+		width := 0
+		for _, line := range lines {
+			parts := []string{line}
+			if len(columnDelimiters) > 0 {
+				parts = splitOnDelimiters(line, columnDelimiters, insensitive)
+			}
+			cells := make([]any, 0, len(parts))
+			for _, part := range parts {
+				if ignoreEmpty && part == "" {
+					continue
+				}
+				cells = append(cells, part)
+			}
+			if ignoreEmpty && len(cells) == 0 {
+				continue
+			}
+			width = max(width, len(cells))
+			rows = append(rows, cells)
+		}
+		if len(rows) == 0 || width == 0 {
+			return nil, true, formulaError("#N/A", "TEXTSPLIT found no values")
+		}
+		result := arrayValue{rows: len(rows), columns: width, values: make([]any, 0, len(rows)*width)}
+		for _, row := range rows {
+			for column := 0; column < width; column++ {
+				if column < len(row) {
+					result.values = append(result.values, row[column])
+					continue
+				}
+				result.values = append(result.values, padding)
+			}
+		}
+		return result, true, nil
 	case "SPLIT":
 		if len(arguments) < 2 || len(arguments) > 4 {
 			return nil, true, argError(name)
@@ -263,7 +391,7 @@ func evaluateTextArray(name string, arguments []any) (any, bool, error) {
 		text := display(scalarOrFirst(arguments[0]))
 		separators := display(scalarOrFirst(arguments[1]))
 		eachCharacter := true
-		if len(arguments) >= 3 {
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
 			flag, err := booleanValue(scalarOrFirst(arguments[2]), name)
 			if err != nil {
 				return nil, true, err
@@ -271,7 +399,7 @@ func evaluateTextArray(name string, arguments []any) (any, bool, error) {
 			eachCharacter = flag
 		}
 		removeEmpty := true
-		if len(arguments) == 4 {
+		if len(arguments) == 4 && !omitted(arguments[3]) {
 			flag, err := booleanValue(scalarOrFirst(arguments[3]), name)
 			if err != nil {
 				return nil, true, err
@@ -342,4 +470,56 @@ func splitByAny(text, separators string) []string {
 		parts[len(parts)-1] += string(character)
 	}
 	return parts
+}
+
+// textDelimiters reads the separator argument, which may name several
+// separators at once so one call can split on ", " and " and " together.
+func textDelimiters(argument any) []string {
+	items := make([]string, 0)
+	for _, value := range flatten(argument) {
+		if value == nil {
+			continue
+		}
+		if text := display(value); text != "" {
+			items = append(items, text)
+		}
+	}
+	return items
+}
+
+// delimiterPositions lists where each separator starts and how long it is,
+// scanning left to right so two separators never claim the same characters.
+// The longest separator wins a tie, which is what makes ", " beat "," .
+func delimiterPositions(text string, delimiters []string, insensitive bool) [][2]int {
+	found := make([][2]int, 0)
+	for index := 0; index < len(text); {
+		matched := 0
+		for _, delimiter := range delimiters {
+			if len(delimiter) <= matched || index+len(delimiter) > len(text) {
+				continue
+			}
+			candidate := text[index : index+len(delimiter)]
+			if candidate == delimiter || (insensitive && strings.EqualFold(candidate, delimiter)) {
+				matched = len(delimiter)
+			}
+		}
+		if matched == 0 {
+			index++
+			continue
+		}
+		found = append(found, [2]int{index, matched})
+		index += matched
+	}
+	return found
+}
+
+func splitOnDelimiters(text string, delimiters []string, insensitive bool) []string {
+	found := delimiterPositions(text, delimiters, insensitive)
+	parts := make([]string, 0, len(found)+1)
+	start := 0
+	for _, position := range found {
+		parts = append(parts, text[start:position[0]])
+		start = position[0] + position[1]
+	}
+	return append(parts, text[start:])
 }

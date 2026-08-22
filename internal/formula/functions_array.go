@@ -36,7 +36,7 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			return nil, true, formulaError("#VALUE!", "ADDRESS needs a positive row and column")
 		}
 		kind := 1
-		if len(arguments) >= 3 {
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
 			if kind, err = integerValue(scalarOrFirst(arguments[2]), name); err != nil {
 				return nil, true, err
 			}
@@ -51,7 +51,7 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 		case 3:
 			address = "$" + letters + digits
 		}
-		if len(arguments) == 4 {
+		if len(arguments) == 4 && !omitted(arguments[3]) {
 			if sheet := display(scalarOrFirst(arguments[3])); sheet != "" {
 				address = sheet + "!" + address
 			}
@@ -112,6 +112,96 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			return nil, true, formulaError("#N/A", "TOROW found no values")
 		}
 		return arrayValue{rows: 1, columns: len(values), values: values}, true, nil
+	case "VSTACK", "HSTACK":
+		if len(arguments) < 1 {
+			return nil, true, argError(name)
+		}
+		parts := make([]arrayValue, 0, len(arguments))
+		for _, argument := range arguments {
+			if omitted(argument) {
+				continue
+			}
+			selected, err := toArray(argument)
+			if err != nil {
+				return nil, true, err
+			}
+			if selected.rows == 0 || selected.columns == 0 {
+				continue
+			}
+			parts = append(parts, selected)
+		}
+		if len(parts) == 0 {
+			return nil, true, formulaError("#N/A", name+" received no values")
+		}
+		return stackArrays(name, parts)
+	case "TAKE", "DROP":
+		if len(arguments) < 2 || len(arguments) > 3 {
+			return nil, true, argError(name)
+		}
+		selected, err := toArray(arguments[0])
+		if err != nil {
+			return nil, true, err
+		}
+		rows, columns := 0, 0
+		if !omitted(arguments[1]) {
+			if rows, err = integerValue(scalarOrFirst(arguments[1]), name); err != nil {
+				return nil, true, err
+			}
+		}
+		if len(arguments) == 3 && !omitted(arguments[2]) {
+			if columns, err = integerValue(scalarOrFirst(arguments[2]), name); err != nil {
+				return nil, true, err
+			}
+		}
+		keptRows, err := sliceIndexes(name, selected.rows, rows)
+		if err != nil {
+			return nil, true, err
+		}
+		keptColumns, err := sliceIndexes(name, selected.columns, columns)
+		if err != nil {
+			return nil, true, err
+		}
+		return pickCells(name, selected, keptRows, keptColumns)
+	case "CHOOSEROWS", "CHOOSECOLS":
+		if len(arguments) < 2 {
+			return nil, true, argError(name)
+		}
+		selected, err := toArray(arguments[0])
+		if err != nil {
+			return nil, true, err
+		}
+		limit := selected.rows
+		if name == "CHOOSECOLS" {
+			limit = selected.columns
+		}
+		chosen := make([]int, 0, len(arguments)-1)
+		for _, argument := range arguments[1:] {
+			for _, value := range flatten(argument) {
+				if value == nil {
+					continue
+				}
+				index, indexErr := integerValue(value, name)
+				if indexErr != nil {
+					return nil, true, indexErr
+				}
+				if index < 0 {
+					index = limit + index + 1
+				}
+				if index < 1 || index > limit {
+					return nil, true, formulaError("#VALUE!", name+" index is outside the array")
+				}
+				chosen = append(chosen, index-1)
+			}
+		}
+		if len(chosen) == 0 {
+			return nil, true, argError(name)
+		}
+		if name == "CHOOSEROWS" {
+			return pickCells(name, selected, chosen, wholeRange(selected.columns))
+		}
+		return pickCells(name, selected, wholeRange(selected.rows), chosen)
+	case "SORTBY":
+		return evaluateSortBy(arguments)
 	case "UNIQUE":
 		if len(arguments) < 1 || len(arguments) > 3 {
 			return nil, true, argError(name)
@@ -221,7 +311,7 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			return nil, true, err
 		}
 		results := search
-		if len(arguments) == 3 {
+		if len(arguments) == 3 && !omitted(arguments[2]) {
 			if results, err = toArray(arguments[2]); err != nil {
 				return nil, true, err
 			}
@@ -283,20 +373,20 @@ func evaluateSequence(arguments []any) (any, bool, error) {
 		return nil, true, err
 	}
 	columns := 1
-	if len(arguments) >= 2 {
+	if len(arguments) >= 2 && !omitted(arguments[1]) {
 		if columns, err = integerValue(scalarOrFirst(arguments[1]), "SEQUENCE"); err != nil {
 			return nil, true, err
 		}
 	}
 	start, step := 1.0, 1.0
-	if len(arguments) >= 3 {
+	if len(arguments) >= 3 && !omitted(arguments[2]) {
 		number, ok := toNumber(scalarOrFirst(arguments[2]))
 		if !ok {
 			return nil, true, formulaError("#VALUE!", "SEQUENCE start must be a number")
 		}
 		start = number
 	}
-	if len(arguments) == 4 {
+	if len(arguments) == 4 && !omitted(arguments[3]) {
 		number, ok := toNumber(scalarOrFirst(arguments[3]))
 		if !ok {
 			return nil, true, formulaError("#VALUE!", "SEQUENCE step must be a number")
@@ -399,19 +489,19 @@ func evaluateExtendedLookup(arguments []any) (any, bool, error) {
 		return nil, true, err
 	}
 	matchMode, searchMode := 0, 1
-	if len(arguments) >= 5 {
+	if len(arguments) >= 5 && !omitted(arguments[4]) {
 		if matchMode, err = integerValue(scalarOrFirst(arguments[4]), "XLOOKUP"); err != nil {
 			return nil, true, err
 		}
 	}
-	if len(arguments) == 6 {
+	if len(arguments) == 6 && !omitted(arguments[5]) {
 		if searchMode, err = integerValue(scalarOrFirst(arguments[5]), "XLOOKUP"); err != nil {
 			return nil, true, err
 		}
 	}
 	index := searchIndex(scalarOrFirst(arguments[0]), search, matchMode, searchMode)
 	if index < 0 {
-		if len(arguments) >= 4 {
+		if len(arguments) >= 4 && !omitted(arguments[3]) {
 			return arguments[3], true, nil
 		}
 		return nil, true, formulaError("#N/A", "XLOOKUP found no match")
@@ -447,12 +537,12 @@ func evaluateExtendedMatch(arguments []any) (any, bool, error) {
 		return nil, true, err
 	}
 	matchMode, searchMode := 0, 1
-	if len(arguments) >= 3 {
+	if len(arguments) >= 3 && !omitted(arguments[2]) {
 		if matchMode, err = integerValue(scalarOrFirst(arguments[2]), "XMATCH"); err != nil {
 			return nil, true, err
 		}
 	}
-	if len(arguments) == 4 {
+	if len(arguments) == 4 && !omitted(arguments[3]) {
 		if searchMode, err = integerValue(scalarOrFirst(arguments[3]), "XMATCH"); err != nil {
 			return nil, true, err
 		}
@@ -509,4 +599,186 @@ func searchIndex(target any, search arrayValue, matchMode, searchMode int) int {
 		}
 	}
 	return best
+}
+
+// stackArrays joins arrays edge to edge. Excel fills the ragged corner with
+// #N/A; this engine has no error value that can sit inside an array, so the
+// gap is left empty and the shape is still the union of the parts.
+func stackArrays(name string, parts []arrayValue) (any, bool, error) {
+	rows, columns := 0, 0
+	for _, part := range parts {
+		if name == "VSTACK" {
+			rows += part.rows
+			columns = max(columns, part.columns)
+			continue
+		}
+		rows = max(rows, part.rows)
+		columns += part.columns
+	}
+	if rows*columns > 100_000 {
+		return nil, true, formulaError("#NUM!", name+" would produce more than 100,000 cells")
+	}
+	result := arrayValue{rows: rows, columns: columns, values: make([]any, 0, rows*columns)}
+	if name == "VSTACK" {
+		for _, part := range parts {
+			for row := 0; row < part.rows; row++ {
+				for column := 0; column < columns; column++ {
+					result.values = append(result.values, cellOrBlank(part, row, column))
+				}
+			}
+		}
+		return result, true, nil
+	}
+	for row := 0; row < rows; row++ {
+		for _, part := range parts {
+			for column := 0; column < part.columns; column++ {
+				result.values = append(result.values, cellOrBlank(part, row, column))
+			}
+		}
+	}
+	return result, true, nil
+}
+
+func cellOrBlank(part arrayValue, row, column int) any {
+	if row >= part.rows || column >= part.columns {
+		return nil
+	}
+	return part.at(row, column)
+}
+
+func wholeRange(length int) []int {
+	indexes := make([]int, length)
+	for index := range indexes {
+		indexes[index] = index
+	}
+	return indexes
+}
+
+// sliceIndexes turns a TAKE or DROP count into the positions that survive. A
+// negative count works from the far end, and zero means the whole extent.
+func sliceIndexes(name string, length, count int) ([]int, error) {
+	if count == 0 {
+		return wholeRange(length), nil
+	}
+	size := count
+	if size < 0 {
+		size = -size
+	}
+	size = min(size, length)
+	if name == "TAKE" {
+		if count > 0 {
+			return wholeRange(length)[:size], nil
+		}
+		return wholeRange(length)[length-size:], nil
+	}
+	if count > 0 {
+		return wholeRange(length)[size:], nil
+	}
+	return wholeRange(length)[:length-size], nil
+}
+
+func pickCells(name string, selected arrayValue, rows, columns []int) (any, bool, error) {
+	if len(rows) == 0 || len(columns) == 0 {
+		return nil, true, formulaError("#N/A", name+" left no values")
+	}
+	result := arrayValue{rows: len(rows), columns: len(columns), values: make([]any, 0, len(rows)*len(columns))}
+	for _, row := range rows {
+		for _, column := range columns {
+			result.values = append(result.values, selected.at(row, column))
+		}
+	}
+	return result, true, nil
+}
+
+// evaluateSortBy orders one array by the values of another. The key decides
+// what moves: a column of keys sorts rows, a row of keys sorts columns.
+func evaluateSortBy(arguments []any) (any, bool, error) {
+	if len(arguments) < 2 {
+		return nil, true, argError("SORTBY")
+	}
+	selected, err := toArray(arguments[0])
+	if err != nil {
+		return nil, true, err
+	}
+	if selected.rows == 0 || selected.columns == 0 {
+		return selected, true, nil
+	}
+	type sortByKey struct {
+		values     []any
+		descending bool
+	}
+	keys := make([]sortByKey, 0, len(arguments)/2)
+	byColumn := false
+	for index := 1; index < len(arguments); {
+		by, keyErr := toArray(arguments[index])
+		if keyErr != nil {
+			return nil, true, keyErr
+		}
+		values := flatten(by)
+		if len(keys) == 0 {
+			switch {
+			case by.columns == 1 && by.rows == selected.rows:
+			case by.rows == 1 && by.columns == selected.columns:
+				byColumn = true
+			default:
+				return nil, true, formulaError("#VALUE!", "SORTBY needs one key per row or per column")
+			}
+		}
+		expected := selected.rows
+		if byColumn {
+			expected = selected.columns
+		}
+		if len(values) != expected {
+			return nil, true, formulaError("#VALUE!", "SORTBY keys must all be the same length")
+		}
+		descending := false
+		index++
+		if index < len(arguments) {
+			if !omitted(arguments[index]) {
+				order, orderErr := integerValue(scalarOrFirst(arguments[index]), "SORTBY")
+				if orderErr != nil {
+					return nil, true, orderErr
+				}
+				if order != 1 && order != -1 {
+					return nil, true, formulaError("#VALUE!", "SORTBY order must be 1 or -1")
+				}
+				descending = order == -1
+			}
+			index++
+		}
+		keys = append(keys, sortByKey{values: values, descending: descending})
+	}
+	length := selected.rows
+	if byColumn {
+		length = selected.columns
+	}
+	order := wholeRange(length)
+	sort.SliceStable(order, func(left, right int) bool {
+		for _, key := range keys {
+			comparison := compare(key.values[order[left]], key.values[order[right]])
+			if comparison == 0 {
+				continue
+			}
+			if key.descending {
+				return comparison > 0
+			}
+			return comparison < 0
+		}
+		return false
+	})
+	values := make([]any, 0, len(selected.values))
+	if byColumn {
+		for row := 0; row < selected.rows; row++ {
+			for _, column := range order {
+				values = append(values, selected.at(row, column))
+			}
+		}
+	} else {
+		for _, row := range order {
+			for column := 0; column < selected.columns; column++ {
+				values = append(values, selected.at(row, column))
+			}
+		}
+	}
+	return arrayValue{rows: selected.rows, columns: selected.columns, values: values}, true, nil
 }

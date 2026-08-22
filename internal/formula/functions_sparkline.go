@@ -44,7 +44,7 @@ func evaluateSparkline(arguments []any) (any, bool, error) {
 		numbers = numbers[:1000]
 	}
 	chart := map[string]any{"kanpic": SparklineMarker, "chart": "line", "values": numbers, "color": "#0f766e"}
-	if len(arguments) == 2 {
+	if len(arguments) == 2 && !omitted(arguments[1]) {
 		if err := applySparklineOptions(chart, arguments[1]); err != nil {
 			return nil, true, err
 		}

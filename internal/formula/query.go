@@ -52,7 +52,7 @@ func evaluateQuery(arguments []any) (any, bool, error) {
 	}
 	text := strings.TrimSpace(display(scalarOrFirst(arguments[1])))
 	headers := -1
-	if len(arguments) == 3 {
+	if len(arguments) == 3 && !omitted(arguments[2]) {
 		count, headerErr := integerValue(scalarOrFirst(arguments[2]), "QUERY")
 		if headerErr != nil {
 			return nil, true, headerErr

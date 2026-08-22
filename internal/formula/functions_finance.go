@@ -22,7 +22,7 @@ func evaluateFinance(name string, values []any) (any, bool, error) {
 			return nil, true, err
 		}
 		guess := 0.1
-		if len(values) == 6 {
+		if len(values) == 6 && !omitted(values[5]) {
 			supplied, ok := toNumber(values[5])
 			if !ok {
 				return nil, true, formulaError("#VALUE!", "RATE guess must be a number")
@@ -90,7 +90,7 @@ func evaluateFinance(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#NUM!", name+" needs a positive life and period")
 		}
 		factor := 2.0
-		if len(values) == 5 {
+		if len(values) == 5 && !omitted(values[4]) {
 			if factor, ok = toNumber(values[4]); !ok || factor <= 0 {
 				return nil, true, formulaError("#NUM!", "DDB factor must be positive")
 			}
@@ -174,7 +174,7 @@ func evaluateCashflow(name string, arguments []any) (any, bool, error) {
 			return nil, true, argError(name)
 		}
 		guess := 0.1
-		if len(arguments) == 2 {
+		if len(arguments) == 2 && !omitted(arguments[1]) {
 			supplied, ok := toNumber(scalarOrFirst(arguments[1]))
 			if !ok {
 				return nil, true, formulaError("#VALUE!", "IRR guess must be a number")
@@ -246,7 +246,7 @@ func evaluateCashflow(name string, arguments []any) (any, bool, error) {
 			return present(rate), true, nil
 		}
 		guess := 0.1
-		if len(arguments) == 3 {
+		if len(arguments) == 3 && !omitted(arguments[2]) {
 			if supplied, ok := toNumber(scalarOrFirst(arguments[2])); ok {
 				guess = supplied
 			}
@@ -418,7 +418,7 @@ func decliningBalance(cost, salvage, life, period, factor float64) float64 {
 
 func annuityTail(name string, values []any, index int) (float64, bool, error) {
 	future := 0.0
-	if len(values) > index {
+	if len(values) > index && !omitted(values[index]) {
 		number, ok := toNumber(values[index])
 		if !ok {
 			return 0, false, formulaError("#VALUE!", name+" requires numbers")
@@ -426,7 +426,7 @@ func annuityTail(name string, values []any, index int) (float64, bool, error) {
 		future = number
 	}
 	dueAtStart := false
-	if len(values) > index+1 {
+	if len(values) > index+1 && !omitted(values[index+1]) {
 		number, ok := toNumber(values[index+1])
 		if !ok {
 			return 0, false, formulaError("#VALUE!", name+" requires numbers")

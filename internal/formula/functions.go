@@ -284,7 +284,7 @@ func evaluateConditionalAggregate(name string, arguments []any) (any, error) {
 			return nil, err
 		}
 		sumRange := criteriaRange
-		if len(arguments) == 3 {
+		if len(arguments) == 3 && !omitted(arguments[2]) {
 			sumRange, err = toArray(arguments[2])
 			if err != nil {
 				return nil, err
@@ -507,7 +507,7 @@ func evaluateTableLookup(name string, arguments []any, horizontal bool) (any, er
 		return nil, formulaError("#REF!", name+" index is outside the table")
 	}
 	approximate := true
-	if len(arguments) == 4 {
+	if len(arguments) == 4 && !omitted(arguments[3]) {
 		approximate, err = booleanValue(arguments[3], name+" range lookup")
 		if err != nil {
 			return nil, err
@@ -560,17 +560,23 @@ func evaluateIndex(arguments []any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	row, err := integerValue(arguments[1], "INDEX row")
-	if err != nil {
-		return nil, err
+	// A skipped row or column means "the whole of it", which is how
+	// `INDEX(A1:C9,,2)` returns a column rather than one cell.
+	row := 0
+	if !omitted(arguments[1]) {
+		if row, err = integerValue(arguments[1], "INDEX row"); err != nil {
+			return nil, err
+		}
 	}
 	column := 1
 	if len(arguments) == 2 && selected.rows == 1 {
 		column, row = row, 1
 	} else if len(arguments) == 3 {
-		column, err = integerValue(arguments[2], "INDEX column")
-		if err != nil {
-			return nil, err
+		column = 0
+		if !omitted(arguments[2]) {
+			if column, err = integerValue(arguments[2], "INDEX column"); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if row < 0 || column < 0 || row > selected.rows || column > selected.columns || selected.rows == 0 || selected.columns == 0 {
@@ -612,7 +618,7 @@ func evaluateMatch(arguments []any) (any, error) {
 		return nil, formulaError("#N/A", "MATCH requires one row or one column")
 	}
 	matchType := 1
-	if len(arguments) == 3 {
+	if len(arguments) == 3 && !omitted(arguments[2]) {
 		matchType, err = integerValue(arguments[2], "MATCH type")
 		if err != nil {
 			return nil, err
@@ -769,7 +775,7 @@ func evaluateSort(arguments []any) (any, error) {
 	if len(arguments) > 1 {
 		specs = nil
 		googleStyle := len(arguments) > 4
-		if len(arguments) >= 3 {
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
 			if scalar, scalarErr := scalarValue(arguments[2]); scalarErr == nil {
 				_, googleStyle = scalar.(bool)
 			}
@@ -795,7 +801,7 @@ func evaluateSort(arguments []any) (any, error) {
 				return nil, indexErr
 			}
 			order := 1
-			if len(arguments) >= 3 {
+			if len(arguments) >= 3 && !omitted(arguments[2]) {
 				order, err = integerValue(arguments[2], "SORT order")
 				if err != nil {
 					return nil, err
@@ -804,7 +810,7 @@ func evaluateSort(arguments []any) (any, error) {
 					return nil, formulaError("#VALUE!", "SORT order must be 1 or -1")
 				}
 			}
-			if len(arguments) == 4 {
+			if len(arguments) == 4 && !omitted(arguments[3]) {
 				byColumn, err = booleanValue(arguments[3], "SORT by column")
 				if err != nil {
 					return nil, err

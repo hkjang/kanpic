@@ -1,6 +1,7 @@
 package formula
 
 import (
+	"math"
 	"strings"
 	"unicode"
 
@@ -48,12 +49,13 @@ func (p *parser) referenceFunction(name string, arguments []node) (node, bool, e
 			return dynamicReferenceNode{kind: name, arguments: arguments, sheetID: sheetID, base: first}, true, nil
 		}
 		height, width := rows, columns
-		if len(offsets) >= 3 {
+		if len(offsets) >= 3 && offsets[2] != offsetSkipped {
 			height = offsets[2]
 		}
-		if len(offsets) == 4 {
+		if len(offsets) == 4 && offsets[3] != offsetSkipped {
 			width = offsets[3]
 		}
+		offsets[0], offsets[1] = skippedAsZero(offsets[0]), skippedAsZero(offsets[1])
 		startRow, startColumn := first.Row+offsets[0], first.Column+offsets[1]
 		if startRow < 1 || startColumn < 1 || height < 1 || width < 1 {
 			return nil, true, formulaError("#REF!", "OFFSET moved outside the sheet")
@@ -135,6 +137,10 @@ func (n dynamicReferenceNode) eval(cells map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if omitted(value) {
+			offsets = append(offsets, offsetSkipped)
+			continue
+		}
 		number, ok := toNumber(value)
 		if !ok {
 			return nil, formulaError("#VALUE!", "OFFSET requires whole numbers")
@@ -142,12 +148,13 @@ func (n dynamicReferenceNode) eval(cells map[string]any) (any, error) {
 		offsets = append(offsets, int(number))
 	}
 	height, width := 1, 1
-	if len(offsets) >= 3 {
+	if len(offsets) >= 3 && offsets[2] != offsetSkipped {
 		height = offsets[2]
 	}
-	if len(offsets) == 4 {
+	if len(offsets) == 4 && offsets[3] != offsetSkipped {
 		width = offsets[3]
 	}
+	offsets[0], offsets[1] = skippedAsZero(offsets[0]), skippedAsZero(offsets[1])
 	startRow, startColumn := n.base.Row+offsets[0], n.base.Column+offsets[1]
 	if startRow < 1 || startColumn < 1 || height < 1 || width < 1 {
 		return nil, formulaError("#REF!", "OFFSET moved outside the sheet")
@@ -217,12 +224,27 @@ func nodeReference(value node) (string, cellrange.Position, int, int, bool) {
 	return sheetID, selected.Start, rows, columns, true
 }
 
+// offsetSkipped stands for an argument OFFSET was not given, which is not the
+// same as a zero: `OFFSET(A1,1,1,,2)` keeps the source height.
+const offsetSkipped = math.MinInt
+
+func skippedAsZero(value int) int {
+	if value == offsetSkipped {
+		return 0
+	}
+	return value
+}
+
 func constantIntegers(arguments []node) ([]int, bool) {
 	result := make([]int, 0, len(arguments))
 	for _, argument := range arguments {
 		literal, ok := argument.(literalNode)
 		if !ok {
 			return nil, false
+		}
+		if omitted(literal.value) {
+			result = append(result, offsetSkipped)
+			continue
 		}
 		number, isNumber := toNumber(literal.value)
 		if !isNumber {

@@ -451,6 +451,13 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	}
 	values := make([]any, 0)
 	for _, value := range evaluated {
+		// A skipped argument keeps its slot here. Dropping it would slide
+		// every later argument one position left, so `FIXED(1234.5,,TRUE)`
+		// would read TRUE as the number of decimals instead of the flag.
+		if omitted(value) {
+			values = append(values, omittedValue{})
+			continue
+		}
 		values = append(values, flatten(value)...)
 	}
 	switch name {
@@ -497,7 +504,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 			return nil, formulaError("#VALUE!", "ROUND requires a number")
 		}
 		digits := 0.0
-		if len(values) == 2 {
+		if len(values) == 2 && !omitted(values[1]) {
 			digits, _ = toNumber(values[1])
 		}
 		factor := math.Pow(10, digits)
@@ -514,7 +521,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		text := []rune(display(values[0]))
 		count := 1
-		if len(values) == 2 {
+		if len(values) == 2 && !omitted(values[1]) {
 			number, ok := toNumber(values[1])
 			if !ok || number < 0 {
 				return nil, formulaError("#VALUE!", "invalid character count")
@@ -804,6 +811,17 @@ func (p *parser) primary() (node, error) {
 			arguments := make([]node, 0)
 			if p.current().kind != tokenRight {
 				for {
+					// `SEQUENCE(3,,5)` skips an argument to reach a later one.
+					// Excel and Sheets both allow it, so an empty slot parses
+					// as an explicit omission rather than a syntax error.
+					if kind := p.current().kind; kind == tokenComma || kind == tokenSemicolon || kind == tokenRight {
+						arguments = append(arguments, literalNode{omittedValue{}})
+						if kind == tokenRight {
+							break
+						}
+						p.position++
+						continue
+					}
 					argument, err := p.expression(0)
 					if err != nil {
 						return nil, err
@@ -1170,7 +1188,28 @@ func numericValues(values []any) []float64 {
 	}
 	return result
 }
+// omittedValue marks an argument the author skipped. It is not a value: it
+// travels far enough for each function to fall back to that argument's
+// default, and disappears everywhere else.
+type omittedValue struct{}
+
+// omitted reports whether an optional argument was left out, so a function can
+// use its default instead of reading an empty slot as zero or false.
+func omitted(value any) bool {
+	if _, skipped := value.(omittedValue); skipped {
+		return true
+	}
+	if items, ok := value.([]any); ok && len(items) == 1 {
+		_, skipped := items[0].(omittedValue)
+		return skipped
+	}
+	return false
+}
+
 func flatten(value any) []any {
+	if _, skipped := value.(omittedValue); skipped {
+		return nil
+	}
 	switch typed := value.(type) {
 	case arrayValue:
 		return append([]any(nil), typed.values...)
@@ -1191,6 +1230,9 @@ func flatten(value any) []any {
 }
 
 func publicValue(value any) any {
+	if _, skipped := value.(omittedValue); skipped {
+		return nil
+	}
 	switch typed := value.(type) {
 	case arrayValue:
 		return typed.matrix()
@@ -1218,6 +1260,9 @@ func truthy(value any) bool {
 }
 func display(value any) string {
 	if value == nil {
+		return ""
+	}
+	if _, skipped := value.(omittedValue); skipped {
 		return ""
 	}
 	if number, ok := value.(float64); ok {

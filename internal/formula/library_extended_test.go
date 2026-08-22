@@ -2,6 +2,7 @@ package formula
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -354,4 +355,130 @@ func containsValue(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// An argument left empty is not a zero. `FIXED(1234.5,,TRUE)` used to slide
+// TRUE into the decimals slot and print "1,234.5"; the skipped slot has to
+// survive all the way to the function that owns the default.
+func TestOmittedArgumentsKeepTheirPlace(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 1.0, "A2": 2.0, "A3": 3.0, "B1": "x", "B2": "y", "B3": "z"}
+	for formula, expected := range map[string]any{
+		`=FIXED(1234.5,,TRUE)`:        "1234.50",
+		`=SUM(1,,2)`:                  3.0,
+		`=XLOOKUP(2,A1:A3,B1:B3,,0)`:  "y",
+		`=XMATCH(2,A1:A3,,1)`:         2.0,
+		`=ADDRESS(1,2,,"Sheet1")`:     "Sheet1!$B$1",
+		`=OFFSET(A1,1,0,,1)`:          2.0,
+		// Payments at the start of the period carry no interest in the first
+		// one; reading the trailing 1 as the future value gave -100 instead.
+		`=IPMT(0.1,1,3,1000,,1)`:      0.0,
+		`=SPLIT("a,b",",",,FALSE)`:    nil,
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if expected != nil && result.Value != expected {
+			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
+		}
+	}
+	// A skipped count means the whole extent, not none of it.
+	if result := New().Evaluate(`=SEQUENCE(2,,5)`, cells); result.Error != nil {
+		t.Errorf("SEQUENCE with a skipped column count: %v", result.Error)
+	} else if matrix, ok := result.Value.([][]any); !ok || len(matrix) != 2 || matrix[0][0] != 5.0 || matrix[1][0] != 6.0 {
+		t.Errorf("SEQUENCE(2,,5) = %v", result.Value)
+	}
+	// INDEX with a skipped column returns the whole row.
+	if result := New().Evaluate(`=INDEX(A1:B3,2,)`, cells); result.Error != nil {
+		t.Errorf("INDEX with a skipped column: %v", result.Error)
+	}
+}
+
+func TestTextBeforeAndTextAfterFindTheDelimiter(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": "이름: 홍길동"}
+	for formula, expected := range map[string]string{
+		`=TEXTBEFORE(A1,": ")`:                "이름",
+		`=TEXTAFTER(A1,": ")`:                 "홍길동",
+		`=TEXTBEFORE("a-b-c","-",2)`:          "a-b",
+		`=TEXTAFTER("a-b-c","-",-1)`:          "c",
+		`=TEXTBEFORE("abc","-",1,0,0,"없음")`: "없음",
+		`=TEXTAFTER("A-b","-",1,1)`:           "b",
+		`=TEXTBEFORE("a, b and c",{", "," and "},2)`: "a, b",
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if result.Value != expected {
+			t.Errorf("%s = %v, want %q", formula, result.Value, expected)
+		}
+	}
+	// Without a match and without a fallback the answer is #N/A, not an empty
+	// string: an empty string is a real result that would hide the miss.
+	if result := New().Evaluate(`=TEXTBEFORE("abc","-")`, cells); result.Error == nil || result.Error.Code != "#N/A" {
+		t.Errorf("TEXTBEFORE without a match = %v, %v", result.Value, result.Error)
+	}
+}
+
+func TestTextSplitBuildsATable(t *testing.T) {
+	t.Parallel()
+	result := New().Evaluate(`=TEXTSPLIT("a,b;c,d",",",";")`, map[string]any{})
+	if result.Error != nil {
+		t.Fatalf("TEXTSPLIT: %v", result.Error)
+	}
+	matrix, ok := result.Value.([][]any)
+	if !ok || len(matrix) != 2 || len(matrix[0]) != 2 || matrix[1][1] != "d" {
+		t.Fatalf("TEXTSPLIT = %v", result.Value)
+	}
+	// A short row is padded so the result stays rectangular.
+	padded := New().Evaluate(`=TEXTSPLIT("a,b;c",",",";")`, map[string]any{})
+	if padded.Error != nil {
+		t.Fatalf("ragged TEXTSPLIT: %v", padded.Error)
+	}
+	if matrix, ok := padded.Value.([][]any); !ok || len(matrix) != 2 || len(matrix[1]) != 2 || matrix[1][1] != nil {
+		t.Fatalf("ragged TEXTSPLIT = %v", padded.Value)
+	}
+}
+
+func TestStackingAndSlicingArrays(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": "지역", "B1": "매출", "A2": "부산", "B2": 80.0, "A3": "서울", "B3": 120.0, "A4": "대구", "B4": 95.0,
+	}
+	for formula, expected := range map[string][][]any{
+		`=VSTACK(A2:B2,A3:B3)`:     {{"부산", 80.0}, {"서울", 120.0}},
+		`=HSTACK(A2:A3,B2:B3)`:     {{"부산", 80.0}, {"서울", 120.0}},
+		`=TAKE(A1:B4,2)`:           {{"지역", "매출"}, {"부산", 80.0}},
+		`=TAKE(A1:B4,-2)`:          {{"서울", 120.0}, {"대구", 95.0}},
+		`=DROP(A1:B4,1)`:           {{"부산", 80.0}, {"서울", 120.0}, {"대구", 95.0}},
+		`=DROP(A1:B4,,-1)`:         {{"지역"}, {"부산"}, {"서울"}, {"대구"}},
+		`=CHOOSEROWS(A1:B4,1,-1)`:  {{"지역", "매출"}, {"대구", 95.0}},
+		`=CHOOSECOLS(A1:B4,2)`:     {{"매출"}, {80.0}, {120.0}, {95.0}},
+		`=SORTBY(A2:B4,B2:B4,-1)`:  {{"서울", 120.0}, {"대구", 95.0}, {"부산", 80.0}},
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if !reflect.DeepEqual(result.Value, expected) {
+			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
+		}
+	}
+	// Stacking uneven parts keeps the union of the shapes and leaves the
+	// corner blank rather than failing the whole call.
+	if result := New().Evaluate(`=VSTACK(A2:B2,A3:A3)`, cells); result.Error != nil {
+		t.Errorf("ragged VSTACK: %v", result.Error)
+	} else if matrix, ok := result.Value.([][]any); !ok || len(matrix) != 2 || matrix[1][1] != nil {
+		t.Errorf("ragged VSTACK = %v", result.Value)
+	}
+	// A key that does not line up with the array is refused, because guessing
+	// which row belongs to which key would sort the table into nonsense.
+	if result := New().Evaluate(`=SORTBY(A2:B4,B2:B3)`, cells); result.Error == nil {
+		t.Errorf("SORTBY with a short key = %v", result.Value)
+	}
 }

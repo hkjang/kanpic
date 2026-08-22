@@ -177,6 +177,9 @@ var catalog = []FunctionDoc{
 	{"REPLACE", "텍스트", "REPLACE(텍스트, 시작 위치, 개수, 새 텍스트)", "위치를 지정해 일부를 바꿉니다."},
 	{"EXACT", "텍스트", "EXACT(텍스트1, 텍스트2)", "대소문자까지 같은지 비교합니다."},
 	{"SPLIT", "텍스트", "SPLIT(텍스트, 구분자, [각 문자 구분], [빈 값 제거])", "텍스트를 나눠 여러 셀로 펼칩니다."},
+	{"TEXTSPLIT", "텍스트", "TEXTSPLIT(텍스트, 열 구분자, [행 구분자], [빈 값 무시], [대소문자 구분 안 함], [채울 값])", "텍스트를 열과 행으로 나눠 표로 펼칩니다."},
+	{"TEXTBEFORE", "텍스트", "TEXTBEFORE(텍스트, 구분자, [번째], [대소문자 구분 안 함], [끝을 구분자로], [없을 때])", "구분자 앞의 텍스트를 반환합니다."},
+	{"TEXTAFTER", "텍스트", "TEXTAFTER(텍스트, 구분자, [번째], [대소문자 구분 안 함], [끝을 구분자로], [없을 때])", "구분자 뒤의 텍스트를 반환합니다."},
 	{"JOIN", "텍스트", "JOIN(구분자, 값1, …)", "값을 구분자로 이어 붙입니다."},
 	{"CHAR", "텍스트", "CHAR(코드)", "문자 코드에 해당하는 문자를 반환합니다."},
 	{"CODE", "텍스트", "CODE(텍스트)", "첫 글자의 문자 코드를 반환합니다."},
@@ -216,6 +219,13 @@ var catalog = []FunctionDoc{
 	{"CHOOSE", "조회", "CHOOSE(번호, 값1, 값2, …)", "번호에 해당하는 값을 고릅니다."},
 	{"UNIQUE", "배열", "UNIQUE(범위)", "중복을 없앤 목록을 반환합니다."},
 	{"SEQUENCE", "배열", "SEQUENCE(행 수, [열 수], [시작], [증가])", "연속된 숫자 배열을 만듭니다."},
+	{"VSTACK", "배열", "VSTACK(배열1, 배열2, …)", "배열을 위아래로 이어 붙입니다."},
+	{"HSTACK", "배열", "HSTACK(배열1, 배열2, …)", "배열을 좌우로 이어 붙입니다."},
+	{"TAKE", "배열", "TAKE(배열, 행 수, [열 수])", "배열의 앞이나 뒤에서 지정한 만큼만 남깁니다."},
+	{"DROP", "배열", "DROP(배열, 행 수, [열 수])", "배열의 앞이나 뒤에서 지정한 만큼을 덜어냅니다."},
+	{"CHOOSEROWS", "배열", "CHOOSEROWS(배열, 행1, 행2, …)", "고른 행만 순서대로 반환합니다."},
+	{"CHOOSECOLS", "배열", "CHOOSECOLS(배열, 열1, 열2, …)", "고른 열만 순서대로 반환합니다."},
+	{"SORTBY", "배열", "SORTBY(배열, 기준1, [순서1], …)", "다른 배열의 값을 기준으로 정렬합니다."},
 	{"TRANSPOSE", "배열", "TRANSPOSE(범위)", "행과 열을 바꿉니다."},
 	{"FLATTEN", "배열", "FLATTEN(범위1, …)", "여러 범위를 한 열로 펼칩니다."},
 	{"TOCOL", "배열", "TOCOL(범위1, …)", "범위를 한 열로 펼칩니다."},
@@ -454,7 +464,7 @@ func roundingArguments(name string, values []any) (float64, float64, error) {
 		return 0, 0, formulaError("#VALUE!", name+" requires a number")
 	}
 	digits := 0.0
-	if len(values) == 2 {
+	if len(values) == 2 && !omitted(values[1]) {
 		digits, _ = toNumber(values[1])
 	}
 	return number, digits, nil

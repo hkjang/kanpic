@@ -81,7 +81,7 @@ func evaluateDate(name string, values []any) (any, bool, error) {
 			start, end = end, start
 		}
 		basis := 0
-		if len(values) == 3 {
+		if len(values) == 3 && !omitted(values[2]) {
 			supplied, err := integerValue(values[2], name)
 			if err != nil {
 				return nil, true, err
