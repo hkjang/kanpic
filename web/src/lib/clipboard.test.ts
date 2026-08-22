@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { clipboardText,materializeFill,materializePaste,parseTabularText,shiftFormula,type KanpicClipboard } from './clipboard'
+import { clipboardText,materializeFill,materializePaste,parseTabularText,shiftFormula,type KanpicClipboard,MAX_GRID_ROWS} from './clipboard'
 
 describe('formula translation',()=>{
   it('moves relative references and keeps absolute axes',()=>{
@@ -59,7 +59,9 @@ describe('clipboard parsing',()=>{
   })
 
   it('rejects a destination outside the supported grid',()=>{
-    expect(()=>materializePaste('1\n2',undefined,10_000,1)).toThrow('시트 한도')
+    // 마지막 행에서 두 줄을 붙여넣으면 격자 밖으로 나간다. 한도는 상수에서
+    // 읽는다. 값을 적어 두면 한도가 바뀔 때 테스트가 먼저 거짓말을 한다.
+    expect(()=>materializePaste('1\n2',undefined,MAX_GRID_ROWS,1)).toThrow('시트 한도')
   })
 })
 
@@ -97,7 +99,7 @@ describe('automatic fill',()=>{
   it('rejects targets outside the grid or operation limit',()=>{
     const payload:KanpicClipboard={version:1,sourceRow:1,sourceColumn:1,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:1}]}
     expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:10_000,endColumn:2})).toThrow('최대 10,000셀')
-    expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:10_001,endColumn:1})).toThrow('원본 선택 범위')
+    expect(()=>materializeFill(payload,{startRow:1,startColumn:1,endRow:MAX_GRID_ROWS+1,endColumn:1})).toThrow('원본 선택 범위')
   })
 })
 
