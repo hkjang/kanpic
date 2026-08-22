@@ -460,12 +460,15 @@ func (s *Server) duplicateSheet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteSheet(w http.ResponseWriter, r *http.Request) {
 	workbookID := s.workbookIDForSheet(r.Context(), r.PathValue("sheetId"))
-	if err := s.repository.DeleteSheet(r.Context(), r.PathValue("sheetId")); err != nil {
+	deletion, err := s.repository.DeleteSheet(r.Context(), r.PathValue("sheetId"), actorID(r))
+	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	s.publishCurrentVersion(r.Context(), workbookID, actorID(r), "")
-	w.WriteHeader(http.StatusNoContent)
+	// The response carries the snapshot taken before the delete, because that
+	// is the only way back and the client cannot find it on its own.
+	writeJSON(w, http.StatusOK, deletion)
 }
 
 type cellMutationRequest struct {

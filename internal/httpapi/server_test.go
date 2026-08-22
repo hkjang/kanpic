@@ -2006,7 +2006,12 @@ func TestCrossSheetFormulaThroughRESTAndMCP(t *testing.T) {
 	if !reflect.DeepEqual(reportInfo.Dependencies, []string{"'Raw Data'!A1"}) || !reflect.DeepEqual(reportInfo.Dependents, []string{"'Raw Data'!A2"}) {
 		t.Fatalf("cross report formula info=%#v", reportInfo)
 	}
-	request[map[string]any](t, server, http.MethodDelete, "/api/v1/sheets/"+inputSheet.ID, nil, http.StatusNoContent)
+	// Deleting a sheet answers with the snapshot taken before it, because that
+	// is the only way back and the client cannot find it on its own.
+	deletion := request[map[string]any](t, server, http.MethodDelete, "/api/v1/sheets/"+inputSheet.ID, nil, http.StatusOK)
+	if deletion["backup_version_id"] == "" || deletion["sheet_name"] == "" {
+		t.Fatalf("sheet deletion result: %#v", deletion)
+	}
 	selected = request[struct {
 		Items []workbook.Cell `json:"items"`
 	}](t, server, http.MethodGet, "/api/v1/sheets/"+reportSheet.ID+"/ranges/B1", nil, http.StatusOK)

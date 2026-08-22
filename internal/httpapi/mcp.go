@@ -415,7 +415,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	case "spreadsheet.sheet.delete":
 		sheetID := stringArg(args, "sheet_id")
 		workbookID := s.workbookIDForSheet(ctx, sheetID)
-		err := s.repository.DeleteSheet(ctx, sheetID)
+		_, err := s.repository.DeleteSheet(ctx, sheetID, actor)
 		if err == nil {
 			s.publishCurrentVersion(ctx, workbookID, actor, "")
 		}

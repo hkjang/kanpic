@@ -224,7 +224,15 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     }
   }
   const duplicateSheet=async(sheet:Sheet)=>{const duplicated=await api<Sheet>(`/api/v1/sheets/${sheet.id}/duplicate`,{method:'POST',body:'{}'});setActiveSheet(duplicated);await refreshWorkbook()}
-  const deleteSheet=async(sheet:Sheet)=>{const ordered=workbook.data!.sheets;const index=ordered.findIndex(item=>item.id===sheet.id);const fallback=ordered[index===0?1:index-1];await api(`/api/v1/sheets/${sheet.id}`,{method:'DELETE'});if(activeSheet?.id===sheet.id&&fallback)setActiveSheet(fallback);await refreshWorkbook()}
+  const deleteSheet=async(sheet:Sheet)=>{
+    const ordered=workbook.data!.sheets;const index=ordered.findIndex(item=>item.id===sheet.id);const fallback=ordered[index===0?1:index-1]
+    // 시트 삭제는 그 안의 모든 셀을 버리고 셀 단위로 되돌릴 수 없다. 서버가
+    // 삭제 직전에 남긴 스냅숏이 유일한 회수 경로라서 그 번호를 붙들어 둔다.
+    const deletion=await api<{backup_version_id?:string;sheet_name?:string}>(`/api/v1/sheets/${sheet.id}`,{method:'DELETE'})
+    if(activeSheet?.id===sheet.id&&fallback)setActiveSheet(fallback)
+    await refreshWorkbook()
+    if(deletion?.backup_version_id)editor.reportRecoverableEdit({versionId:deletion.backup_version_id,summary:`시트 ${deletion.sheet_name||sheet.name}`})
+  }
   const revertOperation=async(mode:'undo'|'redo')=>{if(!writable())return;if(!navigator.onLine){alert('Undo와 Redo는 서버에 다시 연결한 후 사용할 수 있습니다.');return}const target=mode==='undo'?editor.takeUndo():editor.takeRedo();if(!target)return;editor.setSaveState('saving');try{const result=await api<MutationResult>(`/api/v1/operations/${target}:undo`,{method:'POST',body:JSON.stringify({idempotency_key:`undo:${target}`,client_id:collaborationClientId()})});updateVersion(result.server_version);if(result.applied_cells>0){if(mode==='undo')editor.completeUndo(result.operation_id);else editor.completeRedo(result.operation_id)}else{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target)}editor.setSaveState(result.conflicts.length?'conflict':'saved',result.conflicts.length)}catch{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target);editor.setSaveState('error')}}
   const denyWrite=()=>{editor.setSaveState('error');alert('보기 전용 권한입니다. 소유자에게 편집 권한을 요청하세요.')}
   const writable=()=>{const role=workbook.data?.access_role??'owner';if(role==='editor'||role==='owner')return true;denyWrite();return false}

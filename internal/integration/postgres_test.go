@@ -1508,7 +1508,7 @@ func TestPostgresDeletingReferencedSheetStoresRefError(t *testing.T) {
 	if err != nil || len(created.FormulaErrors) != 0 {
 		t.Fatalf("create deleted references=%#v error=%v", created, err)
 	}
-	if err := repository.DeleteSheet(ctx, inputSheet.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, inputSheet.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	selected, _ := cellrange.Parse("A1:B1")
@@ -1626,7 +1626,7 @@ func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, workbook.UpdateSheetInput{Name: &changedName}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.DeleteSheet(ctx, detail.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, detail.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	temporary, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "temporary"})
@@ -1725,7 +1725,7 @@ func TestPostgresSheetLifecyclePreservesDataAndPositions(t *testing.T) {
 	if _, err := repository.UpdateSheet(ctx, duplicated.ID, workbook.UpdateSheetInput{Name: &duplicateName}); !errors.Is(err, workbook.ErrDuplicateName) {
 		t.Fatalf("case-insensitive duplicate name: %v", err)
 	}
-	if err := repository.DeleteSheet(ctx, book.Sheets[0].ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, book.Sheets[0].ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	afterDelete, _ := repository.GetWorkbook(ctx, book.ID)

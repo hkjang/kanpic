@@ -169,7 +169,7 @@ func TestMemoryPivotGroupingStructureRestoreDuplicationAndBrokenSource(t *testin
 	if latest.Version <= moved.WorkbookVersion {
 		t.Fatalf("unexpected latest version %d", latest.Version)
 	}
-	if err := repository.DeleteSheet(ctx, source.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, source.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	broken, err := repository.GetPivotData(ctx, pivot.ID)

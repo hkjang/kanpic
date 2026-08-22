@@ -95,7 +95,7 @@ func TestDeletingReferencedSheetInvalidatesDependentFormulas(t *testing.T) {
 	if err != nil || len(created.FormulaErrors) != 0 {
 		t.Fatalf("create references=%#v error=%v", created, err)
 	}
-	if err := repository.DeleteSheet(ctx, inputSheet.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, inputSheet.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	cells, err := repository.ReadRange(ctx, reportSheet.ID, mustRange(t, "A1:B1"))

@@ -803,7 +803,7 @@ func (s *Service) executeReportSheetTool(ctx context.Context, action *Action, to
 	if err != nil {
 		return err
 	}
-	compensate := func() { _ = s.workbooks.DeleteSheet(context.WithoutCancel(ctx), sheet.ID) }
+	compensate := func() { _, _ = s.workbooks.DeleteSheet(context.WithoutCancel(ctx), sheet.ID, action.ActorID) }
 	book, err := s.workbooks.GetWorkbook(ctx, action.WorkbookID)
 	if err != nil {
 		compensate()
@@ -1093,7 +1093,7 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 		case "create_report_sheet":
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
-				if err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}

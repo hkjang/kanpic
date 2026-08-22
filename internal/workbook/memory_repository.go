@@ -751,16 +751,20 @@ func (r *MemoryRepository) UpdateSheet(_ context.Context, sheetID string, input 
 	return next, nil
 }
 
-func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error {
+func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID, actorID string) (SheetDeletion, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, deleted, err := r.sheetState(sheetID)
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if len(state.sheets) == 1 {
-		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
+		return SheetDeletion{}, fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
 	}
+	// Deleting a sheet throws away every cell in it and there is no cell-level
+	// undo for it, so the snapshot taken here is the only way back.
+	backup := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: state.workbook.Version, Name: sheetDeletionBackupName(deleted.Name), ActorID: actorID, CreatedAt: r.now()}
+	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	nextSheets, nextCells := cloneSheets(state.sheets), cloneAllCells(state.cells)
 	delete(nextSheets, sheetID)
 	delete(nextCells, sheetID)
@@ -787,7 +791,8 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 		for id, item := range removedRanges {
 			r.namedRanges[id] = item
 		}
-		return err
+		state.versions = state.versions[:len(state.versions)-1]
+		return SheetDeletion{}, err
 	}
 	now := r.now()
 	for _, input := range expanded {
@@ -859,7 +864,13 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID string) error 
 	}
 	delete(r.sheetToWB, sheetID)
 	r.bump(state)
-	return nil
+	return SheetDeletion{WorkbookID: state.workbook.ID, SheetName: deleted.Name, BackupVersionID: backup.ID, ServerVersion: state.workbook.Version}, nil
+}
+
+// sheetDeletionBackupName reads in the version list the way the structural
+// backups do, so one glance says what was thrown away.
+func sheetDeletionBackupName(name string) string {
+	return "시트 " + name + " 삭제 전 자동 백업"
 }
 
 func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) (MutationResult, error) {

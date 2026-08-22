@@ -465,6 +465,16 @@ type CreateSheetInput struct {
 	Color string `json:"color,omitempty"`
 }
 
+// SheetDeletion reports what a sheet deletion left behind. Deleting a sheet
+// throws away every cell in it and cannot be undone cell by cell, so the only
+// way back is the snapshot taken just before.
+type SheetDeletion struct {
+	WorkbookID       string `json:"workbook_id"`
+	SheetName        string `json:"sheet_name"`
+	BackupVersionID  string `json:"backup_version_id"`
+	ServerVersion    int64  `json:"server_version"`
+}
+
 type UpdateSheetInput struct {
 	Name     *string `json:"name,omitempty"`
 	Position *int    `json:"position,omitempty"`

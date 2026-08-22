@@ -168,7 +168,7 @@ func TestMemoryChartPreservesBrokenSourceWhenSourceSheetIsDeleted(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.DeleteSheet(ctx, source.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, source.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	broken, err := repository.GetChartData(ctx, chart.ID)

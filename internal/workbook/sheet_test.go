@@ -63,7 +63,7 @@ func TestMemorySheetLifecyclePreservesCellsAndPositionInvariant(t *testing.T) {
 	if _, err := repository.DuplicateSheet(ctx, data.ID, DuplicateSheetInput{Name: "TAIL"}); !errors.Is(err, ErrDuplicateName) {
 		t.Fatalf("explicit duplicate name: %v", err)
 	}
-	if err := repository.DeleteSheet(ctx, book.Sheets[0].ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, book.Sheets[0].ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	afterDelete, _ := repository.GetWorkbook(ctx, book.ID)
@@ -79,5 +79,48 @@ func assertSheetPositions(t *testing.T, book Workbook, names []string, version i
 		if book.Sheets[index].Name != name || book.Sheets[index].Position != index {
 			t.Fatalf("sheet %d: %#v", index, book.Sheets[index])
 		}
+	}
+}
+
+// Deleting a sheet throws away every cell in it and there is no cell-level
+// undo for it. The snapshot taken just before is the only way back, so it has
+// to exist and it has to restore the cells, not just the tab.
+func TestDeletingASheetLeavesARestorableBackup(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	ctx := context.Background()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "백업", OwnerID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repository.CreateSheet(ctx, book.ID, CreateSheetInput{Name: "상세"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: detail.ID, ActorID: "owner", IdempotencyKey: "seed", Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"중요"`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	deletion, err := repository.DeleteSheet(ctx, detail.ID, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deletion.BackupVersionID == "" || deletion.SheetName != "상세" {
+		t.Fatalf("deletion result: %#v", deletion)
+	}
+	if after, err := repository.GetWorkbook(ctx, book.ID); err != nil || len(after.Sheets) != 1 {
+		t.Fatalf("sheets after delete: %#v, %v", after.Sheets, err)
+	}
+	if _, err := repository.RestoreVersion(ctx, deletion.BackupVersionID, "owner"); err != nil {
+		t.Fatalf("restore the backup: %v", err)
+	}
+	restored, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil || len(restored.Sheets) != 2 {
+		t.Fatalf("sheets after restore: %#v, %v", restored.Sheets, err)
+	}
+	// The tab coming back is not enough; what was in it has to come back too.
+	selected, _ := cellrange.Parse("A1")
+	cells, err := repository.ReadRange(ctx, detail.ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"중요"` {
+		t.Fatalf("restored cells: %#v, %v", cells, err)
 	}
 }

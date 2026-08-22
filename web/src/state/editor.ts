@@ -71,7 +71,10 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   takeRedo:()=>{const stack=get().redoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({redoStack:stack.slice(0,-1)});return operationId},
   restoreRedo:(operationId)=>set((state)=>({redoStack:[...state.redoStack,operationId].slice(-100)})),
   completeRedo:(redoOperationId)=>set((state)=>({undoStack:[...state.undoStack,redoOperationId].slice(-100)})),
-  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],editBackup:undefined,undoStack:[],redoStack:[]}),
+  // reset은 시트를 옮기거나 워크북을 다시 읽을 때도 불린다. 방금 한 편집이
+  // 남긴 안내는 그때 사라지면 안 된다. 시트를 옮겼다고 지운 시트를 되돌릴
+  // 길이 없어지는 것은 아니기 때문이다.
+  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
 }))
 
 export const cellKey=key

@@ -47,7 +47,7 @@ func TestVersionRestoreRecoversWorkbookSheetStructureAndBackup(t *testing.T) {
 	if _, err := repository.UpdateSheet(ctx, book.Sheets[0].ID, UpdateSheetInput{Name: &changedFirstName}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.DeleteSheet(ctx, detail.ID); err != nil {
+	if _, err := repository.DeleteSheet(ctx, detail.ID, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	temporary, err := repository.CreateSheet(ctx, book.ID, CreateSheetInput{Name: "임시 데이터"})
@@ -84,9 +84,14 @@ func TestVersionRestoreRecoversWorkbookSheetStructureAndBackup(t *testing.T) {
 		t.Fatalf("temporary sheet survived restore: %v", err)
 	}
 
+	// Three versions: the one this test made, the snapshot the sheet deletion
+	// left behind, and the one the restore itself took.
 	versions, err := repository.ListVersions(ctx, book.ID)
-	if err != nil || len(versions) != 2 || versions[0].Name != "복원 전 자동 백업" || versions[0].WorkbookVersion != 10 {
+	if err != nil || len(versions) != 3 || versions[0].Name != "복원 전 자동 백업" || versions[0].WorkbookVersion != 10 {
 		t.Fatalf("automatic backup: %#v, %v", versions, err)
+	}
+	if versions[1].Name != "시트 상세 삭제 전 자동 백업" {
+		t.Fatalf("sheet deletion backup: %#v", versions[1])
 	}
 	if _, err := repository.RestoreVersion(ctx, versions[0].ID, "owner"); err != nil {
 		t.Fatalf("restore automatic backup: %v", err)

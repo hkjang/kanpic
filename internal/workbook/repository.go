@@ -80,7 +80,7 @@ type Repository interface {
 	CreateSheet(context.Context, string, CreateSheetInput) (Sheet, error)
 	DuplicateSheet(context.Context, string, DuplicateSheetInput) (Sheet, error)
 	UpdateSheet(context.Context, string, UpdateSheetInput) (Sheet, error)
-	DeleteSheet(context.Context, string) error
+	DeleteSheet(context.Context, string, string) (SheetDeletion, error)
 	CreateFilterView(context.Context, string, string, CreateFilterViewInput) (FilterView, error)
 	ListFilterViews(context.Context, string, string) ([]FilterView, error)
 	GetFilterView(context.Context, string, string) (FilterView, error)

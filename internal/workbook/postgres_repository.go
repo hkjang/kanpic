@@ -1100,51 +1100,66 @@ func (r *PostgresRepository) UpdateSheet(ctx context.Context, sheetID string, in
 	return sheet, nil
 }
 
-func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) error {
+func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID, actorID string) (SheetDeletion, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var workbookID string
 	err = tx.QueryRow(ctx, `SELECT workbook_id::text FROM sheets WHERE id=$1`, sheetID).Scan(&workbookID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		return SheetDeletion{}, ErrNotFound
 	}
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workbookID).Scan(&workbookID); errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		return SheetDeletion{}, ErrNotFound
 	} else if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	var position, count int
 	err = tx.QueryRow(ctx, `SELECT position,(SELECT count(*) FROM sheets WHERE workbook_id=$2) FROM sheets WHERE id=$1 FOR UPDATE`, sheetID, workbookID).Scan(&position, &count)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		return SheetDeletion{}, ErrNotFound
 	}
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if count <= 1 {
-		return fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
+		return SheetDeletion{}, fmt.Errorf("%w: a workbook must contain at least one sheet", ErrInvalid)
+	}
+	var sheetName string
+	var currentVersion int64
+	if err := tx.QueryRow(ctx, `SELECT s.name,w.version FROM sheets s JOIN workbooks w ON w.id=s.workbook_id WHERE s.id=$1`, sheetID).Scan(&sheetName, &currentVersion); err != nil {
+		return SheetDeletion{}, err
+	}
+	// Deleting a sheet throws away every cell in it and there is no cell-level
+	// undo for it, so the snapshot taken here is the only way back.
+	currentSnapshot, err := r.buildSnapshot(ctx, tx, workbookID)
+	if err != nil {
+		return SheetDeletion{}, err
+	}
+	backup, err := r.insertSnapshot(ctx, tx, workbookID, currentVersion, sheetDeletionBackupName(sheetName), actorID, currentSnapshot)
+	if err != nil {
+		return SheetDeletion{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE charts SET source_sheet_id=NULL,source_range='#REF!',revision=revision+1,updated_at=$2 WHERE source_sheet_id=$1 AND sheet_id<>$1`, sheetID, r.now()); err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE pivots SET source_sheet_id=NULL,source_range='#REF!',source_version=0,cached_result=NULL,refreshed_at=NULL,revision=revision+1,updated_at=$2 WHERE source_sheet_id=$1 AND sheet_id<>$1`, sheetID, r.now()); err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM sheets WHERE id=$1`, sheetID); err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE sheets SET position=position-1 WHERE workbook_id=$1 AND position>$2`, workbookID, position); err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	sheetList, err := r.listSheets(ctx, tx, workbookID)
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	sheets := make(map[string]Sheet, len(sheetList))
 	existing := make(map[string]map[cellKey]Cell, len(sheetList))
@@ -1163,19 +1178,19 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	payloads := make(map[deleteBlockKey]map[string]Cell)
 	rows, err := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b JOIN sheets s ON s.id=b.sheet_id WHERE s.workbook_id=$1 FOR UPDATE OF b`, workbookID)
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	for rows.Next() {
 		var block deleteBlockKey
 		var data []byte
 		if err := rows.Scan(&block.sheetID, &block.row, &block.column, &data); err != nil {
 			rows.Close()
-			return err
+			return SheetDeletion{}, err
 		}
 		payload := make(map[string]Cell)
 		if json.Unmarshal(data, &payload) != nil {
 			rows.Close()
-			return fmt.Errorf("%w: stored cell block is invalid", ErrInvalid)
+			return SheetDeletion{}, fmt.Errorf("%w: stored cell block is invalid", ErrInvalid)
 		}
 		payloads[block] = payload
 		for _, cell := range payload {
@@ -1184,16 +1199,16 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return SheetDeletion{}, err
 	}
 	rows.Close()
 	namedRanges, err := listNamedRangesTx(ctx, tx, workbookID)
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, nil))
 	if err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
 	groups := make(map[deleteBlockKey][]CellInput)
 	for _, input := range expanded {
@@ -1217,19 +1232,19 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID string) er
 		}
 		if len(payload) == 0 {
 			if _, err := tx.Exec(ctx, `DELETE FROM cell_blocks WHERE sheet_id=$1 AND block_row=$2 AND block_column=$3`, block.sheetID, block.row, block.column); err != nil {
-				return err
+				return SheetDeletion{}, err
 			}
 		} else {
 			data, _ := json.Marshal(payload)
 			if _, err := tx.Exec(ctx, `INSERT INTO cell_blocks(sheet_id,block_row,block_column,payload,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(sheet_id,block_row,block_column) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`, block.sheetID, block.row, block.column, data, now); err != nil {
-				return err
+				return SheetDeletion{}, err
 			}
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=version+1,updated_at=$2 WHERE id=$1`, workbookID, now); err != nil {
-		return err
+		return SheetDeletion{}, err
 	}
-	return tx.Commit(ctx)
+	return SheetDeletion{WorkbookID: workbookID, SheetName: sheetName, BackupVersionID: backup.ID, ServerVersion: currentVersion + 1}, tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutation) (MutationResult, error) {
