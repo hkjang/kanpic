@@ -1115,6 +1115,9 @@ test('selects a range and pastes copied formulas with relative references', asyn
   await expect(page.locator('.name-box')).toHaveValue('A1:B1')
   await page.keyboard.press('Control+C')
   await canvas.click({position:{x:390,y:120}})
+  // 붙여넣기는 눌린 순간의 활성 셀에 들어간다. 선택이 옮겨진 것을 확인하지
+  // 않고 누르면 이전 셀이나 옆 칸에 붙는다.
+  await expect(page.locator('.name-box')).toHaveValue('D4')
   await page.keyboard.press('Control+V')
 
   const pasted = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/D4:E4`).then(response => response.json())
