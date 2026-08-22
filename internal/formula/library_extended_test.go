@@ -482,3 +482,75 @@ func TestStackingAndSlicingArrays(t *testing.T) {
 		t.Errorf("SORTBY with a short key = %v", result.Value)
 	}
 }
+
+// LET names the steps of a calculation so a long formula reads in the order it
+// is computed and each step is calculated once.
+func TestLetNamesTheStepsOfACalculation(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 10.0, "A2": 20.0, "A3": 30.0}
+	for formula, expected := range map[string]any{
+		`=LET(x,5,x*2)`:                                 10.0,
+		`=LET(x,5,y,x+1,x*y)`:                           30.0,
+		`=LET(total,SUM(A1:A3),total/COUNT(A1:A3))`:     20.0,
+		`=LET(x,A1,IF(x>5,"큼","작음"))`:                 "큼",
+		`=LAMBDA(x,x+1)(4)`:                             5.0,
+		`=LET(double,LAMBDA(x,x*2),double(21))`:         42.0,
+		`=LET(area,LAMBDA(w,h,w*h),area(3,4)+area(2,2))`: 16.0,
+		`=SUM(LET(x,2,x),3)`:                            5.0,
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if result.Value != expected {
+			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
+		}
+	}
+	// A name that reads as a cell reference is refused, because the formula
+	// would mean something different depending on where it sits.
+	if result := New().Evaluate(`=LET(A1,5,A1)`, cells); result.Error == nil {
+		t.Errorf("LET with a cell reference for a name = %v", result.Value)
+	}
+	// The cells a named step reads are still dependencies of the formula.
+	if result := New().Evaluate(`=LET(total,SUM(A1:A3),total)`, cells); len(result.Dependencies) != 3 {
+		t.Errorf("LET dependencies = %v", result.Dependencies)
+	}
+	// A LAMBDA on its own is a function, not something a cell can hold.
+	if result := New().Evaluate(`=LAMBDA(x,x)`, cells); result.Error == nil {
+		t.Errorf("a bare LAMBDA = %v", result.Value)
+	}
+}
+
+func TestLambdaHelpersWalkAnArray(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 1.0, "A2": 2.0, "A3": 3.0, "B1": 10.0, "B2": 20.0, "B3": 30.0}
+	for formula, expected := range map[string][][]any{
+		`=MAP(A1:A3,LAMBDA(x,x*2))`:            {{2.0}, {4.0}, {6.0}},
+		`=MAP(A1:A3,B1:B3,LAMBDA(x,y,x+y))`:    {{11.0}, {22.0}, {33.0}},
+		`=BYROW(A1:B3,LAMBDA(row,SUM(row)))`:   {{11.0}, {22.0}, {33.0}},
+		`=BYCOL(A1:B3,LAMBDA(col,SUM(col)))`:   {{6.0, 60.0}},
+		`=SCAN(0,A1:A3,LAMBDA(acc,x,acc+x))`:   {{1.0}, {3.0}, {6.0}},
+	} {
+		result := New().Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if !reflect.DeepEqual(result.Value, expected) {
+			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
+		}
+	}
+	if result := New().Evaluate(`=REDUCE(0,A1:A3,LAMBDA(acc,x,acc+x))`, cells); result.Error != nil || result.Value != 6.0 {
+		t.Errorf("REDUCE = %v, %v", result.Value, result.Error)
+	}
+	// A named LAMBDA can be handed to MAP, which is the point of having both.
+	if result := New().Evaluate(`=LET(tax,LAMBDA(v,v*0.1),SUM(MAP(B1:B3,tax)))`, cells); result.Error != nil || result.Value != 6.0 {
+		t.Errorf("MAP with a named LAMBDA = %v, %v", result.Value, result.Error)
+	}
+	// Without a function to apply there is nothing to do, and quietly
+	// returning the array would hide the mistake.
+	if result := New().Evaluate(`=MAP(A1:A3,5)`, cells); result.Error == nil {
+		t.Errorf("MAP without a LAMBDA = %v", result.Value)
+	}
+}

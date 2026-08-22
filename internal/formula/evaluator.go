@@ -92,6 +92,11 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 		normalized[normalizeAddress(address)] = value
 	}
 	value, evalErr := root.eval(normalized)
+	// A LAMBDA on its own is a function, not a result. Storing it would put
+	// something in the cell that nothing can display or calculate with.
+	if _, isFunction := value.(lambdaValue); isFunction && evalErr == nil {
+		evalErr = formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
+	}
 	dependencies := make([]string, 0, len(parser.dependencies))
 	for dependency := range parser.dependencies {
 		dependencies = append(dependencies, dependency)
@@ -365,6 +370,9 @@ type functionNode struct {
 
 func (n functionNode) eval(cells map[string]any) (any, error) {
 	name := strings.ToUpper(n.name)
+	if _, helper := lambdaHelpers[name]; helper {
+		return evaluateLambdaHelper(name, n.arguments, cells)
+	}
 	if name == "IF" {
 		if len(n.arguments) < 2 || len(n.arguments) > 3 {
 			return nil, argError(name)
@@ -663,6 +671,9 @@ type parser struct {
 	position     int
 	dependencies map[string]struct{}
 	scope        Scope
+	// bindings are the names LET and LAMBDA introduced around the point
+	// being parsed, innermost last so an inner name shadows an outer one.
+	bindings []binding
 }
 
 // measureExtent finds how far each sheet's content reaches so unbounded
@@ -808,6 +819,18 @@ func (p *parser) primary() (node, error) {
 		name := strings.ToUpper(strings.ReplaceAll(current.text, "$", ""))
 		if p.current().kind == tokenLeft {
 			p.position++
+			switch name {
+			case "LET":
+				return p.parseLet()
+			case "LAMBDA":
+				return p.callable(p.parseLambda())
+			}
+			// A name bound to a LAMBDA is called like any other function, so
+			// `LET(double, LAMBDA(x, x*2), double(21))` reads naturally.
+			if bound, found := p.lookupBinding(name); found {
+				p.position--
+				return p.callable(bound, nil)
+			}
 			arguments := make([]node, 0)
 			if p.current().kind != tokenRight {
 				for {
@@ -855,6 +878,9 @@ func (p *parser) primary() (node, error) {
 		}
 		if _, columnOnly := columnOnlyReference(name); columnOnly && p.current().kind == tokenColon {
 			return p.cellReference("", current.text)
+		}
+		if bound, found := p.lookupBinding(name); found {
+			return bound, nil
 		}
 		if !isReference(name) {
 			return p.namedRange(current.text)
