@@ -15,7 +15,7 @@ import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
-import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis,rowHeaderWidth} from '../lib/dimensionAxis'
+import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis,rowHeaderWidth,presenceLabelTop} from '../lib/dimensionAxis'
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
@@ -322,7 +322,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(x+cellWidth<headerWidth||y+cellHeight<headerHeight||x>size.width||y>size.height)return
       const color=presenceColor(user.client_id);context.strokeStyle=color;context.lineWidth=2;context.strokeRect(Math.round(x)+2,Math.round(y)+2,Math.round(cellWidth)-4,Math.round(cellHeight)-4);context.fillStyle=color;context.font=`600 ${9*zoom}px Inter, Pretendard, sans-serif`;context.textAlign='left'
       const label=userLabels?.[user.actor_id?.toLowerCase()??'']||user.actor_id||'사용자',labelWidth=Math.min(cellWidth,context.measureText(label).width+10)
-      context.fillRect(x+1,Math.max(headerHeight,y-15*zoom),labelWidth,14*zoom);context.fillStyle='#fff';context.fillText(label,x+5,Math.max(headerHeight+7*zoom,y-8*zoom),labelWidth-8)
+      // 이름표는 셀 위에 붙인다. 맨 윗줄이라 위에 자리가 없으면 아래로
+      // 내린다. 머리글 아래로 밀어 넣으면 그 셀의 내용을 가려서, 누가 어디에
+      // 있는지는 알려 주고 거기에 무엇이 있는지는 감추게 된다.
+      const labelHeight=14*zoom,labelTop=presenceLabelTop(y,cellHeight,labelHeight,headerHeight)
+      context.fillRect(x+1,labelTop,labelWidth,labelHeight);context.fillStyle='#fff';context.fillText(label,x+5,labelTop+labelHeight/2,labelWidth-8)
     })
     if(fillPreview){const box=geometry(fillPreview.startRow,fillPreview.startColumn,fillPreview.endRow,fillPreview.endColumn);if(box){context.fillStyle='rgba(15,118,110,.045)';context.fillRect(box.x,box.y,box.width,box.height);context.save();context.setLineDash([5,3]);context.strokeStyle='#0f766e';context.lineWidth=1;context.strokeRect(Math.round(box.x)+1,Math.round(box.y)+1,Math.round(box.width)-2,Math.round(box.height)-2);context.restore()}}
     const selectionBox=geometry(selection.startRow,selection.startColumn,selection.endRow,selection.endColumn)

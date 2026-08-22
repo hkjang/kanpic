@@ -171,8 +171,12 @@ test('plans, analyzes, cleans, audits, and undoes offline AI actions', async ({ 
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items[0]?.formula}).toBe('=A1*2')
     const actions=await page.request.get(`/api/v1/workbooks/${workbookId}/ai/actions`).then(response=>response.json())
     expect(actions.items).toHaveLength(1)
-    const audited=await page.request.get(`/api/v1/ai/actions/${actions.items[0].id}`).then(response=>response.json())
-    expect(audited.events.map((event:{tool_name:string})=>event.tool_name)).toEqual(['range.read','formula.set'])
+    // 감사 기록은 도구가 끝난 뒤에 쌓인다. 곧바로 읽으면 마지막 한 줄이
+    // 아직 없을 수 있어, 실행 전체가 남을 때까지 기다린다.
+    await expect.poll(async()=>{
+      const audited=await page.request.get(`/api/v1/ai/actions/${actions.items[0].id}`).then(response=>response.json())
+      return (audited.events??[]).map((event:{tool_name:string})=>event.tool_name)
+    }).toEqual(['range.read','formula.set'])
     await panel.getByRole('button',{name:'Undo'}).click()
     await expect(panel.getByText('AI 변경을 새 서버 버전으로 되돌렸습니다.')).toBeVisible()
     await expect.poll(async()=>{const range=await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1`).then(response=>response.json());return range.items.length}).toBe(0)

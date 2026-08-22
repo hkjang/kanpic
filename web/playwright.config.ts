@@ -2,6 +2,10 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  globalSetup: './e2e/global-setup.ts',
+  // 시나리오가 만든 워크북을 실행이 끝난 뒤 정리한다. 쌓이면 홈 화면을
+  // 다루는 시나리오가 느려지고 흔들린다.
+  globalTeardown: './e2e/global-teardown.ts',
   timeout: 30_000,
   fullyParallel: false,
   // Several specs change global settings (AI gateway, SMTP relay) that the

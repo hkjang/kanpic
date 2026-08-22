@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,rowHeaderWidth} from './dimensionAxis'
+import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,rowHeaderWidth,presenceLabelTop} from './dimensionAxis'
 
 describe('dimension axis',()=>{
   it('combines sparse sizes and hidden ranges without materializing every row',()=>{
@@ -36,5 +36,17 @@ describe('rowHeaderWidth', () => {
 
   it('scales the step with the zoom', () => {
     expect(rowHeaderWidth(46,150_001,2)).toBe(78)
+  })
+})
+
+describe('presenceLabelTop', () => {
+  it('sits above the cell when there is room', () => {
+    expect(presenceLabelTop(200,27,14,27)).toBe(185)
+  })
+
+  // 맨 윗줄에서 머리글 아래로 밀어 넣으면 그 셀의 내용을 가린다.
+  it('drops below the cell when the header is in the way', () => {
+    expect(presenceLabelTop(27,27,14,27)).toBe(55)
+    expect(presenceLabelTop(35,27,14,27)).toBe(63)
   })
 })

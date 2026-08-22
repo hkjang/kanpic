@@ -50,3 +50,14 @@ export function rowHeaderWidth(base:number,lastRowInView:number,zoom=1){
   const digits=Math.max(4,String(Math.max(1,Math.trunc(lastRowInView))).length)
   return base+(digits-4)*Math.round(8*zoom)
 }
+
+/**
+ * 함께 보고 있는 사람의 이름표를 놓을 세로 위치입니다. 셀 위에 붙이되,
+ * 맨 윗줄이라 위에 자리가 없으면 아래로 내립니다. 머리글 아래로 밀어
+ * 넣으면 그 셀의 내용을 가려, 누가 어디에 있는지는 알려 주면서 거기에
+ * 무엇이 있는지는 감추게 됩니다.
+ */
+export function presenceLabelTop(cellTop:number,cellHeight:number,labelHeight:number,headerHeight:number){
+  const above=cellTop-labelHeight-1
+  return above>=headerHeight?above:cellTop+cellHeight+1
+}
