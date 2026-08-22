@@ -70,6 +70,10 @@ test('the console configures a hosted provider and previews the generated code',
   // An incomplete configuration is reported rather than silently doing nothing.
   await page.getByLabel('측정 ID').fill('')
   await page.getByLabel('측정 ID').blur()
+  // 검사는 서버가 들고 있는 설정을 본다. 지우기가 아직 날아가는 중이면
+  // 예전 값으로 검사해 "문제 없음" 이라 답하고, 곧이어 도착한 저장 메시지가
+  // 그 자리를 덮는다. 서버가 실제로 비워진 뒤에 검사한다.
+  await expect.poll(async()=>(await request.get('/workbooks/none')).text()).not.toContain('googletagmanager')
   await page.getByRole('button',{name:'설정 확인'}).click()
   await expect(page.locator('.result-banner')).toContainText('analytics.measurement_id')
 })
