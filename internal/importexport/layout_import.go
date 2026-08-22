@@ -10,6 +10,25 @@ import (
 // stores a default for every row and column, so only the ones that differ are
 // carried over: recording the defaults would fill the layout with entries that
 // mean nothing.
+// storedRowCount is how many <row> elements the sheet actually carries.
+// excelize answers GetRowVisible for anything past that with "hidden" rather
+// than an error, so a sheet whose used range reaches beyond its last row - a
+// merge, a validation, a conditional format - imported with its tail hidden.
+// The row iterator stops at the last stored element, trailing empty rows
+// included, which is exactly the bound GetRowVisible is meaningful within.
+func storedRowCount(file *excelize.File, name string) int {
+	rows, err := file.Rows(name)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	return count
+}
+
 func readSheetLayout(file *excelize.File, name string, maxRow, maxColumn int) *workbook.SheetLayout {
 	if maxRow < 1 || maxColumn < 1 {
 		return nil
@@ -25,9 +44,15 @@ func readSheetLayout(file *excelize.File, name string, maxRow, maxColumn int) *w
 	defaultHeight, _ := file.GetRowHeight(name, min(maxRow+1, maxLayoutRow))
 	defaultWidth, _ := file.GetColWidth(name, columnLetters(min(maxColumn+1, maxLayoutColumn)))
 
+	stored := storedRowCount(file, name)
 	hiddenRun := 0
 	for row := 1; row <= maxRow; row++ {
 		visible, err := file.GetRowVisible(name, row)
+		if row > stored {
+			// A row the file never wrote down cannot be hidden, whatever
+			// excelize answers for it.
+			visible, err = true, nil
+		}
 		if err == nil && !visible {
 			if hiddenRun == 0 {
 				hiddenRun = row

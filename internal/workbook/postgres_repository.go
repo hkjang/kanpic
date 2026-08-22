@@ -180,7 +180,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 		}
 		importedCells[sheet.ID] = make(map[cellKey]Cell, len(imported.Cells))
 		for _, inputCell := range imported.Cells {
-			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}
+			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), Note: inputCell.Note, UpdatedAt: now}
 			if isEmptyCell(cell) {
 				continue
 			}
@@ -196,6 +196,11 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	for _, inputCell := range expanded {
 		key := cellKey{inputCell.Row, inputCell.Column}
 		cell := Cell{SheetID: inputCell.SheetID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), SpillSource: inputCell.SpillSource, UpdatedAt: now}
+		// Recalculation rewrites the cell from its formula and knows nothing
+		// about the note hanging on it.
+		if previous, exists := importedCells[inputCell.SheetID][key]; exists {
+			cell.Note = previous.Note
+		}
 		if isEmptyCell(cell) {
 			delete(importedCells[inputCell.SheetID], key)
 		} else {

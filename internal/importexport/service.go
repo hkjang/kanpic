@@ -25,7 +25,25 @@ const (
 	DefaultMaxUploadBytes   = 20 << 20
 	DefaultMaxExpandedBytes = 200 << 20
 	MaxImportCells          = 1_000_000
+	// Excel caps a comment at 32,512 characters and its author at 255. A note
+	// longer than that would make the whole export fail, so it is cut instead.
+	maxCommentLength    = 32_512
+	exportCommentAuthor = "kanpic"
 )
+
+// trimComment keeps a note within what a comment may hold, cutting on a rune
+// boundary so a multi-byte character never ends up halved.
+func trimComment(note string) string {
+	note = strings.TrimSpace(note)
+	if len(note) <= maxCommentLength {
+		return note
+	}
+	cut := maxCommentLength
+	for cut > 0 && !utf8.RuneStart(note[cut]) {
+		cut--
+	}
+	return note[:cut]
+}
 
 type SheetPreview struct {
 	Name          string `json:"name"`
@@ -266,13 +284,67 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		if parsed.Preview.TotalCells > MaxImportCells {
 			return ParsedWorkbook{}, errors.New("import exceeds one million stored cells")
 		}
+		comments, commentErr := file.GetComments(sheetName)
+		if commentErr != nil {
+			return ParsedWorkbook{}, fmt.Errorf("read comments from sheet %s: %w", sheetName, commentErr)
+		}
+		storedBeforeComments := len(imported.Cells)
+		if err := applyImportedComments(&imported, comments, &rowIndex, &maxColumns); err != nil {
+			return ParsedWorkbook{}, fmt.Errorf("import comments from sheet %s: %w", sheetName, err)
+		}
+		parsed.Preview.TotalCells += len(imported.Cells) - storedBeforeComments
+		if parsed.Preview.TotalCells > MaxImportCells {
+			return ParsedWorkbook{}, errors.New("import exceeds one million stored cells")
+		}
 		imported.Layout = readSheetLayout(file, sheetName, rowIndex, maxColumns)
 		imported.Validations = importValidations(file, sheetName)
 		imported.ConditionalFormats = importConditionalFormats(file, sheetName)
 		parsed.Sheets = append(parsed.Sheets, imported)
 		parsed.Preview.Sheets = append(parsed.Preview.Sheets, SheetPreview{Name: sheetName, Rows: rowIndex, Columns: maxColumns, NonEmptyCells: len(imported.Cells)})
 	}
+	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, file)...)
 	return parsed, nil
+}
+
+// unsupportedXLSXParts names what the file carries and the import does not. The
+// reader already knows: a workbook that arrives without its charts and its
+// names looks like the import worked and reads like a different workbook.
+func unsupportedXLSXParts(archive *zip.Reader, file *excelize.File) []string {
+	counts := map[string]int{}
+	for _, entry := range archive.File {
+		switch {
+		case strings.HasPrefix(entry.Name, "xl/charts/chart") && strings.HasSuffix(entry.Name, ".xml"):
+			counts["chart"]++
+		case strings.HasPrefix(entry.Name, "xl/pivotTables/pivotTable") && strings.HasSuffix(entry.Name, ".xml"):
+			counts["pivot"]++
+		case strings.HasPrefix(entry.Name, "xl/media/"):
+			counts["media"]++
+		case strings.HasPrefix(entry.Name, "xl/externalLinks/externalLink") && strings.HasSuffix(entry.Name, ".xml"):
+			counts["external"]++
+		case entry.Name == "xl/vbaProject.bin":
+			counts["macro"]++
+		}
+	}
+	warnings := make([]string, 0, 5)
+	if names := file.GetDefinedName(); len(names) > 0 {
+		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다. 이름을 쓰는 수식은 #NAME? 이 됩니다.", len(names)))
+	}
+	if counts["chart"] > 0 {
+		warnings = append(warnings, fmt.Sprintf("차트 %d개는 가져오지 않습니다. 원본 데이터 범위는 그대로 들어옵니다.", counts["chart"]))
+	}
+	if counts["pivot"] > 0 {
+		warnings = append(warnings, fmt.Sprintf("피벗 테이블 %d개는 가져오지 않습니다. 계산된 값은 셀로 남습니다.", counts["pivot"]))
+	}
+	if counts["media"] > 0 {
+		warnings = append(warnings, fmt.Sprintf("이미지 %d개는 가져오지 않습니다.", counts["media"]))
+	}
+	if counts["external"] > 0 {
+		warnings = append(warnings, fmt.Sprintf("다른 파일을 참조하는 연결 %d개는 가져오지 않습니다. 마지막으로 저장된 값이 셀에 남습니다.", counts["external"]))
+	}
+	if counts["macro"] > 0 {
+		warnings = append(warnings, "매크로(VBA)는 가져오지 않습니다.")
+	}
+	return warnings
 }
 
 func (s *Service) Export(ctx context.Context, request ExportRequest) (ExportedFile, error) {
@@ -461,6 +533,14 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 			} else if merged {
 				mergedRanges[fmt.Sprintf("%d:%d:%d:%d", metadata.StartRow, metadata.StartColumn, metadata.EndRow, metadata.EndColumn)] = metadata
 			}
+			// A note is the whole point of the cell it hangs on: "이 수치는 추정".
+			// Excel keeps it as a cell comment, and a file that arrives without
+			// one looks the same and says less.
+			if note := trimComment(cell.Note); note != "" {
+				if err := file.AddComment(name, excelize.Comment{Cell: coordinate, Author: exportCommentAuthor, Text: note}); err != nil {
+					return ExportedFile{}, err
+				}
+			}
 			if styleDefinition := xlsxStyle(cell.Style); styleDefinition != nil {
 				styleData, _ := json.Marshal(styleDefinition)
 				key := string(styleData)
@@ -495,6 +575,25 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 	for index, sheet := range wb.Sheets {
 		sheetNames[sheet.ID] = sanitizeSheetName(sheet.Name, index)
 	}
+	// A named range is how a sheet explains itself: =SUM(단가) reads and a file
+	// that arrives without the name turns every formula using it into #NAME?.
+	named, err := s.repository.ListNamedRanges(ctx, wb.ID)
+	if err != nil {
+		return ExportedFile{}, err
+	}
+	for _, item := range named {
+		sheetName, known := sheetNames[item.SheetID]
+		if !known {
+			continue
+		}
+		refersTo, ok := definedNameTarget(sheetName, item.Range)
+		if !ok {
+			continue
+		}
+		// Excel is stricter about what a name may be than kanpic is. One name it
+		// refuses must not cost the whole export.
+		_ = file.SetDefinedName(&excelize.DefinedName{Name: item.Name, RefersTo: refersTo})
+	}
 	charts, err := s.repository.ListCharts(ctx, wb.ID, "")
 	if err != nil {
 		return ExportedFile{}, err
@@ -524,6 +623,94 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		return ExportedFile{}, err
 	}
 	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes()}, nil
+}
+
+// applyImportedComments carries Excel cell comments over as kanpic notes. A
+// note can sit on an otherwise empty cell, which the row reader skips, so this
+// runs over the whole comment list rather than over the cells already read.
+// definedNameTarget writes an A1 range the way a workbook-scoped Excel name
+// has to: sheet-qualified and absolute, with the sheet name quoted when it
+// carries anything but letters and digits.
+func definedNameTarget(sheetName, area string) (string, bool) {
+	selected, err := cellrange.Parse(area)
+	if err != nil {
+		return "", false
+	}
+	quoted := sheetName
+	if strings.ContainsAny(sheetName, " '!\"") || strings.Contains(sheetName, "-") {
+		quoted = "'" + strings.ReplaceAll(sheetName, "'", "''") + "'"
+	}
+	start := absoluteAddress(selected.Start.Row, selected.Start.Column)
+	end := absoluteAddress(selected.End.Row, selected.End.Column)
+	if start == end {
+		return quoted + "!" + start, true
+	}
+	return quoted + "!" + start + ":" + end, true
+}
+
+func absoluteAddress(row, column int) string {
+	address := cellrange.Address(row, column)
+	for index := 0; index < len(address); index++ {
+		if address[index] >= '0' && address[index] <= '9' {
+			return "$" + address[:index] + "$" + address[index:]
+		}
+	}
+	return "$" + address
+}
+
+func applyImportedComments(imported *workbook.ImportSheet, comments []excelize.Comment, maxRow, maxColumn *int) error {
+	if len(comments) == 0 {
+		return nil
+	}
+	byCoordinate := make(map[string]int, len(imported.Cells))
+	for index, input := range imported.Cells {
+		byCoordinate[coordinateKey(input.Row, input.Column)] = index
+	}
+	for _, comment := range comments {
+		note := trimComment(commentText(comment))
+		if note == "" {
+			continue
+		}
+		column, row, err := excelize.CellNameToCoordinates(comment.Cell)
+		if err != nil {
+			return err
+		}
+		if row > maxLayoutRow || column > maxLayoutColumn {
+			continue
+		}
+		if index, exists := byCoordinate[coordinateKey(row, column)]; exists {
+			imported.Cells[index].Note = note
+			continue
+		}
+		byCoordinate[coordinateKey(row, column)] = len(imported.Cells)
+		imported.Cells = append(imported.Cells, workbook.CellInput{Row: row, Column: column, Note: note})
+		if row > *maxRow {
+			*maxRow = row
+		}
+		if column > *maxColumn {
+			*maxColumn = column
+		}
+	}
+	sort.Slice(imported.Cells, func(i, j int) bool {
+		if imported.Cells[i].Row == imported.Cells[j].Row {
+			return imported.Cells[i].Column < imported.Cells[j].Column
+		}
+		return imported.Cells[i].Row < imported.Cells[j].Row
+	})
+	return nil
+}
+
+// commentText prefers the plain text and falls back to the rich-text runs,
+// because Excel writes a formatted comment only as paragraphs.
+func commentText(comment excelize.Comment) string {
+	if text := strings.TrimSpace(comment.Text); text != "" {
+		return text
+	}
+	var builder strings.Builder
+	for _, run := range comment.Paragraph {
+		builder.WriteString(run.Text)
+	}
+	return strings.TrimSpace(builder.String())
 }
 
 func applyImportedMerges(imported *workbook.ImportSheet, merges []excelize.MergeCell, maxRow, maxColumn *int) error {

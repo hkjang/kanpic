@@ -159,7 +159,7 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 			if inputCell.Row < 1 || inputCell.Column < 1 {
 				return Workbook{}, fmt.Errorf("%w: row and column must be positive", ErrInvalid)
 			}
-			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), UpdatedAt: now}
+			cell := Cell{SheetID: sheet.ID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), Note: inputCell.Note, UpdatedAt: now}
 			if !isEmptyCell(cell) {
 				state.cells[sheet.ID][cellKey{cell.Row, cell.Column}] = cell
 			}
@@ -208,6 +208,11 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	for _, inputCell := range expanded {
 		key := cellKey{inputCell.Row, inputCell.Column}
 		cell := Cell{SheetID: inputCell.SheetID, Row: inputCell.Row, Column: inputCell.Column, Value: cloneJSON(inputCell.Value), Formula: inputCell.Formula, Style: cloneJSON(inputCell.Style), SpillSource: inputCell.SpillSource, UpdatedAt: now}
+		// Recalculation rewrites the cell from its formula and knows nothing
+		// about the note hanging on it.
+		if previous, exists := state.cells[inputCell.SheetID][key]; exists {
+			cell.Note = previous.Note
+		}
 		if isEmptyCell(cell) {
 			delete(state.cells[inputCell.SheetID], key)
 		} else {

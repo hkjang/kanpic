@@ -767,3 +767,165 @@ func TestDelimitedExportWritesPlainNumbers(t *testing.T) {
 		}
 	}
 }
+
+// excelize answers GetRowVisible with "hidden" for every row past the last one
+// the file stores, so a sheet whose used range reaches beyond its last written
+// row - here a merge on row 11 of a nine-row sheet - imported with its tail
+// hidden and the merged cell nowhere on screen.
+func TestXLSXImportDoesNotHideRowsPastTheLastStoredOne(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "tail", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "tail-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("머리글")},
+		{Row: 4, Column: 1, Value: value("마지막 값")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplySheetLayout(ctx, workbook.SheetLayoutMutation{SheetID: sheetID, ActorID: "tester", IdempotencyKey: "tail-hide", ExpectedRevision: 1, Action: "hide", Axis: "row", Start: 2, Count: 1}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := repository.GetWorkbook(ctx, wb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The merge lives past every row the sheet writes down.
+	selected, err := cellrange.Parse("A11:C11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := workbook.BuildMergeCells(nil, selected, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: current.Version, IdempotencyKey: "tail-merge", Cells: merged}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := parsed.Sheets[0].Layout
+	if layout == nil || len(layout.HiddenRows) != 1 || layout.HiddenRows[0].Start != 2 || layout.HiddenRows[0].End != 2 {
+		t.Fatalf("hidden rows after the round trip = %#v", layout)
+	}
+}
+
+// A note is the whole point of the cell it hangs on. Neither direction carried
+// one: exports arrived in Excel without comments, and an Excel comment was
+// dropped on the way in.
+func TestXLSXNotesSurviveAnExportImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "notes", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "note-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("매출")},
+		{Row: 2, Column: 1, Value: value(1200), Note: "회계팀 추정치입니다"},
+		// A note with nothing else on the cell still has to travel.
+		{Row: 3, Column: 2, Note: "여기에 실적을 채워 주세요"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := map[string]string{}
+	for _, cell := range parsed.Sheets[0].Cells {
+		if cell.Note != "" {
+			notes[cellrange.Address(cell.Row, cell.Column)] = cell.Note
+		}
+	}
+	if notes["A2"] != "회계팀 추정치입니다" || notes["B3"] != "여기에 실적을 채워 주세요" || len(notes) != 2 {
+		t.Fatalf("notes after the round trip = %#v", notes)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "note-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A1:C3")
+	stored, err := repository.ReadRange(ctx, restored.Sheets[0].ID, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]string{}
+	for _, cell := range stored {
+		if cell.Note != "" {
+			found[cellrange.Address(cell.Row, cell.Column)] = cell.Note
+		}
+	}
+	if found["A2"] != "회계팀 추정치입니다" || found["B3"] != "여기에 실적을 채워 주세요" {
+		t.Fatalf("stored notes = %#v", found)
+	}
+}
+
+// A name is how a sheet explains itself. Exports carried no definedNames at
+// all, so =SUM(단가) opened in Excel as #NAME?.
+func TestXLSXExportCarriesNamedRanges(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "names", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "name-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 3, Value: value(1500)}, {Row: 2, Column: 3, Value: value(3200)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateNamedRange(ctx, wb.ID, "tester", workbook.CreateNamedRangeInput{IdempotencyKey: "name-1", SheetID: sheetID, Name: "단가", Range: "C1:C2"}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(repository)
+	exported, err := service.Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	names := file.GetDefinedName()
+	if len(names) != 1 || names[0].Name != "단가" || names[0].RefersTo != "Sheet1!$C$1:$C$2" {
+		t.Fatalf("defined names = %#v", names)
+	}
+	// Import does not keep them yet, so the preview has to say so rather than
+	// letting the name disappear without a word.
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Preview.Warnings) != 1 || !strings.Contains(parsed.Preview.Warnings[0], "이름 정의 1개") {
+		t.Fatalf("import warnings = %#v", parsed.Preview.Warnings)
+	}
+}
