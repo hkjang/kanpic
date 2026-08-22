@@ -97,6 +97,11 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 	if _, isFunction := value.(lambdaValue); isFunction && evalErr == nil {
 		evalErr = formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
 	}
+	// Infinity and NaN cannot be written as JSON, so a result that overflowed
+	// used to reach the browser as an empty response body rather than a value.
+	if evalErr == nil && !finiteValue(value) {
+		evalErr = formulaError("#NUM!", "the result is outside the range a number can hold")
+	}
 	dependencies := make([]string, 0, len(parser.dependencies))
 	for dependency := range parser.dependencies {
 		dependencies = append(dependencies, dependency)
@@ -112,6 +117,11 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 }
 
 type tokenKind int
+
+// numericDigits is how many significant decimal digits a result keeps. Excel
+// and Google Sheets both use fifteen, which is the most a float64 represents
+// without the binary remainder showing through.
+const numericDigits = 15
 
 const (
 	tokenEOF tokenKind = iota
@@ -176,6 +186,22 @@ func lex(input string) ([]token, error) {
 			}
 			if dots > 1 {
 				return nil, fmt.Errorf("invalid number %q", input[start:index])
+			}
+			// 지수 표기(1E-10, 2E3). 값으로 칠 때는 이미 받아들이면서 수식
+			// 안에서는 "unexpected token E" 였다. E 뒤에 숫자가 오지 않으면
+			// 셀 참조(E3 같은)이므로 숫자에 삼키지 않는다.
+			if index < len(input) && (input[index] == 'e' || input[index] == 'E') {
+				exponent := index + 1
+				if exponent < len(input) && (input[exponent] == '+' || input[exponent] == '-') {
+					exponent++
+				}
+				digits := exponent
+				for digits < len(input) && input[digits] >= '0' && input[digits] <= '9' {
+					digits++
+				}
+				if digits > exponent {
+					index = digits
+				}
 			}
 			tokens = append(tokens, token{tokenNumber, input[start:index]})
 			continue
@@ -1268,9 +1294,56 @@ func publicValue(value any) any {
 			result[index] = publicValue(item)
 		}
 		return result
+	case float64:
+		return significantDigits(typed)
 	default:
 		return value
 	}
+}
+
+// finiteValue reports whether every number in a result can be written down.
+func finiteValue(value any) bool {
+	switch typed := value.(type) {
+	case float64:
+		return !math.IsNaN(typed) && !math.IsInf(typed, 0)
+	case arrayValue:
+		for _, item := range typed.values {
+			if !finiteValue(item) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		for _, item := range typed {
+			if !finiteValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+// significantDigits is what keeps `=0.1+0.2` from reading 0.30000000000000004.
+// Binary floating point cannot hold those decimals exactly, and every
+// spreadsheet hides the difference the same way: a result carries fifteen
+// significant decimal digits, which is all a float64 can promise anyway.
+func significantDigits(value float64) float64 {
+	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return value
+	}
+	magnitude := math.Log10(math.Abs(value))
+	// Past what a float64 can represent exactly, rounding would move the value
+	// rather than tidy it.
+	if magnitude >= 15 || magnitude < -300 {
+		return value
+	}
+	rounded, err := strconv.ParseFloat(strconv.FormatFloat(value, 'g', numericDigits, 64), 64)
+	if err != nil {
+		return value
+	}
+	return rounded
 }
 func truthy(value any) bool {
 	if value == nil {
@@ -1300,6 +1373,11 @@ func compare(a, b any) int {
 	left, leftOK := toNumber(a)
 	right, rightOK := toNumber(b)
 	if leftOK && rightOK {
+		// `=0.1+0.2=0.3` has to be TRUE. The two sides differ only in the
+		// binary remainder neither of them is meant to carry, and a check like
+		// `=IF(합계=예상,"OK","불일치")` would otherwise report a mismatch
+		// that is not there.
+		left, right = significantDigits(left), significantDigits(right)
 		if left < right {
 			return -1
 		}

@@ -1,6 +1,7 @@
 package formula
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -634,6 +635,85 @@ func TestDateArithmeticAnswersDaysApartAndShiftsADate(t *testing.T) {
 	} {
 		if result := New().Evaluate(formula, cells); result.Error == nil {
 			t.Fatalf("%s produced %#v instead of an error", formula, result.Value)
+		}
+	}
+}
+
+// `=0.1+0.2` reading 0.30000000000000004 is the oldest way a spreadsheet can
+// look broken. Every spreadsheet hides the binary remainder the same way: a
+// result carries fifteen significant decimal digits.
+func TestNumericResultsCarryFifteenSignificantDigits(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=0.1+0.2", 0.3},
+		{"=0.3-0.1", 0.2},
+		{"=1.1*3", 3.3},
+		{"=(0.1+0.2)*10", float64(3)},
+		{"=SUM(0.1,0.2,0.3)", 0.6},
+		// 열다섯 자리까지는 그대로 남는다. 반올림이 값을 옮기면 안 된다.
+		{"=1/3", 0.333333333333333},
+		{"=2/3", 0.666666666666667},
+		{"=1234567.89*100", 123456789.0},
+		// 비교도 같은 자리에서 이루어져야 `=IF(합계=예상,…)` 이 맞는 답을 낸다.
+		{"=0.1+0.2=0.3", true},
+		{"=(0.1+0.2)>0.3", false},
+		{"=(0.1+0.2)>=0.3", true},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error != nil {
+			t.Fatalf("%s: %v", testCase.formula, result.Error)
+		}
+		if result.Value != testCase.want {
+			t.Fatalf("%s = %#v, want %#v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+}
+
+// 지수 표기는 값으로 칠 때는 받아들이면서 수식 안에서는 "unexpected token E"
+// 였다. 아주 크거나 작은 수를 다루면 바로 막힌다.
+func TestFormulasAcceptScientificNotation(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"E3": 7, "A1": 2}
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=2E3", float64(2000)},
+		{"=1.5E+3", float64(1500)},
+		{"=1E-2", 0.01},
+		{"=1E-10*2", 2e-10},
+		{"=2e2+1", float64(201)},
+		// E3 은 셀 참조다. 숫자에 삼켜서는 안 된다.
+		{"=E3", 7},
+		{"=A1*E3", float64(14)},
+		{"=SUM(A1:E3)", float64(9)},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Fatalf("%s: %v", testCase.formula, result.Error)
+		}
+		if result.Value != testCase.want {
+			t.Fatalf("%s = %#v, want %#v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+}
+
+// 넘쳐 버린 결과는 JSON 으로 쓸 수 없어 브라우저에 빈 응답이 갔다.
+func TestOverflowReportsNumberRangeInsteadOfAnUnwritableValue(t *testing.T) {
+	t.Parallel()
+	for _, formula := range []string{"=1E308*10", "=-1E308*10", "=10^400", "=SEQUENCE(2,1)*1E308*10"} {
+		result := New().Evaluate(formula, map[string]any{})
+		if result.Error == nil {
+			t.Fatalf("%s produced %#v instead of an error", formula, result.Value)
+		}
+		if result.Error.Code != "#NUM!" {
+			t.Fatalf("%s reported %s", formula, result.Error.Code)
+		}
+		if _, err := json.Marshal(result); err != nil {
+			t.Fatalf("%s: the result cannot be written as JSON: %v", formula, err)
 		}
 	}
 }
