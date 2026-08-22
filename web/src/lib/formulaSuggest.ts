@@ -62,9 +62,12 @@ function enclosingCall(upto:string):{name:string;argument:number}|undefined{
 export function suggestFunctions(functions:FunctionDoc[],token:string,limit=8):FunctionDoc[]{
   if(!token)return []
   const needle=token.toUpperCase()
-  const starts=functions.filter(item=>item.name.startsWith(needle))
+  // A fully typed name goes first. Otherwise typing TEXT and pressing Tab
+  // would accept TEXTJOIN, because it is listed earlier.
+  const exact=functions.filter(item=>item.name===needle)
+  const starts=functions.filter(item=>item.name!==needle&&item.name.startsWith(needle))
   const contains=functions.filter(item=>!item.name.startsWith(needle)&&item.name.includes(needle))
-  return [...starts,...contains].slice(0,limit)
+  return [...exact,...starts,...contains].slice(0,limit)
 }
 
 /** Replaces the partial name with the chosen function and an open bracket. */

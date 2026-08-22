@@ -4,6 +4,8 @@ import { AlertTriangle, AlignCenter, Eye, Grid2X2, Lock, MessageCircle, Settings
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
+import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from '../components/FormulaAutocomplete'
+import { applySuggestion } from '../lib/formulaSuggest'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
 import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
 import { ShareDialog,accessSummary } from '../components/ShareDialog'
@@ -97,6 +99,11 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
   const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
+  // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
+  const functionCatalog=useFunctionCatalog()
+  const formulaInput=useRef<HTMLTextAreaElement|null>(null)
+  const [formulaCaret,setFormulaCaret]=useState(0),[formulaSuggestion,setFormulaSuggestion]=useState(0)
   const [nameBoxValue,setNameBoxValue]=useState('A1'),[pendingNavigation,setPendingNavigation]=useState<{sheetId:string;range:{startRow:number;startColumn:number;endRow:number;endColumn:number}}>()
   const [showGridlines,setShowGridlines]=useState(true),[functionsOpen,setFunctionsOpen]=useState(false)
   const [tableMenu,setTableMenu]=useState<{x:number;y:number}>(),[borderMenu,setBorderMenu]=useState<{x:number;y:number}>()
@@ -791,6 +798,15 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'nav:preferences',group:'이동',label:'개인 환경설정',icon:<Settings/>,keywords:'preferences 설정',run:()=>{window.location.href='/preferences'}},
     ...(session?.admin?[{id:'nav:admin',group:'이동',label:'관리자 콘솔',icon:<Settings/>,keywords:'admin 관리자',run:()=>{window.location.href='/admin'}}]:[]),
   ]
+  const formulaBarHint=editor.editing&&!readOnly?formulaHint(functionCatalog,editor.draft,formulaCaret):undefined
+  const chooseFormulaSuggestion=(name:string)=>{
+    if(!formulaBarHint)return
+    const next=applySuggestion(editor.draft,formulaBarHint.context,name)
+    editor.setDraft(next.text)
+    setFormulaCaret(next.caret)
+    setFormulaSuggestion(0)
+    requestAnimationFrame(()=>formulaInput.current?.setSelectionRange(next.caret,next.caret))
+  }
   const menus:WorkbookMenu[]=[
     {label:'파일',items:[
       {kind:'item',label:'저장',shortcut:'Ctrl+S',onSelect:()=>void saveWorkbook()},
@@ -975,16 +991,26 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'찾기 및 바꾸기',shortcut:'Ctrl+H',onSelect:()=>openSearch(true)},
       {kind:'item',label:'단축키 목록',shortcut:'Ctrl+/',onSelect:()=>setShortcutsOpen(true)},
     ]}/>}
-    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><textarea className="formula-input" rows={1} spellCheck={false} aria-label="수식 입력창" value={editor.editing?editor.draft:formula} readOnly={readOnly}
+    <div className="formula-bar"><form onSubmit={event=>{event.preventDefault();submitNameBox()}}><input className="name-box" ref={nameBoxRef} aria-label="이름 상자" list="named-range-options" value={nameBoxValue} onChange={event=>setNameBoxValue(event.target.value)} onBlur={()=>{if(!nameBoxValue.trim())setNameBoxValue(selectionAddress)}}/><datalist id="named-range-options">{(namedRanges.data?.items??[]).map(item=><option key={item.id} value={item.name}>{item.range}</option>)}</datalist></form><button className="named-range-trigger" aria-label="이름 범위 관리" title="이름 범위 관리" onClick={()=>setNamedRangeOpen(true)}><Link2/></button><span>fx</span><textarea className="formula-input" rows={1} spellCheck={false} aria-label="수식 입력창" ref={formulaInput} value={editor.editing?editor.draft:formula} readOnly={readOnly}
+      onSelect={event=>setFormulaCaret(event.currentTarget.selectionStart??0)}
       onFocus={()=>{
         if(readOnly||editor.editing)return
         const source=activeCell?.spill_source&&parseCellAddress(activeCell.spill_source)
         if(source)editor.select(source.row,source.column)
         else{editor.setDraft(formula);editor.setEditing(true)}
       }}
-      onChange={event=>{if(!readOnly){editor.setDraft(event.target.value);editor.setEditing(true)}}}
+      onChange={event=>{if(!readOnly){setFormulaCaret(event.target.selectionStart??event.target.value.length);setFormulaSuggestion(0);editor.setDraft(event.target.value);editor.setEditing(true)}}}
       onKeyDown={event=>{
         if(event.nativeEvent.isComposing)return
+        // 제안 목록이 떠 있으면 방향키와 Tab·Enter는 목록의 것이다. 셀 안에서와
+        // 같은 조작이어야 어디에 쓰든 손이 헷갈리지 않는다.
+        const suggestions=formulaBarHint?.matches??[]
+        if(suggestions.length>0&&formulaSuggestion>=0){
+          if(event.key==='ArrowDown'){event.preventDefault();setFormulaSuggestion((formulaSuggestion+1)%suggestions.length);return}
+          if(event.key==='ArrowUp'){event.preventDefault();setFormulaSuggestion((formulaSuggestion-1+suggestions.length)%suggestions.length);return}
+          if(event.key==='Tab'||(event.key==='Enter'&&!(event.ctrlKey||event.metaKey))){event.preventDefault();chooseFormulaSuggestion(suggestions[formulaSuggestion].name);return}
+          if(event.key==='Escape'){event.preventDefault();setFormulaSuggestion(-1);return}
+        }
         // Alt+Enter writes a line break here too, so a multi-line cell can be
         // edited from the formula bar without losing its breaks.
         if(event.key==='Enter'&&event.altKey){
@@ -998,7 +1024,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         }
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
-      }}/></div>
+      }}/>
+      {formulaBarHint&&formulaSuggestion>=0&&<FormulaAutocomplete hint={formulaBarHint} active={formulaSuggestion} left={88} top={31} onChoose={chooseFormulaSuggestion}/>}</div>
     <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange} onResolveNumericRun={resolveNumericRun}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}

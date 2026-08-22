@@ -53,6 +53,9 @@ function highlightArgument(syntax:string,argument:number){
   const open=syntax.indexOf('(')
   if(open<0)return syntax
   const parts=syntax.slice(open+1,syntax.lastIndexOf(')')).split(', ')
+  // `SUM(값1, 값2, …)` accepts more arguments than it names. Without this the
+  // hint goes blank on the fourth value, which is when it is needed most.
+  if(argument>=parts.length&&parts[parts.length-1]==='…')argument=parts.length-1
   return <>
     {syntax.slice(0,open+1)}
     {parts.map((part,index)=><span key={index}>
