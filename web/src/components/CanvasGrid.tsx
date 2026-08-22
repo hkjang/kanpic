@@ -12,6 +12,7 @@ import { dataRegion, populatedCell } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
+import { parseClipboardHtml } from '../lib/clipboardHtml'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
@@ -707,7 +708,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     await queueCells(empty,'paste')
   },[queueCells,selection.endColumn,selection.endRow,selection.startColumn,selection.startRow])
   const cut=(event:React.ClipboardEvent)=>{if(editing)return;if(writeClipboard(event))void clearSelection()}
-  const runPaste=useCallback((text:string,internal:string,mode:PasteMode)=>{
+  const runPaste=useCallback((text:string,internal:string,mode:PasteMode,html?:string)=>{
+    // 다른 스프레드시트의 표는 HTML 쪽에 서식과 실제 값을 함께 담아 온다.
+    // 워커에는 DOMParser 가 없으므로 여기서 읽어 넘긴다.
+    const htmlCells=internal?undefined:html?parseClipboardHtml(html,MAX_PASTE_CELLS):undefined
     const worker=new Worker(new URL('../workers/paste.worker.ts',import.meta.url),{type:'module'})
     worker.onmessage=async(message:MessageEvent<{cells?:PastedCell[];error?:string}>)=>{try{
       if(message.data.error){setSaveState('error');alert(message.data.error);return}
@@ -720,14 +724,14 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       await queueCells(pasted,'paste')
     }finally{worker.terminate()}}
     worker.onerror=()=>{setSaveState('error');worker.terminate();alert('붙여넣기 데이터를 처리하지 못했습니다.')}
-    worker.postMessage({text,internal,startRow:activeRow,startColumn:activeColumn,mode})
+    worker.postMessage({text,internal,startRow:activeRow,startColumn:activeColumn,mode,htmlCells})
   },[activeColumn,activeRow,cells,queueCells,setSaveState])
   const paste=(event:React.ClipboardEvent)=>{
     // While a cell is open the paste belongs to the text being edited.
     if(editing)return
     event.preventDefault()
     const valuesOnly=pasteAsValues.current;pasteAsValues.current=false
-    runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly?'values':'all')
+    runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly?'values':'all',event.clipboardData.getData('text/html'))
   }
   // Menu-driven clipboard actions cannot rely on a browser clipboard event, so
   // they use the async Clipboard API and keep the last internal copy in memory

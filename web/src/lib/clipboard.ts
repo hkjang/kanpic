@@ -1,3 +1,6 @@
+import type { HtmlCell } from './clipboardHtml'
+import { parsePastedNumber } from './clipboardNumber'
+
 export const KANPIC_CLIPBOARD_TYPE = 'application/x-kanpic-cells+json'
 export const MAX_PASTE_CELLS = 10_000
 // 정렬은 범위 전체를 한 번에 다시 쓰지만, 편집을 이어서 하는 것이 아니라
@@ -124,12 +127,15 @@ export function parseClipboardPayload(raw:string|undefined):KanpicClipboard|unde
   }catch{return}
 }
 
-function parsedValue(raw:string):unknown{
-  if(raw==='')return undefined
-  if(raw.toLowerCase()==='true')return true
-  if(raw.toLowerCase()==='false')return false
-  if(Number.isFinite(Number(raw))&&raw.trim()!=='')return Number(raw)
-  return raw
+function parsedValue(raw:string):{value:unknown;style?:Record<string,unknown>}{
+  if(raw==='')return {value:undefined}
+  if(raw.toLowerCase()==='true')return {value:true}
+  if(raw.toLowerCase()==='false')return {value:false}
+  // 다른 스프레드시트의 평문에는 보이던 글자가 담긴다. `₩1,234` 를 글자로
+  // 저장하면 합계가 0이 되므로, 숫자로 읽고 보이던 모습은 서식으로 남긴다.
+  const number=parsePastedNumber(raw)
+  if(number)return {value:number.value,style:number.numberFormat?{number_format:number.numberFormat}:undefined}
+  return {value:raw}
 }
 
 /**
@@ -139,7 +145,7 @@ function parsedValue(raw:string):unknown{
  */
 export type PasteMode='all'|'values'|'format'|'transpose'
 
-export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number,mode:PasteMode|boolean='all'){
+export function materializePaste(text:string,internalRaw:string|undefined,startRow:number,startColumn:number,mode:PasteMode|boolean='all',htmlCells?:HtmlCell[]){
   const resolved:PasteMode=mode===true?'values':mode===false?'all':mode
   const valuesOnly=resolved==='values',transpose=resolved==='transpose'
   const internal=parseClipboardPayload(internalRaw)
@@ -159,6 +165,17 @@ export function materializePaste(text:string,internalRaw:string|undefined,startR
       }
     }))
   }
+  // 다른 스프레드시트에서 온 표는 평문보다 HTML 쪽이 더 많이 알고 있다.
+  // kanpic에서 복사한 셀이 있을 때는 그쪽이 언제나 더 정확하므로 뒤에 온다.
+  if(htmlCells&&htmlCells.length>0){
+    if(htmlCells.length>MAX_PASTE_CELLS)throw new Error(`붙여넣기는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
+    if(resolved==='format')return []
+    return validateGridBounds(htmlCells.map(cell=>{
+      const rowOffset=transpose?cell.columnOffset:cell.rowOffset,columnOffset=transpose?cell.rowOffset:cell.columnOffset
+      const formula=!valuesOnly&&!transpose&&typeof cell.value==='string'&&cell.value.startsWith('=')?cell.value:undefined
+      return {row:startRow+rowOffset,column:startColumn+columnOffset,value:formula?undefined:cell.value,formula,style:valuesOnly?undefined:cell.style}
+    }))
+  }
   const parsed=parseTabularText(text)
   const rows=transpose?transposeRows(parsed):parsed
   const count=rows.reduce((total,row)=>total+row.length,0)
@@ -166,7 +183,9 @@ export function materializePaste(text:string,internalRaw:string|undefined,startR
   if(resolved==='format')return []
   return validateGridBounds(rows.flatMap((row,rowOffset)=>row.map((raw,columnOffset)=>{
     const formula=!valuesOnly&&!transpose&&raw.startsWith('=')?raw:undefined
-    return {row:startRow+rowOffset,column:startColumn+columnOffset,value:formula?undefined:parsedValue(raw),formula}
+    if(formula)return {row:startRow+rowOffset,column:startColumn+columnOffset,formula}
+    const parsedCell=parsedValue(raw)
+    return {row:startRow+rowOffset,column:startColumn+columnOffset,value:parsedCell.value,style:valuesOnly?undefined:parsedCell.style}
   })))
 }
 
