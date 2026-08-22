@@ -34,7 +34,9 @@ type EditorState = {
   replaceRange:(cells:Cell[],startRow:number,startColumn:number,endRow:number,endColumn:number)=>void
   putCell:(cell:Cell)=>void
   setSaveState:(saveState:SaveState,conflicts?:number)=>void
-  reportFormulaErrors:(errors?:MutationResult['formula_errors'])=>void
+  /** 방금 한 편집이 다른 사람 때문에 자리를 잃은 경우 그 좌표. */
+  droppedCells:NonNullable<MutationResult['dropped_cells']>
+  reportEdit:(result:Pick<MutationResult,'formula_errors'|'dropped_cells'>)=>void
   reportRecoverableEdit:(backup:{versionId:string;summary:string}|undefined,errors?:MutationResult['formula_errors'])=>void
   clearFormulaIssues:()=>void
   recordOperation:(operationId:string)=>void
@@ -50,7 +52,7 @@ type EditorState = {
 const key=(row:number,column:number)=>`${row}:${column}`
 
 export const useEditorStore=create<EditorState>((set,get)=>({
-  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],editBackup:undefined,undoStack:[],redoStack:[],
+  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],droppedCells:[],editBackup:undefined,undoStack:[],redoStack:[],
   select:(activeRow,activeColumn,extend=false)=>set((state)=>({activeRow,activeColumn,anchorRow:extend?state.anchorRow:activeRow,anchorColumn:extend?state.anchorColumn:activeColumn,editing:false})),
   setEditing:(editing)=>set({editing}),
   setDraft:(draft)=>set({draft}),
@@ -61,9 +63,9 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   setSaveState:(saveState,conflicts=0)=>set({saveState,conflicts}),
   // 오류가 없는 편집은 이전 안내를 지운다. 고친 뒤에도 경고가 남아 있으면
   // 무엇이 지금 문제인지 알 수 없다.
-  reportFormulaErrors:(errors)=>set({formulaIssues:errors&&errors.length>0?errors:[],editBackup:undefined}),
-  reportRecoverableEdit:(editBackup,errors)=>set({formulaIssues:errors&&errors.length>0?errors:[],editBackup}),
-  clearFormulaIssues:()=>set({formulaIssues:[],editBackup:undefined}),
+  reportEdit:(result)=>set({formulaIssues:result.formula_errors?.length?result.formula_errors:[],droppedCells:result.dropped_cells?.length?result.dropped_cells:[],editBackup:undefined}),
+  reportRecoverableEdit:(editBackup,errors)=>set({formulaIssues:errors&&errors.length>0?errors:[],droppedCells:[],editBackup}),
+  clearFormulaIssues:()=>set({formulaIssues:[],droppedCells:[],editBackup:undefined}),
   recordOperation:(operationId)=>{if(!operationId||get().undoStack.at(-1)===operationId)return;set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100),redoStack:[]}))},
   takeUndo:()=>{const stack=get().undoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({undoStack:stack.slice(0,-1)});return operationId},
   restoreUndo:(operationId)=>set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100)})),

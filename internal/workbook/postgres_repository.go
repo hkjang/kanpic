@@ -48,6 +48,7 @@ type operationDocument struct {
 	StructuralAction   string                `json:"structural_action,omitempty"`
 	StructuralIndex    int                   `json:"structural_index,omitempty"`
 	StructuralCount    int                   `json:"structural_count,omitempty"`
+	StructuralDestination int                `json:"structural_destination,omitempty"`
 }
 
 type snapshotBlock struct {
@@ -1303,6 +1304,19 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if mutation.RequireExactVersion && mutation.BaseVersion != currentVersion {
 		return MutationResult{}, ErrVersionConflict
 	}
+	// Somebody may have inserted or deleted rows since this write was composed,
+	// which moves every address after them. Rebase before touching anything.
+	structuralChanges, err := r.structuralChangesSince(ctx, tx, workbookID, mutation.SheetID, mutation.BaseVersion)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	rebasedCells, droppedCells, movedCells := rebaseCellInputs(mutation.Cells, structuralChanges)
+	mutation.Cells = rebasedCells
+	if len(mutation.Cells) == 0 {
+		return MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion,
+			RecalculatedCells: []CellCoordinate{}, FormulaErrors: []CellFormulaError{}, ValidationWarnings: []ValidationViolation{}, Conflicts: []CellConflict{},
+			DroppedCells: droppedCells, CreatedAt: r.now()}, tx.Commit(ctx)
+	}
 
 	conflicts := make([]CellConflict, 0)
 	if mutation.Expected == nil {
@@ -1485,7 +1499,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, CreatedAt: now}
 	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
 		cell, ok := after[operationCoordinateKey(mutation.SheetID, row, column)]
 		if !ok {
@@ -2128,6 +2142,7 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 	result.StructuralAction = document.StructuralAction
 	result.StructuralIndex = document.StructuralIndex
 	result.StructuralCount = document.StructuralCount
+	result.StructuralDestination = document.StructuralDestination
 	return result, true, nil
 }
 
@@ -2238,4 +2253,33 @@ func mapPostgresError(err error) error {
 		return ErrDuplicateName
 	}
 	return err
+}
+
+// structuralChangesSince lists the row and column edits recorded for a sheet
+// after a version, oldest first. A write composed against that version names
+// addresses from before those edits.
+func (r *PostgresRepository) structuralChangesSince(ctx context.Context, tx pgx.Tx, workbookID, sheetID string, baseVersion int64) ([]formula.StructuralChange, error) {
+	if baseVersion < 1 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT payload FROM cell_operations WHERE workbook_id=$1 AND sheet_id=$2 AND server_version>$3 AND operation_type LIKE 'structure.%' ORDER BY server_version`, workbookID, sheetID, baseVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	changes := make([]formula.StructuralChange, 0)
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var document operationDocument
+		if json.Unmarshal(data, &document) != nil {
+			continue
+		}
+		if change, ok := structuralChangeFromResult(MutationResult{StructuralAxis: document.StructuralAxis, StructuralAction: document.StructuralAction, StructuralIndex: document.StructuralIndex, StructuralCount: document.StructuralCount, StructuralDestination: document.StructuralDestination}); ok {
+			changes = append(changes, change)
+		}
+	}
+	return changes, rows.Err()
 }

@@ -916,6 +916,15 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if mutation.RequireExactVersion && mutation.BaseVersion != state.workbook.Version {
 		return MutationResult{}, ErrVersionConflict
 	}
+	// Somebody may have inserted or deleted rows since this write was composed,
+	// which moves every address after them. Rebase before touching anything.
+	rebasedCells, droppedCells, movedCells := rebaseCellInputs(mutation.Cells, memoryStructuralChangesSince(state.operations, mutation.SheetID, mutation.BaseVersion))
+	mutation.Cells = rebasedCells
+	if len(mutation.Cells) == 0 {
+		return MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: state.workbook.Version,
+			RecalculatedCells: []CellCoordinate{}, FormulaErrors: []CellFormulaError{}, ValidationWarnings: []ValidationViolation{}, Conflicts: []CellConflict{},
+			DroppedCells: droppedCells, CreatedAt: r.now()}, nil
+	}
 	conflicts := make([]CellConflict, 0)
 	effective := make([]CellInput, 0, len(mutation.Cells))
 	for _, input := range mutation.Cells {
@@ -1015,7 +1024,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, CreatedAt: now}
 	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
 		cell, ok := after[scopedCellKey{sheetID: mutation.SheetID, cellKey: cellKey{row: row, column: column}}]
 		return cell, ok
@@ -1500,4 +1509,23 @@ func cloneAllCells(source map[string]map[cellKey]Cell) map[string]map[cellKey]Ce
 		}
 	}
 	return result
+}
+
+// memoryStructuralChangesSince lists the row and column edits applied to a
+// sheet after a version, oldest first, so a write composed against that
+// version can be moved onto the sheet as it is now.
+func memoryStructuralChangesSince(operations []operation, sheetID string, baseVersion int64) []formula.StructuralChange {
+	if baseVersion < 1 {
+		return nil
+	}
+	changes := make([]formula.StructuralChange, 0)
+	for _, item := range operations {
+		if !item.structural || item.result.SheetID != sheetID || item.result.ServerVersion <= baseVersion {
+			continue
+		}
+		if change, ok := structuralChangeFromResult(item.result); ok {
+			changes = append(changes, change)
+		}
+	}
+	return changes
 }

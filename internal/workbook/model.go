@@ -256,7 +256,16 @@ type MutationResult struct {
 	StructuralAction   string                `json:"structural_action,omitempty"`
 	StructuralIndex    int                   `json:"structural_index,omitempty"`
 	StructuralCount    int                   `json:"structural_count,omitempty"`
-	CreatedAt          time.Time             `json:"created_at"`
+	// StructuralDestination is where a moved band landed. It is needed to
+	// replay the move onto a write that was addressed before it happened.
+	StructuralDestination int `json:"structural_destination,omitempty"`
+	// RebasedCells counts the writes whose address had to be moved because
+	// somebody changed the sheet's shape first, and DroppedCells names the
+	// writes whose row or column no longer exists. Both are zero in the
+	// ordinary case and are what lets the client say something happened.
+	RebasedCells int              `json:"rebased_cells,omitempty"`
+	DroppedCells []CellCoordinate `json:"dropped_cells,omitempty"`
+	CreatedAt    time.Time        `json:"created_at"`
 }
 
 type StructuralMutation struct {

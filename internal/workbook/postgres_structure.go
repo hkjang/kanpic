@@ -284,7 +284,7 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: target.ID, BaseVersion: currentVersion, ServerVersion: serverVersion, AppliedCells: changedCellCount(existing, nextCells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, BackupVersionID: backup.ID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: target.ID, BaseVersion: currentVersion, ServerVersion: serverVersion, AppliedCells: changedCellCount(existing, nextCells), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, BackupVersionID: backup.ID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, StructuralDestination: input.Destination, CreatedAt: now}
 	document := marshalStructuralOperation(input, result)
 	if _, err := tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, result.OperationID, input.IdempotencyKey, workbookID, target.ID, input.ActorID, input.ClientID, currentVersion, serverVersion, "structure."+input.Axis+"."+input.Action, document, now); err != nil {
 		return MutationResult{}, mapPostgresError(err)

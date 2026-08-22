@@ -507,7 +507,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			r.conditionalFormats[id] = rule
 		}
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: target.ID, BaseVersion: input.BaseVersion, ServerVersion: state.workbook.Version, AppliedCells: appliedCells, RecalculatedCells: recalculated, FormulaErrors: formulaErrors, BackupVersionID: backup.ID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: target.ID, BaseVersion: input.BaseVersion, ServerVersion: state.workbook.Version, AppliedCells: appliedCells, RecalculatedCells: recalculated, FormulaErrors: formulaErrors, BackupVersionID: backup.ID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, StructuralDestination: input.Destination, CreatedAt: now}
 	state.operations = append(state.operations, operation{result: result, actorID: input.ActorID, clientID: input.ClientID, operationType: "structure." + input.Axis + "." + input.Action, structural: true})
 	state.idempotent[idempotencyKey] = result
 	return result, nil
@@ -539,7 +539,7 @@ func structureBackupName(input StructuralMutation) string {
 }
 
 func structuralOperationDocument(input StructuralMutation, result MutationResult) operationDocument {
-	return operationDocument{AppliedCells: result.AppliedCells, RecalculatedCells: result.RecalculatedCells, FormulaErrors: result.FormulaErrors, BackupVersionID: result.BackupVersionID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count}
+	return operationDocument{AppliedCells: result.AppliedCells, RecalculatedCells: result.RecalculatedCells, FormulaErrors: result.FormulaErrors, BackupVersionID: result.BackupVersionID, StructuralAxis: input.Axis, StructuralAction: input.Action, StructuralIndex: input.Index, StructuralCount: input.Count, StructuralDestination: input.Destination}
 }
 
 func marshalStructuralOperation(input StructuralMutation, result MutationResult) json.RawMessage {
