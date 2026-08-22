@@ -87,3 +87,62 @@ func TestCellConflictRestoreRejectsAChangedCurrentCell(t *testing.T) {
 		t.Fatalf("conflict/current state changed after rejected restore: %#v, %v", item, err)
 	}
 }
+
+// A conflict means "this changed since the version you were looking at". A
+// write that names no base version is not looking at any version, so there is
+// nothing to compare against — and treating every past operation as newer both
+// invents conflicts and reads a history that only ever grows.
+func TestAWriteWithNoBaseVersionRaisesNoConflict(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	ctx := context.Background()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "기준 없음", OwnerID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "a", BaseVersion: book.Version, IdempotencyKey: "first",
+		Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"A가 쓴 값"`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "b", IdempotencyKey: "second",
+		Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"B가 쓴 값"`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflicts against a history the caller never claimed: %#v", result.Conflicts)
+	}
+	// The write itself still lands.
+	selected, _ := cellrange.Parse("A1")
+	read, err := repository.ReadRange(ctx, sheet, selected)
+	if err != nil || len(read) != 1 || string(read[0].Value) != `"B가 쓴 값"` {
+		t.Fatalf("A1 = %#v, %v", read, err)
+	}
+}
+
+// The case that matters keeps working: a client that says which version it
+// was looking at still learns that somebody else moved underneath it.
+func TestAWriteWithAStaleBaseVersionStillRaisesTheConflict(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	ctx := context.Background()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "낡은 기준", OwnerID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	seen := book.Version
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "a", ClientID: "client-a", BaseVersion: seen, IdempotencyKey: "first",
+		Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"A가 쓴 값"`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "b", ClientID: "client-b", BaseVersion: seen, IdempotencyKey: "second",
+		Cells: []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"B가 쓴 값"`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Conflicts) != 1 || result.Conflicts[0].Row != 1 || result.Conflicts[0].Column != 1 {
+		t.Fatalf("a stale write went through unremarked: %#v", result.Conflicts)
+	}
+}

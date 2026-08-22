@@ -2192,8 +2192,12 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 }
 
 func (r *PostgresRepository) findConflicts(ctx context.Context, tx pgx.Tx, workbookID, sheetID string, baseVersion int64, actorID, clientID string, inputs []CellInput) ([]CellConflict, error) {
+	// A write that claims no base version is saying it does not know what it
+	// is replacing. There is nothing to call a conflict against, and treating
+	// every past operation as newer both invents conflicts and costs a read of
+	// the whole operation history — which only ever grows.
 	if baseVersion < 1 {
-		baseVersion = 0
+		return []CellConflict{}, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT coalesce(sheet_id::text,''),server_version,operation_type,payload,actor_id FROM cell_operations WHERE workbook_id=$1 AND server_version>$2 AND ($4='' OR actor_id<>$3 OR client_id<>$4) ORDER BY server_version`, workbookID, baseVersion, actorID, clientID)
 	if err != nil {

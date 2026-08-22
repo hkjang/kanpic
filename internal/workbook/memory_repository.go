@@ -951,7 +951,11 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 				conflicts = append(conflicts, CellConflict{Row: input.Row, Column: input.Column, ChangedAtVersion: changedVersion, BaseCell: conflictSnapshotFromCell(expected), ConflictingCell: conflictSnapshotFromCell(current), SubmittedCell: conflictSnapshotFromInput(input), PreviousValue: cloneJSON(current.Value), SubmittedValue: cloneJSON(input.Value)})
 				continue
 			}
-		} else if mutation.BaseVersion < state.workbook.Version {
+			// A write that claims no base version is saying it does not know
+			// what it is replacing. There is nothing to call a conflict
+			// against, and treating every past operation as newer both
+			// invents conflicts and costs a scan of the whole history.
+		} else if mutation.BaseVersion >= 1 && mutation.BaseVersion < state.workbook.Version {
 			if changedVersion := latestChange(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID); changedVersion > 0 {
 				baseCell, conflictingCell, conflictingActor := memoryConflictDetails(state.operations, mutation.SheetID, coord, mutation.BaseVersion, mutation.ActorID, mutation.ClientID)
 				if emptyConflictSnapshot(conflictingCell) {
