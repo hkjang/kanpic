@@ -1653,9 +1653,14 @@ func TestPostgresVersionRestoresDeletedSheetStructure(t *testing.T) {
 	if _, err := repository.ReadRange(ctx, temporary.ID, selected); !errors.Is(err, workbook.ErrNotFound) {
 		t.Fatalf("temporary sheet survived: %v", err)
 	}
+	// Three versions: the one this test made, the snapshot the sheet deletion
+	// left behind, and the one the restore itself took.
 	versions, err := repository.ListVersions(ctx, book.ID)
-	if err != nil || len(versions) != 2 || versions[0].Name != "복원 전 자동 백업" || versions[0].WorkbookVersion != 9 {
+	if err != nil || len(versions) != 3 || versions[0].Name != "복원 전 자동 백업" || versions[0].WorkbookVersion != 9 {
 		t.Fatalf("automatic backup: %#v, %v", versions, err)
+	}
+	if versions[1].Name != "시트 detail 삭제 전 자동 백업" {
+		t.Fatalf("sheet deletion backup: %#v", versions[1])
 	}
 }
 
@@ -3148,5 +3153,124 @@ func TestPostgresEntityFieldsSurviveARoundTrip(t *testing.T) {
 	if len(storedSlicers) != 1 || storedSlicers[0].Title != "왕복 슬라이서" || storedSlicers[0].Column != 2 ||
 		storedSlicers[0].FilterViewID != view.ID || storedSlicers[0].Position.Width != 210 {
 		t.Fatalf("slicer round trip = %#v (layout %#v)", storedSlicers, layout.Layout)
+	}
+}
+
+// Writing one cell used to read and lock every block in the workbook, because
+// a formula anywhere might depend on it. Skipping that read when nothing can
+// depend on the write is only safe if "nothing can depend on it" is judged
+// correctly, so this checks both sides of the judgement.
+func TestPostgresNarrowWriteStillRecalculatesAndValidates(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "narrow write", OwnerID: "narrow-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0].ID
+	seed := make([]workbook.CellInput, 0, 200)
+	for row := 1; row <= 200; row++ {
+		seed = append(seed, workbook.CellInput{Row: row, Column: 1, Value: json.RawMessage(`1`)})
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "narrow-user", IdempotencyKey: "narrow-seed", Cells: seed}); err != nil {
+		t.Fatal(err)
+	}
+	// A write with no formulas anywhere reads only its own block. The value
+	// still has to land and its neighbours still have to survive.
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "narrow-user", IdempotencyKey: "narrow-one",
+		Cells: []workbook.CellInput{{Row: 150, Column: 1, Value: json.RawMessage(`99`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A149:A151")
+	read, err := repository.ReadRange(ctx, sheet, selected)
+	if err != nil || len(read) != 3 {
+		t.Fatalf("neighbours = %#v, %v", read, err)
+	}
+	for _, cell := range read {
+		want := "1"
+		if cell.Row == 150 {
+			want = "99"
+		}
+		if string(cell.Value) != want {
+			t.Errorf("A%d = %s, want %s", cell.Row, cell.Value, want)
+		}
+	}
+	// A formula three blocks away must still see a change to what it reads.
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "narrow-user", IdempotencyKey: "narrow-formula",
+		Cells: []workbook.CellInput{{Row: 1, Column: 3, Formula: "=A200*2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "narrow-user", IdempotencyKey: "narrow-input",
+		Cells: []workbook.CellInput{{Row: 200, Column: 1, Value: json.RawMessage(`21`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := cellrange.Parse("C1")
+	computed, err := repository.ReadRange(ctx, sheet, target)
+	if err != nil || len(computed) != 1 || string(computed[0].Value) != "42" {
+		t.Fatalf("C1 = %#v, %v (the formula did not follow its input)", computed, err)
+	}
+	// A validation rule carries its own condition and lives outside the cell
+	// blocks, so it also has to force the wider read.
+	if _, err := repository.CreateDataValidation(ctx, sheet, "narrow-user", workbook.CreateDataValidationInput{IdempotencyKey: "narrow-rule",
+		Range: "E1:E5", RuleType: "number", Operator: "greater_than", Value: json.RawMessage(`10`)}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "narrow-user", IdempotencyKey: "narrow-violation",
+		Cells: []workbook.CellInput{{Row: 1, Column: 5, Value: json.RawMessage(`3`)}}})
+	if err == nil && len(result.ValidationWarnings) == 0 {
+		t.Fatalf("a value below the rule was accepted without a word: %#v", result)
+	}
+}
+
+// The very first formula in a workbook is written when no formula exists yet,
+// so the write that introduces it must already read widely — otherwise it is
+// calculated against a sheet it cannot see.
+func TestPostgresFirstFormulaSeesTheWholeSheet(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "first formula", OwnerID: "first-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0].ID
+	other, err := repository.CreateSheet(ctx, book.ID, workbook.CreateSheetInput{Name: "Data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: other.ID, ActorID: "first-user", IdempotencyKey: "first-seed",
+		Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`7`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Far enough away to be in another block, and on another sheet.
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet, ActorID: "first-user", IdempotencyKey: "first-formula",
+		Cells: []workbook.CellInput{{Row: 300, Column: 1, Formula: "=Data!A1*3"}}}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A300")
+	read, err := repository.ReadRange(ctx, sheet, selected)
+	if err != nil || len(read) != 1 || string(read[0].Value) != "21" {
+		t.Fatalf("A300 = %#v, %v (the first formula did not see the other sheet)", read, err)
 	}
 }
