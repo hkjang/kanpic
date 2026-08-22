@@ -18,8 +18,12 @@ func readSheetLayout(file *excelize.File, name string, maxRow, maxColumn int) *w
 		maxRow = maxLayoutRow
 	}
 	layout := workbook.SheetLayout{Revision: 1}
-	defaultHeight, _ := file.GetRowHeight(name, 1)
-	defaultWidth, _ := file.GetColWidth(name, "A")
+	// The defaults have to come from outside the used range. Reading them from
+	// the first row and column takes whatever those happen to be: a sheet whose
+	// column A is widened loses that width and every ordinary column after it
+	// is recorded as custom instead.
+	defaultHeight, _ := file.GetRowHeight(name, min(maxRow+1, maxLayoutRow))
+	defaultWidth, _ := file.GetColWidth(name, columnLetters(min(maxColumn+1, maxLayoutColumn)))
 
 	hiddenRun := 0
 	for row := 1; row <= maxRow; row++ {

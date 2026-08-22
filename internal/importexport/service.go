@@ -214,7 +214,19 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 					continue
 				}
 				cellType, _ := file.GetCellType(sheetName, coordinate)
-				value := parseXLSXValue(displayValue, cellType)
+				// The row reader hands back the formatted text, which is what a
+				// person sees but not what the cell holds: 18000 formatted as
+				// currency arrives as "18,000원" and would be stored as words.
+				raw, rawErr := file.GetCellValue(sheetName, coordinate, excelize.Options{RawCellValue: true})
+				if rawErr != nil {
+					raw = displayValue
+				}
+				value := parseXLSXValue(raw, cellType)
+				if text, isText := value.(string); isText && text != displayValue && cellType != excelize.CellTypeNumber {
+					// Nothing numeric was recognised, so keep what the file
+					// showed rather than the storage form.
+					value = displayValue
+				}
 				encoded, _ := json.Marshal(value)
 				input := workbook.CellInput{Row: rowIndex, Column: columnIndex + 1, Value: encoded, Formula: formula}
 				styleID, _ := file.GetCellStyle(sheetName, coordinate)
@@ -595,6 +607,17 @@ func parseScalar(value string) any {
 }
 func parseXLSXValue(value string, cellType excelize.CellType) any {
 	switch cellType {
+	case excelize.CellTypeUnset:
+		// XLSX leaves the type attribute off numbers; text is always stored as
+		// a shared or inline string. An untyped cell holding digits is a
+		// number, and reading it as words means SUM over an imported column
+		// quietly answers zero.
+		if value == "" || hasSignificantLeadingZero(value) {
+			return value
+		}
+		if number, err := strconv.ParseFloat(value, 64); err == nil {
+			return number
+		}
 	case excelize.CellTypeBool:
 		boolean, err := strconv.ParseBool(value)
 		if err == nil {

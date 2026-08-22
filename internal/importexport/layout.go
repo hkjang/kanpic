@@ -19,6 +19,9 @@ const (
 	// A workbook may declare a size for a row far below its data. Applying
 	// those to XLSX would write a row record for every one of them.
 	maxLayoutRow = 20_000
+	// The last column XLSX can address. Probing one past the used range needs
+	// somewhere to stop.
+	maxLayoutColumn = 16_384
 )
 
 func rowHeightPoints(pixels float64) float64  { return pixels / pixelsPerPoint }

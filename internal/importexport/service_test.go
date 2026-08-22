@@ -622,3 +622,80 @@ func TestXLSXExportCarriesCharts(t *testing.T) {
 		t.Fatalf("chart title missing from chart XML")
 	}
 }
+
+// XLSX leaves the type attribute off numbers, and the row reader hands back
+// the formatted text. Reading either one carelessly turns a price list into
+// words: the column looks right and SUM over it answers zero.
+func TestXLSXImportKeepsNumbersNumeric(t *testing.T) {
+	t.Parallel()
+	file := excelize.NewFile()
+	defer file.Close()
+	currency := "#,##0원"
+	styleID, err := file.NewStyle(&excelize.Style{CustomNumFmt: &currency})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = file.SetCellValue("Sheet1", "A1", "품목")
+	_ = file.SetCellValue("Sheet1", "B1", 12)    // 서식 없는 숫자
+	_ = file.SetCellValue("Sheet1", "C1", 18000) // 통화 서식이 붙은 숫자
+	_ = file.SetCellStyle("Sheet1", "C1", "C1", styleID)
+	_ = file.SetCellValue("Sheet1", "D1", "007") // 앞자리 0은 뜻이 있는 글자다
+	_ = file.SetCellValue("Sheet1", "E1", 3.5)
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("prices.xlsx", buffer.Bytes(), DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[int]string, len(parsed.Sheets[0].Cells))
+	for _, cell := range parsed.Sheets[0].Cells {
+		values[cell.Column] = string(cell.Value)
+	}
+	for column, want := range map[int]string{1: `"품목"`, 2: `12`, 3: `18000`, 4: `"007"`, 5: `3.5`} {
+		if values[column] != want {
+			t.Errorf("column %d = %s, want %s", column, values[column], want)
+		}
+	}
+}
+
+// The default row height and column width have to be read from outside the
+// used range. Taking them from the first row and column takes whatever those
+// happen to be, so a widened column A loses its width and every ordinary
+// column after it is recorded as custom.
+func TestXLSXImportReadsSizesAgainstTheRealDefault(t *testing.T) {
+	t.Parallel()
+	file := excelize.NewFile()
+	defer file.Close()
+	for _, column := range []string{"A", "B", "C"} {
+		_ = file.SetCellValue("Sheet1", column+"1", column)
+	}
+	if err := file.SetColWidth("Sheet1", "A", "A", 30.71); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.SetRowHeight("Sheet1", 1, 40); err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("sizes.xlsx", buffer.Bytes(), DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := parsed.Sheets[0].Layout
+	if layout == nil {
+		t.Fatal("no layout was read")
+	}
+	if len(layout.ColumnWidths) != 1 || layout.ColumnWidths[0].Index != 1 {
+		t.Fatalf("column widths = %#v, want only column 1", layout.ColumnWidths)
+	}
+	if width := layout.ColumnWidths[0].Size; width < 210 || width > 230 {
+		t.Errorf("column 1 width = %.1f px, want about 220", width)
+	}
+	if len(layout.RowHeights) != 1 || layout.RowHeights[0].Index != 1 {
+		t.Fatalf("row heights = %#v, want only row 1", layout.RowHeights)
+	}
+}
