@@ -77,7 +77,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const [movePreview,setMovePreview]=useState<{axis:'row'|'column';destination:number}>()
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const editor=useEditorStore()
-  const {activeRow,activeColumn,anchorRow,anchorColumn,editing,draft,zoom,cells,select,setEditing,setDraft,replaceRange,putCells,putCell,setSaveState,recordOperation}=editor
+  const {activeRow,activeColumn,anchorRow,anchorColumn,editing,draft,zoom,cells,select,setEditing,setDraft,replaceRange,putCells,putCell,setSaveState,recordOperation,reportFormulaErrors}=editor
   const selection=selectedMergedBounds(cells,selectedBounds(editor))
   const collaborators=useCollaborationStore(state=>state.users)
   const sendCursor=useCollaborationStore(state=>state.sendCursor),sendSelection=useCollaborationStore(state=>state.sendSelection)
@@ -348,7 +348,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
   },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,showGridlines,resizePreview,movePreview])
 
-  const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState])
+  const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);reportFormulaErrors(applied.formula_errors);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState,reportFormulaErrors])
 
   const readOnlyNotice=useCallback(()=>{setSaveState('error');alert('보기 전용 권한입니다. 소유자에게 편집 권한을 요청하세요.')},[setSaveState])
   const queueCells=useCallback(async(inputs:PastedCell[],endpoint:'batch'|'paste'|'fill')=>{

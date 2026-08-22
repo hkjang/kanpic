@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Cell } from '../types'
+import type { Cell, MutationResult } from '../types'
 
 type SaveState = 'saved'|'saving'|'offline'|'conflict'|'error'
 type EditorState = {
@@ -14,6 +14,11 @@ type EditorState = {
   cells:Map<string,Cell>
   saveState:SaveState
   conflicts:number
+  /**
+   * 방금 한 편집이 만든 수식 오류. 행을 지워 다른 곳의 수식이 깨져도
+   * 지금까지 아무 말이 없었다. 서버는 이미 알려 주고 있었다.
+   */
+  formulaIssues:MutationResult['formula_errors']
   undoStack:string[]
   redoStack:string[]
   select:(row:number,column:number,extend?:boolean)=>void
@@ -24,6 +29,8 @@ type EditorState = {
   replaceRange:(cells:Cell[],startRow:number,startColumn:number,endRow:number,endColumn:number)=>void
   putCell:(cell:Cell)=>void
   setSaveState:(saveState:SaveState,conflicts?:number)=>void
+  reportFormulaErrors:(errors?:MutationResult['formula_errors'])=>void
+  clearFormulaIssues:()=>void
   recordOperation:(operationId:string)=>void
   takeUndo:()=>string|undefined
   restoreUndo:(operationId:string)=>void
@@ -37,7 +44,7 @@ type EditorState = {
 const key=(row:number,column:number)=>`${row}:${column}`
 
 export const useEditorStore=create<EditorState>((set,get)=>({
-  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[],
+  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],undoStack:[],redoStack:[],
   select:(activeRow,activeColumn,extend=false)=>set((state)=>({activeRow,activeColumn,anchorRow:extend?state.anchorRow:activeRow,anchorColumn:extend?state.anchorColumn:activeColumn,editing:false})),
   setEditing:(editing)=>set({editing}),
   setDraft:(draft)=>set({draft}),
@@ -46,6 +53,10 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   replaceRange:(incoming,startRow,startColumn,endRow,endColumn)=>set((state)=>{const cells=new Map(state.cells);for(const [address,cell] of cells){if(cell.row>=startRow&&cell.row<=endRow&&cell.column>=startColumn&&cell.column<=endColumn)cells.delete(address)}incoming.forEach(cell=>cells.set(key(cell.row,cell.column),cell));return{cells}}),
   putCell:(cell)=>set((state)=>{const cells=new Map(state.cells);cells.set(key(cell.row,cell.column),cell);return{cells}}),
   setSaveState:(saveState,conflicts=0)=>set({saveState,conflicts}),
+  // 오류가 없는 편집은 이전 안내를 지운다. 고친 뒤에도 경고가 남아 있으면
+  // 무엇이 지금 문제인지 알 수 없다.
+  reportFormulaErrors:(errors)=>set({formulaIssues:errors&&errors.length>0?errors:[]}),
+  clearFormulaIssues:()=>set({formulaIssues:[]}),
   recordOperation:(operationId)=>{if(!operationId||get().undoStack.at(-1)===operationId)return;set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100),redoStack:[]}))},
   takeUndo:()=>{const stack=get().undoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({undoStack:stack.slice(0,-1)});return operationId},
   restoreUndo:(operationId)=>set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100)})),
@@ -53,7 +64,7 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   takeRedo:()=>{const stack=get().redoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({redoStack:stack.slice(0,-1)});return operationId},
   restoreRedo:(operationId)=>set((state)=>({redoStack:[...state.redoStack,operationId].slice(-100)})),
   completeRedo:(redoOperationId)=>set((state)=>({undoStack:[...state.undoStack,redoOperationId].slice(-100)})),
-  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',cells:new Map(),saveState:'saved',conflicts:0,undoStack:[],redoStack:[]}),
+  reset:()=>set({activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],undoStack:[],redoStack:[]}),
 }))
 
 export const cellKey=key
