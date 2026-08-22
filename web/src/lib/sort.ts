@@ -1,6 +1,6 @@
 import type { Cell } from '../types'
 import { cellKey } from '../state/editor'
-import { shiftFormula,MAX_PASTE_CELLS } from './clipboard'
+import { shiftFormula,MAX_SORT_CELLS } from './clipboard'
 import { cellMerge,type MergeRange } from './merge'
 
 export type SortKey = { column:number; direction:'asc'|'desc' }
@@ -11,7 +11,7 @@ type Scalar = { rank:number; blank:boolean; number?:number; text?:string; truth?
 export function materializeSort(cells:Map<string,Cell>,range:MergeRange,options:SortOptions,sheetId:string){
   const rows=range.endRow-range.startRow+1,columns=range.endColumn-range.startColumn+1,dataRows=rows-options.headerRows
   if(rows<2||columns<1||options.headerRows<0||options.headerRows>=rows||dataRows<2)throw new Error('정렬 범위에는 데이터 행이 두 개 이상 있어야 합니다.')
-  if(dataRows*columns>MAX_PASTE_CELLS)throw new Error(`정렬은 한 번에 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 가능합니다.`)
+  if(dataRows*columns>MAX_SORT_CELLS)throw new Error(`정렬은 한 번에 최대 ${MAX_SORT_CELLS.toLocaleString()}셀(${Math.floor(MAX_SORT_CELLS/Math.max(1,columns)).toLocaleString()}행 × ${columns}열)까지 가능합니다.`)
   if(options.keys.length<1||options.keys.length>columns)throw new Error('정렬 기준 열을 하나 이상 선택하세요.')
   const used=new Set<number>()
   for(const key of options.keys){if(key.column<range.startColumn||key.column>range.endColumn||used.has(key.column))throw new Error('정렬 기준 열은 선택 범위 안에서 중복 없이 지정해야 합니다.');used.add(key.column)}

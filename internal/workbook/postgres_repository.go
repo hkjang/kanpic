@@ -1253,8 +1253,13 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if strings.TrimSpace(mutation.IdempotencyKey) == "" {
 		return MutationResult{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
 	}
-	if len(mutation.Cells) == 0 || len(mutation.Cells) > MaxPasteCells {
-		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, MaxPasteCells)
+	// A sort rewrites a whole range at once and has its own, higher ceiling.
+	limit := MaxPasteCells
+	if mutation.OperationType == "range.sort" {
+		limit = MaxSortCells
+	}
+	if len(mutation.Cells) == 0 || len(mutation.Cells) > limit {
+		return MutationResult{}, fmt.Errorf("%w: cells must contain 1 to %d entries", ErrInvalid, limit)
 	}
 	if len(mutation.StylePatch) > 0 {
 		if err := ValidateStylePatch(mutation.StylePatch); err != nil {

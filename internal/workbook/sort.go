@@ -46,8 +46,8 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 		return nil, fmt.Errorf("%w: sort range must contain at least two data rows", ErrInvalid)
 	}
 	dataRows := rows - options.HeaderRows
-	if dataRows < 2 || dataRows > MaxPasteCells || columns > MaxPasteCells || dataRows > MaxPasteCells/columns {
-		return nil, fmt.Errorf("%w: sorted data range must contain 2 to %d cells", ErrInvalid, MaxPasteCells)
+	if dataRows < 2 || dataRows > MaxSortCells || columns > MaxSortCells || dataRows > MaxSortCells/columns {
+		return nil, fmt.Errorf("%w: sorted data range must contain 2 to %d cells", ErrInvalid, MaxSortCells)
 	}
 	if len(options.Keys) == 0 || len(options.Keys) > columns {
 		return nil, fmt.Errorf("%w: sort keys must contain 1 to %d columns", ErrInvalid, columns)

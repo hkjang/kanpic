@@ -10,6 +10,11 @@ import (
 const (
 	MaxBatchCells = 1_000
 	MaxPasteCells = 10_000
+	// Sorting rewrites every cell in the range, so it used to sit under the
+	// paste limit and refuse anything past ~3,300 rows of three columns. A
+	// sort is one deliberate action on data the user already has, not a
+	// stream of edits, so it gets its own ceiling.
+	MaxSortCells = 60_000
 )
 
 var (

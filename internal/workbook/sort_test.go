@@ -1,7 +1,9 @@
 package workbook
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"kanpic/pkg/cellrange"
@@ -60,8 +62,52 @@ func TestBuildSortCellsRejectsInvalidKeysMergedCellsAndOversizedRange(t *testing
 	if _, err := BuildSortCells([]Cell{{Row: 2, Column: 1, Value: json.RawMessage(`2`), SpillSource: "A1"}}, selected, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err == nil {
 		t.Fatal("expected array result sort rejection")
 	}
-	large, _ := cellrange.Parse("A1:B5001")
+	// Sorting has its own ceiling, above the paste limit, because it rewrites
+	// a whole range in one deliberate action.
+	large, _ := cellrange.Parse(fmt.Sprintf("A1:B%d", MaxSortCells/2+1))
 	if _, err := BuildSortCells(nil, large, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err == nil {
 		t.Fatal("expected operation limit rejection")
+	}
+	withinLimit, _ := cellrange.Parse("A1:B5001")
+	if _, err := BuildSortCells(nil, withinLimit, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}}); err != nil {
+		t.Fatalf("a range inside the sort limit was refused: %v", err)
+	}
+}
+
+// Overwriting a cell that produced an array result has to clear what it
+// spilled. That used to be found by scanning the whole sheet once per written
+// cell, which made a sort quadratic — 16,000 rows took 18 seconds. The
+// clearing still has to happen; only the hunting is gone.
+func TestOverwritingAnArrayFormulaStillClearsWhatItSpilled(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	ctx := context.Background()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "스필", OwnerID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0].ID
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "owner", IdempotencyKey: "seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`1`)}, {Row: 2, Column: 1, Value: json.RawMessage(`2`)}, {Row: 3, Column: 1, Value: json.RawMessage(`3`)},
+		{Row: 1, Column: 3, Formula: "=A1:A3"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	spilled, _ := cellrange.Parse("C1:C3")
+	filled, err := repository.ReadRange(ctx, sheet, spilled)
+	if err != nil || len(filled) != 3 {
+		t.Fatalf("the array formula did not spill: %#v, %v", filled, err)
+	}
+	// Writing a plain value over the source has to take the spill with it.
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "owner", IdempotencyKey: "overwrite",
+		Cells: []CellInput{{Row: 1, Column: 3, Value: json.RawMessage(`"보통 값"`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := repository.ReadRange(ctx, sheet, spilled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Row != 1 || string(after[0].Value) != `"보통 값"` {
+		t.Fatalf("C1:C3 after overwriting the source = %#v", after)
 	}
 }

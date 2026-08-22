@@ -29,6 +29,9 @@ describe('range sorting',()=>{
     expect(()=>materializeSort(new Map(),range,{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'},{column:1,direction:'desc'}]},'sheet')).toThrow('중복 없이')
     const merged=cell(1,1,'x',undefined,{merge:{start_row:1,start_column:1,end_row:2,end_column:1}})
     expect(()=>materializeSort(new Map([['1:1',merged]]),range,{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'}]},'sheet')).toThrow('병합 해제')
-    expect(()=>materializeSort(new Map(),{startRow:1,startColumn:1,endRow:5001,endColumn:2},{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'}]},'sheet')).toThrow('10,000셀')
+    // 정렬은 붙여넣기보다 넓은 한도를 가진다. 한도를 넘으면 몇 셀까지인지와
+    // 그것이 몇 행인지를 함께 알려 준다.
+    expect(()=>materializeSort(new Map(),{startRow:1,startColumn:1,endRow:5001,endColumn:2},{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'}]},'sheet')).not.toThrow()
+    expect(()=>materializeSort(new Map(),{startRow:1,startColumn:1,endRow:30001,endColumn:2},{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'}]},'sheet')).toThrow('60,000셀(30,000행 × 2열)')
   })
 })

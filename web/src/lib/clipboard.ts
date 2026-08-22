@@ -1,5 +1,9 @@
 export const KANPIC_CLIPBOARD_TYPE = 'application/x-kanpic-cells+json'
 export const MAX_PASTE_CELLS = 10_000
+// 정렬은 범위 전체를 한 번에 다시 쓰지만, 편집을 이어서 하는 것이 아니라
+// 이미 가진 데이터에 대한 한 번의 동작이라 자체 한도를 가진다. 서버의
+// MaxSortCells와 같은 값이어야 화면에서 막힌 것이 서버에서도 막힌다.
+export const MAX_SORT_CELLS = 60_000
 export const MAX_GRID_ROWS = 10_000
 export const MAX_GRID_COLUMNS = 500
 

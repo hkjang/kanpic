@@ -61,6 +61,11 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 	}
 	submittedKeys := make(map[scopedCellKey]struct{}, len(submitted))
 	changed := make(map[scopedCellKey]struct{}, len(submitted))
+	// Overwriting a cell that produced an array result has to clear what it
+	// spilled. Looking for those cells by scanning the sheet once per written
+	// cell makes a sort quadratic: sorting 16,000 rows took 18 seconds, and
+	// almost all of it was this. One pass builds the same answer.
+	spilledBySource := spillIndex(prospective[currentSheetID])
 	for _, input := range submitted {
 		input.SheetID = currentSheetID
 		key := cellKey{input.Row, input.Column}
@@ -72,8 +77,11 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		if current.SpillSource != "" && input.SpillSource != current.SpillSource {
 			return nil, nil, nil, fmt.Errorf("%w: %s is part of the array result from %s; edit the source formula instead", ErrInvalid, cellrange.Address(input.Row, input.Column), current.SpillSource)
 		}
-		for _, cleared := range clearSpillCells(prospective[currentSheetID], cellrange.Address(input.Row, input.Column)) {
-			changed[scopedCellKey{sheetID: currentSheetID, cellKey: cleared}] = struct{}{}
+		if address := cellrange.Address(input.Row, input.Column); len(spilledBySource[address]) > 0 {
+			for _, cleared := range clearSpilledKeys(prospective[currentSheetID], spilledBySource[address]) {
+				changed[scopedCellKey{sheetID: currentSheetID, cellKey: cleared}] = struct{}{}
+			}
+			delete(spilledBySource, address)
 		}
 		input.Value = cloneJSON(input.Value)
 		input.Style = cloneJSON(input.Style)
@@ -253,6 +261,39 @@ func formulaStates(cells map[string]map[cellKey]Cell, forced map[string]*formula
 		}
 	}
 	return states, nil
+}
+
+// spillIndex groups the cells an array formula produced under the address of
+// the formula that produced them.
+func spillIndex(cells map[cellKey]Cell) map[string][]cellKey {
+	index := make(map[string][]cellKey)
+	for key, cell := range cells {
+		if cell.SpillSource == "" {
+			continue
+		}
+		index[cell.SpillSource] = append(index[cell.SpillSource], key)
+	}
+	return index
+}
+
+// clearSpilledKeys empties the cells the index already named, which is the
+// same work clearSpillCells does without hunting for them again.
+func clearSpilledKeys(cells map[cellKey]Cell, keys []cellKey) []cellKey {
+	cleared := make([]cellKey, 0, len(keys))
+	for _, key := range keys {
+		cell, found := cells[key]
+		if !found {
+			continue
+		}
+		cell.Value, cell.Formula, cell.SpillSource = nil, "", ""
+		if isEmptyCell(cell) {
+			delete(cells, key)
+		} else {
+			cells[key] = cell
+		}
+		cleared = append(cleared, key)
+	}
+	return cleared
 }
 
 func clearSpillCells(cells map[cellKey]Cell, source string) []cellKey {
