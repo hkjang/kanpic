@@ -153,7 +153,7 @@ func lex(input string) ([]token, error) {
 		}
 		if character == '#' {
 			matched := ""
-			for _, code := range []string{"#CIRC!", "#DIV/0!", "#ERROR!", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#SPILL!", "#VALUE!", "#N/A"} {
+			for _, code := range ErrorCodes {
 				if strings.HasPrefix(strings.ToUpper(input[index:]), code) && len(code) > len(matched) {
 					matched = code
 				}

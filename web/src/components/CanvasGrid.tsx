@@ -3,6 +3,7 @@ import { ArrowDownAZ, ArrowUpAZ, BadgeCheck, BarChart3, Bot, ChevronsDownUp, Che
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from './FormulaAutocomplete'
+import { explainFormulaError, formulaErrorCode, type FormulaErrorExplanation } from '../lib/formulaError'
 import { applySuggestion } from '../lib/formulaSuggest'
 import { suggestColumnValues } from '../lib/valueSuggest'
 import type { LayoutCommand } from './LayoutDialog'
@@ -71,7 +72,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
   const functionCatalog=useFunctionCatalog()
   const [caret,setCaret]=useState(0),[suggestion,setSuggestion]=useState(0)
-  const [noteHover,setNoteHover]=useState<{row:number;column:number;text:string;x:number;y:number}>()
+  const [noteHover,setNoteHover]=useState<{row:number;column:number;text?:string;failure?:FormulaErrorExplanation;x:number;y:number}>()
   const [scroll,setScroll]=useState({left:0,top:0}),[size,setSize]=useState({width:900,height:500}),[fillPreview,setFillPreview]=useState<FillRange>(),[refreshToken,setRefreshToken]=useState(0),[conditionalCells,setConditionalCells]=useState<Map<string,ConditionalFormatCell>>(()=>new Map())
   const [movePreview,setMovePreview]=useState<{axis:'row'|'column';destination:number}>()
   const [resizePreview,setResizePreview]=useState<{axis:'row'|'column';index:number;size:number}>(),[menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
@@ -581,12 +582,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const overBand=!readOnly&&!!onStructure&&((hoveredRegion?.kind==='column'&&wholeColumnsSelected&&hoveredRegion.index>=selection.startColumn&&hoveredRegion.index<=selection.endColumn)||(hoveredRegion?.kind==='row'&&wholeRowsSelected&&hoveredRegion.index>=selection.startRow&&hoveredRegion.index<=selection.endRow))
       event.currentTarget.style.cursor=formatBrush?'copy':target?target.axis==='column'?'col-resize':'row-resize':overBand?'grab':onFillHandle(event)?'crosshair':'default'
       // Hovering a cell that carries a note shows the note, which is the only
-      // way to read one.
+      // way to read one. A cell holding a formula error is explained the same
+      // way, because `#VALUE!` on its own says nothing about what to fix.
       const hovered=pointCell(event)
-      const note=hovered?cells.get(cellKey(hovered.row,hovered.column))?.note:undefined
-      if(note&&hovered){
+      const hoveredCell=hovered?cells.get(cellKey(hovered.row,hovered.column)):undefined
+      const note=hoveredCell?.note
+      const failure=hoveredCell?explainFormulaError(formulaErrorCode(hoveredCell.value)??''):undefined
+      if(hovered&&(note||failure)){
         if(noteHover?.row!==hovered.row||noteHover?.column!==hovered.column)
-          setNoteHover({row:hovered.row,column:hovered.column,text:note,x:columnPositionOf(hovered.column),y:rowPositionOf(hovered.row)+rowAxis.sizeOf(hovered.row)})
+          setNoteHover({row:hovered.row,column:hovered.column,text:note,failure,x:columnPositionOf(hovered.column),y:rowPositionOf(hovered.row)+rowAxis.sizeOf(hovered.row)})
       }else if(noteHover)setNoteHover(undefined)
       return
     }
@@ -1084,7 +1088,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           event.preventDefault();window.location.assign(activeLink.href)
         }}><Link2/> {activeLink.linkLabel}</a>
     </div>}
-    {noteHover&&<div className="cell-note" role="tooltip" style={{left:noteHover.x,top:noteHover.y+2}}>{noteHover.text}</div>}
+    {noteHover&&<div className={noteHover.failure?'cell-note cell-error':'cell-note'} role="tooltip" style={{left:noteHover.x,top:noteHover.y+2}}>
+      {noteHover.failure&&<><strong>{noteHover.failure.code} {noteHover.failure.summary}</strong><span>{noteHover.failure.next}</span></>}
+      {noteHover.text&&<span>{noteHover.text}</span>}
+    </div>}
     <div className="sr-only" aria-live="polite">선택 범위 {selectionAddress}, 활성 셀 값 {activeSparkline?describeSparkline(activeSparkline):activeText||'비어 있음'}{activeCell?.note?`, 메모 ${activeCell.note}`:''}{activeCell?.spill_source?`, ${activeCell.spill_source} 배열 수식 결과`:''}{fillPreview?`, 자동 채우기 미리보기 ${address(fillPreview.startRow,fillPreview.startColumn)}:${address(fillPreview.endRow,fillPreview.endColumn)}`:''}</div>
   </div>
 }

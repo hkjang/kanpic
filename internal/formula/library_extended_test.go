@@ -554,3 +554,27 @@ func TestLambdaHelpersWalkAnArray(t *testing.T) {
 		t.Errorf("MAP without a LAMBDA = %v", result.Value)
 	}
 }
+
+// The product explains each error code in Korean. That table cannot be
+// generated from here, so this test is where a new code gets noticed: adding
+// one means adding an explanation in web/src/lib/formulaError.ts too.
+func TestErrorCodesAreTheOnesTheProductExplains(t *testing.T) {
+	t.Parallel()
+	documented := map[string]struct{}{
+		"#CIRC!": {}, "#DIV/0!": {}, "#ERROR!": {}, "#N/A": {}, "#NAME?": {},
+		"#NULL!": {}, "#NUM!": {}, "#REF!": {}, "#SPILL!": {}, "#VALUE!": {},
+	}
+	if len(ErrorCodes) != len(documented) {
+		t.Fatalf("the engine has %d error codes and the product explains %d", len(ErrorCodes), len(documented))
+	}
+	for _, code := range ErrorCodes {
+		if _, known := documented[code]; !known {
+			t.Errorf("%s has no explanation in web/src/lib/formulaError.ts", code)
+		}
+		// Every code has to survive being written as a literal, because a
+		// formula can name one directly and a cell can hold one.
+		if result := New().Evaluate("="+code, map[string]any{}); result.Error == nil || result.Error.Code != code {
+			t.Errorf("%s as a literal = %v, %v", code, result.Value, result.Error)
+		}
+	}
+}

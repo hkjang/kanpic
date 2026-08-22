@@ -6,6 +6,7 @@ import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
 import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from '../components/FormulaAutocomplete'
 import { applySuggestion } from '../lib/formulaSuggest'
+import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
 import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
 import { ShareDialog,accessSummary } from '../components/ShareDialog'
@@ -798,6 +799,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'nav:preferences',group:'이동',label:'개인 환경설정',icon:<Settings/>,keywords:'preferences 설정',run:()=>{window.location.href='/preferences'}},
     ...(session?.admin?[{id:'nav:admin',group:'이동',label:'관리자 콘솔',icon:<Settings/>,keywords:'admin 관리자',run:()=>{window.location.href='/admin'}}]:[]),
   ]
+  const activeError=explainFormulaError(formulaErrorCode(activeCell?.value)??'')
   const formulaBarHint=editor.editing&&!readOnly?formulaHint(functionCatalog,editor.draft,formulaCaret):undefined
   const chooseFormulaSuggestion=(name:string)=>{
     if(!formulaBarHint)return
@@ -1025,7 +1027,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
         else if(event.key==='Escape'){event.preventDefault();editor.setEditing(false);gridShortcut({command:'focus-grid'})}
       }}/>
-      {formulaBarHint&&formulaSuggestion>=0&&<FormulaAutocomplete hint={formulaBarHint} active={formulaSuggestion} left={88} top={31} onChoose={chooseFormulaSuggestion}/>}</div>
+      {formulaBarHint&&formulaSuggestion>=0&&<FormulaAutocomplete hint={formulaBarHint} active={formulaSuggestion} left={88} top={31} onChoose={chooseFormulaSuggestion}/>}
+      {/* 오류는 마우스를 올려야만 설명을 볼 수 있으면 안 된다. 키보드로 셀을
+          옮겨 다니는 사람에게는 이 자리가 유일한 안내다. */}
+      {!editor.editing&&activeError&&<span className="formula-error" title={activeError.next}><strong>{activeError.code}</strong> {activeError.summary}</span>}</div>
     <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange} onResolveNumericRun={resolveNumericRun}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}

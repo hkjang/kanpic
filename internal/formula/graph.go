@@ -246,11 +246,17 @@ func normalizeAddress(address string) string {
 	return CellKey(sheet, cell)
 }
 
+// ErrorCodes is every error a formula can end in. It is one list because two
+// lists drift: the tokenizer and this check disagreed about nothing so far
+// only by luck. The product shows a Korean explanation for each of these, so
+// adding one here means adding one there.
+var ErrorCodes = []string{"#CIRC!", "#DIV/0!", "#ERROR!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#SPILL!", "#VALUE!"}
+
 func isFormulaErrorCode(code string) bool {
-	switch code {
-	case "#CIRC!", "#DIV/0!", "#ERROR!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#SPILL!", "#VALUE!":
-		return true
-	default:
-		return false
+	for _, known := range ErrorCodes {
+		if known == code {
+			return true
+		}
 	}
+	return false
 }
