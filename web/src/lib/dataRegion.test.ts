@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
 import { dataRegion, looksLikeHeaderRow, populatedCell } from './dataRegion'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from './clipboard'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown]>){
@@ -34,4 +35,13 @@ describe('dataRegion',()=>{
     expect(populatedCell(cells,1,1)).toBe(true)
     expect(populatedCell(cells,2,1)).toBe(false)
   })
+})
+
+// 편집기의 행 한도는 서버가 담아 두는 시트보다 작으면 안 된다. 10,000이던
+// 시절에는 2만 행짜리 표를 정렬하면 앞의 절반만 정렬됐다.
+it('resolves a table taller than ten thousand rows', () => {
+  const cells=new Map<string,Cell>()
+  for(let row=1;row<=15_000;row+=1)cells.set(cellKey(row,1),{sheet_id:'s',row,column:1,value:row,updated_at:''})
+  const region=dataRegion(cells,1,1,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS})
+  expect(region.endRow).toBe(15_000)
 })

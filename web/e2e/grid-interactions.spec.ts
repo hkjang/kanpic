@@ -1,3 +1,4 @@
+import { MAX_GRID_ROWS } from '../src/lib/clipboard'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
 const HEADER_WIDTH=46,HEADER_HEIGHT=27,COLUMN_WIDTH=108,ROW_HEIGHT=27
@@ -35,7 +36,9 @@ test('column header selects the column and its context menu edits structure', as
   const grid=await openEditor(page,workbookId)
 
   await page.mouse.click(grid.columnCenter(2),grid.columnHeader)
-  await expect(page.locator('.name-box')).toHaveValue('B1:B10000')
+  // 열 전체 선택은 편집기의 행 한도까지를 가리킨다. 그 한도는 서버가 담는
+  // 시트보다 작으면 안 되므로 상수에서 읽는다.
+  await expect(page.locator('.name-box')).toHaveValue(`B1:B${MAX_GRID_ROWS}`)
 
   await page.mouse.click(grid.columnCenter(2),grid.columnHeader,{button:'right'})
   const menu=page.locator('.context-menu')
