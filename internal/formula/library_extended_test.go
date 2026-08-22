@@ -578,3 +578,62 @@ func TestErrorCodesAreTheOnesTheProductExplains(t *testing.T) {
 		}
 	}
 }
+
+// kanpic keeps a date as its written form rather than as a serial number, so
+// the two most common date formulas in any spreadsheet - how many days apart,
+// and a week from now - both came back as #VALUE!.
+func TestDateArithmeticAnswersDaysApartAndShiftsADate(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": "2026-08-23",
+		"A2": "2026-09-01",
+		"A3": "2026-08-23 09:30:00",
+		"A4": "2026/08/23",
+		"A5": "7",
+		"A6": "연필",
+	}
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=A2-A1", float64(9)},
+		{"=A1-A2", float64(-9)},
+		{"=A1+7", "2026-08-30"},
+		{"=A1-1", "2026-08-22"},
+		{"=7+A1", "2026-08-30"},
+		// 월과 해를 넘어가도 달력대로 움직인다.
+		{"=A1+130", "2026-12-31"},
+		{"=A1+131", "2027-01-01"},
+		// 시간이 붙은 값은 시간을 잃지 않는다.
+		{"=A3+1", "2026-08-24 09:30:00"},
+		// 쓰인 모양이 다르면 그 모양 그대로 돌려준다.
+		{"=A4+1", "2026/08/24"},
+		// 숫자끼리는 지금까지처럼 계산한다.
+		{"=1+2", float64(3)},
+		{"=A5+1", float64(8)},
+		{"=A6&\"칸\"", "연필칸"},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Fatalf("%s: %v", testCase.formula, result.Error)
+		}
+		if result.Value != testCase.want {
+			t.Fatalf("%s = %#v, want %#v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+	for _, formula := range []string{
+		// 날짜 둘을 더하는 것은 뜻이 없다. 직렬 번호가 없으므로 큰 숫자를
+		// 내놓느니 오류를 낸다.
+		"=A1+A2",
+		// 날짜에서 빼는 것이지 날짜를 빼는 것이 아니다.
+		"=7-A1",
+		"=A1*2",
+		"=A6-A1",
+		// 기간이 나타낼 수 있는 범위를 넘어서면 다른 세기로 넘어가 버린다.
+		"=A1+9000000",
+	} {
+		if result := New().Evaluate(formula, cells); result.Error == nil {
+			t.Fatalf("%s produced %#v instead of an error", formula, result.Value)
+		}
+	}
+}

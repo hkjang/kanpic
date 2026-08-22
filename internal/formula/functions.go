@@ -119,6 +119,11 @@ func evaluateScalarBinary(operator string, left, right any) (any, error) {
 			return comparison >= 0, nil
 		}
 	}
+	if operator == "+" || operator == "-" {
+		if result, err, handled := dateArithmetic(operator, left, right); handled {
+			return result, err
+		}
+	}
 	a, aok := toNumber(left)
 	b, bok := toNumber(right)
 	if !aok || !bok {
