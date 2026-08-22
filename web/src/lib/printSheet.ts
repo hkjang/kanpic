@@ -57,11 +57,14 @@ function cellCSS(style?:Record<string,unknown>){
 export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
   const region=options.region??usedRegion(cells)
   const rows:string[]=[]
+  // 열 머리글은 thead에 둔다. 표 안에 그냥 첫 줄로 넣으면 첫 장에만 찍혀,
+  // 둘째 장부터는 어느 칸이 무슨 열인지 알 수 없다.
+  let head=''
   if(region){
     if(options.headers){
       const headerCells=[`<th class="corner"></th>`]
       for(let column=region.startColumn;column<=region.endColumn;column+=1)headerCells.push(`<th>${escapeHTML(address(1,column).replace(/\d+$/,''))}</th>`)
-      rows.push(`<tr>${headerCells.join('')}</tr>`)
+      head=`<thead><tr>${headerCells.join('')}</tr></thead>`
     }
     for(let row=region.startRow;row<=region.endRow;row+=1){
       if(options.hiddenRows?.has(row))continue
@@ -87,5 +90,6 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
   th.row-head{width:34px}
   .empty{color:#7d8b94}
   tr{page-break-inside:avoid}
-  </style></head><body><header><h1>${escapeHTML(options.title)}</h1><span>${escapeHTML(options.sheetName)}${region?` · ${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`:''}</span></header>${empty||`<table>${rows.join('')}</table>`}</body></html>`
+  thead{display:table-header-group}
+  </style></head><body><header><h1>${escapeHTML(options.title)}</h1><span>${escapeHTML(options.sheetName)}${region?` · ${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`:''}</span></header>${empty||`<table>${head}<tbody>${rows.join('')}</tbody></table>`}</body></html>`
 }

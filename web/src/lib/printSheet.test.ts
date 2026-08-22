@@ -73,3 +73,26 @@ describe('printing hidden rows',()=>{
     for(const name of ['서울','부산','대구'])expect(html).toContain(name)
   })
 })
+
+// 열 머리글이 표 본문의 첫 줄이면 첫 장에만 찍힌다. thead에 있어야 브라우저가
+// 장마다 다시 그려 주고, 둘째 장부터도 어느 칸이 무슨 열인지 알 수 있다.
+it('puts the column headings in a thead so every page repeats them',()=>{
+  const cells=new Map<string,Cell>()
+  for(let row=1;row<=3;row+=1)cells.set(cellKey(row,1),{sheet_id:'s',row,column:1,value:row,updated_at:''})
+  const html=printableDocument(cells,{title:'긴 표',sheetName:'Sheet1',gridlines:true,headers:true})
+  expect(html).toContain('<thead><tr><th class="corner"></th><th>A</th></tr></thead>')
+  expect(html).toContain('<tbody>')
+  // 본문 줄은 thead 밖에 있어야 한다.
+  const head=html.slice(html.indexOf('<thead>'),html.indexOf('</thead>'))
+  const body=html.slice(html.indexOf('<tbody>'))
+  expect(body).toContain('<th class="row-head">1</th>')
+  expect(head).not.toContain('row-head')
+})
+
+it('omits the thead when headings are turned off',()=>{
+  const cells=new Map<string,Cell>()
+  cells.set(cellKey(1,1),{sheet_id:'s',row:1,column:1,value:'값',updated_at:''})
+  const html=printableDocument(cells,{title:'표',sheetName:'Sheet1',gridlines:false,headers:false})
+  expect(html).not.toContain('<thead>')
+  expect(html).toContain('<tbody>')
+})
