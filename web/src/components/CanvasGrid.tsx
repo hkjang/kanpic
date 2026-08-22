@@ -15,7 +15,7 @@ import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
-import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis } from '../lib/dimensionAxis'
+import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis,rowHeaderWidth} from '../lib/dimensionAxis'
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
 import { collapsedIndexes,controlAt,controlIndexFor,groupsAt,innermostGroup,outlineSize,OUTLINE_STEP } from '../lib/outline'
@@ -91,7 +91,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   // The outline gutter sits between the sheet edge and the headers, one step
   // per level of nesting, and is absent entirely when nothing is grouped.
   const rowOutline=outlineSize(layout.row_groups),columnOutline=outlineSize(layout.column_groups)
-  const headerWidth=ROW_HEADER_WIDTH+rowOutline,headerHeight=COLUMN_HEADER_HEIGHT+columnOutline
+  // 행 머리글은 그 자리에 보이는 가장 큰 행 번호를 담을 만큼 넓어야 한다.
+  // 46px는 다섯 자리까지만 들어가서, 15만 행짜리 시트를 내려가면 번호의
+  // 앞자리가 잘려 나갔다. 네 자리까지는 예전 폭 그대로다.
+  const headerWidth=rowHeaderWidth(ROW_HEADER_WIDTH,rowAxis.indexAtOffset(scroll.top+size.height),zoom)+rowOutline,headerHeight=COLUMN_HEADER_HEIGHT+columnOutline
   const frozenRows=Math.min(layout.frozen_rows??0,TOTAL_ROWS),frozenColumns=Math.min(layout.frozen_columns??0,TOTAL_COLUMNS)
   const activeCell=cells.get(cellKey(activeRow,activeColumn))
   // The span the active filter covers, which is where the funnel buttons go.

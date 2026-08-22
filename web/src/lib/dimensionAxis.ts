@@ -39,3 +39,14 @@ export function createDimensionAxis({total,defaultSize,sizes=[],hiddenRanges=[],
 
 export function axisViewportPosition(axis:DimensionAxis,index:number,scroll:number,frozen:number){return axis.offsetOf(index)-(index<=frozen?0:scroll)}
 export function axisIndexAtViewport(axis:DimensionAxis,position:number,scroll:number,frozen:number){const frozenExtent=axis.offsetOf(Math.min(axis.total,frozen)+1);return axis.indexAtOffset(position<frozenExtent?position:position+scroll)}
+
+/**
+ * 행 머리글은 그 자리에 보이는 가장 큰 행 번호를 담을 만큼 넓어야 합니다.
+ * 기본 폭은 다섯 자리까지만 들어가므로, 십오만 행짜리 시트를 내려가면
+ * 번호의 앞자리가 잘려 나갑니다. 네 자리까지는 기본 폭 그대로 두어 작은
+ * 시트에서 자리를 낭비하지 않습니다.
+ */
+export function rowHeaderWidth(base:number,lastRowInView:number,zoom=1){
+  const digits=Math.max(4,String(Math.max(1,Math.trunc(lastRowInView))).length)
+  return base+(digits-4)*Math.round(8*zoom)
+}

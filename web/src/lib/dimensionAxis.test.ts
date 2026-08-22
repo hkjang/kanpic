@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis } from './dimensionAxis'
+import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,rowHeaderWidth} from './dimensionAxis'
 
 describe('dimension axis',()=>{
   it('combines sparse sizes and hidden ranges without materializing every row',()=>{
@@ -18,5 +18,23 @@ describe('dimension axis',()=>{
     expect(axisViewportPosition(axis,8,50,2)).toBe(20)
     expect(axisIndexAtViewport(axis,15,50,2)).toBe(2)
     expect(axisIndexAtViewport(axis,25,50,2)).toBe(8)
+  })
+})
+
+describe('rowHeaderWidth', () => {
+  // 작은 시트에서 자리를 낭비하지 않는다.
+  it('keeps the base width while row numbers are short', () => {
+    expect(rowHeaderWidth(46,1)).toBe(46)
+    expect(rowHeaderWidth(46,9_999)).toBe(46)
+  })
+
+  // 15만 행짜리 시트를 내려가면 번호의 앞자리가 잘려 나갔다.
+  it('grows a step for every extra digit', () => {
+    expect(rowHeaderWidth(46,10_000)).toBe(54)
+    expect(rowHeaderWidth(46,150_001)).toBe(62)
+  })
+
+  it('scales the step with the zoom', () => {
+    expect(rowHeaderWidth(46,150_001,2)).toBe(78)
   })
 })
