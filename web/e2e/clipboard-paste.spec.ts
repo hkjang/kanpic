@@ -20,7 +20,9 @@ const openAtA1=async(page:Page,workbookId:string)=>{
   await page.goto(`/workbooks/${workbookId}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   const box=(await page.locator('.grid-canvas').boundingBox())!
-  await page.mouse.click(box.x+40,box.y+42)
+  // 행 머리글을 넘어선 자리라야 A1 이 선택된다. 머리글을 누르면 행 전체가
+  // 잡혀 복사 한도에 걸린다.
+  await page.mouse.click(box.x+80,box.y+42)
 }
 
 test('pasting a formatted range from Excel keeps its numbers and its formatting', async ({ page, request }) => {
@@ -80,5 +82,43 @@ test('pasting from Google Sheets uses the value it declares, not the text it sho
   // colspan 이 걸린 셀이 두 칸을 차지하므로 다음 줄이 왼쪽으로 밀리면 안 된다.
   expect(at(3,1)).toMatchObject({value:'다음 줄'})
   expect(at(3,2)).toMatchObject({value:1234,style:{number_format:'#,##0'}})
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})
+
+// 복사할 때 평문만 올리면 엑셀·구글 시트·워드 어디에 붙여넣어도 굵게·색·
+// 정렬이 사라진 글자만 남는다. 스프레드시트끼리 서식이 오가는 길은
+// `text/html` 표뿐이다.
+test('copying puts a formatted table on the clipboard, not only plain text', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`복사 ${stamp}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`copy-${stamp}`,cells:[
+    {row:1,column:1,value:'제품',style:{bold:true,background:'#DBEAFE',horizontal_align:'center'}},
+    {row:1,column:2,value:'단가',style:{bold:true,background:'#DBEAFE'}},
+    {row:2,column:1,value:'연필',style:{italic:true}},
+    {row:2,column:2,value:1234.5,style:{color:'#B91C1C',number_format:'#,##0.00'}},
+  ]}})
+  await openAtA1(page,workbook.id)
+  // 데이터 영역 끝까지 확장하는 단축키는 이미 들어온 값으로 끝을 찾는다.
+  // 여기서는 A1:B2 만 필요하므로 한 칸씩 넓힌다.
+  await page.keyboard.press('Shift+ArrowRight')
+  await page.keyboard.press('Shift+ArrowDown')
+
+  const copy=()=>page.evaluate(()=>{
+    const data=new DataTransfer()
+    document.querySelector('.grid-viewport')?.dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,bubbles:true,cancelable:true}))
+    return {html:data.getData('text/html'),text:data.getData('text/plain')}
+  })
+  // 셀 값이 도착하기 전에 복사하면 빈 표가 나온다.
+  await expect.poll(async()=>(await copy()).text).toContain('제품')
+  const copied=await copy()
+  expect(copied.text).toContain('제품\t단가')
+  expect(copied.html).toContain('<table')
+  expect(copied.html).toContain('font-weight:700')
+  expect(copied.html).toContain('background-color:#DBEAFE')
+  expect(copied.html).toContain('font-style:italic')
+  expect(copied.html).toContain('color:#B91C1C')
+  // 받는 쪽이 통화 표기를 못 읽어도 숫자는 숫자로 들어가야 한다.
+  expect(copied.html).toContain('x:num="1234.5"')
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })

@@ -46,9 +46,10 @@ test('typing in a column suggests the entries already used there', async ({ page
     {row:1,column:1,value:'영업본부'},{row:2,column:1,value:'개발본부'},{row:3,column:1,value:'영업본부'},
   ])
   await page.goto(`/workbooks/${workbook.id}`)
-  // Ctrl+↓ stops on the last filled cell, so one more step reaches the empty row.
-  await page.getByLabel('A1 셀 입력').press('Control+ArrowDown')
-  await page.getByLabel('A3 셀 입력').press('ArrowDown')
+  // 데이터 영역 끝으로 가는 단축키는 이미 들어온 값으로 끝을 찾는다. 값이
+  // 도착하기 전에 누르면 시트 맨 아래로 가 버리므로 이름 상자로 옮긴다.
+  await page.getByRole('combobox',{name:'이름 상자'}).fill('A4')
+  await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
   const editor=page.getByLabel('A4 셀 입력')
   await editor.fill('영업')
   const suggestions=page.locator('.value-suggest')

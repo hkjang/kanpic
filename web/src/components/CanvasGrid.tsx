@@ -13,6 +13,7 @@ import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, t
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
+import { clipboardHtml } from '../lib/clipboardHtmlOut'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
@@ -698,7 +699,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
     else if(event.key==='Backspace'||event.key==='Delete'){if(readOnly){readOnlyNotice();event.preventDefault();return}const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1);if(count===1)void commit('');else void clearSelection();event.preventDefault()}
   }
-  const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();internalClipboard.current=payload;event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
+  const writeClipboard=(event:React.ClipboardEvent)=>{try{const payload=selectionPayload();internalClipboard.current=payload;event.preventDefault();event.clipboardData.setData('text/plain',clipboardText(payload));event.clipboardData.setData('text/html',clipboardHtml(payload));event.clipboardData.setData(KANPIC_CLIPBOARD_TYPE,JSON.stringify(payload));return true}catch(error){event.preventDefault();alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.');return false}}
   const copy=(event:React.ClipboardEvent)=>{if(editing)return;writeClipboard(event)}
   const clearSelection=useCallback(async()=>{
     const count=(selection.endRow-selection.startRow+1)*(selection.endColumn-selection.startColumn+1)
@@ -740,7 +741,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     try{
       const payload=selectionPayload(),text=clipboardText(payload)
       internalClipboard.current=payload
-      if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text)
+      // 서식이 따라가려면 표도 함께 올려야 한다. ClipboardItem 을 쓸 수 없는
+      // 브라우저에서는 글자만이라도 올린다.
+      if(navigator.clipboard?.write&&typeof ClipboardItem!=='undefined'){
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain':new Blob([text],{type:'text/plain'}),
+          'text/html':new Blob([clipboardHtml(payload)],{type:'text/html'}),
+        })])
+      }
+      else if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text)
       else if(!document.execCommand('copy'))throw new Error('클립보드를 사용할 수 없습니다.')
       if(cut)await clearSelection()
     }catch(error){alert(error instanceof Error?error.message:'선택 범위를 복사하지 못했습니다.')}
