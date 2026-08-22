@@ -12,6 +12,7 @@ import { dataRegion, populatedCell } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
+import { hashesWhenTooNarrow } from '../lib/cellWidth'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
 import { parsePastedNumber } from '../lib/clipboardNumber'
 import { clipboardHtml } from '../lib/clipboardHtmlOut'
@@ -295,10 +296,15 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         ?spillRoom({row:cell.row,column:cell.column,alignment,maxColumn:TOTAL_COLUMNS,sizeOf:column=>columnAxis.sizeOf(column),populated:(candidateRow,candidateColumn)=>populatedCell(cells,candidateRow,candidateColumn)})
         :{left:0,right:0}
       const drawWidth=textMode==='overflow'&&rotation===0?maxTextWidth+room.left+room.right:maxTextWidth
+      // 자리에 안 들어가는 숫자는 잘라 보여 주면 안 된다. 1,234,567 의 앞
+      // 부분만 보이면 1,234 로 읽힌다. 스프레드시트가 `####` 를 쓰는 이유다.
+      const painted=rotation===0&&textMode!=='wrap'&&typeof cell.value==='number'&&!showFormulas
+        ?hashesWhenTooNarrow(text,drawWidth,value=>context.measureText(value).width)
+        :text
       context.save();context.beginPath();context.rect(x-room.left+1,y+1,Math.max(0,width-2+room.left+room.right),Math.max(0,height-2));context.clip()
-      if(textMode==='wrap'&&rotation===0){const lines=wrapText(text,maxTextWidth,value=>context.measureText(value).width),lineHeight=Math.max(fontSize*zoom*1.25,12*zoom),visibleLines=Math.max(1,Math.floor((height-6)/lineHeight)),shown=lines.slice(0,visibleLines),blockHeight=shown.length*lineHeight,startY=vertical==='top'?y+3+lineHeight/2:vertical==='bottom'?y+height-3-blockHeight+lineHeight/2:y+(height-blockHeight)/2+lineHeight/2;shown.forEach((line,index)=>context.fillText(line,textX,startY+index*lineHeight,maxTextWidth))}else{context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(text,0,0,drawWidth);if(text&&(style.underline===true||style.strike===true)){const measured=Math.min(context.measureText(text).width,drawWidth),start=alignment==='right'?-measured:alignment==='center'?-measured/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+measured,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+measured,0);context.stroke()}}}
+      if(textMode==='wrap'&&rotation===0){const lines=wrapText(text,maxTextWidth,value=>context.measureText(value).width),lineHeight=Math.max(fontSize*zoom*1.25,12*zoom),visibleLines=Math.max(1,Math.floor((height-6)/lineHeight)),shown=lines.slice(0,visibleLines),blockHeight=shown.length*lineHeight,startY=vertical==='top'?y+3+lineHeight/2:vertical==='bottom'?y+height-3-blockHeight+lineHeight/2:y+(height-blockHeight)/2+lineHeight/2;shown.forEach((line,index)=>context.fillText(line,textX,startY+index*lineHeight,maxTextWidth))}else{context.translate(textX,textY);if(rotation)context.rotate(rotation*Math.PI/180);context.fillText(painted,0,0);if(text&&(style.underline===true||style.strike===true)){const measured=Math.min(context.measureText(painted).width,drawWidth),start=alignment==='right'?-measured:alignment==='center'?-measured/2:0;context.strokeStyle=context.fillStyle;context.lineWidth=Math.max(1,zoom);if(style.underline===true){context.beginPath();context.moveTo(start,fontSize*zoom*.48);context.lineTo(start+measured,fontSize*zoom*.48);context.stroke()}if(style.strike===true){context.beginPath();context.moveTo(start,0);context.lineTo(start+measured,0);context.stroke()}}}
       if(link&&text!==''){
-        const measured=Math.min(context.measureText(text).width,drawWidth)
+        const measured=Math.min(context.measureText(painted).width,drawWidth)
         const underlineX=alignment==='right'?textX-measured:alignment==='center'?textX-measured/2:textX
         context.fillRect(underlineX,textY+fontSize*zoom*.55,measured,Math.max(1,zoom))
       }
