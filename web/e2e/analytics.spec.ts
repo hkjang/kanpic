@@ -60,10 +60,11 @@ test('the console configures a hosted provider and previews the generated code',
   await expect(page.getByLabel('추적 코드 삽입')).toBeChecked()
   await expect(page.locator('.tracking-preview')).toContainText('gtag/js?id=G-E2E12345')
 
-  // The generated snippet and the vendor origin reach the served page.
+  // The generated snippet and the vendor origin reach the served page. The
+  // preview above only proves what the console thinks; the checkbox saves in
+  // the background, so the served page is asked until it agrees.
+  await expect.poll(async()=>(await request.get('/workbooks/none')).text()).toContain('https://www.googletagmanager.com/gtag/js?id=G-E2E12345')
   const response=await request.get('/workbooks/none')
-  const body=await response.text()
-  expect(body).toContain('https://www.googletagmanager.com/gtag/js?id=G-E2E12345')
   expect(response.headers()['content-security-policy']).toContain('https://www.googletagmanager.com')
 
   // An incomplete configuration is reported rather than silently doing nothing.
