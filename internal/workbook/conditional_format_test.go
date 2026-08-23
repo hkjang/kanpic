@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
+	"strconv"
 	"testing"
 
 	"kanpic/pkg/cellrange"
@@ -232,5 +235,95 @@ func TestConditionalCustomFormulaValidation(t *testing.T) {
 	rule, _, err := NormalizeConditionalFormat(ConditionalFormat{SheetID: "s", Range: "A1:B2", RuleType: "value", Operator: "greater_than", Value: json.RawMessage(`10`), Formula: `=$C1="완료"`})
 	if err != nil || rule.Formula != "" {
 		t.Fatalf("value rule kept a formula: %#v, %v", rule, err)
+	}
+}
+
+// 상위 N개는 한 칸만 봐서는 답할 수 없다. 범위 전체의 순위를 알아야 하고,
+// 문턱에 걸친 값이 여럿이면 모두 들어가야 한다 — 3등이 둘이면 상위 3개는
+// 넷이 아니라 둘까지가 아니라, 그 둘을 다 세는 것이 스프레드시트의 답이다.
+func TestConditionalRankHighlightsTheTopAndBottomOfItsRange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "rank", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`10`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`50`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`30`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`50`)},
+		{Row: 5, Column: 1, Value: json.RawMessage(`20`)},
+		{Row: 6, Column: 1, Value: json.RawMessage(`"글자"`)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A1:A6")
+	matched := func(key, operator string, count int) []int {
+		t.Helper()
+		rule, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", CreateConditionalFormatInput{
+			IdempotencyKey: key, Name: key, Range: "A1:A6", RuleType: "rank", Operator: operator,
+			Value: json.RawMessage(strconv.Itoa(count)), Style: json.RawMessage(`{"background":"#dcfce7"}`), Priority: 1})
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		evaluation, err := repository.EvaluateConditionalFormats(ctx, sheet.ID, selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := make([]int, 0, len(evaluation.Items))
+		for _, item := range evaluation.Items {
+			rows = append(rows, item.Row)
+		}
+		sort.Ints(rows)
+		if err := repository.DeleteConditionalFormat(ctx, rule.ID, "alice", nil); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	// 50 이 둘이므로 상위 2개는 그 둘이다.
+	if rows := matched("top2", "top", 2); !reflect.DeepEqual(rows, []int{2, 4}) {
+		t.Fatalf("top 2 = %v", rows)
+	}
+	if rows := matched("bottom2", "bottom", 2); !reflect.DeepEqual(rows, []int{1, 5}) {
+		t.Fatalf("bottom 2 = %v", rows)
+	}
+	// 숫자 다섯 개의 40%는 두 개다.
+	if rows := matched("top40", "top_percent", 40); !reflect.DeepEqual(rows, []int{2, 4}) {
+		t.Fatalf("top 40%% = %v", rows)
+	}
+	// 25%는 1.25개이고, 올림해 두 개다. 열 개 중 상위 15%가 한 개면 너무 적다.
+	if rows := matched("bottom25", "bottom_percent", 25); !reflect.DeepEqual(rows, []int{1, 5}) {
+		t.Fatalf("bottom 25%% = %v", rows)
+	}
+	// 범위가 가진 것보다 많이 물으면 숫자 전부다. 글자는 순위에 들지 않는다.
+	if rows := matched("top99", "top", 99); !reflect.DeepEqual(rows, []int{1, 2, 3, 4, 5}) {
+		t.Fatalf("top 99 = %v", rows)
+	}
+}
+
+func TestConditionalRankValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "rank rules", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	for name, input := range map[string]CreateConditionalFormatInput{
+		"unknown operator": {Operator: "middle", Value: json.RawMessage(`2`)},
+		"zero":             {Operator: "top", Value: json.RawMessage(`0`)},
+		"fraction":         {Operator: "top", Value: json.RawMessage(`2.5`)},
+		"over a hundred":   {Operator: "top_percent", Value: json.RawMessage(`150`)},
+		"missing":          {Operator: "top"},
+		"text":             {Operator: "top", Value: json.RawMessage(`"둘"`)},
+	} {
+		input.IdempotencyKey, input.Name, input.Range, input.RuleType, input.Priority = name, name, "A1:A6", "rank", 1
+		if _, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", input); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s was accepted: %v", name, err)
+		}
+	}
+	// 기본값은 상위이고, 색을 주지 않으면 알아볼 수 있는 색이 붙는다.
+	rule, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", CreateConditionalFormatInput{
+		IdempotencyKey: "default", Name: "기본", Range: "A1:A6", RuleType: "rank", Value: json.RawMessage(`3`), Priority: 1})
+	if err != nil || rule.Operator != "top" || len(rule.Style) == 0 {
+		t.Fatalf("default rank rule = %#v, %v", rule, err)
 	}
 }

@@ -321,7 +321,7 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 ## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 7.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `024_automation_rate_admission.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가하며, `024_automation_rate_admission.sql`은 실행 제한에 실제로 접수된 이력만 포함하도록 구분 컬럼과 조회 인덱스를 추가합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `031_conditional_rank.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가하며, `024_automation_rate_admission.sql`은 실행 제한에 실제로 접수된 이력만 포함하도록 구분 컬럼과 조회 인덱스를 추가합니다. `031_conditional_rank.sql`은 조건부 서식 규칙 종류에 상위·하위 N개(`rank`)를 더합니다.
 
 ### 7.2 백업 및 복구 명령어 (pg_dump)
 

@@ -20,6 +20,9 @@ const (
 	// MaxConditionalFormula matches the custom data validation limit: both are
 	// one expression a person types into a dialog.
 	MaxConditionalFormula = 2_000
+	// MaxRankCount bounds a top/bottom N rule. Excel stops at 1,000 and a
+	// larger N than the range holds simply matches everything anyway.
+	MaxRankCount = 1_000
 )
 
 var conditionalValueOperators = map[string]struct{}{
@@ -285,6 +288,30 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		}
 		rule.Value, rule.Value2 = nil, nil
 		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Formula = "", "", "", "", ""
+	case "rank":
+		if rule.Operator == "" {
+			rule.Operator = "top"
+		}
+		if rule.Operator != "top" && rule.Operator != "bottom" && rule.Operator != "top_percent" && rule.Operator != "bottom_percent" {
+			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rank rule operator must be top, bottom, top_percent, or bottom_percent", ErrInvalid)
+		}
+		wanted, ok := validationNumberRaw(rule.Value)
+		percent := rule.Operator == "top_percent" || rule.Operator == "bottom_percent"
+		limit := float64(MaxRankCount)
+		if percent {
+			limit = 100
+		}
+		if !ok || wanted < 1 || wanted > limit || wanted != math.Trunc(wanted) {
+			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rank rule needs a whole number from 1 to %d", ErrInvalid, int(limit))
+		}
+		if len(rule.Style) == 0 {
+			rule.Style = json.RawMessage(`{"background":"#dcfce7","color":"#14532d"}`)
+		}
+		if err := ValidateStylePatch(rule.Style); err != nil {
+			return ConditionalFormat{}, cellrange.Range{}, err
+		}
+		rule.Value2 = nil
+		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor, rule.Formula = "", "", "", "", ""
 	case "color_scale":
 		if rule.MinColor == "" {
 			rule.MinColor = "#dcfce7"
@@ -308,7 +335,7 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		rule.MinColor, rule.MidColor, rule.MaxColor = "", "", ""
 		rule.StopIfTrue = false
 	default:
-		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, custom_formula, duplicate, color_scale, or data_bar", ErrInvalid)
+		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, custom_formula, duplicate, rank, color_scale, or data_bar", ErrInvalid)
 	}
 	return rule, selected, nil
 }
@@ -418,6 +445,9 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 		}
 		duplicates := make(map[string]int)
 		minimum, maximum, hasNumber := 0.0, 0.0, false
+		// 순위 규칙은 한 칸만 봐서는 답할 수 없다. 범위 전체의 숫자를 모아
+		// 문턱값을 한 번 구해 두고 칸마다 그것과 견준다.
+		ranked := make([]float64, 0)
 		for _, cell := range source.Cells {
 			value := conditionalCellValue(cell)
 			values[cellKey{cell.Row, cell.Column}] = value
@@ -435,8 +465,12 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 					maximum = number
 				}
 				hasNumber = true
+				if rule.RuleType == "rank" {
+					ranked = append(ranked, number)
+				}
 			}
 		}
+		threshold := rankThreshold(rule, ranked)
 		for row := intersection.Start.Row; row <= intersection.End.Row; row++ {
 			for column := intersection.Start.Column; column <= intersection.End.Column; column++ {
 				key := cellKey{row, column}
@@ -454,7 +488,7 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 					matched = evaluated.Error == nil && conditionalTruthy(evaluated.Value)
 					patch = cloneJSON(rule.Style)
 				} else {
-					matched, patch, bar = evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber)
+					matched, patch, bar = evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber, threshold)
 				}
 				if !matched {
 					continue
@@ -495,7 +529,7 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 	return result, nil
 }
 
-func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[string]int, minimum, maximum float64, hasNumber bool) (bool, json.RawMessage, *ConditionalDataBar) {
+func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[string]int, minimum, maximum float64, hasNumber bool, threshold *float64) (bool, json.RawMessage, *ConditionalDataBar) {
 	switch rule.RuleType {
 	case "value":
 		matched := conditionalValueMatches(value, rule)
@@ -506,6 +540,18 @@ func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[s
 		}
 		count := duplicates[validationCanonical(value)]
 		matched := rule.Operator == "duplicate" && count > 1 || rule.Operator == "unique" && count == 1
+		return matched, cloneJSON(rule.Style), nil
+	case "rank":
+		number, ok := numericChartValue(value)
+		if !ok || threshold == nil {
+			return false, nil, nil
+		}
+		// 문턱값에 걸친 값은 모두 넣는다. 상위 3개를 물었는데 3등이 둘이면
+		// 둘 다 상위 3개다. 엑셀도 같은 답을 낸다.
+		matched := number <= *threshold
+		if rule.Operator == "top" || rule.Operator == "top_percent" {
+			matched = number >= *threshold
+		}
 		return matched, cloneJSON(rule.Style), nil
 	case "color_scale":
 		number, ok := numericChartValue(value)
@@ -525,6 +571,37 @@ func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[s
 	default:
 		return false, nil, nil
 	}
+}
+
+// rankThreshold is the value a cell has to reach to be in the top or bottom N
+// of its range. Ranking needs every number at once, so it is worked out before
+// the cells are walked rather than per cell.
+func rankThreshold(rule ConditionalFormat, ranked []float64) *float64 {
+	if rule.RuleType != "rank" || len(ranked) == 0 {
+		return nil
+	}
+	wanted, ok := validationNumberRaw(rule.Value)
+	if !ok {
+		return nil
+	}
+	count := int(wanted)
+	if rule.Operator == "top_percent" || rule.Operator == "bottom_percent" {
+		// 백분율은 올림한다. 열 개 중 상위 15%는 한 개가 아니라 두 개다.
+		count = int(math.Ceil(float64(len(ranked)) * wanted / 100))
+	}
+	if count < 1 {
+		return nil
+	}
+	if count > len(ranked) {
+		count = len(ranked)
+	}
+	sorted := append([]float64(nil), ranked...)
+	sort.Float64s(sorted)
+	position := len(sorted) - count
+	if rule.Operator == "bottom" || rule.Operator == "bottom_percent" {
+		position = count - 1
+	}
+	return &sorted[position]
 }
 
 // conditionalTruthy reads a formula result the way a spreadsheet does: TRUE,

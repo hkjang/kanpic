@@ -2,6 +2,7 @@ package importexport
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -63,6 +64,19 @@ func importConditionalFormats(file *excelize.File, name string) []workbook.Impor
 				rule.RuleType, rule.Formula = "custom_formula", "="+strings.TrimPrefix(strings.TrimSpace(item.Criteria), "=")
 			case "duplicate", "unique":
 				rule.RuleType, rule.Operator = "duplicate", item.Type
+			case "top", "bottom":
+				count, countErr := strconv.Atoi(strings.TrimSpace(item.Value))
+				if countErr != nil || count < 1 {
+					continue
+				}
+				rule.RuleType, rule.Operator = "rank", item.Type
+				if item.Percent {
+					rule.Operator = item.Type + "_percent"
+					if count > 100 {
+						continue
+					}
+				}
+				rule.Value = json.RawMessage(strconv.Itoa(count))
 			case "2_color_scale", "3_color_scale":
 				rule.RuleType = "color_scale"
 				rule.MinColor, rule.MaxColor = canonicalColor(item.MinColor), canonicalColor(item.MaxColor)

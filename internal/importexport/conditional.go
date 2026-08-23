@@ -69,6 +69,16 @@ func exportConditionalFormat(rule workbook.ConditionalFormat, styleFor func(json
 			kind = "unique"
 		}
 		return &excelize.ConditionalFormatOptions{Type: kind, Criteria: "=", Format: styleFor(rule.Style), StopIfTrue: rule.StopIfTrue}
+	case "rank":
+		kind := "top"
+		if rule.Operator == "bottom" || rule.Operator == "bottom_percent" {
+			kind = "bottom"
+		}
+		return &excelize.ConditionalFormatOptions{
+			Type: kind, Criteria: "=", Value: conditionalValueText(rule.Value),
+			Percent: rule.Operator == "top_percent" || rule.Operator == "bottom_percent",
+			Format:  styleFor(rule.Style), StopIfTrue: rule.StopIfTrue,
+		}
 	case "color_scale":
 		options := &excelize.ConditionalFormatOptions{
 			Type: "2_color_scale", Criteria: "=",
