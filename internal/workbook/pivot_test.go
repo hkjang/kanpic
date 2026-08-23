@@ -256,3 +256,96 @@ func TestMemoryPivotReportsStaleSourceUntilRefreshed(t *testing.T) {
 		t.Fatalf("pivot went stale again right after a refresh: %#v", after)
 	}
 }
+
+// 피벗이 낼 수 있는 집계가 다섯 가지뿐이었다. 구글 시트는 열세 가지를
+// 내주고, 그 중 "서로 다른 값이 몇 개인가"(countunique)와 중앙값은 표를
+// 들여다볼 때 늘 쓰는 것들이다.
+//
+// count 는 **숫자만** 세야 한다. 예전에는 비어 있지 않은 것을 모두 세어,
+// "미정" 같은 글자가 섞이면 개수가 부풀었다. 비어 있지 않은 것을 세는
+// 것은 counta 다.
+func TestPivotOffersEveryAggregationSheetsDoes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "aggregations", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	// 서울에 10, "미정", 20, 10 / 부산에 5, 7, 1
+	values := []struct {
+		region string
+		amount string
+	}{
+		{"서울", `10`}, {"서울", `"미정"`}, {"서울", `20`}, {"서울", `10`},
+		{"부산", `5`}, {"부산", `7`}, {"부산", `1`},
+	}
+	cells := []CellInput{{Row: 1, Column: 1, Value: json.RawMessage(`"지역"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"수량"`)}}
+	for index, item := range values {
+		cells = append(cells,
+			CellInput{Row: index + 2, Column: 1, Value: json.RawMessage(`"` + item.region + `"`)},
+			CellInput{Row: index + 2, Column: 2, Value: json.RawMessage(item.amount)})
+	}
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "agg-seed", Cells: cells}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range []struct {
+		aggregation string
+		seoul       float64
+		busan       float64
+	}{
+		{"sum", 40, 13},
+		{"average", 40.0 / 3.0, 13.0 / 3.0},
+		// 숫자만 센다. "미정" 은 빠진다.
+		{"count", 3, 3},
+		// 비어 있지 않은 것을 센다. "미정" 이 들어간다.
+		{"counta", 4, 3},
+		// 서로 다른 값: 10, 미정, 20 / 5, 7, 1
+		{"countunique", 3, 3},
+		{"min", 10, 1},
+		{"max", 20, 7},
+		{"median", 10, 5},
+		{"product", 2000, 35},
+		{"stdev", 5.773502691896258, 3.055050463303893},
+		{"stdevp", 4.714045207910317, 2.494438257849294},
+		{"var", 33.333333333333336, 9.333333333333334},
+		{"varp", 22.22222222222222, 6.222222222222222},
+	} {
+		pivot, err := repository.CreatePivot(ctx, book.ID, "alice", CreatePivotInput{
+			IdempotencyKey: "agg-" + testCase.aggregation, SheetID: sheet.ID, SourceSheetID: sheet.ID,
+			Name: testCase.aggregation, SourceRange: "A1:B8",
+			Rows:   []PivotDimension{{Column: 1}},
+			Values: []PivotValueField{{Column: 2, Aggregation: testCase.aggregation}},
+		})
+		if err != nil {
+			t.Errorf("%s: %v", testCase.aggregation, err)
+			continue
+		}
+		data, err := repository.GetPivotData(ctx, pivot.ID)
+		if err != nil {
+			t.Errorf("%s: %v", testCase.aggregation, err)
+			continue
+		}
+		if len(data.Rows) != 2 {
+			t.Errorf("%s: %d행이 나왔다. 둘이어야 한다", testCase.aggregation, len(data.Rows))
+			continue
+		}
+		for index, want := range []float64{testCase.seoul, testCase.busan} {
+			number, ok := numericChartValue(data.Rows[index].Values[0])
+			if !ok {
+				t.Errorf("%s: %v 는 숫자가 아니다", testCase.aggregation, data.Rows[index].Values[0])
+				continue
+			}
+			if difference := number - want; difference > 1e-9 || difference < -1e-9 {
+				t.Errorf("%s %s = %v, want %v", testCase.aggregation, data.Rows[index].Labels[0], number, want)
+			}
+		}
+	}
+
+	// 없는 집계는 그대로 거절한다.
+	if _, err := repository.CreatePivot(ctx, book.ID, "alice", CreatePivotInput{
+		IdempotencyKey: "agg-bogus", SheetID: sheet.ID, SourceSheetID: sheet.ID, SourceRange: "A1:B8",
+		Rows: []PivotDimension{{Column: 1}}, Values: []PivotValueField{{Column: 2, Aggregation: "mode"}},
+	}); err == nil {
+		t.Error("없는 집계 이름이 받아들여졌다")
+	}
+}

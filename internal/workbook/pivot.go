@@ -164,7 +164,17 @@ type PivotDrilldownResult struct {
 }
 
 var pivotGroups = map[string]struct{}{"none": {}, "year": {}, "quarter": {}, "month": {}, "day": {}, "number": {}, "custom": {}}
-var pivotAggregations = map[string]struct{}{"sum": {}, "average": {}, "count": {}, "min": {}, "max": {}}
+
+// pivotAggregations 는 값 필드가 쓸 수 있는 집계다. 구글 시트가 피벗에서
+// 내주는 것과 같은 이름을 쓴다.
+//
+// count 는 **숫자만** 센다. 비어 있지 않은 것을 모두 세는 것은 counta 다.
+// 엑셀·시트가 그렇게 나누고, 예전에는 count 하나가 counta 처럼 세고 있었다.
+var pivotAggregations = map[string]struct{}{
+	"sum": {}, "average": {}, "count": {}, "counta": {}, "countunique": {},
+	"min": {}, "max": {}, "median": {}, "product": {},
+	"stdev": {}, "stdevp": {}, "var": {}, "varp": {},
+}
 var pivotFilterOperators = map[string]struct{}{"equals": {}, "not_equals": {}, "contains": {}, "greater_than": {}, "greater_or_equal": {}, "less_than": {}, "less_or_equal": {}, "in": {}, "is_blank": {}, "not_blank": {}}
 
 // pivotFromInput builds the pivot a create request describes. Both repositories
@@ -236,7 +246,7 @@ func normalizePivot(item Pivot, allowBroken bool) (Pivot, error) {
 			return Pivot{}, fmt.Errorf("%w: pivot value column is outside source range", ErrInvalid)
 		}
 		if _, found := pivotAggregations[field.Aggregation]; !found {
-			return Pivot{}, fmt.Errorf("%w: aggregation must be sum, average, count, min, or max", ErrInvalid)
+			return Pivot{}, fmt.Errorf("%w: aggregation must be one of sum, average, count, counta, countunique, min, max, median, product, stdev, stdevp, var, varp", ErrInvalid)
 		}
 		if field.Name == "" {
 			field.Name = strings.ToUpper(field.Aggregation) + " 열 " + strconv.Itoa(field.Column)
@@ -557,11 +567,20 @@ type pivotAccumulator struct {
 	sum          float64
 	min          float64
 	max          float64
+	// 중앙값과 표준편차는 값을 다 봐야 셈할 수 있어 모아 둔다. 원본은
+	// MaxPivotSourceCells 로 묶여 있으므로 끝없이 자라지 않는다.
+	numbers []float64
+	// 서로 다른 값의 개수를 세려면 무엇이 나왔는지 기억해야 한다.
+	seen map[string]struct{}
 }
 
 func (accumulator *pivotAccumulator) add(value any) {
-	if displayChartValue(value) != "" {
+	if text := displayChartValue(value); text != "" {
 		accumulator.count++
+		if accumulator.seen == nil {
+			accumulator.seen = make(map[string]struct{})
+		}
+		accumulator.seen[text] = struct{}{}
 	}
 	if number, ok := numericChartValue(value); ok {
 		if accumulator.numericCount == 0 || number < accumulator.min {
@@ -572,13 +591,21 @@ func (accumulator *pivotAccumulator) add(value any) {
 		}
 		accumulator.numericCount++
 		accumulator.sum += number
+		accumulator.numbers = append(accumulator.numbers, number)
 	}
 }
 
 func (accumulator pivotAccumulator) value(aggregation string) any {
 	switch aggregation {
 	case "count":
-		return accumulator.count
+		// 숫자만 센다. 비어 있지 않은 것을 모두 세는 것은 counta 다.
+		// 세는 값도 다른 집계와 같은 실수로 돌려주어야 셈하는 쪽에서
+		// 종류를 가리지 않는다.
+		return float64(accumulator.numericCount)
+	case "counta":
+		return float64(accumulator.count)
+	case "countunique":
+		return float64(len(accumulator.seen))
 	case "sum":
 		if accumulator.numericCount == 0 {
 			return nil
@@ -599,9 +626,63 @@ func (accumulator pivotAccumulator) value(aggregation string) any {
 			return nil
 		}
 		return accumulator.max
+	case "median":
+		return pivotMedian(accumulator.numbers)
+	case "product":
+		if accumulator.numericCount == 0 {
+			return nil
+		}
+		result := 1.0
+		for _, number := range accumulator.numbers {
+			result *= number
+		}
+		return result
+	case "stdev", "stdevp", "var", "varp":
+		return pivotSpread(accumulator.numbers, aggregation)
 	default:
 		return nil
 	}
+}
+
+func pivotMedian(numbers []float64) any {
+	if len(numbers) == 0 {
+		return nil
+	}
+	sorted := append([]float64(nil), numbers...)
+	sort.Float64s(sorted)
+	middle := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[middle]
+	}
+	return (sorted[middle-1] + sorted[middle]) / 2
+}
+
+// pivotSpread 는 흩어진 정도를 잰다. 이름 끝의 p 는 모집단 전체를 봤다는
+// 뜻이고, 없으면 표본이라 나누는 수가 하나 적다. 표본은 값이 둘은 있어야
+// 셈할 수 있다.
+func pivotSpread(numbers []float64, aggregation string) any {
+	sample := aggregation == "stdev" || aggregation == "var"
+	if len(numbers) == 0 || (sample && len(numbers) < 2) {
+		return nil
+	}
+	mean := 0.0
+	for _, number := range numbers {
+		mean += number
+	}
+	mean /= float64(len(numbers))
+	total := 0.0
+	for _, number := range numbers {
+		total += (number - mean) * (number - mean)
+	}
+	divisor := float64(len(numbers))
+	if sample {
+		divisor--
+	}
+	variance := total / divisor
+	if aggregation == "var" || aggregation == "varp" {
+		return variance
+	}
+	return math.Sqrt(variance)
 }
 
 func evaluatePivotCalculated(fields []PivotCalculatedField, base []any) []any {
