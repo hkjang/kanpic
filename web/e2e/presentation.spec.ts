@@ -101,3 +101,38 @@ test('the panel says when a deck has fallen behind, and refreshes it in place', 
   expect(download.status()).toBe(200)
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 잴 것이 없는 표 — 로드맵, 절차, 일정 — 도 슬라이드로 만들 값어치가 있다.
+// 그 값어치는 순서에 있으므로 표로 떨어뜨리면 잃는다.
+test('a roadmap becomes a process, not a table', async ({ page, request }) => {
+  const configured=await request.get('/api/v1/presentation/config').then(r=>r.json())
+  test.skip(!configured.enabled,'프레젠테이션 서비스가 설정되지 않았습니다')
+
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`로드맵 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`road-${stamp}`,cells:[
+    {row:1,column:1,value:'단계'},{row:1,column:2,value:'내용'},{row:1,column:3,value:'기한'},
+    {row:2,column:1,value:'준비'},{row:2,column:2,value:'조직·예산 확정'},{row:2,column:3,value:'2026-07'},
+    {row:3,column:1,value:'이행'},{row:3,column:2,value:'1차 이관'},{row:3,column:3,value:'2026-10'},
+    {row:4,column:1,value:'안정화'},{row:4,column:2,value:'운영 이관'},{row:4,column:3,value:'2026-11'},
+  ]}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
+  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 만들기…'}).click()
+  const dialog=page.getByRole('dialog',{name:'프레젠테이션 만들기'})
+  await expect(dialog).toBeVisible()
+
+  // 숫자가 없어도 머리글은 머리글이다. 자료로 삼키면 "단계" 가 첫 단계가 된다.
+  await expect(dialog.getByText(/3행/)).toBeVisible()
+  await expect(dialog.locator('.presentation-slide',{hasText:'진행 순서'})).toBeVisible()
+  await expect(dialog.locator('.presentation-component span',{hasText:'steps'}).first()).toBeVisible()
+  // 표지의 첫 줄은 개수가 아니라 어디서 어디까지인지다.
+  await expect(dialog.locator('.presentation-slide').first()).toContainText('준비부터 안정화까지 3단계입니다.')
+
+  await dialog.getByRole('button',{name:'프레젠테이션 만들기'}).click()
+  await expect(dialog.getByRole('status')).toContainText('만들었습니다',{timeout:30000})
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

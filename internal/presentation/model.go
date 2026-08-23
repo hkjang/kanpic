@@ -43,6 +43,8 @@ const (
 	RoleChange     = "change"
 	RoleAttainment = "attainment"
 	RoleShare      = "share"
+	RoleStage      = "stage"
+	RoleDetail     = "detail"
 )
 
 type Column struct {
@@ -85,17 +87,24 @@ const (
 	ShapeCategories = "categories" // a name column and one or more measures
 	ShapeSeries     = "series"     // a date column and one or more measures
 	ShapeTable      = "table"      // too wide or too plain to be anything else
+	ShapeSteps      = "steps"      // named stages of a process, in order
+	ShapeTimeline   = "timeline"   // dated milestones with nothing to plot
 )
 
-// Chart recommendations, named as Ptium components so the mapping downstream is
-// a rename rather than a decision. A provider that draws something else maps
-// these itself.
+// Chart is the picture the range is drawn as — not every one of them plots a
+// number. Steps and a timeline draw an order rather than a quantity, and a
+// range of dated milestones has nothing to plot but plenty to show.
+//
+// The names match the components a provider is likely to have, so the mapping
+// downstream is a rename rather than a decision.
 const (
 	ChartNone       = ""
 	ChartBars       = "bars"
 	ChartLine       = "line"
 	ChartShare      = "share"
 	ChartComparison = "comparison"
+	ChartSteps      = "steps"
+	ChartTimeline   = "timeline"
 )
 
 // Insight is a sentence the spreadsheet can justify. Every one of these is

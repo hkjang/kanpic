@@ -179,16 +179,54 @@ func looksLikeHeader(grid [][]Value) bool {
 	if firstFilled == 0 || firstText != firstFilled {
 		return false
 	}
-	// 아래에 숫자가 하나도 없으면 전부 글자인 표이고, 첫 줄만 머리글이라고
-	// 볼 근거가 없다. 그럴 때는 첫 줄도 자료로 둔다.
-	for _, row := range grid[1:] {
-		for _, value := range row {
-			if value.IsNum {
-				return true
-			}
+	// 머리글은 열의 이름이지 그 열의 값이 아니다. 그래서 어느 한 열이라도
+	// 아래쪽 값들이 한 종류로 보이는데 첫 줄만 그렇지 않다면, 첫 줄은
+	// 자료가 아니라 이름이다.
+	//
+	// 숫자가 있는지만 보면 숫자 없는 표 - 일정, 절차, 담당자 목록 - 의 머리글을
+	// 통째로 자료 한 줄로 삼키게 된다.
+	for column := range first {
+		body := make([]Value, 0, len(grid)-1)
+		for _, row := range grid[1:] {
+			body = append(body, row[column])
+		}
+		if memberOfKind(body, first[column]) {
+			return true
 		}
 	}
 	return false
+}
+
+// memberOfKind reports whether the values below a cell share a kind the cell
+// itself does not have.
+func memberOfKind(body []Value, header Value) bool {
+	filled := 0
+	numbers, dates, stages := 0, 0, 0
+	for _, value := range body {
+		if value.Blank {
+			continue
+		}
+		filled++
+		if value.IsNum {
+			numbers++
+		}
+		if looksLikeDate(value.Text) {
+			dates++
+		}
+		if looksLikeStageLabel(value.Text) {
+			stages++
+		}
+	}
+	if filled == 0 {
+		return false
+	}
+	if numbers == filled && !header.IsNum {
+		return true
+	}
+	if dates == filled && !looksLikeDate(header.Text) {
+		return true
+	}
+	return stages == filled && !looksLikeStageLabel(header.Text)
 }
 
 func classifyColumn(values []Value) string {
@@ -303,12 +341,115 @@ func assignRoles(analysis *Analysis) {
 	}
 }
 
+// stageColumn finds the column that names the stages of a process. A roadmap
+// and a procedure are among the most common things anybody puts in a deck, and
+// as a plain table they lose the one thing that makes them worth a slide: that
+// the rows are in an order and lead somewhere.
+//
+// The evidence is what the author wrote — a column called 단계 or Phase, or
+// values that count themselves (1단계, Step 2). Guessing from anything vaguer
+// would turn ordinary tables into flowcharts.
+func stageColumn(analysis *Analysis) int {
+	for index, column := range analysis.Columns {
+		if column.Kind != ColumnText {
+			continue
+		}
+		if containsAny(strings.ToLower(column.Name), "단계", "절차", "과정", "공정", "step", "phase", "stage") {
+			return index
+		}
+	}
+	for index, column := range analysis.Columns {
+		if column.Kind != ColumnText || len(column.Values) < 2 {
+			continue
+		}
+		counted := 0
+		for _, value := range column.Values {
+			if value.Blank {
+				continue
+			}
+			if looksLikeStageLabel(value.Text) {
+				counted++
+			} else {
+				counted = -len(column.Values)
+				break
+			}
+		}
+		if counted >= 2 {
+			return index
+		}
+	}
+	return -1
+}
+
+func looksLikeStageLabel(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	for _, suffix := range []string{"단계", "차", "주차"} {
+		head := strings.TrimSuffix(trimmed, suffix)
+		if head != trimmed && head != "" && allDigits(head) {
+			return true
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"step ", "phase ", "stage ", "step", "phase"} {
+		tail := strings.TrimSpace(strings.TrimPrefix(lower, prefix))
+		if tail != lower && tail != "" && allDigits(tail) {
+			return true
+		}
+	}
+	return false
+}
+
+func allDigits(text string) bool {
+	for _, letter := range text {
+		if letter < '0' || letter > '9' {
+			return false
+		}
+	}
+	return text != ""
+}
+
+// detailColumn is the column that says what each row is about: the first text
+// column that is not the one naming the rows.
+func detailColumn(analysis *Analysis, skip int) int {
+	for index, column := range analysis.Columns {
+		if index == skip || column.Kind != ColumnText {
+			continue
+		}
+		return index
+	}
+	return -1
+}
+
+func dateColumnIndex(analysis *Analysis) int {
+	for index, column := range analysis.Columns {
+		if column.Kind == ColumnDate {
+			return index
+		}
+	}
+	return -1
+}
+
 func decideShape(analysis *Analysis) {
 	switch {
 	case analysis.RowCount == 0 || len(analysis.Columns) == 0:
 		analysis.Shape, analysis.Chart = ShapeEmpty, ChartNone
 	case len(analysis.Measures) == 0:
+		// 잴 것이 없는 표에도 보여 줄 것이 있다. 순서가 있으면 단계이고,
+		// 날짜가 있으면 이정표다. 둘 다 아니면 그냥 표다.
 		analysis.Shape, analysis.Chart = ShapeTable, ChartNone
+		if stage := stageColumn(analysis); stage >= 0 {
+			if detail := detailColumn(analysis, stage); detail >= 0 {
+				analysis.Dimension, analysis.Shape, analysis.Chart = stage, ShapeSteps, ChartSteps
+				analysis.Columns[stage].Role, analysis.Columns[detail].Role = RoleStage, RoleDetail
+				break
+			}
+		}
+		if date := dateColumnIndex(analysis); date >= 0 {
+			if detail := detailColumn(analysis, date); detail >= 0 {
+				analysis.Dimension, analysis.Shape, analysis.Chart = date, ShapeTimeline, ChartTimeline
+				analysis.Columns[detail].Role = RoleDetail
+			}
+		}
 	case analysis.Dimension < 0:
 		// 이름 열이 없는 숫자 뭉치는 지표 몇 개이거나 그냥 표다.
 		if analysis.RowCount*len(analysis.Measures) <= 4 {
@@ -476,6 +617,11 @@ func writeHeadline(analysis Analysis) string {
 			}
 		}
 	}
+	// 순서가 있는 표는 셀 수가 아니라 어디서 어디까지인지가 요점이다.
+	// "3개 항목을 정리했습니다" 는 로드맵의 표지에 쓸 말이 아니다.
+	if span := writeSpan(analysis); span != "" {
+		return span
+	}
 	switch {
 	case short != nil && short.Detail != "":
 		return short.Detail + "의 " + short.Label + "이 " + short.Value + "로 목표에 못 미칩니다."
@@ -486,6 +632,28 @@ func writeHeadline(analysis Analysis) string {
 	default:
 		return ""
 	}
+}
+
+// writeSpan says where an ordered range starts and ends. A roadmap's first line
+// should be its span, and a timeline's its dates.
+func writeSpan(analysis Analysis) string {
+	if analysis.Shape != ShapeSteps && analysis.Shape != ShapeTimeline || analysis.Dimension < 0 {
+		return ""
+	}
+	labels := []string{}
+	for _, value := range analysis.Columns[analysis.Dimension].Values {
+		if !value.Blank {
+			labels = append(labels, value.Text)
+		}
+	}
+	if len(labels) < 2 {
+		return ""
+	}
+	unit := "단계"
+	if analysis.Shape == ShapeTimeline {
+		unit = "개 일정"
+	}
+	return labels[0] + "부터 " + labels[len(labels)-1] + "까지 " + strconv.Itoa(len(labels)) + unit + "입니다."
 }
 
 func containsAny(text string, needles ...string) bool {

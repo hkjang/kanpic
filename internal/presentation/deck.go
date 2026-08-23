@@ -162,7 +162,15 @@ func insightLabel(insight Insight) string {
 }
 
 func chartComponent(analysis Analysis) *Component {
-	if analysis.Chart == ChartNone || analysis.Dimension < 0 || len(analysis.Measures) == 0 {
+	if analysis.Chart == ChartNone || analysis.Dimension < 0 {
+		return nil
+	}
+	// 단계와 이정표는 숫자를 그리지 않는다. 재는 것이 없어도 순서는 보여 줄
+	// 것이 있다.
+	if analysis.Chart == ChartSteps || analysis.Chart == ChartTimeline {
+		return orderedComponent(analysis)
+	}
+	if len(analysis.Measures) == 0 {
 		return nil
 	}
 	names := analysis.Columns[analysis.Dimension].Values
@@ -217,6 +225,54 @@ func chartComponent(analysis Analysis) *Component {
 	return &Component{Kind: kind, Caption: caption, Rows: rows}
 }
 
+// orderedComponent draws the rows in the order they were written: a process as
+// steps, dated rows as a timeline. The label is what names the row and the
+// detail is what it says; a date beside a stage is kept with the detail rather
+// than replacing it.
+func orderedComponent(analysis Analysis) *Component {
+	kind := "steps"
+	if analysis.Chart == ChartTimeline {
+		kind = "timeline"
+	}
+	labels := analysis.Columns[analysis.Dimension].Values
+	detail, date := -1, -1
+	for index, column := range analysis.Columns {
+		if index == analysis.Dimension {
+			continue
+		}
+		if column.Role == RoleDetail && detail < 0 {
+			detail = index
+		}
+		if column.Kind == ColumnDate && date < 0 {
+			date = index
+		}
+	}
+	if detail < 0 {
+		return nil
+	}
+	rows := make([]Row, 0, len(labels))
+	for position, label := range labels {
+		if label.Blank {
+			continue
+		}
+		text := ""
+		if position < len(analysis.Columns[detail].Values) {
+			text = analysis.Columns[detail].Values[position].Text
+		}
+		if date >= 0 && position < len(analysis.Columns[date].Values) {
+			if at := analysis.Columns[date].Values[position]; !at.Blank {
+				text = strings.TrimSpace(text + " (" + at.Text + ")")
+			}
+		}
+		rows = append(rows, Row{Label: label.Text, Fields: []string{text}})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	caption := strings.TrimSpace(analysis.Columns[analysis.Dimension].Name)
+	return &Component{Kind: kind, Caption: caption, Rows: rows}
+}
+
 func axisLabel(analysis Analysis) string {
 	if name := strings.TrimSpace(analysis.Columns[analysis.Dimension].Name); name != "" {
 		return name
@@ -225,6 +281,12 @@ func axisLabel(analysis Analysis) string {
 }
 
 func chartTitle(analysis Analysis) string {
+	if analysis.Chart == ChartSteps {
+		return "진행 순서"
+	}
+	if analysis.Chart == ChartTimeline {
+		return "주요 일정"
+	}
 	dimension := strings.TrimSpace(analysis.Columns[analysis.Dimension].Name)
 	measure := ""
 	if len(analysis.Measures) > 0 {

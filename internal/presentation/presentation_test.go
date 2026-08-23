@@ -252,3 +252,84 @@ func TestAnalyzeTellsCalendarLabelsFromDurations(t *testing.T) {
 		t.Fatalf("duration column=%+v", duration.Columns[1])
 	}
 }
+
+// 로드맵과 절차는 덱에 가장 흔히 실리는 표인데, 잴 것이 없다는 이유로 그냥
+// 표가 되면 슬라이드로 만들 값어치가 있는 유일한 것 - 순서 - 을 잃는다.
+func TestAnalyzeReadsOrderWhereThereIsNothingToMeasure(t *testing.T) {
+	t.Parallel()
+	steps := Analyze(SourceRef{}, rangeOf(t, "A1:C4"), sheetOf([][]any{
+		{"단계", "내용", "기한"},
+		{"준비", "조직·예산 확정", "2026-07"},
+		{"이행", "1차 이관", "2026-10"},
+		{"안정화", "운영 이관", "2026-11"},
+	}))
+	if steps.Shape != ShapeSteps || steps.Chart != ChartSteps || steps.Dimension != 0 {
+		t.Fatalf("steps shape=%s chart=%s dimension=%d", steps.Shape, steps.Chart, steps.Dimension)
+	}
+	// 날짜는 단계를 밀어내지 않고 설명에 붙는다.
+	component := Build(steps, DeckOptions{}).Slides[1].Component
+	if component == nil || component.Kind != "steps" {
+		t.Fatalf("component=%+v", component)
+	}
+	if component.Rows[0].Label != "준비" || component.Rows[0].Fields[0] != "조직·예산 확정 (2026-07)" {
+		t.Fatalf("first step=%+v", component.Rows[0])
+	}
+
+	// 이름이 아니라 값이 스스로를 세는 경우도 단계다.
+	numbered := Analyze(SourceRef{}, rangeOf(t, "A1:B4"), sheetOf([][]any{
+		{"구분", "설명"}, {"1단계", "요건 정의"}, {"2단계", "설계"}, {"3단계", "구축"},
+	}))
+	if numbered.Shape != ShapeSteps {
+		t.Fatalf("numbered shape=%s", numbered.Shape)
+	}
+
+	// 날짜와 할 일뿐이면 이정표다.
+	milestones := Analyze(SourceRef{}, rangeOf(t, "A1:B4"), sheetOf([][]any{
+		{"시점", "일"}, {"2026-07", "착수"}, {"2026-10", "1차 완료"}, {"2027-01", "종료"},
+	}))
+	if milestones.Shape != ShapeTimeline || milestones.Chart != ChartTimeline {
+		t.Fatalf("timeline shape=%s chart=%s", milestones.Shape, milestones.Chart)
+	}
+
+	// 표지의 첫 줄은 몇 개인지가 아니라 어디서 어디까지인지다.
+	if steps.Headline != "준비부터 안정화까지 3단계입니다." {
+		t.Fatalf("steps headline=%q", steps.Headline)
+	}
+	if milestones := Analyze(SourceRef{}, rangeOf(t, "A1:B4"), sheetOf([][]any{
+		{"시점", "일"}, {"2026-07", "착수"}, {"2026-10", "1차 완료"}, {"2027-01", "종료"},
+	})); milestones.Headline != "2026-07부터 2027-01까지 3개 일정입니다." {
+		t.Fatalf("timeline headline=%q", milestones.Headline)
+	}
+
+	// 순서로 볼 근거가 없는 글자 표는 그대로 표다. 아무 목록이나 공정도로
+	// 만들면 안 된다.
+	plain := Analyze(SourceRef{}, rangeOf(t, "A1:B4"), sheetOf([][]any{
+		{"담당", "연락처"}, {"김", "1234"}, {"이", "5678"}, {"박", "9012"},
+	}))
+	if plain.Shape == ShapeSteps || plain.Shape == ShapeTimeline {
+		t.Fatalf("an ordinary list became %s", plain.Shape)
+	}
+}
+
+// 숫자가 없다는 이유로 머리글을 자료로 삼키면 일정표의 열 이름이 첫 단계가
+// 된다. 머리글은 열의 이름이지 그 열의 값이 아니다.
+func TestAnalyzeFindsAHeaderInATableWithNoNumbers(t *testing.T) {
+	t.Parallel()
+	dated := Analyze(SourceRef{}, rangeOf(t, "A1:B3"), sheetOf([][]any{
+		{"시점", "일"}, {"2026-07", "착수"}, {"2026-10", "종료"},
+	}))
+	if !dated.HasHeader || dated.RowCount != 2 || dated.Columns[0].Name != "시점" {
+		t.Fatalf("dated header=%v rows=%d name=%q", dated.HasHeader, dated.RowCount, dated.Columns[0].Name)
+	}
+	staged := Analyze(SourceRef{}, rangeOf(t, "A1:B3"), sheetOf([][]any{
+		{"구분", "설명"}, {"1단계", "요건"}, {"2단계", "설계"},
+	}))
+	if !staged.HasHeader || staged.Columns[1].Name != "설명" {
+		t.Fatalf("staged header=%v name=%q", staged.HasHeader, staged.Columns[1].Name)
+	}
+	// 근거가 없으면 머리글로 삼지 않는다. 이름 목록의 첫 줄은 이름이다.
+	names := Analyze(SourceRef{}, rangeOf(t, "A1:A3"), sheetOf([][]any{{"김"}, {"이"}, {"박"}}))
+	if names.HasHeader || names.RowCount != 3 {
+		t.Fatalf("names header=%v rows=%d", names.HasHeader, names.RowCount)
+	}
+}
