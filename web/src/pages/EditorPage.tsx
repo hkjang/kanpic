@@ -32,6 +32,8 @@ import { ConflictPanel } from '../components/ConflictPanel'
 import { ConditionalFormatDialog } from '../components/ConditionalFormatDialog'
 import { PresentationPanel,type PresentationRecord } from '../components/PresentationPanel'
 import { GoalSeekDialog,type GoalSeekOutcome } from '../components/GoalSeekDialog'
+import { FlashFillDialog } from '../components/FlashFillDialog'
+import { planFlashFill,type FillPlan } from '../lib/flashFillPlan'
 import { PresentationDialog,type PresentationAnalysis,type PresentationDeck,type PresentationResult,type PresentationTemplate } from '../components/PresentationDialog'
 import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
@@ -114,7 +116,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const functionCatalog=useFunctionCatalog()
@@ -672,6 +674,24 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     }
     return painted
   }
+  /**
+   * 손으로 채워 둔 칸을 본보기 삼아 같은 열의 빈 칸을 채운다. 규칙을 알아내지
+   * 못하면 왜 못 했는지 말한다 — 아무 일도 일어나지 않는 것이 가장 나쁘다.
+   */
+  const startFlashFill=async()=>{
+    if(!activeSheet||!writable())return
+    const block=await resolveWorkingBlock()
+    const column=editorSelection.startColumn
+    if(column<block.region.startColumn||column>block.region.endColumn){
+      alert('채울 열을 표 안에서 선택하세요.')
+      return
+    }
+    const plan=planFlashFill(block.cells,block.region,column)
+    if(plan==='no-examples'){alert('먼저 한두 칸을 손으로 채워 본보기를 보여 주세요.');return}
+    if(plan==='nothing-to-fill'){alert('이 열에는 빈 칸이 없습니다.');return}
+    if(plan==='no-rule'){alert('채워 둔 값에서 규칙을 찾지 못했습니다. 본보기를 하나 더 채워 보거나, 옆 열의 값으로 만들 수 있는 값인지 확인하세요.');return}
+    setFlashFill({plan,column})
+  }
   const printSheet=async()=>{
     if(!activeSheet)return
     // The grid holds only the rows on screen, so printing from memory would
@@ -1068,6 +1088,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
       {kind:'separator'},
       {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
+        {kind:'item',label:'빠른 채우기…',onSelect:()=>void startFlashFill()},
         {kind:'item',label:'중복 항목 삭제…',onSelect:()=>void openCleanup('duplicates')},
         {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
       ]},
@@ -1235,6 +1256,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}
     {filterOpen&&<FilterDialog range={editorSelection} views={filterViews.data?.items??[]} result={filterResult.data} onClose={()=>setFilterOpen(false)} onCreate={createFilter} onUpdate={updateFilter} onDelete={deleteFilter}/>} 
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 
+    {flashFill&&<FlashFillDialog plan={flashFill.plan} column={flashFill.column} onClose={()=>setFlashFill(undefined)}
+      onApply={async plan=>{await writeCells(plan.writes.map(write=>({row:write.row,column:plan.column,value:write.value})))}}/>}
     {goalSeekOpen&&activeSheet&&<GoalSeekDialog
       defaultTarget={address(editorSelection.startRow,editorSelection.startColumn)}
       canWrite={canWrite}
