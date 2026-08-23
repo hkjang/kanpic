@@ -113,3 +113,25 @@ test('a late frame does not drag typing back to where the line break was', async
   await expect(editor).toHaveValue('첫 줄\n둘째 줄')
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 수식 입력줄에도 같은 코드가 있었다. 격자만 고치고 여기를 두면 같은 버그가
+// 같은 워크북 안에 그대로 남는다.
+test('a late frame does not scramble typing in the formula bar either', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`수식줄 캐럿 ${stamp}`}}).then(r=>r.json())
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.evaluate(()=>{
+    window.requestAnimationFrame=(callback:FrameRequestCallback)=>
+      window.setTimeout(()=>callback(performance.now()),150) as unknown as number
+  })
+  const bar=page.locator('.formula-input')
+  await bar.click()
+  await bar.type('첫 줄')
+  await bar.press('Alt+Enter')
+  await bar.type('둘째')
+  await page.waitForTimeout(300)
+  await bar.type(' 줄')
+  await expect(bar).toHaveValue('첫 줄\n둘째 줄')
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

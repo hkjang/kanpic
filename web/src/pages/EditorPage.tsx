@@ -960,6 +960,17 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     ...(session?.admin?[{id:'nav:admin',group:'이동',label:'관리자 콘솔',icon:<Settings/>,keywords:'admin 관리자',run:()=>{window.location.href='/admin'}}]:[]),
   ]
   const activeError=explainFormulaError(formulaErrorCode(activeCell?.value)??'')
+  /**
+   * 값과 캐럿을 지금 맞춰 두고 다음 프레임에 한 번 더 맞추되, **그 사이에 값이
+   * 바뀌지 않았을 때만** 되돌린다. 눌린 순간의 자리를 나중에 그대로 적용하면
+   * 그 사이에 친 글자가 앞으로 끌려간다. 격자의 셀 편집기와 같은 이유다.
+   */
+  const settleFormulaCaret=(expected:string,start:number,end:number)=>{
+    requestAnimationFrame(()=>{
+      const field=formulaInput.current
+      if(field&&field.value===expected)field.setSelectionRange(start,end)
+    })
+  }
   const formulaBarHint=editor.editing&&!readOnly?formulaHint(functionCatalog,editor.draft,formulaCaret):undefined
   const chooseFormulaSuggestion=(name:string)=>{
     if(!formulaBarHint)return
@@ -967,7 +978,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     editor.setDraft(next.text)
     setFormulaCaret(next.caret)
     setFormulaSuggestion(0)
-    requestAnimationFrame(()=>formulaInput.current?.setSelectionRange(next.caret,next.caret))
+    settleFormulaCaret(next.text,next.caret,next.caret)
   }
   const menus:WorkbookMenu[]=[
     {label:'파일',items:[
@@ -1191,7 +1202,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
             event.preventDefault()
             editor.setDraft(cycled.text);editor.setEditing(true);setFormulaCaret(cycled.end)
             field.value=cycled.text;field.setSelectionRange(cycled.start,cycled.end)
-            requestAnimationFrame(()=>field.setSelectionRange(cycled.start,cycled.end))
+            settleFormulaCaret(cycled.text,cycled.start,cycled.end)
           }
           return
         }
@@ -1205,7 +1216,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
           editor.setDraft(next);editor.setEditing(true)
           // 다음 프레임에만 캐럿을 옮기면 그 사이에 친 글자가 이전 자리로 간다.
           field.value=next;field.setSelectionRange(at+1,at+1)
-          requestAnimationFrame(()=>field.setSelectionRange(at+1,at+1))
+          settleFormulaCaret(next,at+1,at+1)
           return
         }
         if(event.key==='Enter'){event.preventDefault();gridShortcut({command:'commit-draft'})}
