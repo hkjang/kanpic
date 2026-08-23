@@ -786,3 +786,77 @@ func TestTheAVariantsCountTextAsZero(t *testing.T) {
 		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
 	}
 }
+
+// 엑셀과 시트에서 흔히 쓰는 선택 인수 몇 가지가 빠져 있었다. 문서를 보고
+// 그대로 적으면 #VALUE! 가 났다.
+//
+//	SUBSTITUTE(글, 찾을 값, 바꿀 값, [몇 번째])
+//	FIND / SEARCH(찾을 값, 글, [시작 위치])
+//	WEEKDAY(날짜, [유형])
+//
+// CONCATENATE 는 아예 없었다. CONCAT 만 있어서, 옛 이름을 적으면 #NAME? 이
+// 났다. 엑셀을 배운 사람은 대개 옛 이름을 먼저 떠올린다.
+func TestTheOptionalArgumentsSheetsDocumentsAreAccepted(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		// 몇 번째로 나온 것만 바꾼다.
+		{`=SUBSTITUTE("aaa","a","b",1)`, "baa"},
+		{`=SUBSTITUTE("aaa","a","b",2)`, "aba"},
+		{`=SUBSTITUTE("aaa","a","b",3)`, "aab"},
+		// 그만큼 나오지 않으면 원래 글이 그대로 나온다.
+		{`=SUBSTITUTE("aaa","a","b",4)`, "aaa"},
+		{`=SUBSTITUTE("aaa","a","b")`, "bbb"},
+		// 글자 수로 세므로 한글도 자리가 맞는다.
+		{`=SUBSTITUTE("가나가","가","다",2)`, "가나다"},
+
+		// 시작 위치를 주면 그 앞은 건너뛰고, 자리는 글 전체에서 센다.
+		{`=FIND("a","banana")`, 2.0},
+		{`=FIND("a","banana",3)`, 4.0},
+		{`=FIND("a","banana",5)`, 6.0},
+		{`=SEARCH("A","banana",3)`, 4.0},
+		{`=FIND("나","가나다나",3)`, 4.0},
+
+		// 한 주가 어느 요일에 시작하는지 고른다. 2024-01-01 은 월요일이다.
+		{`=WEEKDAY("2024-01-01")`, 2.0},
+		{`=WEEKDAY("2024-01-01",1)`, 2.0},
+		{`=WEEKDAY("2024-01-01",2)`, 1.0},
+		{`=WEEKDAY("2024-01-01",3)`, 0.0},
+		{`=WEEKDAY("2024-01-01",11)`, 1.0},
+		{`=WEEKDAY("2024-01-01",12)`, 7.0},
+		{`=WEEKDAY("2024-01-01",17)`, 2.0},
+
+		{`=CONCATENATE("a","b","c")`, "abc"},
+		{`=CONCAT("a","b")`, "ab"},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+
+	// 말이 되지 않는 값은 조용히 넘어가지 않는다.
+	for _, testCase := range []struct {
+		formula string
+		code    string
+	}{
+		{`=SUBSTITUTE("aaa","a","b",0)`, "#VALUE!"},
+		{`=FIND("a","banana",7)`, "#VALUE!"},
+		{`=WEEKDAY("2024-01-01",4)`, "#NUM!"},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error == nil {
+			t.Errorf("%s = %v, want %s", testCase.formula, result.Value, testCase.code)
+			continue
+		}
+		if result.Error.Code != testCase.code {
+			t.Errorf("%s = %s, want %s", testCase.formula, result.Error.Code, testCase.code)
+		}
+	}
+}

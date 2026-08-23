@@ -43,6 +43,7 @@ var catalog = []FunctionDoc{
 	{"OR", "논리", "OR(조건1, 조건2, …)", "조건 중 하나라도 참이면 TRUE입니다."},
 	{"NOT", "논리", "NOT(조건)", "참과 거짓을 뒤집습니다."},
 	{"CONCAT", "텍스트", "CONCAT(값1, 값2, …)", "텍스트를 이어 붙입니다."},
+	{"CONCATENATE", "텍스트", "CONCATENATE(값1, 값2, …)", "텍스트를 이어 붙입니다. CONCAT의 옛 이름입니다."},
 	{"TEXTJOIN", "텍스트", "TEXTJOIN(구분자, 빈 값 무시, 값1, …)", "구분자를 넣어 텍스트를 이어 붙입니다."},
 	{"LEFT", "텍스트", "LEFT(텍스트, [개수])", "왼쪽에서 지정한 개수만큼 잘라냅니다."},
 	{"RIGHT", "텍스트", "RIGHT(텍스트, [개수])", "오른쪽에서 지정한 개수만큼 잘라냅니다."},
@@ -52,9 +53,9 @@ var catalog = []FunctionDoc{
 	{"UPPER", "텍스트", "UPPER(텍스트)", "영문을 대문자로 바꿉니다."},
 	{"LOWER", "텍스트", "LOWER(텍스트)", "영문을 소문자로 바꿉니다."},
 	{"PROPER", "텍스트", "PROPER(텍스트)", "각 단어의 첫 글자를 대문자로 바꿉니다."},
-	{"SUBSTITUTE", "텍스트", "SUBSTITUTE(텍스트, 찾을 값, 바꿀 값)", "텍스트의 일부를 바꿉니다."},
-	{"FIND", "텍스트", "FIND(찾을 값, 텍스트)", "대소문자를 구분해 위치를 찾습니다."},
-	{"SEARCH", "텍스트", "SEARCH(찾을 값, 텍스트)", "대소문자를 구분하지 않고 위치를 찾습니다."},
+	{"SUBSTITUTE", "텍스트", "SUBSTITUTE(텍스트, 찾을 값, 바꿀 값, [몇 번째])", "텍스트의 일부를 바꿉니다. 몇 번째를 적으면 그 하나만 바꿉니다."},
+	{"FIND", "텍스트", "FIND(찾을 값, 텍스트, [시작 위치])", "대소문자를 구분해 위치를 찾습니다."},
+	{"SEARCH", "텍스트", "SEARCH(찾을 값, 텍스트, [시작 위치])", "대소문자를 구분하지 않고 위치를 찾습니다."},
 	{"REPT", "텍스트", "REPT(텍스트, 횟수)", "텍스트를 지정한 횟수만큼 반복합니다."},
 	{"VALUE", "텍스트", "VALUE(텍스트)", "숫자 형태의 텍스트를 숫자로 바꿉니다."},
 	{"HYPERLINK", "텍스트", "HYPERLINK(주소, [표시할 텍스트])", "링크 주소와 표시 텍스트를 만듭니다."},
@@ -64,7 +65,7 @@ var catalog = []FunctionDoc{
 	{"YEAR", "날짜", "YEAR(날짜)", "날짜에서 연도를 꺼냅니다."},
 	{"MONTH", "날짜", "MONTH(날짜)", "날짜에서 월을 꺼냅니다."},
 	{"DAY", "날짜", "DAY(날짜)", "날짜에서 일을 꺼냅니다."},
-	{"WEEKDAY", "날짜", "WEEKDAY(날짜)", "요일 번호를 반환합니다. 일요일이 1입니다."},
+	{"WEEKDAY", "날짜", "WEEKDAY(날짜, [유형])", "요일 번호를 반환합니다. 기본은 일요일이 1이고, 유형 2는 월요일이 1입니다."},
 	{"VLOOKUP", "조회", "VLOOKUP(찾을 값, 범위, 열 번호, [정렬 여부])", "세로 방향으로 값을 찾습니다."},
 	{"HLOOKUP", "조회", "HLOOKUP(찾을 값, 범위, 행 번호, [정렬 여부])", "가로 방향으로 값을 찾습니다."},
 	{"INDEX", "조회", "INDEX(범위, 행, [열])", "범위에서 위치로 값을 꺼냅니다."},
@@ -377,23 +378,63 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 		}
 		return properCase(text), true, nil
 	case "SUBSTITUTE":
-		if len(values) != 3 {
+		if len(values) != 3 && len(values) != 4 {
 			return nil, true, argError(name)
 		}
-		return strings.ReplaceAll(display(values[0]), display(values[1]), display(values[2])), true, nil
+		text, old, replacement := display(values[0]), display(values[1]), display(values[2])
+		if len(values) == 3 {
+			return strings.ReplaceAll(text, old, replacement), true, nil
+		}
+		// 네 번째 인수는 "몇 번째로 나온 것만 바꿀지" 이다.
+		instance, ok := toNumber(values[3])
+		if !ok || instance < 1 || instance != math.Trunc(instance) {
+			return nil, true, formulaError("#VALUE!", "SUBSTITUTE instance must be a whole number of at least one")
+		}
+		if old == "" {
+			return text, true, nil
+		}
+		// 그만큼 나오지 않으면 원래 글이 그대로 나온다. 엑셀도 그렇게 한다.
+		searched, remaining := 0, int(instance)
+		for {
+			found := strings.Index(text[searched:], old)
+			if found < 0 {
+				return text, true, nil
+			}
+			searched += found
+			remaining--
+			if remaining == 0 {
+				return text[:searched] + replacement + text[searched+len(old):], true, nil
+			}
+			searched += len(old)
+		}
 	case "FIND", "SEARCH":
-		if len(values) != 2 {
+		if len(values) != 2 && len(values) != 3 {
 			return nil, true, argError(name)
 		}
 		needle, haystack := display(values[0]), display(values[1])
 		if name == "SEARCH" {
 			needle, haystack = strings.ToLower(needle), strings.ToLower(haystack)
 		}
-		index := strings.Index(haystack, needle)
+		// 세 번째 인수는 몇 번째 글자부터 찾을지다. 두 번째로 나온 것을
+		// 찾을 때 쓴다. 돌려주는 자리는 글 전체에서 센 자리다.
+		letters := []rune(haystack)
+		start := 0
+		if len(values) == 3 {
+			number, ok := toNumber(values[2])
+			if !ok || number < 1 || number != math.Trunc(number) {
+				return nil, true, formulaError("#VALUE!", name+" start position must be a whole number of at least one")
+			}
+			start = int(number) - 1
+			if start > len(letters) {
+				return nil, true, formulaError("#VALUE!", name+" start position is past the end of the text")
+			}
+		}
+		offset := len(string(letters[:start]))
+		index := strings.Index(haystack[offset:], needle)
 		if index < 0 {
 			return nil, true, formulaError("#VALUE!", name+" did not find the text")
 		}
-		return float64(len([]rune(haystack[:index])) + 1), true, nil
+		return float64(len([]rune(haystack[:offset+index])) + 1), true, nil
 	case "REPT":
 		if len(values) != 2 {
 			return nil, true, argError(name)
@@ -445,7 +486,9 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 		}
 		return now().Format("2006-01-02 15:04:05"), true, nil
 	case "YEAR", "MONTH", "DAY", "WEEKDAY":
-		if len(values) != 1 {
+		// WEEKDAY 만 두 번째 인수로 한 주가 어느 요일에 시작하는지 고를 수
+		// 있다. 나머지는 날짜 하나만 받는다.
+		if len(values) != 1 && !(name == "WEEKDAY" && len(values) == 2) {
 			return nil, true, argError(name)
 		}
 		moment, ok := parseDate(values[0])
@@ -460,9 +503,42 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 		case "DAY":
 			return float64(moment.Day()), true, nil
 		}
-		return float64(int(moment.Weekday()) + 1), true, nil
+		weekdayType := 1.0
+		if len(values) == 2 {
+			number, ok := toNumber(values[1])
+			if !ok {
+				return nil, true, formulaError("#VALUE!", "WEEKDAY requires a number for the week type")
+			}
+			weekdayType = number
+		}
+		return weekdayNumber(moment, int(weekdayType))
 	}
 	return nil, false, nil
+}
+
+// weekdayNumber 는 엑셀과 시트가 쓰는 요일 번호 방식을 그대로 따른다.
+// 어느 요일을 한 주의 처음으로 볼지, 번호를 1 부터 셀지 0 부터 셀지가
+// 나라와 쓰임에 따라 다르기 때문에 방식이 여럿이다.
+//
+//	1(생략) 일요일이 1        2  월요일이 1        3  월요일이 0
+//	11~17   월~일 차례로 그 요일이 1
+func weekdayNumber(moment time.Time, weekdayType int) (any, bool, error) {
+	// time.Weekday 는 일요일이 0 이다.
+	sunday := int(moment.Weekday())
+	switch weekdayType {
+	case 1:
+		return float64(sunday + 1), true, nil
+	case 2:
+		return float64((sunday+6)%7 + 1), true, nil
+	case 3:
+		return float64((sunday + 6) % 7), true, nil
+	}
+	// 11 은 월요일, 12 는 화요일… 17 은 일요일을 한 주의 처음으로 본다.
+	if weekdayType >= 11 && weekdayType <= 17 {
+		first := (weekdayType - 11 + 1) % 7
+		return float64((sunday-first+7)%7 + 1), true, nil
+	}
+	return nil, true, formulaError("#NUM!", "WEEKDAY week type must be 1, 2, 3 or 11 to 17")
 }
 
 func sign(number float64) float64 {

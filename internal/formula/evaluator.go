@@ -533,7 +533,9 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		factor := math.Pow(10, digits)
 		return math.Round(number*factor) / factor, nil
-	case "CONCAT":
+	// CONCATENATE 는 CONCAT 의 옛 이름이다. 엑셀 강의와 오래된 통합 문서가
+	// 아직 이 이름을 쓰므로 둘 다 알아듣는다.
+	case "CONCAT", "CONCATENATE":
 		var builder strings.Builder
 		for _, value := range values {
 			builder.WriteString(display(value))
