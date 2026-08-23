@@ -38,6 +38,17 @@ jobs:
         with: { go-version: "1.26.x", cache: true }
       - uses: actions/setup-node@v4
         with: { node-version: "24", cache: npm, cache-dependency-path: web/package-lock.json }
+      # 서식이 어긋난 파일은 diff 를 시끄럽게 만들어, 정작 무엇이 바뀌었는지
+      # 가린다. 사람이 알아채기 전에 여기서 먼저 잡는다.
+      - name: Check Go files are gofmt clean
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./pkg)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt 가 필요한 파일:"
+            echo "$unformatted"
+            gofmt -d ./cmd ./internal ./pkg
+            exit 1
+          fi
       - run: go test ./...
       - run: npm ci && npm test && npm run build
         working-directory: web

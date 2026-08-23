@@ -139,7 +139,7 @@ type PivotData struct {
 	// manually refreshed pivot otherwise looks current no matter how old it is.
 	SourceChangedAt *time.Time `json:"source_changed_at,omitempty"`
 	Stale           bool       `json:"stale,omitempty"`
-	Warning         string              `json:"warning,omitempty"`
+	Warning         string     `json:"warning,omitempty"`
 }
 
 type PivotDrilldownInput struct {

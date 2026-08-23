@@ -61,7 +61,9 @@ func (t Template) summary() TemplateSummary {
 // allTemplates is the gallery: the business catalog followed by the formula
 // cookbook, which is kept in its own file because it is organised by function
 // family rather than by the job being done.
-func allTemplates() []Template { return append(append([]Template(nil), templates...), formulaTemplates...) }
+func allTemplates() []Template {
+	return append(append([]Template(nil), templates...), formulaTemplates...)
+}
 
 func TemplateCatalog() []TemplateSummary {
 	items := make([]TemplateSummary, 0, len(templates)+len(formulaTemplates))

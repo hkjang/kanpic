@@ -401,20 +401,20 @@ type DataValidation struct {
 	// SourceOptions is what that range currently holds. It is derived on read
 	// and never stored, so a dropdown always offers today's list rather than
 	// the one that existed when the rule was written.
-	SourceOptions   []ValidationOption `json:"source_options,omitempty"`
-	Value           json.RawMessage    `json:"value,omitempty"`
-	Value2          json.RawMessage    `json:"value2,omitempty"`
-	Formula         string             `json:"formula,omitempty"`
-	AllowBlank      bool               `json:"allow_blank"`
-	RejectInput     bool               `json:"reject_input"`
-	ShowDropdown    bool               `json:"show_dropdown"`
-	DisplayStyle    string             `json:"display_style"`
-	HelpText        string             `json:"help_text,omitempty"`
-	Revision        int64              `json:"revision"`
-	CreatedBy       string             `json:"created_by"`
-	UpdatedBy       string             `json:"updated_by"`
-	CreatedAt       time.Time          `json:"created_at"`
-	UpdatedAt       time.Time          `json:"updated_at"`
+	SourceOptions []ValidationOption `json:"source_options,omitempty"`
+	Value         json.RawMessage    `json:"value,omitempty"`
+	Value2        json.RawMessage    `json:"value2,omitempty"`
+	Formula       string             `json:"formula,omitempty"`
+	AllowBlank    bool               `json:"allow_blank"`
+	RejectInput   bool               `json:"reject_input"`
+	ShowDropdown  bool               `json:"show_dropdown"`
+	DisplayStyle  string             `json:"display_style"`
+	HelpText      string             `json:"help_text,omitempty"`
+	Revision      int64              `json:"revision"`
+	CreatedBy     string             `json:"created_by"`
+	UpdatedBy     string             `json:"updated_by"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
 }
 
 type CreateDataValidationInput struct {
@@ -501,10 +501,10 @@ type CreateSheetInput struct {
 // throws away every cell in it and cannot be undone cell by cell, so the only
 // way back is the snapshot taken just before.
 type SheetDeletion struct {
-	WorkbookID       string `json:"workbook_id"`
-	SheetName        string `json:"sheet_name"`
-	BackupVersionID  string `json:"backup_version_id"`
-	ServerVersion    int64  `json:"server_version"`
+	WorkbookID      string `json:"workbook_id"`
+	SheetName       string `json:"sheet_name"`
+	BackupVersionID string `json:"backup_version_id"`
+	ServerVersion   int64  `json:"server_version"`
 }
 
 type UpdateSheetInput struct {
@@ -554,16 +554,16 @@ type ImportValidation struct {
 
 // ImportConditionalFormat is one highlighting rule read out of a file.
 type ImportConditionalFormat struct {
-	Range      string          `json:"range"`
-	RuleType   string          `json:"rule_type"`
-	Operator   string          `json:"operator,omitempty"`
-	Formula    string          `json:"formula,omitempty"`
-	Value      json.RawMessage `json:"value,omitempty"`
-	Value2     json.RawMessage `json:"value2,omitempty"`
-	Style      json.RawMessage `json:"style,omitempty"`
-	MinColor   string          `json:"min_color,omitempty"`
-	MidColor   string          `json:"mid_color,omitempty"`
-	MaxColor   string          `json:"max_color,omitempty"`
+	Range       string          `json:"range"`
+	RuleType    string          `json:"rule_type"`
+	Operator    string          `json:"operator,omitempty"`
+	Formula     string          `json:"formula,omitempty"`
+	Value       json.RawMessage `json:"value,omitempty"`
+	Value2      json.RawMessage `json:"value2,omitempty"`
+	Style       json.RawMessage `json:"style,omitempty"`
+	MinColor    string          `json:"min_color,omitempty"`
+	MidColor    string          `json:"mid_color,omitempty"`
+	MaxColor    string          `json:"max_color,omitempty"`
 	BarColor    string          `json:"bar_color,omitempty"`
 	IconStyle   string          `json:"icon_style,omitempty"`
 	IconReverse bool            `json:"icon_reverse,omitempty"`

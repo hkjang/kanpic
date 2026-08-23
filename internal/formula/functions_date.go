@@ -171,7 +171,7 @@ func evaluateDate(name string, values []any) (any, bool, error) {
 		if err != nil {
 			return nil, true, err
 		}
-		total := ((hours*3600 + minutes*60 + seconds) % 86400 + 86400) % 86400
+		total := ((hours*3600+minutes*60+seconds)%86400 + 86400) % 86400
 		return time.Date(2000, 1, 1, 0, 0, total, 0, time.UTC).Format("15:04:05"), true, nil
 	case "HOUR", "MINUTE", "SECOND":
 		if len(values) != 1 {
