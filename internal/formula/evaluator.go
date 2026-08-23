@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -531,8 +532,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		if len(values) == 2 && !omitted(values[1]) {
 			digits, _ = toNumber(values[1])
 		}
-		factor := math.Pow(10, digits)
-		return math.Round(number*factor) / factor, nil
+		return decimalRound(number, int(digits), roundHalfAway), nil
 	// CONCATENATE 는 CONCAT 의 옛 이름이다. 엑셀 강의와 오래된 통합 문서가
 	// 아직 이 이름을 쓰므로 둘 다 알아듣는다.
 	case "CONCAT", "CONCATENATE":
@@ -1232,6 +1232,7 @@ func numericValues(values []any) []float64 {
 	}
 	return result
 }
+
 // omittedValue marks an argument the author skipped. It is not a value: it
 // travels far enough for each function to fall back to that argument's
 // default, and disappears everywhere else.
@@ -1346,6 +1347,83 @@ func finiteValue(value any) bool {
 // Binary floating point cannot hold those decimals exactly, and every
 // spreadsheet hides the difference the same way: a result carries fifteen
 // significant decimal digits, which is all a float64 can promise anyway.
+// 반올림은 사람이 적은 십진수를 기준으로 해야 한다. 이진 실수로 셈하면
+// 1.005 는 실제로 1.00499999999999989… 로 담기므로 두 자리에서 반올림해도
+// 1.00 이 되지만, 엑셀과 시트는 1.01 을 낸다. 돈을 다루는 표에서는 1원이
+// 어긋난다.
+//
+// 두 곳이 다르게 굴러가면 안 되므로 순서를 정해 둔다.
+//
+//  1. 먼저 열다섯 자리로 다듬는다. 표 프로그램이 값을 보는 방식이고,
+//     이 파일의 significantDigits 가 이미 쓰는 방식이다. 이 단계가 있어야
+//     =ROUNDUP(0.1+0.2,1) 이 0.4 가 아니라 0.3 이 된다.
+//  2. 그 십진수를 그대로 분수로 옮겨 어긋남 없이 자른다.
+//
+// 자릿수가 음수면 정수 쪽으로 자른다. ROUND(1234,-2) 는 1200 이다.
+func decimalRound(number float64, digits int, mode roundMode) float64 {
+	if number == 0 || math.IsNaN(number) || math.IsInf(number, 0) {
+		return number
+	}
+	value, ok := new(big.Rat).SetString(strconv.FormatFloat(number, 'g', numericDigits, 64))
+	if !ok {
+		return number
+	}
+	distance := digits
+	if distance < 0 {
+		distance = -distance
+	}
+	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(distance)), nil))
+	scaled := new(big.Rat)
+	if digits >= 0 {
+		scaled.Mul(value, scale)
+	} else {
+		scaled.Quo(value, scale)
+	}
+	result := new(big.Rat).SetInt(roundRat(scaled, mode))
+	if digits >= 0 {
+		result.Quo(result, scale)
+	} else {
+		result.Mul(result, scale)
+	}
+	rounded, _ := result.Float64()
+	return rounded
+}
+
+// roundMode 는 딱 중간에 놓인 값과 나머지를 어느 쪽으로 보낼지 정한다.
+type roundMode int
+
+const (
+	// roundHalfAway 는 중간값을 0 에서 먼 쪽으로 보낸다. ROUND 가 쓴다.
+	roundHalfAway roundMode = iota
+	// roundAwayFromZero 는 조금이라도 남으면 0 에서 먼 쪽으로 올린다.
+	roundAwayFromZero
+	// roundTowardZero 는 남은 것을 버린다.
+	roundTowardZero
+)
+
+func roundRat(value *big.Rat, mode roundMode) *big.Int {
+	quotient, remainder := new(big.Int).QuoRem(value.Num(), value.Denom(), new(big.Int))
+	if remainder.Sign() == 0 {
+		return quotient
+	}
+	step := big.NewInt(1)
+	if value.Sign() < 0 {
+		step = big.NewInt(-1)
+	}
+	switch mode {
+	case roundAwayFromZero:
+		return quotient.Add(quotient, step)
+	case roundTowardZero:
+		return quotient
+	}
+	doubled := new(big.Int).Abs(remainder)
+	doubled.Lsh(doubled, 1)
+	if doubled.Cmp(value.Denom()) >= 0 {
+		return quotient.Add(quotient, step)
+	}
+	return quotient
+}
+
 func significantDigits(value float64) float64 {
 	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return value
