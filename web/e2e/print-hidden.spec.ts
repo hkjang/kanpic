@@ -35,7 +35,7 @@ test('printing leaves out rows a filter hides', async ({ page, request }) => {
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menuitem',{name:'파일'}).click()
-  await page.getByRole('menuitem',{name:/인쇄/}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const text=await printedText(page)
   expect(text).toContain('서울')
@@ -59,7 +59,7 @@ test('printing leaves out rows folded into a collapsed group', async ({ page, re
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menuitem',{name:'파일'}).click()
-  await page.getByRole('menuitem',{name:/인쇄/}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const text=await printedText(page)
   expect(text).toContain('서울')

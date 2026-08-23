@@ -17,7 +17,7 @@ test('a frozen row is repeated at the top of every printed page', async ({ page,
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menuitem',{name:'파일'}).click()
-  await page.getByRole('menuitem',{name:/인쇄/}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const printed=await (async()=>{
     for(let attempt=0;attempt<40;attempt+=1){

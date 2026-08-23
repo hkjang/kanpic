@@ -93,7 +93,7 @@ test('printing covers the whole sheet, not the rows on screen', async ({ page, r
   await page.goto(`/workbooks/${workbook.id}`)
   await page.waitForSelector('.grid-canvas')
   await page.getByRole('menuitem',{name:'파일'}).click()
-  await page.getByRole('menuitem',{name:/인쇄/}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   await expect.poll(async()=>page.evaluate(()=>{
     for(const frame of [...document.querySelectorAll('iframe')]){

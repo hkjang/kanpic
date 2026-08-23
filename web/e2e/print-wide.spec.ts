@@ -45,7 +45,7 @@ test('a table wider than the page carries on over more pages instead of being sq
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menuitem',{name:'파일'}).click()
-  await page.getByRole('menuitem',{name:/인쇄/}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const printed=await printedTables(page)
   expect(printed.tables).toBeGreaterThan(1)

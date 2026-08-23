@@ -19,7 +19,7 @@ test('a printed sheet keeps the colours and weights it was given', async ({ page
   // 인쇄 대화 상자를 띄우지 않고 문서만 만든다.
   await page.evaluate(()=>{(window as unknown as {print:()=>void}).print=()=>{}})
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'파일',exact:true}).click()
-  await page.getByRole('menuitem',{name:'인쇄'}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const painted=await (async()=>{
     for(let attempt=0;attempt<50;attempt+=1){
@@ -84,7 +84,7 @@ test('a printed sheet carries the conditional formatting the reader sees', async
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.evaluate(()=>{(window as unknown as {print:()=>void}).print=()=>{}})
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'파일',exact:true}).click()
-  await page.getByRole('menuitem',{name:'인쇄'}).click()
+  await page.getByRole('menuitem',{name:/^인쇄(?!\s*영역)/}).click()
 
   const printed=await (async()=>{
     for(let attempt=0;attempt<50;attempt+=1){
