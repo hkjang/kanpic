@@ -1,4 +1,5 @@
 import type { HtmlCell } from './clipboardHtml'
+import { leadingNumberSeriesValue, listSeriesValue } from './fillSeries'
 import { parsePastedNumber } from './clipboardNumber'
 
 export const KANPIC_CLIPBOARD_TYPE = 'application/x-kanpic-cells+json'
@@ -212,12 +213,18 @@ function seriesValue(values:ClipboardCell[],position:number){
     const timestamps=dates as number[],day=86_400_000,step=timestamps.length===1?day:arithmeticStep(timestamps)
     if(step!==undefined)return{matched:true as const,value:new Date(timestamps[0]+step*position).toISOString().slice(0,10)}
   }
+  // 이름 목록이 먼저다. `1월` 은 앞자리 숫자 규칙에도 걸리지만 12월 다음은
+  // 13월이 아니라 1월이어야 하고, 그 되돌아옴은 목록만 안다.
+  const listed=listSeriesValue(raw,position)
+  if(listed!==undefined)return {matched:true as const,value:listed}
   const numbered=raw.map(trailingNumber)
   if(numbered.every(value=>value!==undefined)){
     const items=numbered as Array<{prefix:string;number:number;width:number}>,samePrefix=items.every(item=>item.prefix===items[0].prefix)
     const step=items.length===1?1:arithmeticStep(items.map(item=>item.number))
     if(samePrefix&&step!==undefined){const number=items[0].number+step*position,sign=number<0?'-':'';return{matched:true as const,value:`${items[0].prefix}${sign}${String(Math.abs(number)).padStart(items[0].width,'0')}`}}
   }
+  const leading=leadingNumberSeriesValue(raw,position)
+  if(leading!==undefined)return {matched:true as const,value:leading}
   return{matched:false as const}
 }
 
