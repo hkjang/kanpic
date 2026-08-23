@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.124.2
+VERSION=v0.124.3
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
