@@ -132,6 +132,12 @@ func TestSortReadsTheNumbersInsideText(t *testing.T) {
 		{"앞자리 0", []string{"7호", "07호"}, false, []string{"07호", "7호"}},
 		// 마흔 자리 계좌번호는 수량이 아니므로 글자로 견준다.
 		{"아주 긴 숫자", []string{"9999999999999999999", "1111111111111111111"}, false, []string{"1111111111111111111", "9999999999999999999"}},
+		// 정렬은 화면에서 먼저 반영하고 서버가 다시 확정한다. 둘이 어긋나면
+		// 줄이 눈앞에서 한 번 튄다. 자바스크립트의 기본 문자열 비교는 UTF-16
+		// 조각을 견주므로 이모지를 ￦(U+FFE6) 앞에 놓지만, 여기서는 코드포인트
+		// 차례대로 뒤에 놓는다. web/src/lib/naturalOrder.test.ts 가 **같은 값**
+		// 을 고정하고 있으니 한쪽만 고치면 양쪽 다 걸린다.
+		{"이모지와 전각 글자", []string{"￦100", "😀항목", "＀", "🍎사과"}, false, []string{"＀", "￦100", "🍎사과", "😀항목"}},
 	} {
 		cells := make([]Cell, 0, len(testCase.values))
 		for index, value := range testCase.values {

@@ -37,3 +37,23 @@ describe('compareNatural',()=>{
     expect(compareNatural('가나','가')).toBeGreaterThan(0)
   })
 })
+
+// 서버와 화면이 같은 차례를 내야 한다. 정렬은 화면에서 먼저 반영하고 서버가
+// 다시 확정하므로, 둘이 어긋나면 줄이 눈앞에서 한 번 튄다.
+//
+// 아래 목록은 서버의 internal/workbook/natural_order.go 시험과 **같은 값** 을
+// 고정한다. 한쪽만 고치면 양쪽 다 걸린다.
+describe('the browser orders text the way the server does', () => {
+  it('puts characters in code point order, surrogates included', () => {
+    // 자바스크립트의 기본 문자열 비교는 UTF-16 조각을 견주므로 이모지를
+    // ￦(U+FFE6) 앞에 놓는다. 서버는 UTF-8 바이트를 견주어 뒤에 놓는다.
+    const sorted=['￦100','😀항목','가나다','항목2','항목10','ZZ','＀','�끝','🍎사과','abc'].sort(compareNatural)
+    expect(sorted).toEqual(['ZZ','abc','가나다','항목2','항목10','＀','￦100','�끝','🍎사과','😀항목'])
+  })
+
+  it('does not fall back to the built-in comparison', () => {
+    // 이 한 쌍이 두 방식을 가른다.
+    expect(compareNatural('😀','￦')).toBe(1)
+    expect('😀'<'￦').toBe(true)
+  })
+})

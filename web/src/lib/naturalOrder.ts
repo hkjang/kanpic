@@ -23,8 +23,15 @@ export function compareNatural(left:string,right:string){
       continue
     }
     if(leftDigit!==rightDigit)return leftDigit?-1:1
-    if(left[leftIndex]!==right[rightIndex])return left[leftIndex]<right[rightIndex]?-1:1
-    leftIndex+=1;rightIndex+=1
+    // 자바스크립트의 문자열 비교는 UTF-16 조각을 견주므로, U+FFFF 를 넘는
+    // 글자(이모지)가 ￦ 나 ＀ 같은 글자보다 **앞** 에 온다. 서버는 UTF-8
+    // 바이트를 견주어 코드포인트 차례대로 놓는다. 그대로 두면 화면에서 한 번,
+    // 서버가 확정하며 또 한 번, 줄이 서로 다른 자리에 선다.
+    const leftPoint=left.codePointAt(leftIndex) as number
+    const rightPoint=right.codePointAt(rightIndex) as number
+    if(leftPoint!==rightPoint)return leftPoint<rightPoint?-1:1
+    leftIndex+=leftPoint>0xffff?2:1
+    rightIndex+=rightPoint>0xffff?2:1
   }
   if(leftIndex<left.length)return 1
   if(rightIndex<right.length)return -1
