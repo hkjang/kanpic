@@ -1031,3 +1031,71 @@ func TestXLSXImportReportsNamesItCannotKeep(t *testing.T) {
 		t.Fatalf("import warnings = %#v", parsed.Preview.Warnings)
 	}
 }
+
+// 무엇이 빠졌는지 알아야 사람이 그것을 다시 만들지 말지 정할 수 있다. 이유를
+// 뭉뚱그려 세면 "세 개" 만 남고, 그중 하나가 자기 것인지는 알 수 없다.
+func TestSkippedNamesSayWhichKindWasLeftBehind(t *testing.T) {
+	t.Parallel()
+	skipped := SkippedNames{SheetScoped: 1, PrintArea: 1, NotARange: 2}
+	if skipped.Total() != 4 {
+		t.Fatalf("total=%d", skipped.Total())
+	}
+	reasons := strings.Join(skipped.Reasons(), ", ")
+	for _, want := range []string{"시트 전용 1개", "인쇄 영역 1개", "값·수식을 가리키는 이름 2개"} {
+		if !strings.Contains(reasons, want) {
+			t.Fatalf("reasons %q is missing %q", reasons, want)
+		}
+	}
+	// 없는 것은 말하지 않는다.
+	if strings.Contains(reasons, "겹치는") {
+		t.Fatalf("reasons %q names something that did not happen", reasons)
+	}
+	if len(SkippedNames{}.Reasons()) != 0 {
+		t.Fatal("an import that skipped nothing has nothing to say")
+	}
+}
+
+// 엑셀 파일이 실제로 가진 이름들을 읽어, 가져올 것과 두고 갈 것을 가른다.
+func TestImportReportsEachKindOfNameItLeaves(t *testing.T) {
+	t.Parallel()
+	file := excelize.NewFile()
+	defer file.Close()
+	sheet := file.GetSheetName(0)
+	for address, value := range map[string]any{"A1": "품목", "B1": "단가", "A2": "연필", "B2": 500} {
+		if err := file.SetCellValue(sheet, address, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, definition := range []*excelize.DefinedName{
+		{Name: "단가", RefersTo: sheet + "!$B$2:$B$2"},
+		{Name: "시트전용", RefersTo: sheet + "!$A$2:$A$2", Scope: sheet},
+		{Name: "_xlnm.Print_Area", RefersTo: sheet + "!$A$1:$B$2", Scope: sheet},
+		{Name: "세율", RefersTo: "0.1"},
+	} {
+		if err := file.SetDefinedName(definition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("names.xlsx", buffer.Bytes(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.NamedRanges) != 1 || parsed.NamedRanges[0].Name != "단가" {
+		t.Fatalf("named ranges=%+v", parsed.NamedRanges)
+	}
+	warning := strings.Join(parsed.Preview.Warnings, " | ")
+	if !strings.Contains(warning, "이름 정의 3개") {
+		t.Fatalf("warnings=%q", warning)
+	}
+	// 상수를 가리키는 이름도 이유를 밝혀야 한다. 예전에는 세 가지만 늘어놓아
+	// 자기 것이 왜 빠졌는지 알 수 없었다.
+	for _, want := range []string{"시트 전용 1개", "인쇄 영역 1개", "값·수식을 가리키는 이름 1개"} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warnings %q is missing %q", warning, want)
+		}
+	}
+}

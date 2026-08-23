@@ -317,40 +317,81 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 // target is not a plain range on a sheet in this file - a print area, a
 // constant, a formula, a reference into another workbook - has no kanpic
 // equivalent, so it is counted and reported rather than approximated.
-func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, int) {
+func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, SkippedNames) {
 	definitions := file.GetDefinedName()
 	if len(definitions) == 0 {
-		return nil, 0
+		return nil, SkippedNames{}
 	}
 	named := make([]workbook.ImportNamedRange, 0, len(definitions))
-	skipped := 0
+	skipped := SkippedNames{}
 	seen := make(map[string]struct{}, len(definitions))
 	for _, definition := range definitions {
+		// 인쇄 영역은 이름의 모습을 하고 있지만 이름이 아니다. 시트 전용
+		// 이름과 함께 세되, 세는 자리는 나눠 둔다 — 무엇이 빠졌는지 알아야
+		// 사람이 그것을 다시 만들지 말지 정할 수 있다.
+		if strings.HasPrefix(definition.Name, "_xlnm.") {
+			skipped.PrintArea++
+			continue
+		}
 		// A sheet-scoped name means something different from a workbook-scoped
 		// one, and kanpic only has the workbook-scoped kind. excelize reports
 		// that scope as the literal "Workbook".
-		if definition.Scope != "Workbook" || strings.HasPrefix(definition.Name, "_xlnm.") {
-			skipped++
+		if definition.Scope != "Workbook" {
+			skipped.SheetScoped++
 			continue
 		}
 		sheetName, area, ok := splitDefinedNameTarget(definition.RefersTo)
 		if !ok {
-			skipped++
+			// 상수나 수식을 가리키는 이름. kanpic 의 이름은 범위만 가리킨다.
+			skipped.NotARange++
 			continue
 		}
 		if _, exists := sheetNames[sheetName]; !exists {
-			skipped++
+			skipped.MissingSheet++
 			continue
 		}
 		key := strings.ToUpper(definition.Name)
 		if _, duplicate := seen[key]; duplicate {
-			skipped++
+			skipped.Duplicate++
 			continue
 		}
 		seen[key] = struct{}{}
 		named = append(named, workbook.ImportNamedRange{Name: definition.Name, SheetName: sheetName, Range: area})
 	}
 	return named, skipped
+}
+
+// SkippedNames counts, by reason, the defined names an import left behind.
+type SkippedNames struct {
+	SheetScoped  int
+	PrintArea    int
+	NotARange    int
+	MissingSheet int
+	Duplicate    int
+}
+
+func (s SkippedNames) Total() int {
+	return s.SheetScoped + s.PrintArea + s.NotARange + s.MissingSheet + s.Duplicate
+}
+
+// Reasons lists what was left behind, in the words a person would use.
+func (s SkippedNames) Reasons() []string {
+	reasons := make([]string, 0, 5)
+	for _, item := range []struct {
+		count int
+		label string
+	}{
+		{s.SheetScoped, "시트 전용"},
+		{s.PrintArea, "인쇄 영역"},
+		{s.NotARange, "값·수식을 가리키는 이름"},
+		{s.MissingSheet, "없는 시트를 가리키는 이름"},
+		{s.Duplicate, "이름이 겹치는 것"},
+	} {
+		if item.count > 0 {
+			reasons = append(reasons, fmt.Sprintf("%s %d개", item.label, item.count))
+		}
+	}
+	return reasons
 }
 
 // splitDefinedNameTarget reads the sheet and the A1 range out of a RefersTo
@@ -387,7 +428,7 @@ func splitDefinedNameTarget(refersTo string) (string, string, bool) {
 // unsupportedXLSXParts names what the file carries and the import does not. The
 // reader already knows: a workbook that arrives without its charts and its
 // names looks like the import worked and reads like a different workbook.
-func unsupportedXLSXParts(archive *zip.Reader, skippedNames int) []string {
+func unsupportedXLSXParts(archive *zip.Reader, skippedNames SkippedNames) []string {
 	counts := map[string]int{}
 	for _, entry := range archive.File {
 		switch {
@@ -404,8 +445,8 @@ func unsupportedXLSXParts(archive *zip.Reader, skippedNames int) []string {
 		}
 	}
 	warnings := make([]string, 0, 5)
-	if skippedNames > 0 {
-		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다. 시트 하나에만 적용되는 이름, 인쇄 영역, 다른 파일을 가리키는 이름은 kanpic에 대응이 없습니다.", skippedNames))
+	if total := skippedNames.Total(); total > 0 {
+		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다: %s. kanpic의 이름은 워크북 전체에 걸린 범위만 가리킵니다.", total, strings.Join(skippedNames.Reasons(), ", ")))
 	}
 	if counts["chart"] > 0 {
 		warnings = append(warnings, fmt.Sprintf("차트 %d개는 가져오지 않습니다. 원본 데이터 범위는 그대로 들어옵니다.", counts["chart"]))
