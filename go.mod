@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/text v0.38.0
 )
 
 require (
@@ -23,5 +24,4 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 )

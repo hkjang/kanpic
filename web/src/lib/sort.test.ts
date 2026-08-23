@@ -35,3 +35,22 @@ describe('range sorting',()=>{
     expect(()=>materializeSort(new Map(),{startRow:1,startColumn:1,endRow:30001,endColumn:2},{headerRows:0,caseSensitive:false,keys:[{column:1,direction:'asc'}]},'sheet')).toThrow('60,000셀(30,000행 × 2열)')
   })
 })
+
+// 대소문자를 무시하는 정렬은 화면과 서버가 **같은 방식** 으로 글자를 낮춰야
+// 한다. 자바스크립트의 toLowerCase 는 유니코드 규칙을 그대로 따르지만 Go 의
+// strings.ToLower 는 글자 하나씩만 보는 단순 변환이라 두 군데에서 갈렸다.
+// 서버가 x/text 의 cases.Lower 를 쓰도록 고쳐 맞추었다.
+//
+// 아래 목록은 서버의 internal/workbook/sort_test.go 와 **같은 값** 을 고정한다.
+// 한쪽만 고치면 양쪽 다 걸린다. 넣는 차례를 일부러 답과 다르게 두어, 안정
+// 정렬이 손대지 않고 지나가는 것만으로는 통과하지 못하게 했다.
+describe('ignoring case lowers letters the way the server does',()=>{
+  it('keeps the Turkish dotted İ and the Greek final sigma in the same place',()=>{
+    const values=['İD','id','ID','οδοσ','ΟΔΟΣ','ΟΔΟΤ']
+    const cells=new Map<string,Cell>(values.map((value,index)=>[`${index+1}:1`,cell(index+1,1,value)]))
+    const sorted=materializeSort(cells,{startRow:1,startColumn:1,endRow:values.length,endColumn:1},{keys:[{column:1,direction:'asc'}],headerRows:0,caseSensitive:false},'sheet')
+    const got:string[]=[]
+    for(const item of sorted)got[item.row-1]=item.value as string
+    expect(got).toEqual(['id','ID','İD','ΟΔΟΣ','οδοσ','ΟΔΟΤ'])
+  })
+})

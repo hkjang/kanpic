@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"kanpic/internal/formula"
 	"kanpic/pkg/cellrange"
 )
@@ -87,11 +90,13 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 			}
 		}
 	}
+	// Caser 는 여러 고루틴이 같이 쓸 수 없으므로 정렬 한 번마다 하나 만든다.
+	folder := newCaseFolder()
 	records := make([]sortRow, 0, dataRows)
 	for row := dataStart; row <= selected.End.Row; row++ {
 		record := sortRow{originalRow: row, values: make([]sortScalar, len(options.Keys))}
 		for index, key := range options.Keys {
-			value, err := sortableValue(byCoordinate[coordinateKey(row, key.Column)], options.CaseSensitive)
+			value, err := sortableValue(byCoordinate[coordinateKey(row, key.Column)], options.CaseSensitive, folder)
 			if err != nil {
 				return nil, err
 			}
@@ -126,7 +131,21 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 	return inputs, nil
 }
 
-func sortableValue(cell Cell, caseSensitive bool) (sortScalar, error) {
+// 대소문자를 무시하고 견줄 때는 브라우저와 **같은 방식** 으로 낮춰야 한다.
+// strings.ToLower 는 글자 하나씩만 보는 단순 변환이라 자바스크립트의
+// toLowerCase 와 두 군데에서 갈린다.
+//
+//	ΟΔΟΣ  → strings.ToLower 는 οδοσ, 브라우저는 οδος (낱말 끝 시그마)
+//	İ      → strings.ToLower 는 i,    브라우저는 i + 점(U+0307)
+//
+// 정렬은 화면이 먼저 그리고 서버가 덮으므로, 갈리는 만큼 줄이 튄다.
+// x/text 의 cases.Lower 는 브라우저와 같은 유니코드 규칙을 따른다.
+//
+// 남는 차이는 유니코드 판 차이뿐이다. 크롬이 아는 새 글자를 x/text 가 아직
+// 모르면 그 글자에서만 갈리고, x/text 를 올리면 함께 사라진다.
+func newCaseFolder() cases.Caser { return cases.Lower(language.Und) }
+
+func sortableValue(cell Cell, caseSensitive bool, folder cases.Caser) (sortScalar, error) {
 	if len(bytes.TrimSpace(cell.Value)) == 0 || bytes.Equal(bytes.TrimSpace(cell.Value), []byte("null")) {
 		return sortScalar{rank: 4, blank: true}, nil
 	}
@@ -145,7 +164,7 @@ func sortableValue(cell Cell, caseSensitive bool) (sortScalar, error) {
 		return sortScalar{rank: 0, number: number}, nil
 	case string:
 		if !caseSensitive {
-			typed = strings.ToLower(typed)
+			typed = folder.String(typed)
 		}
 		return sortScalar{rank: 1, text: typed}, nil
 	case bool:

@@ -160,3 +160,36 @@ func TestSortReadsTheNumbersInsideText(t *testing.T) {
 		}
 	}
 }
+
+// 대소문자를 무시하는 정렬은 화면과 서버가 같은 방식으로 글자를 낮춰야 한다.
+// strings.ToLower 는 글자 하나씩만 보는 단순 변환이라 브라우저의 toLowerCase
+// 와 두 군데에서 갈렸다 — 낱말 끝 시그마(ΟΔΟΣ)와 튀르키예어 İ. 정렬은 화면이
+// 먼저 그리고 서버가 덮으므로, 갈리는 만큼 줄이 눈앞에서 튄다.
+//
+// 아래 목록은 web/src/lib/sort.test.ts 와 **같은 값** 을 고정한다. 한쪽만
+// 고치면 양쪽 다 걸린다. 넣는 차례를 일부러 답과 다르게 두어, 안정 정렬이
+// 손대지 않고 지나가는 것만으로는 통과하지 못하게 했다.
+func TestSortLowersLettersTheWayTheBrowserDoes(t *testing.T) {
+	t.Parallel()
+	values := []string{"İD", "id", "ID", "οδοσ", "ΟΔΟΣ", "ΟΔΟΤ"}
+	cells := make([]Cell, 0, len(values))
+	for index, value := range values {
+		encoded, _ := json.Marshal(value)
+		cells = append(cells, Cell{Row: index + 1, Column: 1, Value: encoded})
+	}
+	selected, _ := cellrange.Parse(fmt.Sprintf("A1:A%d", len(values)))
+	sorted, err := BuildSortCells(cells, selected, SortOptions{Keys: []SortKey{{Column: 1, Direction: "asc"}}})
+	if err != nil {
+		t.Fatalf("sort: %v", err)
+	}
+	got := make([]string, len(values))
+	for _, cell := range sorted {
+		var text string
+		_ = json.Unmarshal(cell.Value, &text)
+		got[cell.Row-1] = text
+	}
+	want := []string{"id", "ID", "İD", "ΟΔΟΣ", "οδοσ", "ΟΔΟΤ"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+}
