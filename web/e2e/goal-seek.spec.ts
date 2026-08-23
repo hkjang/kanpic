@@ -62,18 +62,24 @@ test('goal seek says so when the value cannot be reached', async ({ page, reques
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
 
-// 메뉴가 화면을 넘기면 아래쪽 항목은 스크롤 뒤로 숨는다. 항목을 하나 더할
-// 때마다 조금씩 다가가다가 어느 날 넘어가고, 그때 무엇이 밀려났는지는 아무도
-// 모른다. 넘어가면 여기서 걸린다.
-test('the data menu still fits on screen', async ({ page, request }) => {
+// 메뉴가 길어지면 아래쪽 항목은 스크롤 뒤로 숨는다. 항목을 하나 더할 때마다
+// 조금씩 다가가다가 어느 날 넘어가고, 그때 무엇이 밀려났는지는 아무도 모른다.
+//
+// 픽셀로 재지 않는 이유: 글꼴이 환경마다 달라 같은 항목 수라도 높이가 다르다.
+// 이 시험이 처음에 그렇게 쓰여 CI에서만 걸렸다. 줄 수는 어디서나 같고, 막으려는
+// 것도 결국 줄이 늘어나는 것이다. 스무 줄은 1280×800 창에 들어가는 한도로
+// 재어 본 값이다.
+const DATA_MENU_ROW_LIMIT=20
+
+test('the data menu does not grow past what a window holds', async ({ page, request }) => {
   const workbook=await request.post('/api/v1/workbooks',{data:{title:`메뉴 ${Date.now()}`}}).then(r=>r.json())
-  await page.setViewportSize({width:1280,height:800})
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
   const list=page.locator('.context-menu-list').first()
   await expect(list).toBeVisible()
-  const overflow=await list.evaluate(element=>element.scrollHeight-element.clientHeight)
-  expect(overflow).toBeLessThanOrEqual(1)
+  const rows=await list.evaluate(element=>element.querySelectorAll('[role=menuitem]').length)
+  expect(rows).toBeGreaterThan(0)
+  expect(rows).toBeLessThanOrEqual(DATA_MENU_ROW_LIMIT)
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
