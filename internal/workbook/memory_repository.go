@@ -182,6 +182,20 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 			normalized.CreatedAt, normalized.UpdatedAt, normalized.Revision = now, now, 1
 			r.conditionalFormats[normalized.ID] = normalized
 		}
+		// 차트도 만들기 요청과 같은 길을 지난다.
+		for index, item := range imported.Charts {
+			created, ok := importedChartInput(item, sheetID, index)
+			if !ok {
+				continue
+			}
+			chart, err := chartFromInput(wb.ID, created.IdempotencyKey, input.ActorID, created)
+			if err != nil {
+				continue
+			}
+			chart.ID, chart.Revision = identity.New(), 1
+			chart.CreatedAt, chart.UpdatedAt = now, now
+			r.charts[chart.ID] = chart
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {

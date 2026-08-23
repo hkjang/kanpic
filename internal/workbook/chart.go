@@ -136,6 +136,26 @@ type ChartData struct {
 // chartFromInput builds the chart a create request describes. Both repositories
 // call it so a new field cannot reach one storage path and not the other:
 // that mistake has shipped twice, and it looks like data silently reverting.
+// importedChartInput 은 파일에서 읽은 차트를 만들기 요청과 같은 모습으로
+// 옮긴다. 요청과 같은 길을 지나야 파일에서 온 차트라고 해서 규칙을 비켜
+// 가지 않는다.
+func importedChartInput(imported ImportChart, sheetID string, index int) (CreateChartInput, bool) {
+	if strings.TrimSpace(imported.SourceRange) == "" {
+		return CreateChartInput{}, false
+	}
+	if _, found := chartTypes[imported.Type]; !found {
+		return CreateChartInput{}, false
+	}
+	return CreateChartInput{
+		IdempotencyKey: fmt.Sprintf("import-chart-%s-%d", sheetID, index),
+		SheetID:        sheetID,
+		SourceSheetID:  sheetID,
+		Type:           imported.Type,
+		Title:          imported.Title,
+		SourceRange:    imported.SourceRange,
+	}, true
+}
+
 func chartFromInput(workbookID, key, actor string, input CreateChartInput) (Chart, error) {
 	headers, labels := true, true
 	if input.FirstRowHeaders != nil {

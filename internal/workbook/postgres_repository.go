@@ -163,6 +163,23 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 				return Workbook{}, err
 			}
 		}
+		// 차트도 만들기 요청과 같은 길을 지난다. 메모리 저장소와 같은
+		// 자리에 두어야 한 쪽만 가져오는 일이 없다.
+		for index, item := range imported.Charts {
+			created, ok := importedChartInput(item, sheet.ID, index)
+			if !ok {
+				continue
+			}
+			chart, chartErr := chartFromInput(wb.ID, created.IdempotencyKey, input.ActorID, created)
+			if chartErr != nil {
+				continue
+			}
+			chart.ID, chart.Revision = identity.New(), 1
+			chart.CreatedAt, chart.UpdatedAt = now, now
+			if err := insertChartTx(ctx, tx, chart); err != nil {
+				return Workbook{}, err
+			}
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {

@@ -537,10 +537,22 @@ type ImportSheet struct {
 	// how a sheet says which numbers matter, and a table without them looks
 	// uniformly unremarkable.
 	ConditionalFormats []ImportConditionalFormat `json:"conditional_formats,omitempty"`
+	// Charts are the pictures the file drew from this sheet's data. A report
+	// that arrives without them looks like a table nobody bothered to explain.
+	Charts []ImportChart `json:"charts,omitempty"`
 	// Layout carries what the file said about arrangement: hidden rows and
 	// columns, sizes, frozen panes and outline groups. An import that drops it
 	// flattens a workbook that was exported from here minutes earlier.
 	Layout *SheetLayout `json:"layout,omitempty"`
+}
+
+// ImportChart is one chart read out of an imported file, reduced to what
+// kanpic keeps: the kind of picture, its title, and the one range its series
+// came from.
+type ImportChart struct {
+	Type        string `json:"type"`
+	Title       string `json:"title,omitempty"`
+	SourceRange string `json:"source_range"`
 }
 
 // ImportValidation is one input rule read out of an imported file, in the

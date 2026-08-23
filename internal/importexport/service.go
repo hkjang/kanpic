@@ -307,6 +307,18 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 	for _, sheetName := range sheetNames {
 		known[sheetName] = struct{}{}
 	}
+	// 차트는 excelize 가 읽지 못하므로 XML 을 곧바로 읽는다. 자료가 있는
+	// 시트에 붙인다 — 그림이 어느 시트 위에 놓여 있었는지는 그리기 관계를
+	// 따라가야 알 수 있는데, 자료 옆에 두는 편이 다시 찾기 쉽다.
+	charts, unreadCharts := importCharts(archive)
+	for _, item := range charts {
+		for index := range parsed.Sheets {
+			if parsed.Sheets[index].Name == item.SheetName {
+				parsed.Sheets[index].Charts = append(parsed.Sheets[index].Charts, item.Chart)
+				break
+			}
+		}
+	}
 	named, printAreas, skippedNames := importDefinedNames(file, known)
 	parsed.NamedRanges = named
 	// 인쇄 영역은 이름의 모습으로 담겨 있지만 이름이 아니라 시트의 성질이다.
@@ -323,7 +335,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		}
 		parsed.Sheets[index].Layout.PrintArea = area
 	}
-	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, skippedNames)...)
+	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, skippedNames, unreadCharts)...)
 	return parsed, nil
 }
 
@@ -454,7 +466,7 @@ func splitDefinedNameTarget(refersTo string) (string, string, bool) {
 // unsupportedXLSXParts names what the file carries and the import does not. The
 // reader already knows: a workbook that arrives without its charts and its
 // names looks like the import worked and reads like a different workbook.
-func unsupportedXLSXParts(archive *zip.Reader, skippedNames SkippedNames) []string {
+func unsupportedXLSXParts(archive *zip.Reader, skippedNames SkippedNames, unreadCharts int) []string {
 	counts := map[string]int{}
 	for _, entry := range archive.File {
 		switch {
@@ -474,8 +486,11 @@ func unsupportedXLSXParts(archive *zip.Reader, skippedNames SkippedNames) []stri
 	if total := skippedNames.Total(); total > 0 {
 		warnings = append(warnings, fmt.Sprintf("이름 정의 %d개는 가져오지 않습니다: %s. kanpic의 이름은 워크북 전체에 걸린 범위만 가리킵니다.", total, strings.Join(skippedNames.Reasons(), ", ")))
 	}
-	if counts["chart"] > 0 {
-		warnings = append(warnings, fmt.Sprintf("차트 %d개는 가져오지 않습니다. 원본 데이터 범위는 그대로 들어옵니다.", counts["chart"]))
+	// 이제 대부분의 차트는 가져온다. 되살리지 못한 것만 세어 알린다 —
+	// 여러 시트에서 끌어 왔거나 떨어진 자리를 가리키는 차트는 범위 하나로
+	// 묶을 수 없어 엉뚱한 그림이 되기 쉽다.
+	if unreadCharts > 0 {
+		warnings = append(warnings, fmt.Sprintf("차트 %d개는 가져오지 않습니다. 여러 시트나 떨어진 범위를 가리키는 차트는 되살리지 못합니다. 원본 데이터는 그대로 들어옵니다.", unreadCharts))
 	}
 	if counts["pivot"] > 0 {
 		warnings = append(warnings, fmt.Sprintf("피벗 테이블 %d개는 가져오지 않습니다. 계산된 값은 셀로 남습니다.", counts["pivot"]))
