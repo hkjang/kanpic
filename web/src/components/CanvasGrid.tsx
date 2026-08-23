@@ -1061,13 +1061,27 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
   // Repeating an entry already in the column is the most common thing anybody
   // types, so those values are offered whenever a formula hint is not showing.
   const valueSuggestions=textEditing&&!hint?suggestColumnValues(cells,activeColumn,activeRow,draft):[]
+  /**
+   * 값과 캐럿을 지금 맞춰 두고, React 가 다시 그린 뒤에 한 번 더 맞춘다.
+   *
+   * 다음 프레임에 캐럿을 되돌릴 때는 **그 사이에 사람이 더 치지 않았을 때만**
+   * 해야 한다. 눌린 순간의 자리를 나중에 그대로 다시 적용하면, 그 사이에 친
+   * 글자가 앞으로 끌려가 "둘째 줄" 이 "줄둘째 " 가 된다. 부하가 걸려 프레임이
+   * 늦을수록 잘 일어난다.
+   */
+  const settleCaret=(expected:string,start:number,end:number)=>{
+    requestAnimationFrame(()=>{
+      const field=editorInput.current
+      if(field&&field.value===expected)field.setSelectionRange(start,end)
+    })
+  }
   // Accepting a suggestion rewrites the draft and puts the caret inside the
   // brackets, so typing can continue with the arguments.
   const chooseValue=(value:string)=>{
     setDraft(value)
     setCaret(value.length)
     setSuggestion(0)
-    requestAnimationFrame(()=>editorInput.current?.setSelectionRange(value.length,value.length))
+    settleCaret(value,value.length,value.length)
   }
   const chooseSuggestion=(name:string)=>{
     if(!hint)return
@@ -1075,7 +1089,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     setDraft(next.text)
     setCaret(next.caret)
     setSuggestion(0)
-    requestAnimationFrame(()=>editorInput.current?.setSelectionRange(next.caret,next.caret))
+    settleCaret(next.text,next.caret,next.caret)
   }
   const selectionAddress=selection.startRow===selection.endRow&&selection.startColumn===selection.endColumn?address(activeRow,activeColumn):`${address(selection.startRow,selection.startColumn)}:${address(selection.endRow,selection.endColumn)}`
   return <div className="grid-viewport" id="kanpic-grid" ref={viewport} tabIndex={0} onFocus={event=>{if(event.target===event.currentTarget)focusGrid()}} onScroll={(event)=>setScroll({left:event.currentTarget.scrollLeft,top:event.currentTarget.scrollTop})} onKeyDown={keyDown} onCopy={copy} onCut={cut} onPaste={paste} aria-label="스프레드시트 그리드">
@@ -1121,7 +1135,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
             event.preventDefault()
             setDraft(cycled.text);setCaret(cycled.end)
             if(field){field.value=cycled.text;field.setSelectionRange(cycled.start,cycled.end)}
-            requestAnimationFrame(()=>field?.setSelectionRange(cycled.start,cycled.end))
+            settleCaret(cycled.text,cycled.start,cycled.end)
           }
           return
         }
@@ -1135,7 +1149,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           // 들어간다. 값과 캐럿을 지금 맞춰 두고, React 가 다시 그린 뒤에도
           // 한 번 더 맞춘다.
           if(field){field.value=next;field.setSelectionRange(at+1,at+1)}
-          requestAnimationFrame(()=>field?.setSelectionRange(at+1,at+1))
+          settleCaret(next,at+1,at+1)
           return
         }
         if(primary&&event.key==='Enter'){event.preventDefault();void fillDraft(draft)}
