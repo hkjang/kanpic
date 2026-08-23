@@ -172,7 +172,20 @@ func evaluateDate(name string, values []any) (any, bool, error) {
 			return nil, true, err
 		}
 		total := ((hours*3600+minutes*60+seconds)%86400 + 86400) % 86400
-		return time.Date(2000, 1, 1, 0, 0, total, 0, time.UTC).Format("15:04:05"), true, nil
+		// 시각은 하루를 1 로 본 분수다. TIMEVALUE 가 이미 그렇게 돌려주고
+		// 엑셀·시트도 그렇다.
+		//
+		// 예전에는 "01:30:00" 이라는 글자를 돌려주었다. 칸에 그대로 보기에는
+		// 좋았지만 **더할 수가 없었다**.
+		//
+		//	=A1+TIME(1,0,0)     #VALUE!
+		//	=TIME(12,30,0)*24   #VALUE!
+		//
+		// 시각을 만드는 함수를 시각에 더할 수 없으면 만들 까닭이 없다.
+		// 같은 라이브러리 안에서 TIMEVALUE 와 답이 갈리기도 했다.
+		//
+		// 칸에 시각으로 보이게 하려면 시각 서식을 주거나 TEXT 를 쓴다.
+		return float64(total) / 86400, true, nil
 	case "HOUR", "MINUTE", "SECOND":
 		if len(values) != 1 {
 			return nil, true, argError(name)

@@ -266,9 +266,12 @@ func TestExtendedTextAndDateFunctions(t *testing.T) {
 		`=WORKDAY("2024-03-08",1)`:                "2024-03-11",
 		`=YEARFRAC("2024-01-01","2024-07-01")`:    0.5,
 		`=WEEKNUM(A2)`:                            11.0,
-		`=TIME(13,5,0)`:                           "13:05:00",
-		`=HOUR("13:05:00")`:                       13.0,
-		`=SPLIT("a,b,c",",")`:                     nil,
+		// 시각은 하루를 1 로 본 분수다. 13시 5분은 47100초이므로
+		// 47100/86400 이다. 값은 열다섯 자리로 다듬어 나온다. 예전에는
+		// "13:05:00" 이라는 글자였는데, 그러면 시각에 더할 수가 없었다.
+		`=TIME(13,5,0)`:       0.545138888888889,
+		`=HOUR("13:05:00")`:   13.0,
+		`=SPLIT("a,b,c",",")`: nil,
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -1434,4 +1437,47 @@ func TestOneBadCellDoesNotSilenceTheWholeRange(t *testing.T) {
 	if result := New().Evaluate("=ABS(A4)", cells); result.Error == nil {
 		t.Errorf("=ABS(A4) = %v, 오류여야 한다", result.Value)
 	}
+}
+
+// 시각은 하루를 1 로 본 분수다. 그래야 날짜에 더할 수 있다.
+//
+// TIME 만 글자를 돌려주고 있었다. 칸에 그대로 보기에는 좋았지만 **더할
+// 수가 없었다** — 시각을 만드는 함수를 시각에 더할 수 없으면 만들 까닭이
+// 없다. 같은 라이브러리 안에서 TIMEVALUE 와 답이 갈리기도 했다.
+func TestTimeIsAFractionOfADaySoItCanBeAdded(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": "2024-01-15 10:00:00",
+		"A2": 45306.5, // 엑셀에서 가져온 2024-01-15 12:00
+	}
+	// TIME 과 TIMEVALUE 가 같은 답을 낸다.
+	assertClose(t, "TIME", evaluateNumber(t, "=TIME(1,30,0)", cells), 0.0625, 1e-12)
+	assertClose(t, "TIMEVALUE", evaluateNumber(t, `=TIMEVALUE("01:30:00")`, cells), 0.0625, 1e-12)
+	assertClose(t, "TIME*24", evaluateNumber(t, "=TIME(12,30,0)*24", cells), 12.5, 1e-12)
+	// 하루를 넘기면 돌아온다. 25시는 1시다.
+	assertClose(t, "TIME wraps", evaluateNumber(t, "=TIME(25,0,0)", cells), 1.0/24.0, 1e-12)
+	// 분과 초도 넘어간다. 90분은 한 시간 반이다.
+	assertClose(t, "TIME rolls", evaluateNumber(t, "=TIME(0,90,0)", cells), 0.0625, 1e-12)
+
+	// 이제 시각에 더할 수 있다. 이것이 TIME 을 두는 까닭이다.
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{`=A1+TIME(1,0,0)`, "2024-01-15 11:00:00"},
+		{`=TEXT(A1+TIME(1,30,0),"yyyy-mm-dd hh:mm")`, "2024-01-15 11:30"},
+		{`=TEXT(TIME(13,5,0),"hh:mm")`, "13:05"},
+		{`=HOUR(A1+TIME(2,0,0))`, 12.0},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+	// 엑셀에서 가져온 일련번호에도 더할 수 있다.
+	assertClose(t, "serial + TIME", evaluateNumber(t, "=A2+TIME(6,0,0)", cells), 45306.75, 1e-9)
 }
