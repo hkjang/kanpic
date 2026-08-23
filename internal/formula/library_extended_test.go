@@ -365,16 +365,16 @@ func TestOmittedArgumentsKeepTheirPlace(t *testing.T) {
 	t.Parallel()
 	cells := map[string]any{"A1": 1.0, "A2": 2.0, "A3": 3.0, "B1": "x", "B2": "y", "B3": "z"}
 	for formula, expected := range map[string]any{
-		`=FIXED(1234.5,,TRUE)`:        "1234.50",
-		`=SUM(1,,2)`:                  3.0,
-		`=XLOOKUP(2,A1:A3,B1:B3,,0)`:  "y",
-		`=XMATCH(2,A1:A3,,1)`:         2.0,
-		`=ADDRESS(1,2,,"Sheet1")`:     "Sheet1!$B$1",
-		`=OFFSET(A1,1,0,,1)`:          2.0,
+		`=FIXED(1234.5,,TRUE)`:       "1234.50",
+		`=SUM(1,,2)`:                 3.0,
+		`=XLOOKUP(2,A1:A3,B1:B3,,0)`: "y",
+		`=XMATCH(2,A1:A3,,1)`:        2.0,
+		`=ADDRESS(1,2,,"Sheet1")`:    "Sheet1!$B$1",
+		`=OFFSET(A1,1,0,,1)`:         2.0,
 		// Payments at the start of the period carry no interest in the first
 		// one; reading the trailing 1 as the future value gave -100 instead.
-		`=IPMT(0.1,1,3,1000,,1)`:      0.0,
-		`=SPLIT("a,b",",",,FALSE)`:    nil,
+		`=IPMT(0.1,1,3,1000,,1)`:   0.0,
+		`=SPLIT("a,b",",",,FALSE)`: nil,
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -401,12 +401,12 @@ func TestTextBeforeAndTextAfterFindTheDelimiter(t *testing.T) {
 	t.Parallel()
 	cells := map[string]any{"A1": "이름: 홍길동"}
 	for formula, expected := range map[string]string{
-		`=TEXTBEFORE(A1,": ")`:                "이름",
-		`=TEXTAFTER(A1,": ")`:                 "홍길동",
-		`=TEXTBEFORE("a-b-c","-",2)`:          "a-b",
-		`=TEXTAFTER("a-b-c","-",-1)`:          "c",
-		`=TEXTBEFORE("abc","-",1,0,0,"없음")`: "없음",
-		`=TEXTAFTER("A-b","-",1,1)`:           "b",
+		`=TEXTBEFORE(A1,": ")`:                       "이름",
+		`=TEXTAFTER(A1,": ")`:                        "홍길동",
+		`=TEXTBEFORE("a-b-c","-",2)`:                 "a-b",
+		`=TEXTAFTER("a-b-c","-",-1)`:                 "c",
+		`=TEXTBEFORE("abc","-",1,0,0,"없음")`:          "없음",
+		`=TEXTAFTER("A-b","-",1,1)`:                  "b",
 		`=TEXTBEFORE("a, b and c",{", "," and "},2)`: "a, b",
 	} {
 		result := New().Evaluate(formula, cells)
@@ -451,15 +451,15 @@ func TestStackingAndSlicingArrays(t *testing.T) {
 		"A1": "지역", "B1": "매출", "A2": "부산", "B2": 80.0, "A3": "서울", "B3": 120.0, "A4": "대구", "B4": 95.0,
 	}
 	for formula, expected := range map[string][][]any{
-		`=VSTACK(A2:B2,A3:B3)`:     {{"부산", 80.0}, {"서울", 120.0}},
-		`=HSTACK(A2:A3,B2:B3)`:     {{"부산", 80.0}, {"서울", 120.0}},
-		`=TAKE(A1:B4,2)`:           {{"지역", "매출"}, {"부산", 80.0}},
-		`=TAKE(A1:B4,-2)`:          {{"서울", 120.0}, {"대구", 95.0}},
-		`=DROP(A1:B4,1)`:           {{"부산", 80.0}, {"서울", 120.0}, {"대구", 95.0}},
-		`=DROP(A1:B4,,-1)`:         {{"지역"}, {"부산"}, {"서울"}, {"대구"}},
-		`=CHOOSEROWS(A1:B4,1,-1)`:  {{"지역", "매출"}, {"대구", 95.0}},
-		`=CHOOSECOLS(A1:B4,2)`:     {{"매출"}, {80.0}, {120.0}, {95.0}},
-		`=SORTBY(A2:B4,B2:B4,-1)`:  {{"서울", 120.0}, {"대구", 95.0}, {"부산", 80.0}},
+		`=VSTACK(A2:B2,A3:B3)`:    {{"부산", 80.0}, {"서울", 120.0}},
+		`=HSTACK(A2:A3,B2:B3)`:    {{"부산", 80.0}, {"서울", 120.0}},
+		`=TAKE(A1:B4,2)`:          {{"지역", "매출"}, {"부산", 80.0}},
+		`=TAKE(A1:B4,-2)`:         {{"서울", 120.0}, {"대구", 95.0}},
+		`=DROP(A1:B4,1)`:          {{"부산", 80.0}, {"서울", 120.0}, {"대구", 95.0}},
+		`=DROP(A1:B4,,-1)`:        {{"지역"}, {"부산"}, {"서울"}, {"대구"}},
+		`=CHOOSEROWS(A1:B4,1,-1)`: {{"지역", "매출"}, {"대구", 95.0}},
+		`=CHOOSECOLS(A1:B4,2)`:    {{"매출"}, {80.0}, {120.0}, {95.0}},
+		`=SORTBY(A2:B4,B2:B4,-1)`: {{"서울", 120.0}, {"대구", 95.0}, {"부산", 80.0}},
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -490,14 +490,14 @@ func TestLetNamesTheStepsOfACalculation(t *testing.T) {
 	t.Parallel()
 	cells := map[string]any{"A1": 10.0, "A2": 20.0, "A3": 30.0}
 	for formula, expected := range map[string]any{
-		`=LET(x,5,x*2)`:                                 10.0,
-		`=LET(x,5,y,x+1,x*y)`:                           30.0,
-		`=LET(total,SUM(A1:A3),total/COUNT(A1:A3))`:     20.0,
-		`=LET(x,A1,IF(x>5,"큼","작음"))`:                 "큼",
-		`=LAMBDA(x,x+1)(4)`:                             5.0,
-		`=LET(double,LAMBDA(x,x*2),double(21))`:         42.0,
+		`=LET(x,5,x*2)`:                                  10.0,
+		`=LET(x,5,y,x+1,x*y)`:                            30.0,
+		`=LET(total,SUM(A1:A3),total/COUNT(A1:A3))`:      20.0,
+		`=LET(x,A1,IF(x>5,"큼","작음"))`:                    "큼",
+		`=LAMBDA(x,x+1)(4)`:                              5.0,
+		`=LET(double,LAMBDA(x,x*2),double(21))`:          42.0,
 		`=LET(area,LAMBDA(w,h,w*h),area(3,4)+area(2,2))`: 16.0,
-		`=SUM(LET(x,2,x),3)`:                            5.0,
+		`=SUM(LET(x,2,x),3)`:                             5.0,
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -527,11 +527,11 @@ func TestLambdaHelpersWalkAnArray(t *testing.T) {
 	t.Parallel()
 	cells := map[string]any{"A1": 1.0, "A2": 2.0, "A3": 3.0, "B1": 10.0, "B2": 20.0, "B3": 30.0}
 	for formula, expected := range map[string][][]any{
-		`=MAP(A1:A3,LAMBDA(x,x*2))`:            {{2.0}, {4.0}, {6.0}},
-		`=MAP(A1:A3,B1:B3,LAMBDA(x,y,x+y))`:    {{11.0}, {22.0}, {33.0}},
-		`=BYROW(A1:B3,LAMBDA(row,SUM(row)))`:   {{11.0}, {22.0}, {33.0}},
-		`=BYCOL(A1:B3,LAMBDA(col,SUM(col)))`:   {{6.0, 60.0}},
-		`=SCAN(0,A1:A3,LAMBDA(acc,x,acc+x))`:   {{1.0}, {3.0}, {6.0}},
+		`=MAP(A1:A3,LAMBDA(x,x*2))`:          {{2.0}, {4.0}, {6.0}},
+		`=MAP(A1:A3,B1:B3,LAMBDA(x,y,x+y))`:  {{11.0}, {22.0}, {33.0}},
+		`=BYROW(A1:B3,LAMBDA(row,SUM(row)))`: {{11.0}, {22.0}, {33.0}},
+		`=BYCOL(A1:B3,LAMBDA(col,SUM(col)))`: {{6.0, 60.0}},
+		`=SCAN(0,A1:A3,LAMBDA(acc,x,acc+x))`: {{1.0}, {3.0}, {6.0}},
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -715,5 +715,74 @@ func TestOverflowReportsNumberRangeInsteadOfAnUnwritableValue(t *testing.T) {
 		if _, err := json.Marshal(result); err != nil {
 			t.Fatalf("%s: the result cannot be written as JSON: %v", formula, err)
 		}
+	}
+}
+
+// TREND 과 FORECAST 는 셈이 같고 **인수 차례가 다르다**. 예전에는 둘을 한
+// 갈래로 묶어 두어, 엑셀과 시트의 문서대로 TREND 를 쓰면 인수가 조용히
+// 뒤바뀌었다. 오류도 없이 그럴듯한 수가 나오는 쪽이 더 나쁘다.
+//
+//	TREND({2;4;6},{1;2;3},{7;8;9}) 은 14, 16, 18 이다.
+//	묶여 있던 시절에는 -4 하나가 나왔다.
+func TestTrendTakesItsArgumentsInTheOrderSheetsDoes(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{}
+	// 구할 x 를 하나만 주면 값 하나가 나온다.
+	assertClose(t, "TREND one", evaluateNumber(t, "=TREND({2;4;6},{1;2;3},7)", cells), 14, 1e-9)
+	// FORECAST 는 구할 x 가 맨 앞이고, 같은 답을 낸다.
+	assertClose(t, "FORECAST", evaluateNumber(t, "=FORECAST(7,{2;4;6},{1;2;3})", cells), 14, 1e-9)
+	// 알려진 x 를 적지 않으면 1, 2, 3… 을 쓴다.
+	assertClose(t, "TREND default x", evaluateNumber(t, "=INDEX(TREND({2;4;6}),3)", cells), 6, 1e-9)
+	// b 를 거짓으로 두면 직선이 원점을 지난다. 기울기는 34/14 이다.
+	assertClose(t, "TREND no intercept", evaluateNumber(t, "=TREND({3;5;7},{1;2;3},7,FALSE)", cells), 17, 1e-9)
+
+	// 결과는 구할 x 와 같은 모양으로 돌아온다.
+	result := New().Evaluate("=TREND({2;4;6},{1;2;3},{7;8;9})", cells)
+	if result.Error != nil {
+		t.Fatalf("TREND array: %v", result.Error)
+	}
+	matrix, ok := result.Value.([][]any)
+	if !ok {
+		t.Fatalf("TREND returned %T, want a column of three values", result.Value)
+	}
+	if len(matrix) != 3 || len(matrix[0]) != 1 {
+		t.Fatalf("TREND returned %d×%d, want 3×1", len(matrix), len(matrix[0]))
+	}
+	for index, want := range []float64{14, 16, 18} {
+		number, _ := toNumber(matrix[index][0])
+		assertClose(t, "TREND array", number, want, 1e-9)
+	}
+
+	// 알려진 x 와 y 의 개수가 다르면 조용히 넘어가지 않는다.
+	if mismatched := New().Evaluate("=TREND({2;4;6},{1;2},7)", cells); mismatched.Error == nil {
+		t.Fatalf("TREND with mismatched series returned %v, want an error", mismatched.Value)
+	}
+}
+
+// 이름 끝에 A 가 붙은 통계 함수는 숫자가 아닌 값을 0 으로 센다. 붙지 않은
+// 쪽은 건너뛴다. 엑셀과 시트가 그렇게 나눠 놓았고, AVERAGEA 는 처음부터
+// 그렇게 세고 있었는데 STDEVA 와 VARA 는 건너뛰고 있었다.
+//
+// 1, 2, 3, "x" 는 A 가 붙으면 1, 2, 3, 0 이 된다.
+func TestTheAVariantsCountTextAsZero(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{}
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{`=VARA(1,2,3,"x")`, 5.0 / 3.0},
+		{`=STDEVA(1,2,3,"x")`, 1.2909944487358056},
+		{`=VARPA(1,2,3,"x")`, 1.25},
+		{`=STDEVPA(1,2,3,"x")`, 1.118033988749895},
+		{`=AVERAGEA(1,2,3,"x")`, 1.5},
+		// A 가 붙지 않은 쪽은 글자를 건너뛰므로 1, 2, 3 만 센다.
+		{`=VAR(1,2,3,"x")`, 1},
+		{`=STDEV(1,2,3,"x")`, 1},
+		{`=VARP(1,2,3,"x")`, 2.0 / 3.0},
+		// 참은 1, 거짓은 0 으로 센다.
+		{`=VARA(1,2,3,TRUE)`, 11.0 / 12.0},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
 	}
 }

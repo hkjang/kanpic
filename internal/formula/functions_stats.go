@@ -103,7 +103,14 @@ func matchedNumbers(values arrayValue, ranges []arrayValue, criteria []criterion
 func evaluateStatistics(name string, values []any) (any, bool, error) {
 	switch name {
 	case "STDEV", "STDEVA", "STDEVP", "STDEVPA", "VAR", "VARA", "VARP", "VARPA":
+		// 이름 끝에 A 가 붙은 것은 숫자가 아닌 값도 0 으로 세는 쪽이다.
+		// STDEV 는 "x" 를 건너뛰고 STDEVA 는 0 으로 센다 — 엑셀과 시트가
+		// 그렇게 나눈다. AVERAGEA 는 이미 그렇게 세고 있었다.
 		numbers := numericValues(values)
+		switch name {
+		case "STDEVA", "STDEVPA", "VARA", "VARPA":
+			numbers = numbersCountingTextAsZero(values)
+		}
 		sample := name == "STDEV" || name == "STDEVA" || name == "VAR" || name == "VARA"
 		if len(numbers) < 2 && sample {
 			return nil, true, formulaError("#DIV/0!", name+" needs at least two numbers")
@@ -303,7 +310,9 @@ func evaluatePairedStatistics(name string, arguments []any) (any, bool, error) {
 			return correlation * correlation, true, nil
 		}
 		return correlation, true, nil
-	case "FORECAST", "TREND":
+	case "TREND":
+		return evaluateTrend(arguments)
+	case "FORECAST":
 		if len(arguments) != 3 {
 			return nil, true, argError(name)
 		}
@@ -360,6 +369,24 @@ func scalarOrFirst(value any) any {
 	return items[0]
 }
 
+// numbersCountingTextAsZero 는 AVERAGEA, STDEVA, VARA 처럼 이름 끝에 A 가
+// 붙은 함수가 값을 세는 방식이다. 빈 칸은 건너뛰고, 숫자로 읽히지 않는 값은
+// 0 으로 센다. 참은 1, 거짓은 0 으로 읽히므로 따로 다루지 않는다.
+func numbersCountingTextAsZero(values []any) []float64 {
+	numbers := make([]float64, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		number, ok := toNumber(value)
+		if !ok {
+			number = 0
+		}
+		numbers = append(numbers, number)
+	}
+	return numbers
+}
+
 func mean(numbers []float64) float64 {
 	total := 0.0
 	for _, number := range numbers {
@@ -401,4 +428,107 @@ func percentileOf(sorted []float64, fraction float64) float64 {
 		return sorted[lower]
 	}
 	return sorted[lower] + (position-float64(lower))*(sorted[upper]-sorted[lower])
+}
+
+// evaluateTrend 은 최소제곱 직선 위의 값을 돌려준다. FORECAST 와 셈은 같지만
+// **인수 차례가 다르다**. 엑셀과 시트가 이렇게 나눠 놓았다.
+//
+//	FORECAST(구할 x, 알려진 y, 알려진 x)   — 구할 값이 맨 앞
+//	TREND(알려진 y, [알려진 x], [구할 x], [b]) — 구할 값이 뒤
+//
+// 예전에는 둘을 한 갈래로 묶어 두어, TREND 를 문서대로 쓰면 인수가 조용히
+// 뒤바뀌어 엉뚱한 수가 나왔다. 오류도 없이 그럴듯한 수가 나오는 쪽이 더
+// 나쁘다.
+//
+// 알려진 x 를 적지 않으면 1, 2, 3… 을 쓴다. 구할 x 를 적지 않으면 알려진 x
+// 를 그대로 쓴다. b 를 거짓으로 두면 직선이 원점을 지나게 한다.
+func evaluateTrend(arguments []any) (any, bool, error) {
+	if len(arguments) < 1 || len(arguments) > 4 {
+		return nil, true, argError("TREND")
+	}
+	knownY := numericSeries(arguments[0])
+	if len(knownY) == 0 {
+		return nil, true, formulaError("#VALUE!", "TREND needs known y values")
+	}
+	knownX := make([]float64, len(knownY))
+	for index := range knownX {
+		knownX[index] = float64(index + 1)
+	}
+	if len(arguments) >= 2 && !omitted(arguments[1]) {
+		knownX = numericSeries(arguments[1])
+		if len(knownX) != len(knownY) {
+			return nil, true, formulaError("#REF!", "TREND needs known x and y series of the same length")
+		}
+	}
+	if len(knownY) < 2 {
+		return nil, true, formulaError("#DIV/0!", "TREND needs at least two known points")
+	}
+	intercept := true
+	if len(arguments) == 4 && !omitted(arguments[3]) {
+		truth, err := booleanValue(scalarOrFirst(arguments[3]), "TREND")
+		if err != nil {
+			return nil, true, err
+		}
+		intercept = truth
+	}
+	var slope, offset float64
+	if intercept {
+		meanX, meanY := mean(knownX), mean(knownY)
+		var covariance, varianceX float64
+		for index := range knownX {
+			covariance += (knownX[index] - meanX) * (knownY[index] - meanY)
+			varianceX += (knownX[index] - meanX) * (knownX[index] - meanX)
+		}
+		if varianceX == 0 {
+			return nil, true, formulaError("#DIV/0!", "TREND needs varying x values")
+		}
+		slope = covariance / varianceX
+		offset = meanY - slope*meanX
+	} else {
+		var sumXY, sumXX float64
+		for index := range knownX {
+			sumXY += knownX[index] * knownY[index]
+			sumXX += knownX[index] * knownX[index]
+		}
+		if sumXX == 0 {
+			return nil, true, formulaError("#DIV/0!", "TREND needs varying x values")
+		}
+		slope = sumXY / sumXX
+	}
+	// 구할 x 를 적지 않으면 알려진 x 자리를 그대로 되짚는다.
+	if len(arguments) < 3 || omitted(arguments[2]) {
+		results := make([]any, len(knownX))
+		for index, x := range knownX {
+			results[index] = offset + slope*x
+		}
+		return trendShape(arrayValue{rows: len(results), columns: 1, values: results}), true, nil
+	}
+	// 결과는 구할 x 와 같은 모양으로 돌려준다. 한 칸이면 한 칸이다.
+	target, err := toArray(arguments[2])
+	if err != nil {
+		return nil, true, err
+	}
+	results := make([]any, len(target.values))
+	for index, value := range target.values {
+		number, ok := toNumber(value)
+		if !ok {
+			return nil, true, formulaError("#VALUE!", "TREND needs numbers to forecast at")
+		}
+		results[index] = offset + slope*number
+	}
+	return trendShape(arrayValue{rows: target.rows, columns: target.columns, values: results}), true, nil
+}
+
+// 한 칸짜리 답은 배열이 아니라 값으로 돌려준다. 그래야 =TREND(…)*2 처럼
+// 이어 쓸 때 자연스럽다.
+func trendShape(result arrayValue) any {
+	if len(result.values) == 1 {
+		return result.values[0]
+	}
+	return result
+}
+
+// numericSeries 는 인수를 펴서 숫자만 모은다. 빈 칸과 글자는 건너뛴다.
+func numericSeries(value any) []float64 {
+	return numericValues(flatten(value))
 }
