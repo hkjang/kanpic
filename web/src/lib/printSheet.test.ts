@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { printableDocument, usedRegion } from './printSheet'
+import { columnPages, printableDocument, usedRegion } from './printSheet'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown,Record<string,unknown>?]>){
@@ -95,4 +95,56 @@ it('omits the thead when headings are turned off',()=>{
   const html=printableDocument(cells,{title:'표',sheetName:'Sheet1',gridlines:false,headers:false})
   expect(html).not.toContain('<thead>')
   expect(html).toContain('<tbody>')
+})
+
+
+// 예전에는 표를 종이 폭에 맞춰 통째로 눌러 담았다. 열이 서른 개면 한 열이
+// 몇 밀리미터로 찌그러져 읽을 수가 없었다. 엑셀은 들어가는 만큼 찍고 나머지를
+// 다음 장으로 넘긴다.
+describe('columnPages',()=>{
+  it('keeps columns that fit on one page together',()=>{
+    expect(columnPages(1,5,()=>100)).toHaveLength(1)
+    expect(columnPages(1,5,()=>100)[0]).toMatchObject({start:1,end:5})
+  })
+
+  it('moves the columns that do not fit onto the next page',()=>{
+    const pages=columnPages(1,20,()=>100)
+    expect(pages.length).toBeGreaterThan(1)
+    expect(pages[0].start).toBe(1)
+    // 장과 장 사이에 빠지거나 겹치는 열이 없어야 한다.
+    for(let at=1;at<pages.length;at+=1)expect(pages[at].start).toBe(pages[at-1].end+1)
+    expect(pages[pages.length-1].end).toBe(20)
+  })
+
+  it('gives a column wider than the page a page of its own',()=>{
+    const pages=columnPages(1,3,column=>column===2?2000:100)
+    expect(pages.map(page=>[page.start,page.end])).toEqual([[1,1],[2,2],[3,3]])
+  })
+
+  it('follows the real width of each column',()=>{
+    // 좁은 열은 한 장에 많이, 넓은 열은 적게 들어간다.
+    expect(columnPages(1,12,()=>50).length).toBeLessThan(columnPages(1,12,()=>300).length)
+  })
+})
+
+describe('printableDocument across pages',()=>{
+  const wide=new Map<string,Cell>()
+  for(let column=1;column<=12;column+=1)wide.set(cellKey(1,column),{sheet_id:'s',row:1,column,value:`열${column}`,updated_at:''})
+
+  it('breaks a wide sheet into pages instead of squeezing it',()=>{
+    const html=printableDocument(wide,{title:'넓은 표',sheetName:'시트1',gridlines:true,headers:true,columnWidth:()=>200})
+    // 눌러 담지 않는다.
+    expect(html).not.toContain('width:100%')
+    expect(html.match(/<table>/g)?.length).toBeGreaterThan(1)
+    // 어느 장에서든 어느 열의 몇 행인지 알 수 있어야 한다.
+    expect(html.match(/<thead>/g)?.length).toBe(html.match(/<table>/g)?.length)
+    expect(html.match(/class="row-head">1</g)?.length).toBe(html.match(/<table>/g)?.length)
+    // 열은 하나도 빠지지 않는다.
+    for(let column=1;column<=12;column+=1)expect(html).toContain(`열${column}`)
+  })
+
+  it('stays a single table when everything fits',()=>{
+    const html=printableDocument(wide,{title:'좁은 표',sheetName:'시트1',gridlines:true,headers:true,columnWidth:()=>40})
+    expect(html.match(/<table>/g)?.length).toBe(1)
+  })
 })

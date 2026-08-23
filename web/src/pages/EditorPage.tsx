@@ -634,7 +634,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     for(const range of activeSheet.layout?.hidden_rows??[])
       for(let row=range.start;row<=range.end;row+=1)hiddenRows.add(row)
     for(const row of collapsedIndexes(activeSheet.layout?.row_groups))hiddenRows.add(row)
-    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows})
+    // 화면에서 정한 열 너비 그대로 찍어야 종이 폭에 몇 열이 들어가는지 셀 수
+    // 있다. 확대 배율은 화면 사정이므로 뺀다.
+    const printWidths=new Map((activeSheet.layout?.column_widths??[]).map(item=>[item.index,item.size]))
+    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,
+      columnWidth:column=>printWidths.get(column)??108})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
     document.body.appendChild(frame)
