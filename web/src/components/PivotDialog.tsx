@@ -13,7 +13,15 @@ const columnNumber=(letters:string)=>[...letters.toUpperCase()].reduce((value,le
 const rangeShape=(value:string)=>{const match=/^([A-Z]+)([1-9]\d*)(?::([A-Z]+)([1-9]\d*))?$/i.exec(value.trim().replaceAll('$',''));if(!match)return;const startColumn=columnNumber(match[1]),endColumn=columnNumber(match[3]??match[1]);return{startRow:Number(match[2]),startColumn,width:endColumn-startColumn+1}}
 const draftFor=(pivot:Pivot|undefined,activeSheetId:string,selectionRange:string):Draft=>pivot?{name:pivot.name,sourceSheetId:pivot.source_sheet_id??activeSheetId,sourceRange:pivot.source_range,firstRowHeaders:pivot.first_row_headers,rows:pivot.rows??[],columns:pivot.columns??[],values:pivot.values??[],filters:pivot.filters??[],calculatedFields:pivot.calculated_fields??[],refreshMode:pivot.refresh_mode}:{name:'새 피벗 테이블',sourceSheetId:activeSheetId,sourceRange:selectionRange,firstRowHeaders:true,rows:[],columns:[],values:[{column:1,aggregation:'sum'}],filters:[],calculatedFields:[],refreshMode:'auto'}
 const groups:Array<[PivotGroup,string]>=[['none','그룹 없음'],['year','연도'],['quarter','분기'],['month','월'],['day','일'],['number','숫자 구간'],['custom','사용자 그룹']]
-const aggregations:Array<[PivotAggregation,string]>=[['sum','합계'],['average','평균'],['count','개수'],['min','최소'],['max','최대']]
+// 서버가 내주는 집계와 같은 차례로 늘어놓는다. 개수를 세는 셋은 서로
+// 무엇이 다른지 이름만으로는 헷갈리므로 괄호로 갈라 적는다.
+const aggregations:Array<[PivotAggregation,string]>=[
+  ['sum','합계'],['average','평균'],
+  ['count','개수 (숫자만)'],['counta','개수 (빈 칸 제외)'],['countunique','고유 개수'],
+  ['min','최소'],['max','최대'],['median','중앙값'],['product','곱'],
+  ['stdev','표준편차 (표본)'],['stdevp','표준편차 (모집단)'],
+  ['var','분산 (표본)'],['varp','분산 (모집단)'],
+]
 const operators:Array<[PivotFilter['operator'],string]>=[['equals','같음'],['not_equals','같지 않음'],['contains','포함'],['greater_than','보다 큼'],['greater_or_equal','이상'],['less_than','보다 작음'],['less_or_equal','이하'],['in','목록에 포함'],['is_blank','빈 값'],['not_blank','빈 값 아님']]
 const customText=(dimension:PivotDimension)=>(dimension.custom_groups??[]).map(group=>`${group.name}=${group.values.join(',')}`).join('; ')
 const parseCustom=(value:string)=>value.split(';').map(group=>group.trim()).filter(Boolean).map(group=>{const [name,...rest]=group.split('=');return{name:name.trim(),values:rest.join('=').split(',').map(item=>item.trim()).filter(Boolean)}}).filter(group=>group.name&&group.values.length)

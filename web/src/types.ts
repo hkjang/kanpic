@@ -46,7 +46,9 @@ export type ChartPoint = { category:string; value:number|null; x?:number }
 export type ChartSeries = { name:string; points:ChartPoint[] }
 export type ChartData = { chart:Chart; workbook_version:number; series:ChartSeries[]; warning?:string }
 export type PivotGroup = 'none'|'year'|'quarter'|'month'|'day'|'number'|'custom'
-export type PivotAggregation = 'sum'|'average'|'count'|'min'|'max'
+// 서버의 internal/workbook/pivot.go 의 pivotAggregations 와 같아야 한다.
+// count 는 숫자만, counta 는 비어 있지 않은 것을 센다.
+export type PivotAggregation = 'sum'|'average'|'count'|'counta'|'countunique'|'min'|'max'|'median'|'product'|'stdev'|'stdevp'|'var'|'varp'
 export type PivotCustomGroup = { name:string; values:string[] }
 export type PivotDimension = { column:number; name?:string; group?:PivotGroup; interval?:number; custom_groups?:PivotCustomGroup[] }
 export type PivotValueField = { column:number; name?:string; aggregation:PivotAggregation }
