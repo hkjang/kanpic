@@ -99,6 +99,32 @@ func (c *Client) Create(ctx context.Context, request presentation.CreateRequest)
 	if err := c.call(ctx, http.MethodPost, "/api/v1/presentations", body, &created); err != nil {
 		return presentation.Result{}, err
 	}
+	return c.applySource(ctx, created.Data, request.Deck)
+}
+
+// Replace recompiles an existing deck from a fresh reading of its range. The
+// deck keeps its id, so a link already shared keeps working and shows the
+// current numbers.
+func (c *Client) Replace(ctx context.Context, id string, deck presentation.Deck) (presentation.Result, error) {
+	if strings.TrimSpace(id) == "" {
+		return presentation.Result{}, fmt.Errorf("%w: ptium replace: presentation id is required", presentation.ErrUpstream)
+	}
+	// 제목도 함께 맞춘다. 범위 이름이 바뀌었는데 표지만 옛말을 하면 안 된다.
+	var updated envelope[presentationRecord]
+	if err := c.call(ctx, http.MethodPut, "/api/v1/presentations/"+url.PathEscape(id), map[string]any{"title": deck.Title}, &updated); err != nil {
+		return presentation.Result{}, err
+	}
+	record := updated.Data
+	if record.ID == "" {
+		record.ID = id
+	}
+	return c.applySource(ctx, record, deck)
+}
+
+// applySource compiles the deck into the presentation's slides. Ptium reports
+// every adjustment it had to make in warnings, and those are carried back
+// rather than dropped.
+func (c *Client) applySource(ctx context.Context, target presentationRecord, deck presentation.Deck) (presentation.Result, error) {
 	var applied struct {
 		Data struct {
 			Applied      bool               `json:"applied"`
@@ -106,13 +132,13 @@ func (c *Client) Create(ctx context.Context, request presentation.CreateRequest)
 			Presentation presentationRecord `json:"presentation"`
 		} `json:"data"`
 	}
-	source := map[string]any{"source": WriteSource(request.Deck)}
-	if err := c.call(ctx, http.MethodPut, "/api/v1/presentations/"+url.PathEscape(created.Data.ID)+"/source", source, &applied); err != nil {
+	source := map[string]any{"source": WriteSource(deck)}
+	if err := c.call(ctx, http.MethodPut, "/api/v1/presentations/"+url.PathEscape(target.ID)+"/source", source, &applied); err != nil {
 		return presentation.Result{}, err
 	}
 	record := applied.Data.Presentation
 	if record.ID == "" {
-		record = created.Data
+		record = target
 	}
 	warnings := applied.Data.Warnings
 	if warnings == nil {
@@ -122,7 +148,7 @@ func (c *Client) Create(ctx context.Context, request presentation.CreateRequest)
 		ID: record.ID, Title: record.Title, Status: record.Status,
 		SlideCount: record.SlideCount, Template: record.TemplateName,
 		EditURL:  c.config.BaseURL + "/presentations/" + record.ID,
-		Warnings: warnings, Source: request.Deck.Source,
+		Warnings: warnings, Source: deck.Source,
 	}, nil
 }
 

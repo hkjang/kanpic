@@ -121,6 +121,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/presentations", s.listWorkbookPresentations)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/presentations", s.createPresentation)
 	mux.HandleFunc("GET /api/v1/presentations/{presentationId}/export", s.exportPresentation)
+	mux.HandleFunc("POST /api/v1/presentations/{presentationId}/refresh", s.refreshPresentation)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sharing", s.getWorkbookSharing)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}/sharing", s.updateWorkbookSharing)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sharing:transfer-ownership", s.transferWorkbookOwnership)

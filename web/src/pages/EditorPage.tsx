@@ -30,6 +30,7 @@ import '../components/ChartLauncher.css'
 import { CommentPanel } from '../components/CommentPanel'
 import { ConflictPanel } from '../components/ConflictPanel'
 import { ConditionalFormatDialog } from '../components/ConditionalFormatDialog'
+import { PresentationPanel,type PresentationRecord } from '../components/PresentationPanel'
 import { PresentationDialog,type PresentationAnalysis,type PresentationDeck,type PresentationResult,type PresentationTemplate } from '../components/PresentationDialog'
 import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
@@ -212,7 +213,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const presentationConfig=useQuery({queryKey:['presentation-config'],queryFn:()=>api<{enabled:boolean}>('/api/v1/presentation/config'),staleTime:300_000})
   const presentationEnabled=presentationConfig.data?.enabled===true
   const previewPresentation=useCallback((input:Record<string,unknown>)=>api<{deck:PresentationDeck;analysis:PresentationAnalysis}>(`/api/v1/sheets/${activeSheet!.id}/presentations`,{method:'POST',body:JSON.stringify(input)}),[activeSheet?.id])
-  const createPresentation=useCallback((input:Record<string,unknown>)=>api<{presentation:PresentationResult}>(`/api/v1/sheets/${activeSheet!.id}/presentations`,{method:'POST',body:JSON.stringify(input)}),[activeSheet?.id])
+  const createPresentation=useCallback(async(input:Record<string,unknown>)=>{
+    const made=await api<{presentation:PresentationResult}>(`/api/v1/sheets/${activeSheet!.id}/presentations`,{method:'POST',body:JSON.stringify(input)})
+    await client.invalidateQueries({queryKey:['presentations',workbookId]})
+    return made
+  },[activeSheet?.id,client,workbookId])
   const loadPresentationTemplates=useCallback(async()=>(await api<{items:PresentationTemplate[]}>('/api/v1/presentation/templates')).items,[])
   const downloadPresentation=async(id:string)=>{
     const response=await fetch(`/api/v1/presentations/${id}/export`,{credentials:'same-origin'})
@@ -223,6 +228,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const name=encoded?decodeURIComponent(encoded):'presentation.pptx'
     const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();URL.revokeObjectURL(link.href)
   }
+  const presentationList=useQuery({queryKey:['presentations',workbookId],queryFn:()=>api<{items:PresentationRecord[]}>(`/api/v1/workbooks/${workbookId}/presentations`),enabled:presentationEnabled})
+  const refreshPresentationList=()=>client.invalidateQueries({queryKey:['presentations',workbookId]})
+  const refreshPresentation=async(record:PresentationRecord)=>{await api(`/api/v1/presentations/${record.id}/refresh`,{method:'POST',body:'{}'});await refreshPresentationList()}
   const workbookList=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks'),staleTime:60_000})
   const namedRanges=useQuery({queryKey:['named-ranges',workbookId],queryFn:()=>api<{items:NamedRange[]}>(`/api/v1/workbooks/${workbookId}/named-ranges`)})
 	const charts=useQuery({queryKey:['charts',workbookId,activeSheet?.id],queryFn:()=>api<{items:Chart[]}>(`/api/v1/workbooks/${workbookId}/charts?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
@@ -1010,7 +1018,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
       {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
-      ...(presentationEnabled?[{kind:'item' as const,label:'프레젠테이션 만들기…',onSelect:()=>setPresentationOpen(true)}]:[]),
+      ...(presentationEnabled?[
+        {kind:'item' as const,label:'프레젠테이션 만들기…',onSelect:()=>setPresentationOpen(true)},
+        {kind:'item' as const,label:'프레젠테이션 목록',onSelect:()=>setRightPanel('presentations')},
+      ]:[]),
       {kind:'item',label:'슬라이서 추가',disabled:!canWrite,onSelect:()=>void addSlicer().catch(error=>alert(error instanceof Error?error.message:'슬라이서를 추가하지 못했습니다.'))},
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
@@ -1127,6 +1138,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {rightPanel==='history'&&<VersionPanel workbookId={workbookId} currentVersion={serverVersion} onClose={()=>setRightPanel(null)} onRestored={handleRestored}/>}
         {rightPanel==='comments'&&<CommentPanel workbookId={workbookId} sheetId={activeSheet.id} selectionRange={selectionAddress} currentActor={session?.user?.id??'local-user'} focusThreadId={routeNavigation.commentId||undefined} onNavigate={navigateToRange} onClose={()=>setRightPanel(null)}/>}
         {rightPanel==='conflicts'&&<ConflictPanel workbookId={workbookId} sheets={workbook.data.sheets} currentActor={session?.user?.id??'local-user'} onClose={()=>setRightPanel(null)} onNavigate={navigateToRange} onResolved={handleConflictResolved}/>}
+        {rightPanel==='presentations'&&<PresentationPanel items={presentationList.data?.items??[]} sheetNames={new Map(workbook.data.sheets.map(sheet=>[sheet.id,sheet.name]))} onClose={()=>setRightPanel(null)} onCreate={()=>setPresentationOpen(true)} onRefresh={refreshPresentation} onDownload={record=>downloadPresentation(record.id)}/>}
         {rightPanel==='charts'&&<ChartPanel charts={charts.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setChartDialog(null)} onEdit={item=>setChartDialog(item)} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
         {rightPanel==='pivots'&&<PivotPanel pivots={pivots.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setPivotDialog(null)} onEdit={item=>setPivotDialog(item)} onOpen={setPivotResult} onRefresh={refreshPivot} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
       </ResizableRightPanel>}

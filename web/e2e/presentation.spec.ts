@@ -56,3 +56,48 @@ test('a range becomes a deck, and the menu stays hidden when nobody set one up',
 
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 덱을 만든 뒤 원본이 바뀌면 덱은 옛말을 한다. 목록이 그것을 말해 주고,
+// 다시 만들기는 **같은 덱** 을 지금 값으로 고쳐 쓴다 — 새 덱을 만들면 이미
+// 보낸 링크가 계속 옛 숫자를 보여 준다.
+test('the panel says when a deck has fallen behind, and refreshes it in place', async ({ page, request }) => {
+  const configured=await request.get('/api/v1/presentation/config').then(r=>r.json())
+  test.skip(!configured.enabled,'프레젠테이션 서비스가 설정되지 않았습니다')
+
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`새로고침 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`seed-${stamp}`,cells:[
+    {row:1,column:1,value:'부서'},{row:1,column:2,value:'매출'},
+    {row:2,column:1,value:'영업1'},{row:2,column:2,value:120},
+    {row:3,column:1,value:'영업2'},{row:3,column:2,value:95},
+    {row:4,column:1,value:'영업3'},{row:4,column:2,value:110},
+  ]}})
+  const made=await request.post(`/api/v1/sheets/${sheet}/presentations`,{data:{range:'A1:B4',title:`실적 ${stamp}`}}).then(r=>r.json())
+  const deckId=made.presentation.id as string
+
+  const current=await request.get(`/api/v1/workbooks/${workbook.id}`).then(r=>r.json())
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{base_version:current.version,idempotency_key:`bump-${stamp}`,cells:[{row:3,column:2,value:400}]}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
+  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 목록'}).click()
+
+  const card=page.locator('.presentation-panel-list article')
+  await expect(card).toHaveCount(1)
+  await expect(card.getByText('원본 변경됨')).toBeVisible()
+
+  await card.getByRole('button',{name:/다시 만들기/}).click()
+  await expect(card.getByText('원본 변경됨')).toHaveCount(0,{timeout:30000})
+
+  // 같은 덱이어야 하고, 새 숫자가 들어가 있어야 한다.
+  const records=await request.get(`/api/v1/workbooks/${workbook.id}/presentations`).then(r=>r.json())
+  expect(records.items).toHaveLength(1)
+  expect(records.items[0].id).toBe(deckId)
+  expect(records.items[0].stale).toBe(false)
+
+  const download=await request.get(`/api/v1/presentations/${deckId}/export`)
+  expect(download.status()).toBe(200)
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

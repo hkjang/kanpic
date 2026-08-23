@@ -58,6 +58,10 @@ type Provider interface {
 	Templates(ctx context.Context) ([]Template, error)
 	// Create makes the deck and returns where it now lives.
 	Create(ctx context.Context, request CreateRequest) (Result, error)
+	// Replace rewrites an existing deck from a new version of the same range.
+	// It is a separate call rather than a create because the deck keeps its
+	// identity: a link somebody sent last week still opens the current numbers.
+	Replace(ctx context.Context, id string, deck Deck) (Result, error)
 	// Export renders the deck to a file. The format is a hint; a provider that
 	// supports one format returns that one and says so in the content type.
 	Export(ctx context.Context, id, format string) (data []byte, contentType, filename string, err error)

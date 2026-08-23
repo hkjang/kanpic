@@ -85,6 +85,35 @@ func (s *Server) createPresentation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"presentation": result, "analysis": summarizeAnalysis(analysis)})
 }
 
+type presentationRefreshRequest struct {
+	Title        string `json:"title,omitempty"`
+	Language     string `json:"language,omitempty"`
+	IncludeTable *bool  `json:"include_table,omitempty"`
+}
+
+func (s *Server) refreshPresentation(w http.ResponseWriter, r *http.Request) {
+	if s.presentations == nil {
+		s.writeError(w, r, presentation.ErrNotConfigured)
+		return
+	}
+	request := presentationRefreshRequest{}
+	if r.ContentLength > 0 && !decodeJSON(w, r, &request) {
+		return
+	}
+	includeTable := true
+	if request.IncludeTable != nil {
+		includeTable = *request.IncludeTable
+	}
+	result, record, err := s.presentations.Refresh(r.Context(), r.PathValue("presentationId"), presentation.RefreshOptions{
+		Title: request.Title, Language: request.Language, IncludeTable: includeTable,
+	})
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"presentation": result, "record": record})
+}
+
 func (s *Server) exportPresentation(w http.ResponseWriter, r *http.Request) {
 	if s.presentations == nil {
 		s.writeError(w, r, presentation.ErrNotConfigured)

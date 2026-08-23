@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"kanpic/internal/presentation"
@@ -18,6 +19,7 @@ import (
 // download one — so the deck itself only has to come back with an id.
 type recordingProvider struct {
 	decks    []presentation.Deck
+	replaced []presentation.Deck
 	exported []string
 }
 
@@ -30,6 +32,11 @@ func (p *recordingProvider) Templates(context.Context) ([]presentation.Template,
 func (p *recordingProvider) Create(_ context.Context, request presentation.CreateRequest) (presentation.Result, error) {
 	p.decks = append(p.decks, request.Deck)
 	return presentation.Result{ID: "deck-1", Title: request.Deck.Title, Status: "completed", SlideCount: len(request.Deck.Slides), Warnings: []string{}}, nil
+}
+
+func (p *recordingProvider) Replace(_ context.Context, id string, deck presentation.Deck) (presentation.Result, error) {
+	p.replaced = append(p.replaced, deck)
+	return presentation.Result{ID: id, Title: deck.Title, Status: "completed", SlideCount: len(deck.Slides), Warnings: []string{}}, nil
 }
 
 func (p *recordingProvider) Export(_ context.Context, id, _ string) ([]byte, string, string, error) {
@@ -175,6 +182,100 @@ func TestPresentationListRemembersWhereADeckCameFrom(t *testing.T) {
 	if record.ID != created.Presentation.ID || record.Range != "A1:B4" || record.SourceVersion == 0 {
 		t.Fatalf("record=%+v", record)
 	}
+}
+
+// 원본이 바뀌면 덱은 옛말을 한다. 다시 만들기는 **그때 그 범위** 를 지금
+// 상태로 다시 읽는 것이지, 부르는 쪽이 준 범위로 바꾸는 것이 아니다.
+func TestPresentationRefreshRereadsTheRangeItWasMadeFrom(t *testing.T) {
+	t.Parallel()
+	server, provider, sheetID := presentationServer(t)
+	created := requestAs[struct {
+		Presentation presentation.Result `json:"presentation"`
+	}](t, server, "alice", http.MethodPost, "/api/v1/sheets/"+sheetID+"/presentations",
+		map[string]any{"range": "A1:B4", "title": "부서별 매출"}, http.StatusCreated)
+	book := workbookOf(t, server, sheetID)
+
+	listed := func() presentation.Record {
+		t.Helper()
+		page := requestAs[struct {
+			Items []presentation.Record `json:"items"`
+		}](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book+"/presentations", nil, http.StatusOK)
+		if len(page.Items) != 1 {
+			t.Fatalf("records=%+v", page.Items)
+		}
+		return page.Items[0]
+	}
+	if listed().Stale {
+		t.Fatal("a deck made from the current numbers is not out of date")
+	}
+
+	// 원본을 고치면 덱은 옛말을 하게 된다.
+	current := requestAs[workbook.Workbook](t, server, "alice", http.MethodGet, "/api/v1/workbooks/"+book, nil, http.StatusOK)
+	requestAs[map[string]any](t, server, "alice", http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch",
+		map[string]any{"base_version": current.Version, "idempotency_key": "moved-on", "cells": []map[string]any{
+			{"row": 2, "column": 2, "value": 200},
+		}}, http.StatusOK)
+	if !listed().Stale {
+		t.Fatal("the deck was not reported as out of date after the range changed")
+	}
+
+	refreshed := requestAs[struct {
+		Presentation presentation.Result `json:"presentation"`
+		Record       presentation.Record `json:"record"`
+	}](t, server, "alice", http.MethodPost, "/api/v1/presentations/"+created.Presentation.ID+"/refresh", map[string]any{}, http.StatusOK)
+	// 같은 덱이어야 한다. 새 덱을 만들면 이미 보낸 링크가 옛 숫자를 계속 보여 준다.
+	if refreshed.Presentation.ID != created.Presentation.ID {
+		t.Fatalf("refresh made a different deck: %s", refreshed.Presentation.ID)
+	}
+	if refreshed.Record.Stale {
+		t.Fatal("the refreshed deck is still reported as out of date")
+	}
+	if listed().Stale {
+		t.Fatal("the stored record was not brought up to date")
+	}
+	if len(provider.replaced) != 1 {
+		t.Fatalf("the provider was asked to replace %d times", len(provider.replaced))
+	}
+	// 새로 읽은 숫자가 들어가야 한다.
+	if !deckMentions(provider.replaced[0], "200") {
+		t.Fatalf("the refreshed deck does not carry the new number: %+v", provider.replaced[0])
+	}
+}
+
+func TestPresentationRefreshFollowsTheWorkbook(t *testing.T) {
+	t.Parallel()
+	server, provider, sheetID := presentationServer(t)
+	created := requestAs[struct {
+		Presentation presentation.Result `json:"presentation"`
+	}](t, server, "alice", http.MethodPost, "/api/v1/sheets/"+sheetID+"/presentations",
+		map[string]any{"range": "A1:B4"}, http.StatusCreated)
+	requestAs[map[string]any](t, server, "mallory", http.MethodPost, "/api/v1/presentations/"+created.Presentation.ID+"/refresh", map[string]any{}, http.StatusForbidden)
+	if len(provider.replaced) != 0 {
+		t.Fatal("a stranger reached the provider")
+	}
+}
+
+// deckMentions looks for a value anywhere a slide would print it.
+func deckMentions(deck presentation.Deck, needle string) bool {
+	for _, slide := range deck.Slides {
+		if strings.Contains(slide.Title+" "+slide.Lead, needle) {
+			return true
+		}
+		for _, bullet := range slide.Bullets {
+			if strings.Contains(bullet, needle) {
+				return true
+			}
+		}
+		if slide.Component == nil {
+			continue
+		}
+		for _, row := range slide.Component.Rows {
+			if strings.Contains(row.Label+" "+strings.Join(row.Fields, " "), needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func doRequest(t *testing.T, server *httptest.Server, actor, method, path string) *http.Response {

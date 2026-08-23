@@ -156,6 +156,56 @@ func (s *Service) Create(ctx context.Context, input CreateRequestInput) (Result,
 	return result, analysis, nil
 }
 
+// Refresh rebuilds a deck from the range it was made from, as that range
+// stands now. The deck keeps its id and its template, so a link already shared
+// shows the new numbers rather than becoming a second deck nobody has.
+//
+// It reads the range recorded at the time, not the caller's current selection:
+// refreshing is "say the same thing about newer data", and letting the caller
+// pass a different range would quietly turn it into something else.
+func (s *Service) Refresh(ctx context.Context, id string, options RefreshOptions) (Result, Record, error) {
+	provider, config, err := s.provider(ctx)
+	if err != nil {
+		return Result{}, Record{}, err
+	}
+	record, err := s.store.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return Result{}, Record{}, err
+	}
+	analysis, err := s.analyze(ctx, config, record.SheetID, record.Range)
+	if err != nil {
+		return Result{}, record, err
+	}
+	title := record.Title
+	if strings.TrimSpace(options.Title) != "" {
+		title = strings.TrimSpace(options.Title)
+	}
+	deck := Build(analysis, DeckOptions{Title: title, Language: options.Language, IncludeTable: options.IncludeTable})
+	result, err := provider.Replace(ctx, record.ID, deck)
+	if err != nil {
+		return Result{}, record, err
+	}
+	result.Source = analysis.Source
+	record.Title, record.SlideCount, record.SourceVersion = result.Title, result.SlideCount, analysis.Source.Version
+	if result.Template != "" {
+		record.Template = result.Template
+	}
+	record.UpdatedAt = time.Now().UTC()
+	if err := s.store.Save(ctx, record); err != nil {
+		return Result{}, record, err
+	}
+	record.Stale = false
+	return result, record, nil
+}
+
+// RefreshOptions are the few things a refresh may still change. The range is
+// not among them.
+type RefreshOptions struct {
+	Title        string
+	Language     string
+	IncludeTable bool
+}
+
 // Record returns kanpic's own note of a deck. The authorization layer asks for
 // it before letting anybody near the provider.
 func (s *Service) Record(ctx context.Context, id string) (Record, error) {
