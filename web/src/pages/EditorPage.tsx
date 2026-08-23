@@ -9,6 +9,7 @@ import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { survivesChange, transformSelection } from '../lib/structureTransform'
 import { FormulaIssueNotice } from '../components/FormulaIssueNotice'
+import { cycleReference } from '../lib/referenceCycle'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
 import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
 import { ShareDialog,accessSummary } from '../components/ShareDialog'
@@ -1062,6 +1063,17 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
           if(event.key==='ArrowUp'){event.preventDefault();setFormulaSuggestion((formulaSuggestion-1+suggestions.length)%suggestions.length);return}
           if(event.key==='Tab'||(event.key==='Enter'&&!(event.ctrlKey||event.metaKey))){event.preventDefault();chooseFormulaSuggestion(suggestions[formulaSuggestion].name);return}
           if(event.key==='Escape'){event.preventDefault();setFormulaSuggestion(-1);return}
+        }
+        // F4 로 참조 고정을 돌리는 것도 셀 안에서와 같아야 한다.
+        if(event.key==='F4'){
+          const field=event.currentTarget
+          const cycled=cycleReference(field.value,field.selectionStart??field.value.length,field.selectionEnd??field.value.length)
+          if(cycled){
+            event.preventDefault()
+            editor.setDraft(cycled.text);editor.setEditing(true);setFormulaCaret(cycled.end)
+            requestAnimationFrame(()=>field.setSelectionRange(cycled.start,cycled.end))
+          }
+          return
         }
         // Alt+Enter writes a line break here too, so a multi-line cell can be
         // edited from the formula bar without losing its breaks.

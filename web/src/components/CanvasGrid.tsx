@@ -14,6 +14,7 @@ import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { hashesWhenTooNarrow } from '../lib/cellWidth'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
+import { cycleReference } from '../lib/referenceCycle'
 import { parsePastedNumber } from '../lib/clipboardNumber'
 import { clipboardHtml } from '../lib/clipboardHtmlOut'
 import { collaborationClientId } from '../lib/client'
@@ -1105,6 +1106,17 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           if(event.key==='ArrowUp'){event.preventDefault();setSuggestion((suggestion-1+valueSuggestions.length)%valueSuggestions.length);return}
           if(event.key==='Tab'){event.preventDefault();chooseValue(valueSuggestions[suggestion]);return}
           if(event.key==='Escape'){event.preventDefault();setSuggestion(-1);return}
+        }
+        // F4 로 참조를 상대 → 절대 → 행 고정 → 열 고정 순으로 돌린다.
+        if(event.key==='F4'){
+          const field=editorInput.current
+          const cycled=cycleReference(draft,field?.selectionStart??draft.length,field?.selectionEnd??draft.length)
+          if(cycled){
+            event.preventDefault()
+            setDraft(cycled.text);setCaret(cycled.end)
+            requestAnimationFrame(()=>field?.setSelectionRange(cycled.start,cycled.end))
+          }
+          return
         }
         if(event.key==='Enter'&&event.altKey){
           event.preventDefault()
