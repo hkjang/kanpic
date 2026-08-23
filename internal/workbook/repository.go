@@ -31,6 +31,7 @@ var (
 type Repository interface {
 	CreateWorkbook(context.Context, CreateWorkbookInput) (Workbook, error)
 	ListWorkbooks(context.Context, string, AccessPrincipal) ([]Workbook, error)
+	BrowseWorkbooks(context.Context, AccessPrincipal, WorkbookQuery) (WorkbookPage, error)
 
 	// One cell's edit history, read out of the operation log.
 	CellHistory(context.Context, string, int, int, int) (CellHistory, error)

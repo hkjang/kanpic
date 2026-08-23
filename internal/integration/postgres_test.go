@@ -3467,3 +3467,97 @@ func TestPostgresWorkbookListReadsEverySheetInOneQuery(t *testing.T) {
 		}
 	}
 }
+
+// 목록 화면이 열 수 있는 워크북을 전부 받아 브라우저에서 걸러 내던 것을
+// 서버로 옮겼다. 메모리 저장소와 같은 답을 내야 하므로 같은 경우들을 본다.
+func TestPostgresBrowseWorkbooksPagesSearchesAndFilters(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("browse-owner-%d", time.Now().UnixNano())
+	workspace := fmt.Sprintf("browse-%d", time.Now().UnixNano())
+	titles := []string{"분기 보고", "분기 예산", "월간 보고", "연간 계획", "50% 달성"}
+	created := make([]workbook.Workbook, 0, len(titles))
+	for _, title := range titles {
+		book, createErr := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: title, WorkspaceID: workspace, OwnerID: owner})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+		created = append(created, book)
+	}
+	if err := repository.SetWorkbookFavorite(ctx, created[0].ID, owner, true); err != nil {
+		t.Fatal(err)
+	}
+	principal := workbook.AccessPrincipal{UserID: owner, Authenticated: true}
+	browse := func(query workbook.WorkbookQuery) workbook.WorkbookPage {
+		t.Helper()
+		query.WorkspaceID = workspace
+		page, browseErr := repository.BrowseWorkbooks(ctx, principal, query)
+		if browseErr != nil {
+			t.Fatal(browseErr)
+		}
+		return page
+	}
+
+	all := browse(workbook.WorkbookQuery{})
+	if all.Total != 5 || len(all.Items) != 5 || all.HasMore {
+		t.Fatalf("unlimited browse = %d of %d, more=%v", len(all.Items), all.Total, all.HasMore)
+	}
+	for _, item := range all.Items {
+		if len(item.Sheets) != 1 {
+			t.Fatalf("%s came back with %d sheets", item.Title, len(item.Sheets))
+		}
+	}
+	// 페이지를 이어 붙이면 전체와 같은 순서여야 한다.
+	joined := make([]string, 0, 5)
+	for offset := 0; offset < 5; offset += 2 {
+		page := browse(workbook.WorkbookQuery{Limit: 2, Offset: offset})
+		if page.Total != 5 {
+			t.Fatalf("page at %d reported %d in total", offset, page.Total)
+		}
+		if wantMore := offset+len(page.Items) < 5; page.HasMore != wantMore {
+			t.Fatalf("page at %d said more=%v", offset, page.HasMore)
+		}
+		for _, item := range page.Items {
+			joined = append(joined, item.ID)
+		}
+	}
+	for index, id := range joined {
+		if id != all.Items[index].ID {
+			t.Fatalf("paged order differs from the whole list at %d", index)
+		}
+	}
+
+	if search := browse(workbook.WorkbookQuery{Search: "분기"}); search.Total != 2 {
+		t.Fatalf("search for 분기 found %d", search.Total)
+	}
+	if paged := browse(workbook.WorkbookQuery{Search: "보고", Limit: 1}); paged.Total != 2 || len(paged.Items) != 1 || !paged.HasMore {
+		t.Fatalf("searched page = %d of %d, more=%v", len(paged.Items), paged.Total, paged.HasMore)
+	}
+	// % 는 제목의 글자일 뿐이며 아무것이나 맞는 표시가 아니다.
+	if wildcard := browse(workbook.WorkbookQuery{Search: "%"}); wildcard.Total != 1 {
+		t.Fatalf("searching for a percent sign matched %d workbooks", wildcard.Total)
+	}
+	if underscore := browse(workbook.WorkbookQuery{Search: "_"}); underscore.Total != 0 {
+		t.Fatalf("searching for an underscore matched %d workbooks", underscore.Total)
+	}
+	if favorite := browse(workbook.WorkbookQuery{Filter: "favorite"}); favorite.Total != 1 || favorite.Items[0].ID != created[0].ID {
+		t.Fatalf("favorite filter = %d", favorite.Total)
+	}
+	if owned := browse(workbook.WorkbookQuery{Filter: "owned"}); owned.Total != 5 {
+		t.Fatalf("owned filter = %d", owned.Total)
+	}
+	if shared := browse(workbook.WorkbookQuery{Filter: "shared"}); shared.Total != 0 {
+		t.Fatalf("shared filter = %d", shared.Total)
+	}
+}

@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Building2, ChevronRight, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
+import './HomePage.css'
+
+/** 한 번에 받아 오는 워크북 수. 화면을 채우고도 남을 만큼이면 된다. */
+const WORKBOOK_PAGE=60
 import { api, newIdempotencyKey } from '../lib/api'
 import type { BuildInfo, Session, ShareRole, Workbook } from '../types'
 import { ShareDialog } from '../components/ShareDialog'
@@ -44,7 +48,28 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const [cardMenu,setCardMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
   const [renameTarget,setRenameTarget]=useState<Workbook>()
   const [renameTitle,setRenameTitle]=useState('')
-  const workbooks=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks')})
+  // 목록은 한 번에 한 페이지만 받는다. 예전에는 열 수 있는 워크북을 전부
+  // 받아 브라우저에서 걸러 냈는데, 수천 개가 되면 몇 MB를 받아 카드를 전부
+  // 그리게 된다. 그래서 검색과 필터도 서버에 함께 넘긴다.
+  const [search,setSearch]=useState('')
+  const [query,setQuery]=useState('')
+  const [limit,setLimit]=useState(WORKBOOK_PAGE)
+  // 검색어가 실제로 바뀔 때만 첫 페이지로 돌아간다. 조건 없이 되돌리면
+  // 화면이 열린 직후 도는 이 타이머가 방금 누른 "더 보기" 를 취소한다.
+  useEffect(()=>{
+    const next=search.trim()
+    if(next===query)return
+    const timer=window.setTimeout(()=>{setQuery(next);setLimit(WORKBOOK_PAGE)},250)
+    return()=>window.clearTimeout(timer)
+  },[search,query])
+  useEffect(()=>{setLimit(WORKBOOK_PAGE)},[filter])
+  const serverFilter=filter==='favorite'||filter==='owned'||filter==='shared'?filter:''
+  const workbooks=useQuery({
+    queryKey:['workbooks',query,serverFilter,limit],
+    queryFn:()=>api<{items:Workbook[];total:number;has_more:boolean}>(
+      `/api/v1/workbooks?limit=${limit}${query?`&q=${encodeURIComponent(query)}`:''}${serverFilter?`&filter=${serverFilter}`:''}`),
+    placeholderData:previous=>previous,
+  })
   const create=useMutation({
     mutationFn:(input?:{title?:string;templateId?:string})=>api<Workbook>('/api/v1/workbooks',{method:'POST',body:JSON.stringify({
       title:input?.title?.trim()||(input?.templateId?undefined:'제목 없는 워크북'),workspace_id:'default',template_id:input?.templateId,
@@ -90,12 +115,8 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
     setCardMenu({x:point.clientX,y:point.clientY,items:cardMenuItems(workbook),label:`${workbook.title} 메뉴`})
   }
   const directory=useUserDirectory((workbooks.data?.items??[]).map(item=>item.owner_id))
-  const visibleWorkbooks=(workbooks.data?.items??[]).filter(workbook=>{
-    if(filter==='favorite')return workbook.favorite
-    if(filter==='owned')return workbook.access_role==='owner'
-    if(filter==='shared')return workbook.access_role!=='owner'
-    return true
-  })
+  // 걸러 내는 일은 서버가 한다. 화면은 받은 페이지를 그대로 보여 준다.
+  const visibleWorkbooks=workbooks.data?.items??[]
 
   return <div className="page-shell"><AppHeader build={build} session={session}/><main className="home-content">
     <section className="home-title"><div><span className="eyebrow">WORKSPACE</span><h1>좋은 아침이에요.</h1><p>오늘도 데이터에서 더 나은 답을 만들어 보세요.</p></div><div className="home-title-actions"><input ref={inputRef} type="file" hidden accept=".csv,.tsv,.xlsx" onChange={event=>chooseImport(event.target.files?.[0])}/><button className="secondary" onClick={()=>inputRef.current?.click()}><FileUp size={18}/> 파일 가져오기</button><button className="primary" onClick={()=>create.mutate(undefined)}><Plus size={18}/> 새 워크북</button></div></section>
@@ -114,6 +135,7 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
         ]})
       }
     }}><div className="section-heading"><h2>최근 워크북</h2><div className="segmented"><button className={filter==='recent'?'active':''} onClick={()=>setFilter('recent')}><Clock3/> 최근</button><button className={filter==='owned'?'active':''} onClick={()=>setFilter('owned')}><Lock/> 내 소유</button><button className={filter==='shared'?'active':''} onClick={()=>setFilter('shared')}><Users/> 나와 공유됨</button><button className={filter==='favorite'?'active':''} onClick={()=>setFilter('favorite')}><Star/> 즐겨찾기</button><button className={filter==='trash'?'active':''} onClick={()=>setFilter('trash')}><Trash/> 휴지통</button></div></div>
+      {filter!=='trash'&&<div className="home-search"><input aria-label="워크북 검색" type="search" value={search} placeholder="워크북 이름으로 찾기" onChange={event=>setSearch(event.target.value)}/>{workbooks.data&&<span>{query||serverFilter?`${workbooks.data.total.toLocaleString()}개 중 ${visibleWorkbooks.length.toLocaleString()}개`:`전체 ${workbooks.data.total.toLocaleString()}개 중 ${visibleWorkbooks.length.toLocaleString()}개`}</span>}</div>}
       {filter==='trash'
         ?trash.isLoading?<div className="loading-card">휴지통을 불러오는 중…</div>
           :(trash.data?.items??[]).length===0?<div className="empty-state"><Trash/><h3>휴지통이 비어 있습니다</h3><p>삭제한 워크북은 여기에서 복원하거나 완전히 지울 수 있습니다.</p></div>
@@ -122,10 +144,11 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
             <button disabled={restore.isPending} onClick={()=>void restore.mutateAsync(item)}><RotateCcw/> 복원</button>
             <button className="danger" disabled={purge.isPending} onClick={()=>{if(confirm(`'${item.title}' 워크북을 완전히 삭제할까요? 이 작업은 되돌릴 수 없습니다.`))void purge.mutateAsync(item)}}><Trash2/> 완전 삭제</button>
           </article>)}</div>
-        :workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:visibleWorkbooks.length===0?<div className="empty-state"><FilePlus2/><h3>{filter==='favorite'?'즐겨찾기한 워크북이 없습니다':filter==='shared'?'나와 공유된 워크북이 없습니다':filter==='owned'?'내가 소유한 워크북이 없습니다':'첫 워크북을 만들어 보세요'}</h3><p>{filter==='favorite'?'워크북 메뉴에서 즐겨찾기에 추가할 수 있습니다.':filter==='shared'?'동료가 사용자, 부서 또는 역할로 공유하면 여기에 표시됩니다.':'셀 편집 내용은 자동으로 안전하게 저장됩니다.'}</p></div>:<div className="workbook-grid">{visibleWorkbooks.map(workbook=><article className="workbook-card" key={workbook.id} onContextMenu={event=>{event.preventDefault();openCardMenu(workbook,event)}}>
+        :workbooks.isLoading?<div className="loading-card">워크북을 불러오는 중…</div>:visibleWorkbooks.length===0?<div className="empty-state"><FilePlus2/><h3>{query?`'${query}'와 맞는 워크북이 없습니다`:filter==='favorite'?'즐겨찾기한 워크북이 없습니다':filter==='shared'?'나와 공유된 워크북이 없습니다':filter==='owned'?'내가 소유한 워크북이 없습니다':'첫 워크북을 만들어 보세요'}</h3><p>{query?'이름의 일부만 넣어도 찾습니다.':filter==='favorite'?'워크북 메뉴에서 즐겨찾기에 추가할 수 있습니다.':filter==='shared'?'동료가 사용자, 부서 또는 역할로 공유하면 여기에 표시됩니다.':'셀 편집 내용은 자동으로 안전하게 저장됩니다.'}</p></div>:<div className="workbook-grid">{visibleWorkbooks.map(workbook=><article className="workbook-card" key={workbook.id} onContextMenu={event=>{event.preventDefault();openCardMenu(workbook,event)}}>
         <a href={`/workbooks/${workbook.id}`} className="workbook-preview"><Grid2X2/><span>{workbook.sheets.length} sheets</span>{workbook.favorite&&<Star className="favorite-star" fill="currentColor"/>}</a>
         <div className="workbook-meta"><a href={`/workbooks/${workbook.id}`}><strong>{workbook.title}</strong><small>{new Date(workbook.updated_at).toLocaleString('ko-KR')} 수정{workbook.access_role&&workbook.access_role!=='owner'?` · ${userLabel(workbook.owner_id,directory)} 소유`:''}</small></a>{accessChip(workbook)}<button aria-label={`${workbook.title} 더보기`} aria-haspopup="menu" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openCardMenu(workbook,{clientX:rect.right-8,clientY:rect.bottom})}}><MoreHorizontal/></button></div>
       </article>)}</div>}
+      {workbooks.data?.has_more&&<div className="home-more"><button className="secondary" disabled={workbooks.isFetching} onClick={()=>setLimit(current=>current+WORKBOOK_PAGE)}>{workbooks.isFetching?'불러오는 중…':`더 보기 (${(workbooks.data.total-visibleWorkbooks.length).toLocaleString()}개 남음)`}</button></div>}
     </section>
     {renameTarget&&<RenameWorkbookDialog title={renameTitle} pending={update.isPending} onTitle={setRenameTitle} onClose={()=>setRenameTarget(undefined)} onSave={()=>void rename()}/>}
     {preview&&importFile&&<div className="modal-backdrop"><div className="modal import-modal"><div className="import-preview-icon"><UploadCloud/></div><h2>{importFile.name}</h2><p>{preview.format.toUpperCase()} · 비어 있지 않은 셀 {preview.total_cells.toLocaleString()}개</p><div className="import-sheet-list">{preview.sheets.map(sheet=><div key={sheet.name}><Grid2X2/><div><strong>{sheet.name}</strong><small>{sheet.rows.toLocaleString()}행 × {sheet.columns.toLocaleString()}열 · {sheet.non_empty_cells.toLocaleString()}개 셀</small></div></div>)}</div>{preview.warnings.length>0&&<div className="import-warnings">{preview.warnings.map(warning=><span key={warning}>{warning}</span>)}</div>}<div className="modal-actions"><button className="secondary" onClick={()=>{setPreview(undefined);setImportFile(undefined)}}>취소</button><button className="primary" disabled={importing} onClick={executeImport}>{importing?'가져오는 중…':'워크북으로 가져오기'}</button></div></div></div>}

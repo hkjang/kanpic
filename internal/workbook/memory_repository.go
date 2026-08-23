@@ -363,6 +363,50 @@ func (r *MemoryRepository) ListWorkbooks(_ context.Context, workspaceID string, 
 	return items, nil
 }
 
+// BrowseWorkbooks narrows the list the same way the Postgres repository does,
+// so the two agree about what a page of workbooks contains.
+func (r *MemoryRepository) BrowseWorkbooks(ctx context.Context, principal AccessPrincipal, query WorkbookQuery) (WorkbookPage, error) {
+	items, err := r.ListWorkbooks(ctx, query.WorkspaceID, principal)
+	if err != nil {
+		return WorkbookPage{}, err
+	}
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	matched := make([]Workbook, 0, len(items))
+	for _, item := range items {
+		if search != "" && !strings.Contains(strings.ToLower(item.Title), search) {
+			continue
+		}
+		switch query.Filter {
+		case "favorite":
+			if !item.Favorite {
+				continue
+			}
+		case "owned":
+			if item.AccessRole != RoleOwner {
+				continue
+			}
+		case "shared":
+			if item.AccessRole == RoleOwner {
+				continue
+			}
+		}
+		matched = append(matched, item)
+	}
+	total := len(matched)
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	page := matched[offset:]
+	if query.Limit > 0 && len(page) > query.Limit {
+		page = page[:query.Limit]
+	}
+	return WorkbookPage{Items: page, Total: total, HasMore: query.Limit > 0 && offset+len(page) < total}, nil
+}
+
 func (r *MemoryRepository) GetWorkbook(_ context.Context, id string) (Workbook, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

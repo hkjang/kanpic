@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,12 +350,36 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWorkbooks(w http.ResponseWriter, r *http.Request) {
-	items, err := s.repository.ListWorkbooks(r.Context(), r.URL.Query().Get("workspace_id"), s.accessPrincipal(r))
+	// limit is absent for callers that want the whole list, which is what this
+	// endpoint always returned. The workbook list screen asks for a page.
+	query := workbook.WorkbookQuery{
+		WorkspaceID: r.URL.Query().Get("workspace_id"),
+		Search:      strings.TrimSpace(r.URL.Query().Get("q")),
+		Filter:      r.URL.Query().Get("filter"),
+		Limit:       boundedQueryInt(r, "limit", 0, maxWorkbookPage),
+		Offset:      boundedQueryInt(r, "offset", 0, 1_000_000),
+	}
+	page, err := s.repository.BrowseWorkbooks(r.Context(), s.accessPrincipal(r), query)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": page.Items, "total": page.Total, "has_more": page.HasMore})
+}
+
+// maxWorkbookPage bounds one page of the workbook list. A reader who asks for
+// more than this gets this many; the rest are one more page away.
+const maxWorkbookPage = 500
+
+func boundedQueryInt(r *http.Request, name string, fallback, limit int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get(name)))
+	if err != nil || value < 0 {
+		return fallback
+	}
+	if value > limit {
+		return limit
+	}
+	return value
 }
 
 func (s *Server) getWorkbook(w http.ResponseWriter, r *http.Request) {

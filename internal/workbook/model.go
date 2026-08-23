@@ -299,6 +299,29 @@ type NamedRange struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+// WorkbookQuery is what the workbook list screen asks for. Without it the list
+// returned every workbook a person could open, which at a few thousand meant
+// megabytes of JSON and a card for each one.
+type WorkbookQuery struct {
+	WorkspaceID string
+	// Search matches anywhere in the title, case-insensitively. Paging without
+	// a way to search would bury a workbook that is not on the first page.
+	Search string
+	// Filter is "", "favorite", "owned" or "shared". The screen used to apply
+	// these in the browser, which only works while it holds every workbook.
+	Filter string
+	// Limit of zero means no limit, which is what callers that need the whole
+	// list - cross-workbook formulas, the MCP tools - still ask for.
+	Limit  int
+	Offset int
+}
+
+type WorkbookPage struct {
+	Items   []Workbook `json:"items"`
+	Total   int        `json:"total"`
+	HasMore bool       `json:"has_more"`
+}
+
 type CreateNamedRangeInput struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	Name           string `json:"name"`

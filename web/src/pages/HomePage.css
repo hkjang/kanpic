@@ -1,0 +1,6 @@
+.home-search{display:flex;align-items:center;gap:10px;margin:0 0 12px}
+.home-search input{flex:1;max-width:340px;min-height:34px;border:1px solid var(--border);border-radius:7px;background:white;padding:6px 10px;font:inherit;font-size:var(--font-label);color:#26363e}
+.home-search input:focus{outline:2px solid #a8cdc5;outline-offset:1px}
+.home-search span{font-size:var(--font-caption);color:#7d8b94}
+.home-more{display:flex;justify-content:center;margin-top:14px}
+.home-more button{min-height:34px;padding:7px 16px;font-size:var(--font-label)}

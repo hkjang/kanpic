@@ -310,6 +310,80 @@ func (r *PostgresRepository) CreateWorkbook(ctx context.Context, input CreateWor
 	return wb, nil
 }
 
+// BrowseWorkbooks is the workbook list screen's read: the same visibility rules
+// as ListWorkbooks, plus the search, filter and page the screen asks for. The
+// screen used to fetch everything and narrow it in the browser, which stops
+// working once a person can open more workbooks than a page can hold.
+func (r *PostgresRepository) BrowseWorkbooks(ctx context.Context, principal AccessPrincipal, query WorkbookQuery) (WorkbookPage, error) {
+	identities := principal.identities()
+	roles := principal.roleSet()
+	closure, err := r.departmentClosure(ctx, principal)
+	if err != nil {
+		return WorkbookPage{}, err
+	}
+	departmentIDs := make([]string, 0, len(closure))
+	for id := range closure {
+		departmentIDs = append(departmentIDs, id)
+	}
+	where, args := workbookVisibility(principal, identities, roles, departmentIDs)
+	if workspace := strings.TrimSpace(query.WorkspaceID); workspace != "" {
+		args = append(args, workspace)
+		where += fmt.Sprintf(` AND workspace_id=$%d`, len(args))
+	}
+	if search := strings.TrimSpace(query.Search); search != "" {
+		args = append(args, "%"+escapeLikePattern(search)+"%")
+		where += fmt.Sprintf(` AND title ILIKE $%d ESCAPE '\'`, len(args))
+	}
+	switch query.Filter {
+	case "favorite":
+		args = append(args, identities)
+		where += fmt.Sprintf(` AND EXISTS (SELECT 1 FROM workbook_favorites f WHERE f.workbook_id=workbooks.id AND lower(f.user_id) = ANY($%d))`, len(args))
+	case "owned", "shared":
+		// 관리자는 모든 워크북에 소유자 권한을 갖는다. 화면의 필터가 그렇게
+		// 동작하므로 서버에서도 같아야 한다.
+		if !principal.Admin {
+			args = append(args, identities)
+			if query.Filter == "owned" {
+				where += fmt.Sprintf(` AND lower(owner_id) = ANY($%d)`, len(args))
+			} else {
+				where += fmt.Sprintf(` AND NOT (lower(owner_id) = ANY($%d))`, len(args))
+			}
+		} else if query.Filter == "shared" {
+			where += ` AND false`
+		}
+	}
+	var total int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM workbooks WHERE `+where, args...).Scan(&total); err != nil {
+		return WorkbookPage{}, err
+	}
+	listing := `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy
+		FROM workbooks WHERE ` + where + ` ORDER BY updated_at DESC,id`
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if query.Limit > 0 {
+		args = append(args, query.Limit)
+		listing += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		listing += fmt.Sprintf(` OFFSET $%d`, len(args))
+	}
+	items, err := r.readWorkbookRows(ctx, listing, args, principal, closure)
+	if err != nil {
+		return WorkbookPage{}, err
+	}
+	return WorkbookPage{Items: items, Total: total, HasMore: query.Limit > 0 && offset+len(items) < total}, nil
+}
+
+// escapeLikePattern keeps a title containing % or _ from matching everything.
+func escapeLikePattern(value string) string {
+	replaced := strings.ReplaceAll(value, `\`, `\\`)
+	replaced = strings.ReplaceAll(replaced, "%", `\%`)
+	return strings.ReplaceAll(replaced, "_", `\_`)
+}
+
 // ListWorkbooks returns only the workbooks the principal may open: the ones
 // they own, the ones shared with them directly, through a department or an
 // identity provider role, and the ones opened up by link access. Administrators
@@ -325,14 +399,24 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	for id := range closure {
 		departmentIDs = append(departmentIDs, id)
 	}
+	where, args := workbookVisibility(principal, identities, roles, departmentIDs)
+	if workspaceID != "" {
+		args = append(args, workspaceID)
+		where += fmt.Sprintf(` AND workspace_id=$%d`, len(args))
+	}
 	query := `SELECT id::text,workspace_id,title,owner_id,favorite,version,created_at,updated_at,link_access,link_role,sharing_locked,viewer_can_copy
-		FROM workbooks WHERE deleted_at IS NULL`
-	// Administrators see every workbook, so the visibility parameters are only
-	// bound when the clause that reads them is part of the query.
-	args := []any{}
-	if !principal.Admin {
-		args = append(args, identities, roles, departmentIDs)
-		query += ` AND (
+		FROM workbooks WHERE ` + where + ` ORDER BY updated_at DESC`
+	return r.readWorkbookRows(ctx, query, args, principal, closure)
+}
+
+// workbookVisibility is the clause that decides which workbooks a person may
+// open. Administrators see every one, so the visibility parameters are only
+// bound when the clause that reads them is part of the query.
+func workbookVisibility(principal AccessPrincipal, identities, roles, departmentIDs []string) (string, []any) {
+	if principal.Admin {
+		return `deleted_at IS NULL`, []any{}
+	}
+	return `deleted_at IS NULL AND (
 			lower(owner_id) = ANY($1)
 			OR link_access IN ('organization','anyone')
 			OR EXISTS (
@@ -342,13 +426,12 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 					OR (s.principal_type='department' AND lower(s.principal_id) = ANY($3))
 				)
 			)
-		)`
-	}
-	if workspaceID != "" {
-		args = append(args, workspaceID)
-		query += fmt.Sprintf(` AND workspace_id=$%d`, len(args))
-	}
-	query += ` ORDER BY updated_at DESC`
+		)`, []any{identities, roles, departmentIDs}
+}
+
+// readWorkbookRows runs a workbook listing and fills in the parts that do not
+// live on the row: sheets, shares, favourites and the reader's access.
+func (r *PostgresRepository) readWorkbookRows(ctx context.Context, query string, args []any, principal AccessPrincipal, closure map[string]string) ([]Workbook, error) {
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
