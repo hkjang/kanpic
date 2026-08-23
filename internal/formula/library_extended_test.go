@@ -1021,3 +1021,63 @@ func TestDatesReadBothTheSerialAndTheText(t *testing.T) {
 		}
 	}
 }
+
+// 표 서식에서 m 은 **앞뒤를 봐야** 뜻이 정해진다. 시 뒤에 오거나 초 앞에
+// 오면 분이고, 그 밖에는 달이다.
+//
+//	"mm/dd/yyyy"  달
+//	"hh:mm"       분
+//	"h:mm:ss"     분
+//
+// 예전에는 서식을 Go 의 시각 layout 으로 바꿔치기해서 m 을 가려낼 수
+// 없었다. mm 이 늘 달이 되어 =TEXT(0.5,"hh:mm") 이 12:00 이 아니라 12:12
+// 였고, "h:mm:ss" 는 아예 "1" 이 나왔다.
+//
+// 아래 값은 web/src/lib/cellFormat.test.ts 와 **같은 글자** 를 고정한다.
+// 격자에 보이는 값과 TEXT 의 답이 어긋나면 안 된다.
+func TestDatePatternsTellMonthsFromMinutes(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    string
+	}{
+		// 45306 은 2024-01-15, 0.5 는 낮 열두 시다.
+		{`=TEXT(0.5,"hh:mm")`, "12:00"},
+		{`=TEXT(0.5,"h:mm:ss")`, "12:00:00"},
+		{`=TEXT(0.5104166666666666,"hh:mm:ss")`, "12:15:00"},
+		{`=TEXT(0.5104166666666666,"h:m")`, "12:15"},
+		// 초 앞에 오면 시가 없어도 분이다.
+		{`=TEXT(0.5104166666666666,"m:ss")`, "15:00"},
+		{`=TEXT(45306.25,"yyyy-mm-dd hh:mm")`, "2024-01-15 06:00"},
+
+		// 날짜 쪽 m 은 달이다.
+		{`=TEXT(45306,"mm/dd/yyyy")`, "01/15/2024"},
+		{`=TEXT(45306,"yyyy-mm-dd")`, "2024-01-15"},
+		// 토막이 셋인 서식도 모두 그린다.
+		{`=TEXT(45306,"yyyy년 m월 d일")`, "2024년 1월 15일"},
+
+		// 이름으로 적는 것들.
+		{`=TEXT(45306,"mmmm")`, "January"},
+		{`=TEXT(45306.5,"mmm d")`, "Jan 15"},
+		{`=TEXT(45306,"dddd")`, "Monday"},
+		{`=TEXT(45306,"ddd")`, "Mon"},
+		{`=TEXT(45306,"yy")`, "24"},
+
+		// 오전·오후를 적으면 열두 시간으로 센다.
+		{`=TEXT(45306.75,"h:mm am/pm")`, "6:00 PM"},
+		{`=TEXT(45306.25,"h:mm am/pm")`, "6:00 AM"},
+
+		// 숫자 서식은 그대로다.
+		{`=TEXT(1234.5,"#,##0.00")`, "1,234.50"},
+		{`=TEXT(0.256,"0.0%")`, "25.6%"},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %q", testCase.formula, result.Value, testCase.want)
+		}
+	}
+}

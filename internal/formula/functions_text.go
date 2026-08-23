@@ -1,9 +1,11 @@
 package formula
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // evaluateText covers the string functions whose arguments are plain values.
@@ -159,7 +161,7 @@ func formatValue(value any, pattern string) string {
 		return display(value)
 	}
 	if moment, ok := parseDate(value); ok && isDatePattern(pattern) {
-		return moment.Format(goDateLayout(pattern))
+		return renderDatePattern(moment, pattern)
 	}
 	number, ok := toNumber(value)
 	if !ok {
@@ -189,30 +191,145 @@ func formatValue(value any, pattern string) string {
 	return prefix + formatNumber(number, decimals, grouped) + suffix
 }
 
+// isDatePattern 은 서식이 날짜·시각을 적는 것인지 가린다.
+//
+// 따옴표로 묶은 글자와 벗어난 글자는 그냥 글자이므로 먼저 걷어낸다.
+// 대괄호도 걷어내되 [h] [m] [s] 는 남긴다 — 흘러간 시간을 적는 기호다.
+//
+// 남은 것에 y, d, h, s 가 있으면 날짜 서식이다. m 하나만으로는 가르지
+// 않는다. "0.0 m" 처럼 단위로 적은 m 을 달로 읽으면 안 되기 때문이다.
+// web/src/lib/cellFormat.ts 의 isDateFormat 이 같은 기준을 쓴다.
 func isDatePattern(pattern string) bool {
-	lower := strings.ToLower(pattern)
-	return strings.Contains(lower, "yy") || strings.Contains(lower, "mmm") ||
-		(strings.Contains(lower, "d") && strings.Contains(lower, "m")) || strings.Contains(lower, "hh")
+	cleaned := quotedLiteral.ReplaceAllString(pattern, "")
+	cleaned = escapedLetter.ReplaceAllString(cleaned, "")
+	// Go 의 정규식에는 부정 전방탐색이 없으므로 하나씩 보고 남길지 정한다.
+	cleaned = bracketSection.ReplaceAllStringFunc(cleaned, func(match string) string {
+		if elapsedSection.MatchString(match) {
+			return match
+		}
+		return ""
+	})
+	lowered := strings.ToLower(cleaned)
+	// mmm 과 mmmm 은 달 이름이므로 단위로 오해할 일이 없다.
+	return strings.ContainsAny(lowered, "ydhs") || strings.Contains(lowered, "mmm")
 }
 
-// goDateLayout translates the spreadsheet date pattern to a Go layout, longest
-// token first so mm is not consumed as two m tokens.
-func goDateLayout(pattern string) string {
-	replacements := []struct{ from, to string }{
-		{"yyyy", "2006"}, {"yy", "06"},
-		{"mmmm", "January"}, {"mmm", "Jan"}, {"mm", "01"},
-		{"dddd", "Monday"}, {"ddd", "Mon"}, {"dd", "02"},
-		{"hh", "15"}, {"ss", "05"},
+var (
+	quotedLiteral  = regexp.MustCompile(`"[^"]*"`)
+	escapedLetter  = regexp.MustCompile(`\\.`)
+	bracketSection = regexp.MustCompile(`\[[^\]]*\]`)
+	// [h] [mm] [ss] 는 흘러간 시간을 적는 기호이므로 남긴다.
+	elapsedSection = regexp.MustCompile(`(?i)^\[[hms]+\]$`)
+)
+
+// renderDatePattern 은 표 서식 기호를 하나씩 읽어 그대로 적는다.
+//
+// 예전에는 기호를 Go 의 시각 layout 으로 바꿔치기했는데, 그 방식으로는
+// m 을 가려낼 수 없다. 표 서식에서 m 은 **앞뒤를 봐야** 뜻이 정해진다.
+//
+//	"mm/dd/yyyy"  달
+//	"hh:mm"       분 — 시 뒤에 오면 분이다
+//	"h:mm:ss"     분 — 초 앞에 와도 분이다
+//
+// 바꿔치기하던 시절에는 mm 이 늘 달이 되어 =TEXT(0.5,"hh:mm") 이 12:00 이
+// 아니라 12:12 였다. 격자는 web/src/lib/cellFormat.ts 에서 제대로 그리고
+// 있었으므로, 같은 값을 화면과 TEXT 가 다르게 보여주고 있었다.
+func renderDatePattern(moment time.Time, pattern string) string {
+	letters := []rune(pattern)
+	twelveHour := hasMeridiem(pattern)
+	var builder strings.Builder
+	previousWasHour := false
+	for index := 0; index < len(letters); {
+		token, size := nextDateToken(letters, index)
+		switch token {
+		case "":
+			builder.WriteRune(letters[index])
+			index++
+			continue
+		case "am/pm", "a/p":
+			marker := "AM"
+			if moment.Hour() >= 12 {
+				marker = "PM"
+			}
+			if token == "a/p" {
+				marker = marker[:1]
+			}
+			builder.WriteString(marker)
+		case "yyyy":
+			builder.WriteString(fmt.Sprintf("%04d", moment.Year()))
+		case "yy":
+			builder.WriteString(fmt.Sprintf("%02d", moment.Year()%100))
+		case "mmmm":
+			builder.WriteString(moment.Format("January"))
+		case "mmm":
+			builder.WriteString(moment.Format("Jan"))
+		case "dddd":
+			builder.WriteString(moment.Format("Monday"))
+		case "ddd":
+			builder.WriteString(moment.Format("Mon"))
+		case "dd":
+			builder.WriteString(fmt.Sprintf("%02d", moment.Day()))
+		case "d":
+			builder.WriteString(strconv.Itoa(moment.Day()))
+		case "hh", "h":
+			hour := moment.Hour()
+			if twelveHour {
+				if hour %= 12; hour == 0 {
+					hour = 12
+				}
+			}
+			builder.WriteString(padded(hour, token == "hh"))
+		case "ss", "s":
+			builder.WriteString(padded(moment.Second(), token == "ss"))
+		case "mm", "m":
+			// 시 뒤에 오거나 초 앞에 오면 분이다. 그 밖에는 달이다.
+			if previousWasHour || secondFollows(letters, index+size) {
+				builder.WriteString(padded(moment.Minute(), token == "mm"))
+			} else {
+				builder.WriteString(padded(int(moment.Month()), token == "mm"))
+			}
+		}
+		previousWasHour = token == "hh" || token == "h"
+		index += size
 	}
-	result := strings.ToLower(pattern)
-	for _, replacement := range replacements {
-		result = strings.ReplaceAll(result, replacement.from, replacement.to)
+	return builder.String()
+}
+
+func padded(value int, twoDigits bool) string {
+	if twoDigits {
+		return fmt.Sprintf("%02d", value)
 	}
-	// A lone m between date tokens means the month; after 15 it means minutes.
-	result = strings.ReplaceAll(result, "15:m", "15:04")
-	result = strings.ReplaceAll(result, "d", "2")
-	result = strings.ReplaceAll(result, "m", "1")
-	return result
+	return strconv.Itoa(value)
+}
+
+// nextDateToken 은 자리에서 가장 긴 서식 기호를 집는다. 기호가 아니면 빈
+// 글자와 0 을 돌려주어 부르는 쪽이 글자를 그대로 적게 한다.
+func nextDateToken(letters []rune, index int) (string, int) {
+	rest := strings.ToLower(string(letters[index:]))
+	for _, token := range []string{"am/pm", "a/p", "yyyy", "yy", "mmmm", "mmm", "mm", "m", "dddd", "ddd", "dd", "d", "hh", "h", "ss", "s"} {
+		if strings.HasPrefix(rest, token) {
+			return token, len([]rune(token))
+		}
+	}
+	return "", 0
+}
+
+func hasMeridiem(pattern string) bool {
+	lowered := strings.ToLower(pattern)
+	return strings.Contains(lowered, "am/pm") || strings.Contains(lowered, "a/p")
+}
+
+// secondFollows 는 구분 기호를 건너뛰고 다음 기호가 초인지 본다.
+func secondFollows(letters []rune, index int) bool {
+	for index < len(letters) {
+		token, _ := nextDateToken(letters, index)
+		if token == "" {
+			index++
+			continue
+		}
+		return token == "ss" || token == "s"
+	}
+	return false
 }
 
 func formatNumber(number float64, decimals int, grouped bool) string {

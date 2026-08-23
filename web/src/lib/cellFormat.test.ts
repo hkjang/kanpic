@@ -54,3 +54,34 @@ describe('the grid reads the date serials an import brings in',()=>{
     expect(formatCellValue(61,{number_format:'yyyy-mm-dd'},'en-US')).toBe('1900-03-01')
   })
 })
+
+// 표 서식에서 m은 앞뒤를 봐야 뜻이 정해진다. 시 뒤에 오거나 초 앞에 오면
+// 분이고, 그 밖에는 달이다.
+//
+// 예전에는 서식을 공백으로 잘라 "날짜 한 토막"과 "시각 한 토막"만 그렸다.
+// 그래서 "yyyy년 m월 d일" 처럼 토막이 셋인 한국어 날짜 서식이 앞 토막만
+// 그려져 "2024년 m월 d일" 이 되었다. 요일과 달 이름도 그리지 못했다.
+//
+// 아래 값은 서버의 internal/formula/library_extended_test.go 와 **같은
+// 글자** 를 고정한다. 한쪽만 고치면 양쪽 다 걸린다.
+describe('the grid tells months from minutes in a date format',()=>{
+  const shown=(value:number,format:string)=>formatCellValue(value,{number_format:format},'en-US')
+  it('reads m by what sits beside it',()=>{
+    expect(shown(0.5,'hh:mm')).toBe('12:00')
+    expect(shown(0.5,'h:mm:ss')).toBe('12:00:00')
+    expect(shown(0.5104166666666666,'hh:mm:ss')).toBe('12:15:00')
+    expect(shown(0.5104166666666666,'h:m')).toBe('12:15')
+    expect(shown(0.5104166666666666,'m:ss')).toBe('15:00')
+    expect(shown(45306.25,'yyyy-mm-dd hh:mm')).toBe('2024-01-15 06:00')
+    expect(shown(45306,'mm/dd/yyyy')).toBe('01/15/2024')
+  })
+  it('draws every piece of a format, not just the first',()=>{
+    expect(shown(45306,'yyyy년 m월 d일')).toBe('2024년 1월 15일')
+    expect(shown(45306,'mmmm')).toBe('January')
+    expect(shown(45306.5,'mmm d')).toBe('Jan 15')
+    expect(shown(45306,'dddd')).toBe('Monday')
+    expect(shown(45306,'ddd')).toBe('Mon')
+    expect(shown(45306.75,'h:mm am/pm')).toBe('6:00 PM')
+    expect(shown(45306.25,'h:mm am/pm')).toBe('6:00 AM')
+  })
+})

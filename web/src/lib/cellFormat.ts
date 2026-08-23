@@ -58,16 +58,72 @@ function spreadsheetDate(value:unknown){
   }
 }
 
+// 서식 기호를 하나씩 읽어 그대로 적는다.
+//
+// 예전에는 서식을 공백으로 잘라 "날짜 부분 하나"와 "시각 부분 하나"만
+// 그렸다. 그래서 "yyyy년 m월 d일" 처럼 토막이 셋인 서식은 앞 토막만
+// 그려져 "2024년 m월 d일" 이 되었다. 한국어 날짜 서식이 그대로 깨졌다.
+// "dddd" 와 "mmmm" 처럼 요일·달 이름만 적은 서식도 그리지 못했다.
+//
+// 표 서식에서 m 은 앞뒤를 봐야 뜻이 정해진다. 시 뒤에 오거나 초 앞에
+// 오면 분이고, 그 밖에는 달이다. 서버의 internal/formula 의
+// renderDatePattern 이 같은 규칙을 쓴다.
+const DATE_TOKENS=['am/pm','a/p','yyyy','yy','mmmm','mmm','mm','m','dddd','ddd','dd','d','hh','h','ss','s']
+
+function nextDateToken(format:string,index:number){
+  const rest=format.slice(index).toLowerCase()
+  for(const token of DATE_TOKENS)if(rest.startsWith(token))return token
+  return ''
+}
+
+function secondFollows(format:string,index:number){
+  while(index<format.length){
+    const token=nextDateToken(format,index)
+    if(!token){index+=1;continue}
+    return token==='ss'||token==='s'
+  }
+  return false
+}
+
 function formatDate(date:Date,format:string,locale:string){
-  const normalized=format.replace(/\[[^hms\]]*]/gi,'').replace(/\[([hms]+)\]/gi,'$1').trim(),parts=normalized.split(/\s+/),dateIndex=parts.findIndex(part=>/[yd]/i.test(part)),timeIndex=parts.findIndex(part=>/[hs]/i.test(part))
-  const pad=(value:number)=>String(value).padStart(2,'0'),monthName=new Intl.DateTimeFormat(locale,{timeZone:'UTC',month:'short'}).format(date)
-  const renderDate=(pattern:string)=>pattern.replace(/yyyy|yy|mmmm|mmm|mm|m|dd|d/gi,token=>{switch(token.toLowerCase()){case'yyyy':return String(date.getUTCFullYear());case'yy':return pad(date.getUTCFullYear()%100);case'mmmm':case'mmm':return monthName;case'mm':return pad(date.getUTCMonth()+1);case'm':return String(date.getUTCMonth()+1);case'dd':return pad(date.getUTCDate());default:return String(date.getUTCDate())}})
-  const renderTime=(pattern:string)=>{const twelve=/am\/pm/i.test(normalized),hour=twelve?(date.getUTCHours()%12||12):date.getUTCHours();return pattern.replace(/hh|h|mm|m|ss|s/gi,token=>{switch(token.toLowerCase()){case'hh':return pad(hour);case'h':return String(hour);case'mm':return pad(date.getUTCMinutes());case'm':return String(date.getUTCMinutes());case'ss':return pad(date.getUTCSeconds());default:return String(date.getUTCSeconds())}})}
-  const rendered=parts.map((part,index)=>index===dateIndex?renderDate(part):index===timeIndex?renderTime(part):/^am\/pm$/i.test(part)?date.getUTCHours()<12?'AM':'PM':part)
-  return rendered.join(' ')
+  const normalized=format.replace(/\[([hms]+)]/gi,'$1').replace(/\[[^\]]*]/g,'')
+  const twelve=/am\/pm|a\/p/i.test(normalized)
+  const pad=(value:number,two:boolean)=>two?String(value).padStart(2,'0'):String(value)
+  const monthName=(long:boolean)=>new Intl.DateTimeFormat(locale,{timeZone:'UTC',month:long?'long':'short'}).format(date)
+  const dayName=(long:boolean)=>new Intl.DateTimeFormat(locale,{timeZone:'UTC',weekday:long?'long':'short'}).format(date)
+  let out='',index=0,previousWasHour=false
+  while(index<normalized.length){
+    const token=nextDateToken(normalized,index)
+    if(!token){out+=normalized[index];index+=1;continue}
+    switch(token){
+      case'am/pm':out+=date.getUTCHours()<12?'AM':'PM';break
+      case'a/p':out+=date.getUTCHours()<12?'A':'P';break
+      case'yyyy':out+=String(date.getUTCFullYear());break
+      case'yy':out+=pad(date.getUTCFullYear()%100,true);break
+      case'mmmm':out+=monthName(true);break
+      case'mmm':out+=monthName(false);break
+      case'dddd':out+=dayName(true);break
+      case'ddd':out+=dayName(false);break
+      case'dd':case'd':out+=pad(date.getUTCDate(),token==='dd');break
+      case'hh':case'h':{const hour=twelve?(date.getUTCHours()%12||12):date.getUTCHours();out+=pad(hour,token==='hh');break}
+      case'ss':case's':out+=pad(date.getUTCSeconds(),token==='ss');break
+      case'mm':case'm':
+        // 시 뒤에 오거나 초 앞에 오면 분이다. 그 밖에는 달이다.
+        out+=previousWasHour||secondFollows(normalized,index+token.length)
+          ?pad(date.getUTCMinutes(),token==='mm')
+          :pad(date.getUTCMonth()+1,token==='mm')
+        break
+    }
+    previousWasHour=token==='hh'||token==='h'
+    index+=token.length
+  }
+  return out
 }
 
 function isDateFormat(format:string){
   const cleaned=format.replace(/"[^"]*"/g,'').replace(/\\./g,'').replace(/\[(?!h+\]|m+\]|s+\])[^\]]*]/gi,'')
-  return /[ydhs]/i.test(cleaned)
+  // mmm 과 mmmm 은 달 이름이므로 단위로 오해할 일이 없다. m 하나만으로는
+  // 가르지 않는다 — "0.0 m" 처럼 단위로 적은 것을 달로 읽으면 안 된다.
+  // 서버의 internal/formula 의 isDatePattern 이 같은 기준을 쓴다.
+  return /[ydhs]/i.test(cleaned)||/mmm/i.test(cleaned)
 }
