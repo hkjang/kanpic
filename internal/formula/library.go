@@ -352,11 +352,6 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 			return math.Mod(math.Mod(left, right)+right, right), true, nil
 		}
 		return math.Pow(left, right), true, nil
-	case "NOT":
-		if len(values) != 1 {
-			return nil, true, argError(name)
-		}
-		return !truthy(values[0]), true, nil
 	case "LEN":
 		if len(values) != 1 {
 			return nil, true, argError(name)

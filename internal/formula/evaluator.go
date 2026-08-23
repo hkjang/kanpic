@@ -478,6 +478,27 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		return evaluateFilter(evaluated)
 	case "SORT":
 		return evaluateSort(evaluated)
+	case "NOT":
+		// 아래에서 인수를 낱낱이 펴기 전에 다룬다. 펴 버리면 배열 하나가
+		// 값 여럿이 되어 "인수가 하나여야 한다" 에 걸린다.
+		//
+		// 배열을 받으면 칸마다 뒤집는다. 오류가 아닌 칸을 세는 흔한 꼴이
+		// 이것을 쓴다 — =SUMPRODUCT(--NOT(ISERROR(A1:A100)))
+		if len(evaluated) != 1 {
+			return nil, argError(name)
+		}
+		if !isArrayOperand(evaluated[0]) {
+			return !truthy(evaluated[0]), nil
+		}
+		selected, err := toArray(evaluated[0])
+		if err != nil {
+			return nil, err
+		}
+		flipped := arrayValue{rows: selected.rows, columns: selected.columns, values: make([]any, len(selected.values))}
+		for index, item := range selected.values {
+			flipped.values[index] = !truthy(item)
+		}
+		return flipped, nil
 	}
 	values := make([]any, 0)
 	for _, value := range evaluated {
@@ -665,6 +686,20 @@ func (n functionNode) evaluateLazy(name string, cells map[string]any) (any, bool
 		if name == "ISFORMULA" {
 			// The evaluator sees values, not the formulas behind them.
 			return nil, true, formulaError("#N/A", "ISFORMULA is not supported")
+		}
+		// 범위를 받으면 칸마다 따로 묻는다. 오류가 아닌 칸을 세는 흔한
+		// 꼴이 이것을 쓴다.
+		//
+		//	=SUMPRODUCT(--NOT(ISERROR(A1:A100)))
+		//
+		// 예전에는 범위 안에 오류가 하나라도 있으면 통째로 참 하나를
+		// 돌려주어, 이 꼴이 늘 0 이나 1 을 냈다.
+		if ranged, isRange := n.arguments[0].(rangeNode); isRange {
+			answers := arrayValue{rows: ranged.rows, columns: ranged.columns, values: make([]any, 0, len(ranged.addresses))}
+			for _, address := range ranged.addresses {
+				answers.values = append(answers.values, errorAnswer(name, cells[address]))
+			}
+			return answers, true, nil
 		}
 		value, err := n.arguments[0].eval(cells)
 		typed, isFormulaError := err.(*Error)
@@ -1498,10 +1533,34 @@ func truthy(value any) bool {
 //
 // 예전에는 이 셋도 함께 멈춰서, 열 어딘가에 #N/A 가 하나 있으면 그 열의
 // 개수를 셀 방법이 없었다.
+// errorAnswer 는 칸 하나에 대해 ISERROR·ISERR·ISNA 가 낼 답을 고른다.
+func errorAnswer(name string, value any) bool {
+	code := ""
+	if typed, isError := value.(*Error); isError {
+		code = typed.Code
+	} else if text, isText := value.(string); isText && isFormulaErrorCode(text) {
+		// 저장된 오류 코드는 글자로 들어온다.
+		code = text
+	}
+	if code == "" {
+		return false
+	}
+	switch name {
+	case "ISNA":
+		return code == "#N/A"
+	case "ISERR":
+		return code != "#N/A"
+	}
+	return true
+}
+
 func toleratesErrors(name string) bool {
 	switch name {
 	// 세는 함수. 오류 칸을 건너뛰거나 "비어 있지 않다" 고 센다.
-	case "COUNT", "COUNTA", "COUNTBLANK", "AGGREGATE":
+	// COUNTIF 는 조건에 맞는 것만 세므로 오류 칸은 어느 조건에도 맞지
+	// 않아 그냥 빠진다. 마이크로소프트 문서가 권하는 우회 —
+	// COUNTIF(범위,"<>#N/A") — 도 COUNTIF 가 멈추지 않아야 쓸 수 있다.
+	case "COUNT", "COUNTA", "COUNTBLANK", "COUNTIF", "COUNTIFS", "AGGREGATE":
 		return true
 	// 값이 무엇인지 묻는 함수. 오류를 만나도 답할 수 있어야 한다.
 	// =IF(ISNUMBER(A2),A2,0) 은 오류를 피해 가려고 쓰는 흔한 꼴인데,
@@ -1512,9 +1571,9 @@ func toleratesErrors(name string) bool {
 	// ISEVEN 과 ISODD 는 오류를 그대로 낸다. 짝수인지 묻기 전에 수여야
 	// 하기 때문이다. 엑셀도 그렇게 한다.
 	//
-	// SUMIF 와 COUNTIF 는 손대지 않았다. 조건에 맞는 것만 골라 세는
-	// 함수라 오류를 어떻게 다뤄야 하는지 확인하지 못했다. 확인한 뒤에
-	// 고칠 일이다.
+	// SUMIF 는 그대로 멈춘다. 엑셀도 범위에 오류가 있으면 SUMIF 가
+	// 오류를 낸다 — 더할 수 없는 것이 섞여 있으면 합계도 알 수 없다.
+	// 세는 쪽과 더하는 쪽이 갈리는 자리다.
 	return false
 }
 
@@ -1550,6 +1609,12 @@ func display(value any) string {
 	}
 	if number, ok := value.(float64); ok {
 		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	// 오류는 칸에 보이는 그대로 코드만 적는다. Error() 는 뒤에 설명까지
+	// 붙이므로, 그대로 두면 COUNTIF(범위,"#N/A") 같은 조건이 "#N/A" 와
+	// "#N/A: no value" 를 견주게 되어 하나도 맞지 않는다.
+	if formulaErr, isError := value.(*Error); isError {
+		return formulaErr.Code
 	}
 	return fmt.Sprint(value)
 }

@@ -1214,3 +1214,71 @@ func TestAskingWhatAValueIsWorksOnErrorsToo(t *testing.T) {
 		t.Errorf("=ISEVEN(A2) = %v, 오류여야 한다", result.Value)
 	}
 }
+
+// 마이크로소프트 문서가 오류를 다루라며 권하는 두 가지 꼴이 모두 되지
+// 않았다.
+//
+//	=COUNTIF(범위,"<>#N/A")               특정 오류만 빼고 센다
+//	=SUMPRODUCT(--NOT(ISERROR(범위)))     오류가 아닌 칸을 센다
+//
+// 앞엣것은 COUNTIF 가 오류에 걸려 멈춰서, 뒤엣것은 ISERROR 가 범위를
+// 통째로 참 하나로 접고 NOT 이 배열을 받지 못해서 되지 않았다.
+//
+// SUMIF 는 그대로 멈춘다. 엑셀도 그렇게 한다 — 더할 수 없는 것이 섞여
+// 있으면 합계도 알 수 없다. 세는 쪽과 더하는 쪽이 갈리는 자리다.
+func TestCountingAroundErrorsFollowsTheDocumentedShapes(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": 1.0,
+		"A2": formulaError("#N/A", "no value"),
+		"A3": 3.0,
+		"A4": 5.0,
+	}
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		// 조건에 맞는 것만 센다. 오류는 어느 조건에도 맞지 않는다.
+		{`=COUNTIF(A1:A4,">0")`, 3},
+		{`=COUNTIFS(A1:A4,">0")`, 3},
+		// 오류를 이름으로 골라낼 수도 있어야 한다.
+		{`=COUNTIF(A1:A4,"<>#N/A")`, 3},
+		{`=COUNTIF(A1:A4,"#N/A")`, 1},
+		// 범위를 칸마다 물어 배열로 답한다.
+		{`=SUMPRODUCT(--ISERROR(A1:A3))`, 1},
+		{`=SUMPRODUCT(--NOT(ISERROR(A1:A3)))`, 2},
+		{`=SUMPRODUCT(--ISNA(A1:A3))`, 1},
+		{`=SUMPRODUCT(--ISERR(A1:A3))`, 0},
+		{`=COUNT(A1:A4)`, 3},
+		{`=COUNTA(A1:A4)`, 4},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
+	}
+
+	// NOT 은 홑값도 그대로 뒤집는다.
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=NOT(TRUE)", false},
+		{"=NOT(FALSE)", true},
+		{"=NOT(0)", true},
+		{"=INDEX(NOT({TRUE;FALSE}),2)", true},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+
+	// 더하는 쪽은 그대로 멈춘다.
+	for _, formula := range []string{`=SUMIF(A1:A4,">0")`, "=SUM(A1:A4)"} {
+		if result := New().Evaluate(formula, cells); result.Error == nil {
+			t.Errorf("%s = %v, 오류여야 한다", formula, result.Value)
+		}
+	}
+}
