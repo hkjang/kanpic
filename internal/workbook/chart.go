@@ -146,6 +146,11 @@ func importedChartInput(imported ImportChart, sheetID string, index int) (Create
 	if _, found := chartTypes[imported.Type]; !found {
 		return CreateChartInput{}, false
 	}
+	// 그림이 놓여 있던 자리는 그리기 관계를 따라가야 알 수 있다. 여기서는
+	// 자리 대신 **겹치지 않는 것** 을 지킨다. 모두 같은 자리에 두면 두
+	// 번째 차트부터는 첫 번째 뒤에 숨어, 가져오지 못한 것처럼 보인다.
+	position := defaultChartPosition()
+	position.Y += index * (position.Height + chartImportGap)
 	return CreateChartInput{
 		IdempotencyKey: fmt.Sprintf("import-chart-%s-%d", sheetID, index),
 		SheetID:        sheetID,
@@ -153,6 +158,7 @@ func importedChartInput(imported ImportChart, sheetID string, index int) (Create
 		Type:           imported.Type,
 		Title:          imported.Title,
 		SourceRange:    imported.SourceRange,
+		Position:       &position,
 	}, true
 }
 
@@ -177,6 +183,9 @@ func chartFromInput(workbookID, key, actor string, input CreateChartInput) (Char
 		Position:      position, CreatedBy: actor, UpdatedBy: actor,
 	}, false)
 }
+
+// chartImportGap 은 가져온 차트를 아래로 늘어놓을 때 사이에 두는 여백이다.
+const chartImportGap = 24
 
 func defaultChartPosition() ChartPosition {
 	return ChartPosition{X: 24, Y: 24, Width: 560, Height: 320}

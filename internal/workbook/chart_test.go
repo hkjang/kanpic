@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -174,5 +175,37 @@ func TestMemoryChartPreservesBrokenSourceWhenSourceSheetIsDeleted(t *testing.T) 
 	broken, err := repository.GetChartData(ctx, chart.ID)
 	if err != nil || broken.Chart.SourceSheetID != "" || broken.Chart.SourceRange != "#REF!" || broken.Warning != "#REF!" {
 		t.Fatalf("broken source chart = %#v, %v", broken, err)
+	}
+}
+
+// 가져온 차트를 모두 같은 자리에 두면, 두 번째부터는 첫 번째 뒤에 숨는다.
+// 사람 눈에는 차트 하나만 들어온 것으로 보이고, 나머지는 가져오지 못한
+// 줄 안다. 자리를 다르게 두어 겹치지 않게 한다.
+//
+// 그림이 원래 놓여 있던 자리는 그리기 관계를 따라가야 알 수 있다. 자리는
+// 자료가 아니라 배치이므로, 겹치지 않는 것만 지키면 된다.
+func TestImportedChartsDoNotSitOnTopOfEachOther(t *testing.T) {
+	t.Parallel()
+	seen := map[string]struct{}{}
+	for index := 0; index < 4; index++ {
+		created, ok := importedChartInput(ImportChart{Type: "bar", SourceRange: "A1:B4"}, "sheet-1", index)
+		if !ok {
+			t.Fatalf("%d번째 차트를 옮기지 못했다", index)
+		}
+		if created.Position == nil {
+			t.Fatalf("%d번째 차트에 자리가 없다", index)
+		}
+		key := fmt.Sprintf("%d:%d", created.Position.X, created.Position.Y)
+		if _, repeated := seen[key]; repeated {
+			t.Fatalf("%d번째 차트가 앞의 차트와 같은 자리(%s)에 놓였다", index, key)
+		}
+		seen[key] = struct{}{}
+	}
+
+	// 종류를 알 수 없거나 범위가 없으면 만들지 않는다.
+	for _, item := range []ImportChart{{Type: "", SourceRange: "A1:B4"}, {Type: "bar", SourceRange: ""}, {Type: "없는종류", SourceRange: "A1:B4"}} {
+		if _, ok := importedChartInput(item, "sheet-1", 0); ok {
+			t.Errorf("%#v 가 받아들여졌다", item)
+		}
 	}
 }
