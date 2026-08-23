@@ -39,3 +39,18 @@ describe('the grid rounds the way the server does',()=>{
     expect((1.005).toFixed(2)).toBe('1.00')
   })
 })
+
+// 엑셀 파일에서 읽어 온 날짜는 1899-12-30부터 센 날 수로 담긴다. 격자는
+// 이 번호를 날짜로 보여주어야 하고, 서버의 수식도 같은 날짜로 읽어야 한다.
+// 아래 값은 서버의 internal/formula/library_extended_test.go 와 **같은
+// 날짜** 를 고정한다. 한쪽만 고치면 양쪽 다 걸린다.
+describe('the grid reads the date serials an import brings in',()=>{
+  it('turns a serial into the same day the server does',()=>{
+    expect(formatCellValue(45306,{number_format:'yyyy-mm-dd'},'en-US')).toBe('2024-01-15')
+    // 엑셀은 1900년을 윤년으로 잘못 센다. 60번은 없는 날이라, 그보다 작은
+    // 번호는 하루 뒤에서 세야 1번이 1900-01-01이 된다.
+    expect(formatCellValue(1,{number_format:'yyyy-mm-dd'},'en-US')).toBe('1900-01-01')
+    expect(formatCellValue(59,{number_format:'yyyy-mm-dd'},'en-US')).toBe('1900-02-28')
+    expect(formatCellValue(61,{number_format:'yyyy-mm-dd'},'en-US')).toBe('1900-03-01')
+  })
+})

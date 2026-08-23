@@ -579,7 +579,24 @@ func properCase(text string) string {
 
 // Dates are stored as the text DATE produces, so both the plain date and the
 // date with a time component are accepted.
+// parseDate 는 날짜를 두 가지 모습으로 받는다.
+//
+//   - 사람이 적은 글: "2024-01-15"
+//   - 엑셀에서 가져온 날 수: 45306
+//
+// 엑셀 파일을 읽어 오면 날짜가 일련번호로 담긴다. 브라우저의 격자는
+// web/src/lib/cellFormat.ts 에서 이 번호를 날짜로 읽어 제대로 보여주고
+// 있었지만, 여기서는 읽지 못해 YEAR, MONTH, WEEKDAY, DATEDIF, TEXT 이
+// 모두 #VALUE! 를 냈다. 가져온 파일의 날짜 칸은 보이기만 하고 셈에는
+// 쓸 수 없었다.
 func parseDate(value any) (time.Time, bool) {
+	// 글로 적힌 "2024" 를 날 수로 보면 안 되므로 진짜 숫자만 가른다.
+	switch number := value.(type) {
+	case float64:
+		return serialDate(number)
+	case int:
+		return serialDate(float64(number))
+	}
 	text := strings.TrimSpace(display(value))
 	if text == "" {
 		return time.Time{}, false
@@ -590,4 +607,25 @@ func parseDate(value any) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// serialDate 는 표 프로그램이 쓰는 날 수를 날짜로 바꾼다.
+//
+// 엑셀은 1900 년을 윤년으로 잘못 센다. 그래서 일련번호 60 은 없는 날인
+// 1900-02-29 를 가리킨다. 60 보다 작은 번호는 하루 뒤에서 세기 시작해야
+// 1900-01-01 이 1 번이 된다.
+//
+// web/src/lib/cellFormat.ts 의 spreadsheetDate 가 **같은 셈** 을 한다.
+// 격자에 보이는 날짜와 수식이 읽는 날짜가 어긋나면 안 된다.
+func serialDate(serial float64) (time.Time, bool) {
+	// 9999-12-31 이 2958465 다. 그 너머는 날짜가 아니다.
+	if serial < 0 || serial > 2958465 || math.IsNaN(serial) {
+		return time.Time{}, false
+	}
+	epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+	if serial < 60 {
+		epoch = time.Date(1899, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
+	days := math.Floor(serial)
+	return epoch.AddDate(0, 0, int(days)).Add(time.Duration((serial - days) * 24 * float64(time.Hour))), true
 }

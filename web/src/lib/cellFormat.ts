@@ -48,7 +48,10 @@ export function wrapText(text:string,maxWidth:number,measure:(text:string)=>numb
 }
 
 function spreadsheetDate(value:unknown){
-  if(typeof value==='number'&&Number.isFinite(value))return new Date(Date.UTC(1899,11,30)+value*86400000)
+  // 엑셀은 1900년을 윤년으로 잘못 센다. 일련번호 60은 없는 날(1900-02-29)을
+  // 가리키므로, 그보다 작은 번호는 하루 뒤에서 세기 시작해야 1900-01-01이
+  // 1번이 된다. 서버의 internal/formula 의 serialDate 가 같은 셈을 한다.
+  if(typeof value==='number'&&Number.isFinite(value))return new Date((value<60?Date.UTC(1899,11,31):Date.UTC(1899,11,30))+value*86400000)
   if(typeof value==='string'){
     const parsed=new Date(value)
     if(Number.isFinite(parsed.getTime()))return parsed

@@ -966,3 +966,58 @@ func TestMultiplesAndDisplayFollowTheSameDecimal(t *testing.T) {
 		}
 	}
 }
+
+// 엑셀 파일을 읽어 오면 날짜가 1899-12-30 부터 센 날 수로 담긴다. 사람이
+// 손으로 적은 날짜는 "2024-01-15" 같은 글로 담긴다. 한 워크북 안에 두
+// 모습이 함께 있을 수 있으므로 둘 다 날짜로 읽어야 한다.
+//
+// 브라우저의 격자는 날 수를 이미 날짜로 읽어 제대로 보여주고 있었지만
+// 수식 쪽은 읽지 못했다. 가져온 파일의 날짜 칸이 보이기만 하고 셈에는
+// 쓸 수 없었다 — YEAR, MONTH, WEEKDAY, DATEDIF, TEXT 이 모두 #VALUE! 였다.
+//
+// 아래 값은 web/src/lib/cellFormat.test.ts 와 **같은 날짜** 를 고정한다.
+func TestDatesReadBothTheSerialAndTheText(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		// 2024-01-15 를 엑셀은 45306 으로 담는다.
+		{"=YEAR(45306)", 2024.0},
+		{"=MONTH(45306)", 1.0},
+		{"=DAY(45306)", 15.0},
+		{"=WEEKDAY(45306)", 2.0},
+		{`=TEXT(45306,"yyyy-mm-dd")`, "2024-01-15"},
+		{`=TEXT(45306,"yyyy년 m월 d일")`, "2024년 1월 15일"},
+		{`=DATEDIF(45306,"2024-03-01","M")`, 1.0},
+
+		// 글로 적은 날짜도 그대로 읽는다.
+		{`=YEAR("2024-01-15")`, 2024.0},
+
+		// 엑셀은 1900 년을 윤년으로 잘못 세므로 1 번이 1900-01-01 이 되려면
+		// 60 보다 작은 번호는 하루 뒤에서 세야 한다.
+		{"=YEAR(1)", 1900.0},
+		{"=MONTH(1)", 1.0},
+		{"=DAY(1)", 1.0},
+		{"=MONTH(59)", 2.0},
+		{"=DAY(59)", 28.0},
+		{"=MONTH(61)", 3.0},
+		{"=DAY(61)", 1.0},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+
+	// 날짜가 될 수 없는 것은 날짜로 읽지 않는다.
+	for _, formula := range []string{`=YEAR(-1)`, `=YEAR("abc")`, `=YEAR(3000000)`} {
+		if result := New().Evaluate(formula, map[string]any{}); result.Error == nil {
+			t.Errorf("%s = %v, want an error", formula, result.Value)
+		}
+	}
+}
