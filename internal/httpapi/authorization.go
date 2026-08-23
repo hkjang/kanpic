@@ -323,11 +323,16 @@ var mcpResourceArgs = []struct{ arg, kind string }{
 	{"run_id", "automationRunId"},
 	{"action_id", "aiActionId"},
 	{"request_id", "accessRequestId"},
+	{"presentation_id", "presentationId"},
 }
 
 func mcpCapability(name string) workbook.Capability {
 	switch {
 	case name == "spreadsheet.automation.test":
+		return workbook.CapabilityRead
+	// 덱을 만드는 것은 내보내기와 같다. 워크북은 그대로이므로 REST 와 같이
+	// 읽을 수 있으면 만들 수 있다.
+	case name == "spreadsheet.presentation.create":
 		return workbook.CapabilityRead
 	case strings.HasPrefix(name, "spreadsheet.share.") || strings.HasPrefix(name, "spreadsheet.department."):
 		if strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".get") {

@@ -310,3 +310,92 @@ func workbookOf(t *testing.T, server *httptest.Server, sheetID string) string {
 	t.Fatalf("no workbook holds sheet %s", sheetID)
 	return ""
 }
+
+// mcpCall runs one tool and reports whether the tool refused.
+func mcpCall(t *testing.T, server *httptest.Server, actor, tool string, args map[string]any) (map[string]any, string) {
+	t.Helper()
+	response := requestAs[struct {
+		Result struct {
+			IsError    bool           `json:"isError"`
+			Structured map[string]any `json:"structuredContent"`
+			Content    []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}](t, server, actor, http.MethodPost, "/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": tool, "arguments": args},
+	}, http.StatusOK)
+	if response.Result.IsError {
+		text := ""
+		if len(response.Result.Content) > 0 {
+			text = response.Result.Content[0].Text
+		}
+		return nil, text
+	}
+	return response.Result.Structured, ""
+}
+
+// 에이전트도 같은 문을 지나야 한다. MCP 가 REST 와 다른 권한 규칙을 쓰면
+// 도구 하나가 공유 규칙 전체를 우회하는 길이 된다.
+func TestPresentationToolsFollowTheSameRules(t *testing.T) {
+	t.Parallel()
+	server, provider, sheetID := presentationServer(t)
+
+	// 미리보기는 만들지 않는다. 에이전트가 무엇이 만들어질지 먼저 보고 정한다.
+	previewed, refusal := mcpCall(t, server, "alice", "spreadsheet.presentation.preview",
+		map[string]any{"sheet_id": sheetID, "range": "A1:B4"})
+	if refusal != "" {
+		t.Fatalf("preview refused: %s", refusal)
+	}
+	if previewed["deck"] == nil || previewed["analysis"] == nil {
+		t.Fatalf("preview=%v", previewed)
+	}
+	if len(provider.decks) != 0 {
+		t.Fatalf("preview reached the provider %d times", len(provider.decks))
+	}
+
+	created, refusal := mcpCall(t, server, "alice", "spreadsheet.presentation.create",
+		map[string]any{"sheet_id": sheetID, "range": "A1:B4", "title": "에이전트 덱"})
+	if refusal != "" {
+		t.Fatalf("create refused: %s", refusal)
+	}
+	deck, _ := created["presentation"].(map[string]any)
+	id, _ := deck["id"].(string)
+	if id == "" {
+		t.Fatalf("created=%v", created)
+	}
+
+	listed, refusal := mcpCall(t, server, "alice", "spreadsheet.presentation.list",
+		map[string]any{"workbook_id": workbookOf(t, server, sheetID)})
+	if refusal != "" {
+		t.Fatalf("list refused: %s", refusal)
+	}
+	if items, _ := listed["items"].([]any); len(items) != 1 {
+		t.Fatalf("listed=%v", listed)
+	}
+
+	if _, refusal := mcpCall(t, server, "alice", "spreadsheet.presentation.refresh",
+		map[string]any{"presentation_id": id}); refusal != "" {
+		t.Fatalf("refresh refused: %s", refusal)
+	}
+
+	// 워크북에 권한이 없는 사람은 에이전트를 거쳐도 막힌다.
+	for tool, args := range map[string]map[string]any{
+		"spreadsheet.presentation.create":  {"sheet_id": sheetID, "range": "A1:B4"},
+		"spreadsheet.presentation.preview": {"sheet_id": sheetID, "range": "A1:B4"},
+		"spreadsheet.presentation.refresh": {"presentation_id": id},
+	} {
+		if _, refusal := mcpCall(t, server, "mallory", tool, args); refusal == "" {
+			t.Fatalf("%s let a stranger through", tool)
+		}
+	}
+	// kanpic 이 만들지 않은 덱은 서비스에 닿기 전에 막힌다.
+	if _, refusal := mcpCall(t, server, "alice", "spreadsheet.presentation.refresh",
+		map[string]any{"presentation_id": "deck-nobody-made"}); refusal == "" {
+		t.Fatal("an unknown deck was refreshed")
+	}
+	if len(provider.replaced) != 1 {
+		t.Fatalf("the provider was asked to replace %d times", len(provider.replaced))
+	}
+}

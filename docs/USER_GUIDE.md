@@ -1254,6 +1254,14 @@ payload는 비어 있거나 최대 1MiB의 유효한 JSON이어야 합니다. ka
 
 값이 바뀌면 슬라이드도 따라 바뀝니다. 1위가 뒤바뀌었으면 지표 타일의 최고 항목도 바뀌고, 목표를 넘겼으면 "목표 미달" 은 사라집니다.
 
+### 에이전트로 만들기
+
+같은 일을 MCP 도구로도 할 수 있습니다. `spreadsheet.presentation.preview` 는 만들지 않고 **어떤 슬라이드가 될지** 와 kanpic이 각 열을 무엇으로 읽었는지 돌려주므로, 에이전트가 먼저 보고 정할 수 있습니다. 이어서 `spreadsheet.presentation.create`, `spreadsheet.presentation.list`, `spreadsheet.presentation.refresh`, `spreadsheet.presentation.template.list` 를 씁니다.
+
+권한은 REST와 같습니다 — 워크북을 읽을 수 있어야 만들 수 있고, 다시 만들려면 편집 권한이 필요하며, kanpic이 만들지 않은 덱은 어떤 경로로도 건드릴 수 없습니다. API 키에는 `presentation.read`(미리보기·조회)와 `presentation.write`(만들기·다시 만들기) scope가 필요합니다.
+
+PPTX 내려받기는 MCP에 없습니다. 파일을 받는 일은 REST(`GET /api/v1/presentations/{id}/export`)가 맞습니다.
+
 프레젠테이션 서비스 주소와 API Key는 관리자가 설정합니다. 설정되지 않았으면 메뉴에 이 항목이 아예 나오지 않습니다. 브라우저는 프레젠테이션 서비스를 직접 부르지 않으며 API Key도 받지 않습니다 — 요청은 항상 kanpic 서버를 거칩니다.
 
 ---

@@ -16,6 +16,7 @@ import (
 	"kanpic/internal/apikey"
 	"kanpic/internal/automation"
 	"kanpic/internal/importexport"
+	"kanpic/internal/presentation"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
@@ -154,6 +155,11 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
 	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
+	tool("spreadsheet.presentation.preview", "범위를 프레젠테이션으로 만들면 어떤 슬라이드가 되는지 만들지 않고 돌려줍니다. 값의 뜻(항목별 비교·추이·비중·진행 순서)과 각 열의 노릇도 함께 알려 줍니다.", "presentation.read", presentationSchema(false)),
+	tool("spreadsheet.presentation.create", "선택 범위로 프레젠테이션을 만듭니다. 셀이 아니라 kanpic이 판단한 뜻이 전달되므로 숫자를 다시 쓸 필요가 없습니다.", "presentation.write", presentationSchema(true)),
+	tool("spreadsheet.presentation.list", "워크북에서 만든 프레젠테이션과 각각의 원본 범위·기준 버전·원본 변경 여부를 조회합니다.", "presentation.read", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.presentation.refresh", "이미 만든 프레젠테이션을 같은 덱인 채로 원본 범위의 지금 값으로 다시 만듭니다.", "presentation.write", requiredProps("presentation_id", "string")),
+	tool("spreadsheet.presentation.template.list", "프레젠테이션 서비스가 제공하는 디자인 목록을 조회합니다.", "presentation.read", nil),
 	tool("spreadsheet.version.create", "현재 워크북 스냅샷 버전을 생성합니다.", "version.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.version.list", "워크북 버전 목록을 조회합니다.", "version.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.version.restore", "선택한 버전을 최신 버전으로 복원합니다.", "version.write", requiredProps("version_id", "string")),
@@ -664,6 +670,53 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			return nil, err
 		}
 		return s.repository.EvaluateConditionalFormats(ctx, stringArg(args, "sheet_id"), selected)
+	case "spreadsheet.presentation.preview":
+		if s.presentations == nil {
+			return nil, presentation.ErrNotConfigured
+		}
+		deck, analysis, err := s.presentations.Preview(ctx, presentationInputFrom(args, actor))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deck": deck, "analysis": summarizeAnalysis(analysis)}, nil
+	case "spreadsheet.presentation.create":
+		if s.presentations == nil {
+			return nil, presentation.ErrNotConfigured
+		}
+		input := presentationInputFrom(args, actor)
+		input.TemplateID = stringArg(args, "template_id")
+		result, analysis, err := s.presentations.Create(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"presentation": result, "analysis": summarizeAnalysis(analysis)}, nil
+	case "spreadsheet.presentation.list":
+		if s.presentations == nil {
+			return map[string]any{"items": []any{}}, nil
+		}
+		records, err := s.presentations.ListForWorkbook(ctx, stringArg(args, "workbook_id"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": records}, nil
+	case "spreadsheet.presentation.refresh":
+		if s.presentations == nil {
+			return nil, presentation.ErrNotConfigured
+		}
+		result, record, err := s.presentations.Refresh(ctx, stringArg(args, "presentation_id"), presentation.RefreshOptions{IncludeTable: true})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"presentation": result, "record": record}, nil
+	case "spreadsheet.presentation.template.list":
+		if s.presentations == nil {
+			return map[string]any{"items": []any{}}, nil
+		}
+		templates, err := s.presentations.Templates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": templates}, nil
 	case "spreadsheet.conditional_format.create":
 		var input workbook.CreateConditionalFormatInput
 		if err := decodeMCP(args, &input); err != nil {
@@ -1778,6 +1831,23 @@ func dataValidationDeleteSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"validation_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"validation_id"}}
 }
 
+// presentationSchema describes making a deck from a range. Creating and
+// previewing take the same arguments on purpose: an agent looks at what would
+// be made, then makes exactly that.
+func presentationSchema(create bool) map[string]any {
+	properties := map[string]any{
+		"sheet_id":      map[string]any{"type": "string"},
+		"range":         map[string]any{"type": "string"},
+		"title":         map[string]any{"type": "string", "maxLength": 200},
+		"language":      map[string]any{"type": "string", "maxLength": 32},
+		"include_table": map[string]any{"type": "boolean"},
+	}
+	if create {
+		properties["template_id"] = map[string]any{"type": "string"}
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": []string{"sheet_id", "range"}}
+}
+
 func conditionalFormatSchema(create bool) map[string]any {
 	color := map[string]any{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
 	properties := map[string]any{
@@ -1843,6 +1913,21 @@ func namedRangeSchema(create bool) map[string]any {
 func namedRangeDeleteSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"named_range_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"named_range_id"}}
 }
+
+// presentationInputFrom reads the arguments both presentation tools share. The
+// table slide is included unless the caller says otherwise, which matches what
+// the dialog does.
+func presentationInputFrom(args map[string]any, actor string) presentation.CreateRequestInput {
+	includeTable := true
+	if value, ok := args["include_table"].(bool); ok {
+		includeTable = value
+	}
+	return presentation.CreateRequestInput{
+		ActorID: actor, SheetID: stringArg(args, "sheet_id"), Range: stringArg(args, "range"),
+		Title: stringArg(args, "title"), Language: stringArg(args, "language"), IncludeTable: includeTable,
+	}
+}
+
 func findMCPTool(name string) (mcpTool, bool) {
 	for _, item := range mcpTools {
 		if item.Name == name {

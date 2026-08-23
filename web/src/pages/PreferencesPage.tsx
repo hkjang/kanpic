@@ -33,6 +33,7 @@ const agentScopes = [
   'automation.webhook.invoke',
   'version.*',
   'comment.*',
+  'presentation.*',
   'profile.read',
 ]
 
