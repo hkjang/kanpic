@@ -37,6 +37,14 @@ func columnLetters(column int) string {
 // Without it an exported sheet loses every arrangement decision somebody made,
 // and the file looks nothing like the sheet it came from.
 func applySheetLayout(file *excelize.File, name string, layout workbook.SheetLayout) error {
+	// 인쇄 영역은 엑셀에서 시트에 걸린 _xlnm.Print_Area 라는 이름으로 담긴다.
+	// 내보낼 때 함께 적어 주지 않으면, 여기서 정한 인쇄 영역이 엑셀로 갔다가
+	// 돌아오는 사이에 사라진다.
+	if target, ok := definedNameTarget(name, layout.PrintArea); ok {
+		if err := file.SetDefinedName(&excelize.DefinedName{Name: "_xlnm.Print_Area", Scope: name, RefersTo: target}); err != nil {
+			return err
+		}
+	}
 	for _, item := range layout.RowHeights {
 		if item.Index < 1 || item.Index > maxLayoutRow {
 			continue

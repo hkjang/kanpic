@@ -1109,3 +1109,43 @@ func TestImportReportsEachKindOfNameItLeaves(t *testing.T) {
 		}
 	}
 }
+
+// 인쇄 영역은 kanpic 에서 정하든 엑셀 파일에서 가져오든 같은 자리에 담긴다.
+// 내보낼 때 함께 적어 주지 않으면, 엑셀로 갔다가 돌아오는 사이에 조용히
+// 사라진다. 파일은 열리고 표도 그대로여서 없어진 줄 모른다.
+func TestPrintAreaSurvivesTheRoundTrip(t *testing.T) {
+	t.Parallel()
+	file := excelize.NewFile()
+	defer file.Close()
+	name := file.GetSheetName(0)
+	for address, value := range map[string]any{"A1": "품목", "A2": "연필", "E9": "영역 밖"} {
+		if err := file.SetCellValue(name, address, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 내보내기가 배치를 적는 자리와 같은 길을 지난다.
+	if err := applySheetLayout(file, name, workbook.SheetLayout{Revision: 1, PrintArea: "A1:B2"}); err != nil {
+		t.Fatalf("export layout: %v", err)
+	}
+	var buffer bytes.Buffer
+	if err := file.Write(&buffer); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("round.xlsx", buffer.Bytes(), 0)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if len(parsed.Sheets) == 0 || parsed.Sheets[0].Layout == nil {
+		t.Fatalf("sheets = %#v", parsed.Sheets)
+	}
+	if parsed.Sheets[0].Layout.PrintArea != "A1:B2" {
+		t.Fatalf("print area after round trip = %q, want A1:B2", parsed.Sheets[0].Layout.PrintArea)
+	}
+	// 인쇄 영역이 이름 목록을 어지럽히면 안 된다. 이름이 아니라 시트의
+	// 성질이므로 이름으로 돌아오지 않아야 한다.
+	for _, name := range parsed.NamedRanges {
+		if strings.HasPrefix(name.Name, "_xlnm") {
+			t.Errorf("이름 목록에 %q 가 들어왔다", name.Name)
+		}
+	}
+}
