@@ -1332,3 +1332,54 @@ func TestScalarFunctionsSpreadOverArrays(t *testing.T) {
 		t.Errorf("모양이 다른 배열 = %v, 오류여야 한다", result.Value)
 	}
 }
+
+// 인수가 둘 이상인 함수도 칸마다 짝지어 셈해야 한다. 글자를 다루는
+// 함수가 특히 그렇다 — 열 하나에서 어떤 글이 든 칸을 세는 꼴이 이것을
+// 쓴다.
+//
+//	=SUMPRODUCT(--ISNUMBER(FIND("서울",A1:A100)))
+//
+// 이어 붙이는 함수는 넣지 않았다. CONCAT 은 배열을 받으면 칸마다 나누는
+// 것이 아니라 모두 이어 붙이는 것이 하는 일이다.
+func TestFunctionsWithSeveralArgumentsSpreadTogether(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{}
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{`=SUMPRODUCT(LEN(LEFT({"abc";"de"},2)))`, 4},
+		{`=SUMPRODUCT(MOD({5;7},{3;3}))`, 3},
+		{`=SUMPRODUCT(POWER({2;3},2))`, 13},
+		{`=SUMPRODUCT(--EXACT({"a";"b"},"a"))`, 1},
+		// 글자가 든 칸을 세는 흔한 꼴.
+		{`=SUMPRODUCT(--ISNUMBER(FIND("a",{"cat";"dog"})))`, 1},
+		// 홑값은 그대로다.
+		{`=MOD(5,3)`, 2},
+		{`=POWER(2,3)`, 8},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
+	}
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{`=INDEX(RIGHT({"abc";"de"},1),1)`, "c"},
+		{`=INDEX(MID({"abc";"de"},2,1),1)`, "b"},
+		{`=INDEX(SUBSTITUTE({"aa";"bb"},"a","c"),1)`, "cc"},
+		{`=INDEX(REPT({"a";"b"},2),2)`, "bb"},
+		{`=LEFT("abc",2)`, "ab"},
+		{`=SUBSTITUTE("aa","a","c")`, "cc"},
+		// 이어 붙이는 함수는 모두 잇는다. 칸마다 나누지 않는다.
+		{`=CONCAT({"a";"b"},"!")`, "ab!"},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+}

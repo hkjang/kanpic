@@ -1557,6 +1557,13 @@ var elementwiseFunctions = map[string]struct{}{
 	"VALUE": {}, "N": {}, "T": {}, "TEXT": {},
 	"ISNUMBER": {}, "ISTEXT": {}, "ISNONTEXT": {}, "ISBLANK": {}, "ISLOGICAL": {},
 	"ISEVEN": {}, "ISODD": {}, "TYPE": {},
+	// 인수가 둘 이상이어도 칸마다 짝지어 셈하는 것은 마찬가지다.
+	"LEFT": {}, "RIGHT": {}, "MID": {}, "REPLACE": {}, "REPT": {},
+	"SUBSTITUTE": {}, "FIND": {}, "SEARCH": {}, "EXACT": {},
+	"MOD": {}, "POWER": {},
+	// CONCAT 과 CONCATENATE 와 TEXTJOIN 은 넣지 않는다. 여러 값을 하나로
+	// 잇는 것이 하는 일이라, 배열을 받으면 칸마다 나누는 것이 아니라 모두
+	// 이어 붙여야 한다. =CONCAT({"a";"b"},"!") 는 "ab!" 다.
 }
 
 // broadcastElementwise 는 배열이 섞인 인수를 칸마다 갈라 같은 함수를 다시
