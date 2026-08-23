@@ -33,6 +33,9 @@ var resourceCollections = map[string]string{
 	"automations":         "automationId",
 	"automation-runs":     "automationRunId",
 	"access-requests":     "accessRequestId",
+	// 덱은 프레젠테이션 서비스의 공용 계정 아래 있으므로, 여기 없으면 로그인한
+	// 누구나 남의 워크북에서 나온 덱을 내려받을 수 있다.
+	"presentations": "presentationId",
 }
 
 type authorizationTarget struct {
@@ -83,6 +86,10 @@ func capabilityForRequest(r *http.Request) workbook.Capability {
 		return ""
 	// Copying a sheet reads the source; the target is authorized separately.
 	case strings.HasSuffix(path, "/copy"):
+		return workbook.CapabilityRead
+	// 덱을 만드는 것은 내보내기와 같다. 워크북은 그대로이므로 읽을 수 있으면
+	// 만들 수 있다.
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/presentations"):
 		return workbook.CapabilityRead
 	// Previewing an automation is a read-only operation even though the REST
 	// action uses POST so it can share the action endpoint shape with :run.
@@ -173,6 +180,11 @@ func (s *Server) resolveTargetWorkbook(ctx context.Context, r *http.Request, tar
 				return workbookID, true, nil
 			}
 		}
+	case "presentationId":
+		if s.presentations != nil {
+			return s.resolvePresentationWorkbook(ctx, target.id)
+		}
+		return "", false, workbook.ErrNotFound
 	case "aiActionId":
 		if s.ai != nil {
 			if item, err := s.ai.Get(ctx, actorID(r), target.id); err == nil && item.WorkbookID != "" {
@@ -183,6 +195,17 @@ func (s *Server) resolveTargetWorkbook(ctx context.Context, r *http.Request, tar
 	workbookID, err := s.repository.WorkbookIDForResource(ctx, target.kind, target.id)
 	if err != nil {
 		return "", false, err
+	}
+	return workbookID, true, nil
+}
+
+// resolvePresentationWorkbook finds the workbook a deck was made from. A deck
+// kanpic has no record of belongs to nobody and is refused rather than passed
+// through to the provider.
+func (s *Server) resolvePresentationWorkbook(ctx context.Context, id string) (string, bool, error) {
+	workbookID, err := s.presentations.WorkbookIDFor(ctx, id)
+	if err != nil || workbookID == "" {
+		return "", false, workbook.ErrNotFound
 	}
 	return workbookID, true, nil
 }

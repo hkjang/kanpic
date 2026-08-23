@@ -20,6 +20,8 @@ import (
 	"kanpic/internal/httpapi"
 	"kanpic/internal/mail"
 	"kanpic/internal/observability"
+	"kanpic/internal/presentation"
+	"kanpic/internal/presentation/ptium"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
 )
@@ -64,7 +66,8 @@ func main() {
 	aiService := ai.NewService(pool, settingRepository, repository, logger)
 	automationService := automation.NewService(pool, settingRepository, repository, logger)
 	mailService := mail.NewService(pool, settingRepository, httpapi.NewMailDirectory(repository), logger)
-	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger, httpapi.WithMail(mailService))
+	presentationService := presentation.NewService(settingRepository, repository, presentation.NewPostgresStore(pool), map[string]presentation.Factory{"ptium": ptium.Factory})
+	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger, httpapi.WithMail(mailService), httpapi.WithPresentations(presentationService))
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

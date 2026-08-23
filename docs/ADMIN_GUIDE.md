@@ -295,6 +295,8 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 ### 6.1 MCP 스코프 및 인증
 - MCP 요청은 HTTP Header `Authorization: Bearer <API_KEY>`를 통과해야 합니다.
 - 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
+- 프레젠테이션 만들기는 원본 워크북의 **읽기** 권한으로 판정합니다. 덱을 내려받는 것도 마찬가지입니다 — 덱은 프레젠테이션 서비스의 공용 계정 아래 만들어지므로, kanpic이 `presentations` 테이블에 기록해 둔 워크북을 기준으로 권한을 따집니다. kanpic이 만들지 않은 덱은 어떤 사용자에게도 내려주지 않습니다.
+- `presentation.*` 설정은 관리자만 볼 수 있고 `presentation.api_key`는 저장 시 암호화됩니다. 브라우저에는 전달되지 않으며, 프레젠테이션 서비스 호출은 전부 kanpic 서버에서 나갑니다. 서비스 계정에는 `presentations:read`와 `presentations:write`만 주는 것을 권장합니다.
 - 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
 - 공개 AI 설정 조회는 `spreadsheet.ai.config.get`, 계획·조회·승인·Undo는 `spreadsheet.ai.action.plan|list|get|approve|undo`로 제공합니다. 모든 호출에 `ai.use`가 필요하고 계획은 `range.read`, 수식 생성·오류 수정 승인은 `formula.write`, 데이터 정제 승인과 Undo는 `range.write`를 추가로 검사합니다. 설명·요약·이상치 탐지는 승인할 수 없습니다.
 - 워크북 자동화는 `spreadsheet.automation.list|get|create|update|delete|test|run|webhook.invoke|run.list|run.undo`로 제공합니다. 정의 조회·검증·이력에는 `automation.read`, 생성·수정·삭제에는 `automation.write`, 실행·Undo에는 `automation.run`, 웹훅 전달에는 `automation.webhook.invoke`가 필요합니다. 검증은 `range.read`, 값 설정·지우기와 Undo는 `range.write`, 수식 실행은 `formula.write`를 추가 검사합니다. 웹훅 MCP 호출도 개인 API 키 인증이 필수입니다.
@@ -321,7 +323,7 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 ## 7. DB 마이그레이션 & 백업 복구 (Backup & Disaster Recovery)
 
 ### 7.1 자동 DDL 마이그레이션 (`migrations/`)
-kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `032_conditional_icon_set.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가하며, `024_automation_rate_admission.sql`은 실행 제한에 실제로 접수된 이력만 포함하도록 구분 컬럼과 조회 인덱스를 추가합니다. `031_conditional_rank.sql`은 조건부 서식 규칙 종류에 상위·하위 N개(`rank`)를, `032_conditional_icon_set.sql`은 아이콘 집합(`icon_set`)과 그 종류·순서 뒤집기 컬럼을 더합니다.
+kanpic 서버 기동 시 `migrations/` 내의 DDL SQL 파일(`001_initial.sql` ~ `033_presentations.sql`)을 자동 순차 실행하여 스키마를 최신 상태로 유지합니다. `015_automations.sql`은 자동화 정의·revision·soft delete를 저장하는 `automations`와 실행 스냅샷·상태·작업·Undo·멱등 정보를 저장하는 `automation_runs`를 추가합니다. `016_scheduled_automations.sql`은 다음 실행 시각, 예약 기준 시각, `skipped` 상태, due 조회 인덱스와 예약 중복 방지 유일 인덱스를 추가합니다. `017_webhook_automations.sql`은 웹훅 trigger 상태, 호출 API 키 참조, payload digest·크기와 키별 조회 인덱스를 추가하며, `024_automation_rate_admission.sql`은 실행 제한에 실제로 접수된 이력만 포함하도록 구분 컬럼과 조회 인덱스를 추가합니다. `031_conditional_rank.sql`은 조건부 서식 규칙 종류에 상위·하위 N개(`rank`)를, `032_conditional_icon_set.sql`은 아이콘 집합(`icon_set`)과 그 종류·순서 뒤집기 컬럼을 더하고, `033_presentations.sql`은 워크북에서 만든 프레젠테이션의 출처(원본 범위와 그때의 워크북 버전)를 저장하는 `presentations`를 추가합니다.
 
 ### 7.2 백업 및 복구 명령어 (pg_dump)
 

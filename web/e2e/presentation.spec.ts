@@ -1,0 +1,58 @@
+import { expect, test } from '@playwright/test'
+
+// 시트의 범위를 골라 프레젠테이션으로 만든다. kanpic 이 값의 뜻을 먼저
+// 판단하고, 프레젠테이션 서비스는 그 뜻을 그림으로 만든다.
+//
+// 이 시험은 프레젠테이션 서비스가 실제로 붙어 있을 때만 돈다. 서비스 없이
+// 도는 CI 에서는 기능이 꺼져 있고, 꺼져 있을 때 메뉴에 나오지 않는 것 자체가
+// 확인할 값어치가 있는 동작이다.
+test('a range becomes a deck, and the menu stays hidden when nobody set one up', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`덱 ${stamp}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`deck-${stamp}`,cells:[
+    {row:1,column:1,value:'부서'},{row:1,column:2,value:'매출'},{row:1,column:3,value:'목표달성률'},
+    {row:2,column:1,value:'영업1'},{row:2,column:2,value:'120억'},{row:2,column:3,value:'108%'},
+    {row:3,column:1,value:'영업2'},{row:3,column:2,value:'95억'},{row:3,column:3,value:'91%'},
+    {row:4,column:1,value:'영업3'},{row:4,column:2,value:'110억'},{row:4,column:3,value:'103%'},
+  ]}})
+  const configured=await request.get('/api/v1/presentation/config').then(r=>r.json())
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
+  const entry=page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 만들기…'})
+
+  if(!configured.enabled){
+    // 설정되지 않은 기능은 메뉴에 없어야 한다.
+    await expect(entry).toHaveCount(0)
+    await request.delete(`/api/v1/workbooks/${workbook.id}`)
+    return
+  }
+
+  await entry.click()
+  const dialog=page.getByRole('dialog',{name:'프레젠테이션 만들기'})
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('프레젠테이션 제목').fill(`영업실적 ${stamp}`)
+
+  // 범위를 어떻게 읽었는지 먼저 보여 준다. 서버가 만든 미리보기라서 여기
+  // 보이는 것과 실제로 만들어지는 것이 다를 수 없다.
+  await expect(dialog.getByText('이 범위를 이렇게 읽었습니다')).toBeVisible()
+  await expect(dialog.locator('.presentation-slide')).not.toHaveCount(0)
+  const previewed=await dialog.locator('.presentation-slide').count()
+
+  await dialog.getByRole('button',{name:'프레젠테이션 만들기'}).click()
+  await expect(dialog.getByRole('status')).toContainText(`${previewed}장을 만들었습니다`,{timeout:30000})
+
+  // 만든 덱은 워크북에 매여 있다. 그래야 볼 수 있는 사람만 내려받는다.
+  const records=await request.get(`/api/v1/workbooks/${workbook.id}/presentations`).then(r=>r.json())
+  expect(records.items).toHaveLength(1)
+  expect(records.items[0]).toMatchObject({range:'A1:C4',stale:false})
+
+  const download=await request.get(`/api/v1/presentations/${records.items[0].id}/export`)
+  expect(download.status()).toBe(200)
+  expect(download.headers()['content-type']).toContain('presentationml')
+  expect((await download.body()).byteLength).toBeGreaterThan(10_000)
+
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

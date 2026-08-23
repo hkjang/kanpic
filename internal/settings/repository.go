@@ -93,6 +93,13 @@ var defaults = []Setting{
 	{Key: "ai.max_changes", Value: json.RawMessage(`100`), ValueType: "number", Description: "AI 계획 한 건의 최대 변경 셀 수"},
 	{Key: "ai.max_output_tokens", Value: json.RawMessage(`0`), ValueType: "number", Description: "AI 응답 최대 토큰 수. 0이면 모델의 컨텍스트 길이에서 자동 계산"},
 	{Key: "ai.history_retention_days", Value: json.RawMessage(`0`), ValueType: "number", Description: "AI 호출 이력 보존 기간(일). 0이면 계속 보관"},
+	{Key: "presentation.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "선택 범위로 프레젠테이션 만들기 사용"},
+	{Key: "presentation.provider", Value: json.RawMessage(`"ptium"`), ValueType: "string", Description: "프레젠테이션 서비스 종류"},
+	{Key: "presentation.base_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "프레젠테이션 서비스 주소 (예: https://ptium.example.com)"},
+	{Key: "presentation.api_key", Value: json.RawMessage(`""`), ValueType: "string", Description: "프레젠테이션 서비스 API Key. presentations:read 와 presentations:write 만 있으면 됩니다", Secret: true},
+	{Key: "presentation.timeout_seconds", Value: json.RawMessage(`60`), ValueType: "number", Description: "프레젠테이션 서비스 요청 제한 시간(초)"},
+	{Key: "presentation.default_template_id", Value: json.RawMessage(`""`), ValueType: "string", Description: "기본 템플릿 ID. 비우면 서비스 기본 디자인"},
+	{Key: "presentation.max_cells", Value: json.RawMessage(`5000`), ValueType: "number", Description: "한 프레젠테이션이 읽을 최대 셀 수"},
 	{Key: "mail.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "이벤트 알림 메일 발송 사용"},
 	{Key: "mail.smtp_host", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 SMTP 서버 주소"},
 	{Key: "mail.smtp_port", Value: json.RawMessage(`25`), ValueType: "number", Description: "SMTP 포트. 25는 사내 릴레이, 587은 STARTTLS, 465는 TLS"},
@@ -260,6 +267,11 @@ func (r *Repository) Validate(ctx context.Context) (ValidationResult, error) {
 	if enabled, ok := boolValue(values["mail.enabled"]); ok && enabled {
 		if host, ok := stringValue(values["mail.smtp_host"]); !ok || strings.TrimSpace(host) == "" {
 			issues = append(issues, ValidationIssue{Key: "mail.smtp_host", Severity: "error", Message: "메일 발송을 사용할 때 필수입니다."})
+		}
+	}
+	if enabled, ok := boolValue(values["presentation.enabled"]); ok && enabled {
+		if value, ok := stringValue(values["presentation.base_url"]); !ok || strings.TrimSpace(value) == "" {
+			issues = append(issues, ValidationIssue{Key: "presentation.base_url", Severity: "error", Message: "프레젠테이션을 사용할 때 필수입니다."})
 		}
 	}
 	if enabled, ok := boolValue(values["ai.enabled"]); ok && enabled {

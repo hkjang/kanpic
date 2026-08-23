@@ -24,6 +24,7 @@ import (
 	"kanpic/internal/importexport"
 	"kanpic/internal/mail"
 	"kanpic/internal/observability"
+	"kanpic/internal/presentation"
 	"kanpic/internal/settings"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
@@ -33,20 +34,21 @@ import (
 const maxJSONBody = 2 << 20
 
 type Server struct {
-	repository  workbook.Repository
-	logger      *slog.Logger
-	settings    *settings.Repository
-	keys        *apikey.Repository
-	auth        *auth.Service
-	logs        *observability.Store
-	build       buildinfo.BuildInfo
-	formula     *formula.Evaluator
-	files       *importexport.Service
-	collab      *collaboration.Hub
-	ai          ai.Orchestrator
-	automations automation.ServiceAPI
-	mail        *mail.Service
-	violations  *analytics.Recorder
+	repository    workbook.Repository
+	logger        *slog.Logger
+	settings      *settings.Repository
+	keys          *apikey.Repository
+	auth          *auth.Service
+	logs          *observability.Store
+	build         buildinfo.BuildInfo
+	formula       *formula.Evaluator
+	files         *importexport.Service
+	collab        *collaboration.Hub
+	ai            ai.Orchestrator
+	automations   automation.ServiceAPI
+	mail          *mail.Service
+	presentations *presentation.Service
+	violations    *analytics.Recorder
 }
 
 func New(repository workbook.Repository, logger *slog.Logger) http.Handler {
@@ -68,6 +70,13 @@ type PlatformOption func(*Server)
 // WithMail wires the notification mailer.
 func WithMail(service *mail.Service) PlatformOption {
 	return func(s *Server) { s.mail = service }
+}
+
+// WithPresentations wires the deck gateway. Without it the routes answer that
+// the feature is off rather than disappearing, so the editor can ask once and
+// hide the button.
+func WithPresentations(service *presentation.Service) PlatformOption {
+	return func(s *Server) { s.presentations = service }
 }
 
 func NewPlatformWithServices(repository workbook.Repository, settingRepository *settings.Repository, keys *apikey.Repository, authService *auth.Service, logs *observability.Store, aiService ai.Orchestrator, automationService automation.ServiceAPI, logger *slog.Logger, options ...PlatformOption) http.Handler {
@@ -107,6 +116,11 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PUT /api/v1/workbooks/{workbookId}/favorite", s.setWorkbookFavorite)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sheet-stats", s.sheetStats)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/copy", s.copySheet)
+	mux.HandleFunc("GET /api/v1/presentation/config", s.presentationConfig)
+	mux.HandleFunc("GET /api/v1/presentation/templates", s.presentationTemplates)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/presentations", s.listWorkbookPresentations)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/presentations", s.createPresentation)
+	mux.HandleFunc("GET /api/v1/presentations/{presentationId}/export", s.exportPresentation)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sharing", s.getWorkbookSharing)
 	mux.HandleFunc("PATCH /api/v1/workbooks/{workbookId}/sharing", s.updateWorkbookSharing)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sharing:transfer-ownership", s.transferWorkbookOwnership)
@@ -1059,6 +1073,15 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		status, code, message = http.StatusForbidden, "workbook_access_denied", "이 워크북에 대한 권한이 없습니다."
 	case errors.Is(err, workbook.ErrRevision):
 		status, code, message = http.StatusConflict, "revision_conflict", "다른 사용자가 규칙을 변경했습니다. 다시 불러오세요."
+	case errors.Is(err, presentation.ErrNotConfigured):
+		status, code, message = http.StatusServiceUnavailable, "presentation_not_configured", "프레젠테이션 서비스가 설정되지 않았습니다. 관리자에게 문의하세요."
+	case errors.Is(err, presentation.ErrInvalid):
+		status, code, message = http.StatusBadRequest, "invalid_request", err.Error()
+	case errors.Is(err, presentation.ErrUpstream):
+		// 프레젠테이션 서비스가 한 말을 그대로 전한다. "요청을 처리하지
+		// 못했습니다" 로는 주소가 틀린 건지 키가 만료된 건지 알 수 없다.
+		status, code, message = http.StatusBadGateway, "presentation_failed", err.Error()
+		s.logger.Error("presentation service failed", "error", err, "path", r.URL.Path)
 	default:
 		s.logger.Error("request failed", "error", err, "path", r.URL.Path)
 	}
