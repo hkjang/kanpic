@@ -148,3 +148,54 @@ describe('printableDocument across pages',()=>{
     expect(html.match(/<table>/g)?.length).toBe(1)
   })
 })
+
+// 200행짜리 표를 인쇄하면 둘째 장부터는 어느 칸이 무슨 뜻인지 알 수 없었다.
+// 화면에서 고정해 둔 행은 "여기까지가 머리글" 이라고 이미 말해 둔 것이다.
+describe('repeating the frozen rows', ()=>{
+  const long=new Map<string,Cell>()
+  long.set(cellKey(1,1),{sheet_id:'s',row:1,column:1,value:'제품',updated_at:''})
+  long.set(cellKey(1,2),{sheet_id:'s',row:1,column:2,value:'단가',updated_at:''})
+  for(let row=2;row<=8;row+=1){
+    long.set(cellKey(row,1),{sheet_id:'s',row,column:1,value:`품목${row}`,updated_at:''})
+    long.set(cellKey(row,2),{sheet_id:'s',row,column:2,value:row*100,updated_at:''})
+  }
+
+  it('puts the frozen row in the head so every page carries it',()=>{
+    const html=printableDocument(long,{title:'긴 표',sheetName:'시트1',gridlines:true,headers:true,frozenRows:1})
+    const head=html.slice(html.indexOf('<thead>'),html.indexOf('</thead>'))
+    expect(head).toContain('제품')
+    expect(head).toContain('단가')
+    // 머리글로 올라간 행이 본문에 한 번 더 나오면 안 된다.
+    expect(html.match(/제품/g)).toHaveLength(1)
+    expect(html).toContain('품목2')
+  })
+
+  it('leaves the body alone when nothing is frozen',()=>{
+    const html=printableDocument(long,{title:'긴 표',sheetName:'시트1',gridlines:true,headers:true})
+    const head=html.slice(html.indexOf('<thead>'),html.indexOf('</thead>'))
+    expect(head).not.toContain('제품')
+    expect(html).toContain('제품')
+  })
+
+  it('repeats the header on each column page too',()=>{
+    const wide=new Map(long)
+    for(let column=3;column<=12;column+=1)wide.set(cellKey(1,column),{sheet_id:'s',row:1,column,value:`열${column}`,updated_at:''})
+    const html=printableDocument(wide,{title:'넓고 긴 표',sheetName:'시트1',gridlines:true,headers:true,frozenRows:1,columnWidth:()=>200})
+    const tables=html.match(/<table>/g)?.length??0
+    expect(tables).toBeGreaterThan(1)
+    expect(html.match(/tr class="frozen"/g)?.length).toBe(tables)
+  })
+
+  it('does not repeat so many rows that no data fits',()=>{
+    const html=printableDocument(long,{title:'긴 표',sheetName:'시트1',gridlines:true,headers:true,frozenRows:99})
+    // 다섯 줄까지만 머리글로 올리고 나머지는 본문에 남는다.
+    expect(html.match(/tr class="frozen"/g)).toHaveLength(5)
+    expect(html).toContain('품목7')
+  })
+
+  it('leaves out a frozen row the reader cannot see',()=>{
+    const html=printableDocument(long,{title:'긴 표',sheetName:'시트1',gridlines:true,headers:true,frozenRows:1,hiddenRows:new Set([1])})
+    expect(html).not.toContain('제품')
+    expect(html).toContain('품목2')
+  })
+})

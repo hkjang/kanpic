@@ -21,7 +21,18 @@ export type PrintOptions={
    * 한 장에 몇 열이 들어가는지 알 수 있다.
    */
   columnWidth?:(column:number)=>number
+  /**
+   * 화면에서 고정해 둔 행의 수. 사용자가 "여기까지가 머리글" 이라고 이미
+   * 말해 둔 것이므로, 종이에서도 장마다 다시 찍는다. 엑셀의 인쇄 제목이다.
+   */
+  frozenRows?:number
 }
+
+/**
+ * 장마다 다시 찍는 머리글 행의 최대 수. 너무 많이 반복하면 정작 데이터가
+ * 들어갈 자리가 없어진다. 다섯 줄이면 한 장의 십분의 일쯤이다.
+ */
+const MAX_REPEATED_HEADER_ROWS=5
 
 /**
  * 한 장에 들어가는 가로 폭(px). A4 세로에 좌우 14mm 여백이면 210 − 28 =
@@ -86,6 +97,16 @@ function cellCSS(style?:Record<string,unknown>){
   return rules.join(';')
 }
 
+function rowCells(cells:Map<string,Cell>,row:number,startColumn:number,endColumn:number,headers:boolean){
+  const columns:string[]=headers?[`<th class="row-head">${row}</th>`]:[]
+  for(let column=startColumn;column<=endColumn;column+=1){
+    const cell=cells.get(cellKey(row,column))
+    const text=cell?formatCellValue(cell.value,cell.style):''
+    columns.push(`<td style="${cellCSS(cell?.style)}">${escapeHTML(text)}</td>`)
+  }
+  return columns.join('')
+}
+
 /**
  * Renders the sheet as a plain HTML table. The canvas grid cannot be printed
  * directly, so printing goes through a document the browser can paginate.
@@ -101,24 +122,26 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
     for(const page of columnPages(region.startColumn,region.endColumn,widthOf)){
       const columnGroup=[options.headers?`<col style="width:${ROW_HEAD_WIDTH}px">`:'']
         .concat(page.widths.map(width=>`<col style="width:${width}px">`)).join('')
-      let head=''
+      const headLines:string[]=[]
       if(options.headers){
         const headerCells=[`<th class="corner"></th>`]
         for(let column=page.start;column<=page.end;column+=1)headerCells.push(`<th>${escapeHTML(address(1,column).replace(/\d+$/,''))}</th>`)
-        head=`<thead><tr>${headerCells.join('')}</tr></thead>`
+        headLines.push(`<tr>${headerCells.join('')}</tr>`)
       }
-      const rows:string[]=[]
-      for(let row=region.startRow;row<=region.endRow;row+=1){
+      // 고정한 행은 thead 안에 둔다. 브라우저가 장마다 다시 찍어 주므로
+      // 둘째 장부터도 어느 칸이 무슨 뜻인지 알 수 있다.
+      const frozenEnd=Math.min(region.startRow+Math.min(options.frozenRows??0,MAX_REPEATED_HEADER_ROWS)-1,region.endRow)
+      for(let row=region.startRow;row<=frozenEnd;row+=1){
         if(options.hiddenRows?.has(row))continue
-        const columns:string[]=options.headers?[`<th class="row-head">${row}</th>`]:[]
-        for(let column=page.start;column<=page.end;column+=1){
-          const cell=cells.get(cellKey(row,column))
-          const text=cell?formatCellValue(cell.value,cell.style):''
-          columns.push(`<td style="${cellCSS(cell?.style)}">${escapeHTML(text)}</td>`)
-        }
-        rows.push(`<tr>${columns.join('')}</tr>`)
+        headLines.push(`<tr class="frozen">${rowCells(cells,row,page.start,page.end,options.headers)}</tr>`)
       }
-      printedRows=rows.length
+      const head=headLines.length>0?`<thead>${headLines.join('')}</thead>`:''
+      const rows:string[]=[]
+      for(let row=frozenEnd+1;row<=region.endRow;row+=1){
+        if(options.hiddenRows?.has(row))continue
+        rows.push(`<tr>${rowCells(cells,row,page.start,page.end,options.headers)}</tr>`)
+      }
+      printedRows=rows.length+headLines.length
       if(rows.length===0)continue
       tables.push(`<table><colgroup>${columnGroup}</colgroup>${head}<tbody>${rows.join('')}</tbody></table>`)
     }
@@ -141,5 +164,7 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
   .empty{color:#7d8b94}
   tr{page-break-inside:avoid}
   thead{display:table-header-group}
+  thead tr.frozen th.row-head{background:#f1f5f7}
+  thead tr.frozen td{background:#fafcfd;font-weight:600}
   </style></head><body><header><h1>${escapeHTML(options.title)}</h1><span>${escapeHTML(options.sheetName)}${region?` · ${address(region.startRow,region.startColumn)}:${address(region.endRow,region.endColumn)}`:''}</span></header>${empty||tables.join('')}</body></html>`
 }

@@ -638,7 +638,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     // 있다. 확대 배율은 화면 사정이므로 뺀다.
     const printWidths=new Map((activeSheet.layout?.column_widths??[]).map(item=>[item.index,item.size]))
     const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,
-      columnWidth:column=>printWidths.get(column)??108})
+      columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
     document.body.appendChild(frame)
