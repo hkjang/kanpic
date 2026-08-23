@@ -11,6 +11,7 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
     {action:'빠른 이동 (시트·워크북·명령)',keys:['Ctrl / ⌘ + K']},
     {action:'워크북 검색',keys:['Ctrl / ⌘ + F']},
     {action:'찾기 및 바꾸기',keys:['Ctrl / ⌘ + H']},
+    {action:'빠른 채우기',keys:['Ctrl / ⌘ + E']},
     {action:'단축키 목록',keys:['Ctrl / ⌘ + /']},
     {action:'새 시트 추가',keys:['Shift + F11']},
     {action:'이전 / 다음 시트로 이동',keys:['Ctrl / ⌘ + PageUp','Ctrl / ⌘ + PageDown']},

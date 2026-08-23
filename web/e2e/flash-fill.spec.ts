@@ -69,3 +69,50 @@ test('it says so rather than guessing', async ({ page, request }) => {
   expect(after.items).toHaveLength(0)
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 대상 열만 골라 놓는 것이 가장 자연스러운 몸짓이다. 그러면 고른 것이 그
+// 열뿐이라 규칙을 만들 재료가 없어지므로, 옆 열들을 표에서 찾아 붙인다.
+test('selecting just the column still finds the columns it reads from', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`열 선택 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`col-${stamp}`,cells:[
+    {row:1,column:1,value:'이메일'},{row:1,column:2,value:'아이디'},
+    {row:2,column:1,value:'hong@example.com'},{row:2,column:2,value:'hong'},
+    {row:3,column:1,value:'kim@sample.co.kr'},
+    {row:4,column:1,value:'lee@x.io'},
+  ]}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('combobox',{name:'이름 상자'}).fill('B2:B4')
+  await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
+  await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
+  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'데이터 정리'}).click()
+  await page.getByRole('menuitem',{name:'빠른 채우기…'}).click()
+
+  const dialog=page.getByRole('dialog',{name:'빠른 채우기'})
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('kim')).toBeVisible()
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})
+
+// 엑셀을 쓰던 사람은 Ctrl+E 를 누른다.
+test('Ctrl+E reaches for it the way Excel does', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`단축키 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`key-${stamp}`,cells:[
+    {row:1,column:1,value:'hong@example.com'},{row:1,column:2,value:'hong'},
+    {row:2,column:1,value:'kim@sample.co.kr'},
+  ]}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('combobox',{name:'이름 상자'}).fill('B1')
+  await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
+  await page.locator('.grid-canvas').click({position:{x:200,y:60}})
+  await page.getByRole('combobox',{name:'이름 상자'}).fill('B1')
+  await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
+  await page.keyboard.press('Control+e')
+  await expect(page.getByRole('dialog',{name:'빠른 채우기'})).toBeVisible({timeout:10000})
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

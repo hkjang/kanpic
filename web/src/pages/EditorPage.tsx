@@ -553,6 +553,18 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(!cells)return {region:editorSelection,cells:editor.cells}
     return {region:dataRegion(cells,editorSelection.startRow,editorSelection.startColumn,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}),cells}
   }
+  /** 한 칸을 씨앗 삼아 그 칸이 속한 표를 읽는다. */
+  const resolveBlockAround=async(row:number,column:number)=>{
+    if(!activeSheet)return undefined
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1)return undefined
+    const label=`${address(1,1)}:${address(Math.min(used.max_row,MAX_GRID_ROWS),Math.min(Math.max(used.max_column,1),MAX_GRID_COLUMNS))}`
+    const result=await api<{items:Cell[]}>(`/api/v1/sheets/${activeSheet.id}/ranges/${label}`).catch(()=>undefined)
+    if(!result)return undefined
+    const cells=new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell]))
+    return {region:dataRegion(cells,row,column,{rows:MAX_GRID_ROWS,columns:MAX_GRID_COLUMNS}),cells}
+  }
   /** The block for menu labels, which cannot wait for a read. */
   const workingRegion=()=>{
     const single=editorSelection.startRow===editorSelection.endRow&&editorSelection.startColumn===editorSelection.endColumn
@@ -682,11 +694,25 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(!activeSheet||!writable())return
     const block=await resolveWorkingBlock()
     const column=editorSelection.startColumn
-    if(column<block.region.startColumn||column>block.region.endColumn){
+    // 대상 열만 골라 놓는 것이 가장 자연스러운 몸짓인데, 그러면 고른 것이
+    // 그 열뿐이라 규칙을 만들 재료가 없다. 그럴 때는 옆 열들을 표에서 찾아
+    // 붙이되, 사람이 고른 줄 범위는 그대로 지킨다.
+    let region=block.region
+    let cells=block.cells
+    if(editorSelection.startColumn===editorSelection.endColumn){
+      const around=await resolveBlockAround(editorSelection.startRow,editorSelection.startColumn)
+      if(around&&around.region.startColumn<around.region.endColumn){
+        cells=around.cells
+        region=editorSelection.startRow===editorSelection.endRow
+          ?around.region
+          :{...around.region,startRow:editorSelection.startRow,endRow:editorSelection.endRow}
+      }
+    }
+    if(column<region.startColumn||column>region.endColumn){
       alert('채울 열을 표 안에서 선택하세요.')
       return
     }
-    const plan=planFlashFill(block.cells,block.region,column)
+    const plan=planFlashFill(cells,region,column)
     if(plan==='no-examples'){alert('먼저 한두 칸을 손으로 채워 본보기를 보여 주세요.');return}
     if(plan==='nothing-to-fill'){alert('이 열에는 빈 칸이 없습니다.');return}
     if(plan==='no-rule'){alert('채워 둔 값에서 규칙을 찾지 못했습니다. 본보기를 하나 더 채워 보거나, 옆 열의 값으로 만들 수 있는 값인지 확인하세요.');return}
@@ -785,6 +811,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(primary&&key==='h'){event.preventDefault();openSearch(true);return}
     if(primary&&key==='k'){event.preventDefault();setQuickOpen(true);return}
     if(primary&&key==='p'){event.preventDefault();void printSheet();return}
+    // 엑셀을 쓰던 사람은 빠른 채우기를 Ctrl+E 로 부른다.
+    if(primary&&key==='e'){event.preventDefault();void startFlashFill();return}
     if(event.key==='F11'&&!primary&&!event.shiftKey){event.preventDefault();toggleFullscreen();return}
     if(primary&&key==='f'){event.preventDefault();openSearch(false);return}
     if(primary&&event.code==='Backquote'){event.preventDefault();setShowFormulas(current=>!current);return}
