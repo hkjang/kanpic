@@ -21,7 +21,10 @@ export type Extract=
 
 export type Transform='none'|'upper'|'lower'
 
-export type Part={literal:string}|{extract:Extract;transform:Transform}
+/** 앞을 채워 자릿수를 맞춘다. 사번과 상품코드가 늘 이 모양이다. */
+export type Pad={length:number;character:string}
+
+export type Part={literal:string}|{extract:Extract;transform:Transform;pad?:Pad}
 
 export type FillRule={parts:Part[]}
 
@@ -33,7 +36,8 @@ export function applyRule(rule:FillRule,sources:string[]):string{
     if('literal' in part)return part.literal
     const text=extract(part.extract,sources)
     if(text===undefined)return ''
-    return part.transform==='upper'?text.toUpperCase():part.transform==='lower'?text.toLowerCase():text
+    const shaped=part.transform==='upper'?text.toUpperCase():part.transform==='lower'?text.toLowerCase():text
+    return part.pad?shaped.padStart(part.pad.length,part.pad.character):shaped
   }).join('')
 }
 
@@ -95,6 +99,10 @@ const MAX_CANDIDATES=400
 
 /** 첫 예시를 조각내고, 조각마다 후보 규칙을 만들어 조합한다. */
 function* candidateRules(example:FillExample):Generator<FillRule>{
+  // 자릿수 맞추기를 먼저 본다. "7" 에서 "007" 은 글자 "00" 을 앞에 붙인 것으로도
+  // 설명되지만 그 규칙은 "12" 에서 "0012" 를 내놓는다. 채워 맞추는 규칙이
+  // 다음 줄에서도 맞을 확률이 훨씬 높다.
+  yield* padCandidates(example)
   const segments=segment(example.output,example.sources)
   if(!segments)return
   const choices=segments.map(part=>'literal' in part?[part]:partCandidates(part,example.sources))
@@ -102,6 +110,27 @@ function* candidateRules(example:FillExample):Generator<FillRule>{
   for(const combination of combine(choices)){
     if(produced++>=MAX_CANDIDATES)return
     yield {parts:combination}
+  }
+}
+
+const MAX_PAD_LENGTH=64
+
+/** 원본을 그대로 두고 앞만 채워 만들어지는 출력인지 본다. */
+function* padCandidates(example:FillExample):Generator<FillRule>{
+  const output=example.output
+  if(output.length<2||output.length>MAX_PAD_LENGTH)return
+  for(let column=0;column<example.sources.length;column+=1){
+    const source=example.sources[column]
+    if(!source||source.length>=output.length||!output.endsWith(source))continue
+    const filler=output.slice(0,output.length-source.length)
+    // 채우는 글자는 하나여야 한다. 여러 글자면 그것은 사람이 적은 말이다.
+    const character=filler[0]
+    if(!filler.split('').every(letter=>letter===character))continue
+    // 그리고 그 글자는 자리를 메우는 글자여야 한다. "홍"+"길동" 에서 "홍" 을
+    // 채움 글자로 읽으면 다음 줄의 김철수가 홍철수가 된다.
+    if(character!=='0'&&character!==' ')continue
+    if(character==='0'&&!/^[0-9]+$/.test(source))continue
+    yield {parts:[{extract:{kind:'whole',column},transform:'none',pad:{length:output.length,character}}]}
   }
 }
 

@@ -116,3 +116,30 @@ test('Ctrl+E reaches for it the way Excel does', async ({ page, request }) => {
   await expect(page.getByRole('dialog',{name:'빠른 채우기'})).toBeVisible({timeout:10000})
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 사번과 상품코드는 늘 자릿수를 맞춰 쓴다.
+test('it learns to pad a number to a fixed width', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`자릿수 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`pad-${stamp}`,cells:[
+    {row:1,column:1,value:'번호'},{row:1,column:2,value:'사번'},
+    {row:2,column:1,value:'7'},{row:2,column:2,value:'007'},
+    {row:3,column:1,value:'12'},{row:3,column:2,value:'012'},
+    {row:4,column:1,value:'5'},
+    {row:5,column:1,value:'123'},
+  ]}})
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.getByRole('combobox',{name:'이름 상자'}).fill('B4')
+  await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
+  await page.keyboard.press('Control+e')
+  const dialog=page.getByRole('dialog',{name:'빠른 채우기'})
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button',{name:/칸 채우기/}).click()
+  await expect.poll(async()=>{
+    const after=await request.get(`/api/v1/sheets/${sheet}/ranges/B4:B5`).then(r=>r.json())
+    return after.items.map((cell:{row:number;value:unknown})=>`${cell.row}:${cell.value}`).sort()
+  },{timeout:10000}).toEqual(['4:005','5:123'])
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

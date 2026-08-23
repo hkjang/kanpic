@@ -151,8 +151,33 @@ describe('flashFill with a single example', () => {
     expect(applyRule(rule!,['2028-12-01'])).toBe('01/12/2028')
   })
 
-  // 자릿수 맞추기는 한 줄만 보고는 알 수 없고, 두 줄을 보면 어긋난다.
-  it('does not pretend to pad numbers', () => {
-    expect(inferRule(rows([[['7'],'007'],[['12'],'012']]))).toBeUndefined()
+  // 사번과 상품코드는 늘 자릿수를 맞춰 쓴다.
+  it('learns to pad a number to a fixed width', () => {
+    const rule=inferRule(rows([[['7'],'007'],[['12'],'012']]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['5'])).toBe('005')
+    expect(applyRule(rule!,['123'])).toBe('123')
+  })
+
+  // 채움 글자는 자리를 메우는 글자여야 한다. 앞에 붙은 글자를 모두 채움으로
+  // 읽으면 성이 채움 글자가 되어 다음 줄의 김철수가 홍철수가 된다.
+  it('does not read a word as a padding character', () => {
+    const rule=inferRule(rows([[['길동','홍'],'홍길동']]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['철수','김'])).toBe('김철수')
+  })
+
+  // "007" 과 "0012" 는 자릿수를 맞춘 것이 아니라 앞에 00 을 붙인 것이다.
+  // 둘 다 설명되므로 그렇게 읽는 것이 맞다.
+  it('reads a fixed prefix as a prefix, not as padding', () => {
+    const rule=inferRule(rows([[['7'],'007'],[['12'],'0012']]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['5'])).toBe('005')
+    expect(applyRule(rule!,['123'])).toBe('00123')
+  })
+
+  // 어느 쪽으로도 설명되지 않으면 채우지 않는다.
+  it('refuses when no padding or prefix explains both', () => {
+    expect(inferRule(rows([[['7'],'007'],[['12'],'12']]))).toBeUndefined()
   })
 })
