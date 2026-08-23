@@ -63,3 +63,57 @@ test('the print page allows styling and nothing else', async ({ request }) => {
   expect(policy).not.toContain('script-src')
   expect(policy).not.toContain('connect-src')
 })
+
+// 조건부 서식은 값에 따라 그때그때 정해지므로 셀에 저장돼 있지 않다. 인쇄가
+// 따로 묻지 않으면, 읽으라고 칠해 놓은 표가 종이에서는 아무 표시 없는 숫자
+// 뭉치가 된다.
+test('a printed sheet carries the conditional formatting the reader sees', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`조건부 인쇄 ${stamp}`}}).then(r=>r.json())
+  const sheet=workbook.sheets[0].id as string
+  await request.patch(`/api/v1/sheets/${sheet}/cells:batch`,{data:{idempotency_key:`cf-${stamp}`,cells:[
+    {row:1,column:1,value:10},{row:2,column:1,value:500},
+  ]}})
+  await request.post(`/api/v1/sheets/${sheet}/conditional-formats`,{data:{
+    idempotency_key:`rule-${stamp}`,name:'큰 값',range:'A1:A2',rule_type:'value',operator:'greater_than',
+    value:100,style:{background:'#00ff00'},priority:1}})
+  await request.post(`/api/v1/sheets/${sheet}/conditional-formats`,{data:{
+    idempotency_key:`icon-${stamp}`,name:'아이콘',range:'A1:A2',rule_type:'icon_set',icon_style:'3Arrows',priority:2}})
+
+  await page.goto(`/workbooks/${workbook.id}`)
+  await expect(page.locator('.grid-canvas')).toBeVisible()
+  await page.evaluate(()=>{(window as unknown as {print:()=>void}).print=()=>{}})
+  await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'파일',exact:true}).click()
+  await page.getByRole('menuitem',{name:'인쇄'}).click()
+
+  const printed=await (async()=>{
+    for(let attempt=0;attempt<50;attempt+=1){
+      const found=await page.evaluate(()=>{
+        for(const frame of [...document.querySelectorAll('iframe')]){
+          const doc=frame.contentDocument, view=doc?.defaultView
+          if(!doc||!view)continue
+          const cells=[...doc.querySelectorAll('td')]
+          if(cells.length<2)continue
+          return cells.map(cell=>({
+            text:cell.textContent??'',
+            background:view.getComputedStyle(cell).backgroundColor,
+            mark:cell.querySelector('.mark')?.textContent??'',
+          }))
+        }
+        return undefined
+      })
+      if(found)return found
+      await page.waitForTimeout(100)
+    }
+    throw new Error('the print document never appeared')
+  })()
+
+  // 규칙에 걸린 칸만 칠해진다.
+  expect(printed[1].background).toBe('rgb(0, 255, 0)')
+  expect(printed[0].background).toBe('rgba(0, 0, 0, 0)')
+  // 아이콘은 값을 밀어낼 뿐 대신하지 않는다.
+  expect(printed[0].mark).toBe('▼')
+  expect(printed[1].mark).toBe('▲')
+  expect(printed[1].text).toContain('500')
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

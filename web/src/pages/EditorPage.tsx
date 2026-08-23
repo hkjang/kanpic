@@ -69,12 +69,12 @@ import { SortScopeDialog } from '../components/SortScopeDialog'
 import { SubtotalDialog } from '../components/SubtotalDialog'
 import { planRemoveSubtotals, type SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
-import { printableDocument } from '../lib/printSheet'
+import { printableDocument, usedRegion } from '../lib/printSheet'
 import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -108,6 +108,8 @@ const FILL_COLORS:Array<{label:string;value:string|null}>=[
 ]
 const MAX_SPLIT_COLUMNS=20
 const MAX_PRINT_ROWS=20_000
+// 서버가 한 번에 재는 조건부 서식 칸 수의 한도와 같다.
+const MAX_CONDITIONAL_CELLS=10_000
 const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
@@ -648,6 +650,28 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const quickSort=async(direction:'asc'|'desc')=>sortColumn(editorSelection.startColumn,direction)
   // The canvas cannot be printed directly, so printing renders the used range
   // into a hidden document the browser can paginate.
+  /**
+   * 인쇄할 범위의 조건부 서식을 받아 온다. 서버는 한 번에 재는 칸 수에 한도가
+   * 있으므로 범위를 잘라 여러 번 묻는다. 도중에 실패하면 인쇄 자체를 막지는
+   * 않는다 — 색이 빠진 종이가 안 나오는 종이보다는 낫다.
+   */
+  const printConditional=async(sheetId:string,cells:Map<string,Cell>)=>{
+    const painted=new Map<string,ConditionalFormatCell>()
+    const region=usedRegion(cells)
+    if(!region)return painted
+    const perRequest=Math.max(1,Math.floor(MAX_CONDITIONAL_CELLS/Math.max(1,region.endColumn-region.startColumn+1)))
+    try{
+      for(let start=region.startRow;start<=region.endRow;start+=perRequest){
+        const end=Math.min(region.endRow,start+perRequest-1)
+        const range=`${address(start,region.startColumn)}:${address(end,region.endColumn)}`
+        const evaluated=await api<ConditionalFormatEvaluation>(`/api/v1/sheets/${sheetId}/conditional-formats:evaluate?range=${encodeURIComponent(range)}`)
+        for(const item of evaluated.items)painted.set(cellKey(item.row,item.column),item)
+      }
+    }catch{
+      return painted
+    }
+    return painted
+  }
   const printSheet=async()=>{
     if(!activeSheet)return
     // The grid holds only the rows on screen, so printing from memory would
@@ -663,7 +687,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     // 화면에서 정한 열 너비 그대로 찍어야 종이 폭에 몇 열이 들어가는지 셀 수
     // 있다. 확대 배율은 화면 사정이므로 뺀다.
     const printWidths=new Map((activeSheet.layout?.column_widths??[]).map(item=>[item.index,item.size]))
-    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,
+    // 조건부 서식은 값에 따라 그때그때 정해지므로 셀에 저장돼 있지 않다.
+    // 따로 물어보지 않으면 사람이 읽으라고 칠해 놓은 표가 종이에서는 아무
+    // 표시 없는 숫자 뭉치가 된다.
+    const conditional=await printConditional(activeSheet.id,printed.cells)
+    const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,conditional,
       columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'

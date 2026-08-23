@@ -226,3 +226,42 @@ describe('print styles', () => {
     expect(cellCSSForTest({font_size:0})).toContain('font-size:4px')
   })
 })
+
+// 조건부 서식은 셀에 저장된 서식이 아니라 값에 따라 그때그때 정해진다. 인쇄가
+// 저장된 서식만 읽으면, 사람이 읽으라고 칠해 놓은 표가 종이에서는 아무 표시
+// 없는 숫자 뭉치가 된다.
+describe('printed conditional formatting', () => {
+  const cells=new Map([
+    [cellKey(1,1),{sheet_id:'s',row:1,column:1,value:10,updated_at:''}],
+    [cellKey(2,1),{sheet_id:'s',row:2,column:1,value:500,style:{bold:true},updated_at:''}],
+  ])
+
+  it('paints the cell the rule painted, over the cell own format', () => {
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:false,
+      conditional:new Map([[cellKey(2,1),{style:{background:'#00ff00'}}]])})
+    expect(html).toContain('background:#00ff00')
+    // 셀 자신의 서식도 남는다 — 얹히는 것이지 갈아치우는 것이 아니다.
+    expect(html).toContain('font-weight:700')
+  })
+
+  it('draws a data bar as a band the width of its ratio', () => {
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:false,
+      conditional:new Map([[cellKey(2,1),{bar:{color:'#38a3a5',ratio:0.75}}]])})
+    expect(html).toContain('linear-gradient(to right,#38a3a5 75%,transparent 75%)')
+  })
+
+  // 아이콘은 흑백으로 인쇄해도 모양이 남는 글자로 찍는다.
+  it('prints an icon beside the value rather than instead of it', () => {
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:false,
+      conditional:new Map([[cellKey(2,1),{icon:{style:'3Arrows',index:2,count:3}}]])})
+    expect(html).toContain('▲')
+    expect(html).toContain('500')
+  })
+
+  it('ignores an icon set it has no glyphs for', () => {
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:false,
+      conditional:new Map([[cellKey(2,1),{icon:{style:'7Hearts',index:0,count:7}}]])})
+    expect(html).toContain('500')
+    expect(html).not.toContain('undefined')
+  })
+})

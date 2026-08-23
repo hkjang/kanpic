@@ -17,6 +17,12 @@ export type PrintOptions={
    */
   hiddenRows?:Set<number>
   /**
+   * 조건부 서식이 화면에서 칠한 결과. 셀에 저장된 서식이 아니라 값에 따라
+   * 그때그때 정해지는 것이라 따로 받는다. 이것이 없으면 사람이 읽으라고
+   * 칠해 놓은 표가 종이에서는 아무 표시 없는 숫자 뭉치가 된다.
+   */
+  conditional?:Map<string,{style?:Record<string,unknown>;bar?:{color:string;ratio:number};icon?:{style:string;index:number;count:number}}>
+  /**
    * 열의 실제 너비(px). 주지 않으면 기본 너비로 셈한다. 이것이 있어야 종이
    * 한 장에 몇 열이 들어가는지 알 수 있다.
    */
@@ -116,14 +122,44 @@ function cellCSS(style?:Record<string,unknown>){
   return rules.join(';')
 }
 
-function rowCells(cells:Map<string,Cell>,row:number,startColumn:number,endColumn:number,headers:boolean){
+function rowCells(cells:Map<string,Cell>,row:number,startColumn:number,endColumn:number,headers:boolean,conditional?:PrintOptions['conditional']){
   const columns:string[]=headers?[`<th class="row-head">${row}</th>`]:[]
   for(let column=startColumn;column<=endColumn;column+=1){
-    const cell=cells.get(cellKey(row,column))
+    const key=cellKey(row,column)
+    const cell=cells.get(key)
+    const painted=conditional?.get(key)
     const text=cell?formatCellValue(cell.value,cell.style):''
-    columns.push(`<td style="${cellCSS(cell?.style)}">${escapeHTML(text)}</td>`)
+    // 조건부 서식이 셀 서식 위에 얹힌다 — 화면과 같은 차례다.
+    const style={...(cell?.style??{}),...(painted?.style??{})}
+    const declarations=[cellCSS(style),dataBarCSS(painted?.bar)].filter(Boolean).join(';')
+    const mark=painted?.icon?`<span class="mark">${escapeHTML(printIcon(painted.icon))}</span>`:''
+    columns.push(`<td style="${declarations}">${mark}${escapeHTML(text)}</td>`)
   }
   return columns.join('')
+}
+
+// 데이터 막대는 종이에서 그라디언트로 그린다. 화면의 반투명 막대와 같은 자리에
+// 같은 비율로 선다.
+function dataBarCSS(bar?:{color:string;ratio:number}){
+  if(!bar||!safeColor(bar.color))return ''
+  const width=Math.round(Math.max(0,Math.min(1,bar.ratio))*100)
+  return `background:linear-gradient(to right,${safeColor(bar.color)} ${width}%,transparent ${width}%)`
+}
+
+// 아이콘은 글자로 찍는다. 흑백으로 인쇄해도 모양이 남는 것을 고른다.
+const PRINT_ICONS:Record<string,string[]>={
+  '3TrafficLights1':['●','●','●'],
+  '3Arrows':['▼','▶','▲'],
+  '3Symbols':['✗','!','✓'],
+  '4Arrows':['▼','↘','↗','▲'],
+  '5Arrows':['▼','↘','▶','↗','▲'],
+  '5Quarters':['○','◔','◑','◕','●'],
+}
+
+function printIcon(icon:{style:string;index:number;count:number}){
+  const set=PRINT_ICONS[icon.style]
+  if(!set)return ''
+  return set[Math.min(Math.max(icon.index,0),set.length-1)]??''
 }
 
 /**
@@ -152,13 +188,13 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
       const frozenEnd=Math.min(region.startRow+Math.min(options.frozenRows??0,MAX_REPEATED_HEADER_ROWS)-1,region.endRow)
       for(let row=region.startRow;row<=frozenEnd;row+=1){
         if(options.hiddenRows?.has(row))continue
-        headLines.push(`<tr class="frozen">${rowCells(cells,row,page.start,page.end,options.headers)}</tr>`)
+        headLines.push(`<tr class="frozen">${rowCells(cells,row,page.start,page.end,options.headers,options.conditional)}</tr>`)
       }
       const head=headLines.length>0?`<thead>${headLines.join('')}</thead>`:''
       const rows:string[]=[]
       for(let row=frozenEnd+1;row<=region.endRow;row+=1){
         if(options.hiddenRows?.has(row))continue
-        rows.push(`<tr>${rowCells(cells,row,page.start,page.end,options.headers)}</tr>`)
+        rows.push(`<tr>${rowCells(cells,row,page.start,page.end,options.headers,options.conditional)}</tr>`)
       }
       printedRows=rows.length+headLines.length
       if(rows.length===0)continue
@@ -167,6 +203,7 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
   }
   const empty=printedRows===0?'<p class="empty">인쇄할 데이터가 없습니다.</p>':''
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHTML(options.title)}</title><style>
+    td .mark{margin-right:4px}
   @page{margin:14mm}
   body{font:12px Inter,Pretendard,'Malgun Gothic',sans-serif;color:#1c2b33;margin:0}
   header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
