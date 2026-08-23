@@ -118,3 +118,41 @@ describe('flashFill refuses rather than guesses', () => {
     expect(applyRule(rule!,['다다@라라'])).toBe('다다')
   })
 })
+
+// 본보기가 하나뿐일 때가 가장 위험하다. 어긋나는 본보기가 없으니 틀린 규칙도
+// 통과하기 때문이다.
+describe('flashFill with a single example', () => {
+  // 2026-08-23 에서 "2026년 8월 23일" 을 만들려면 앞의 0을 떼야 하는데, 그 규칙이
+  // 없으니 "8월" 을 글자로 굳혀 넣게 된다. 그러면 다음 줄도 8월이 된다.
+  it('refuses a rule that freezes this row data into text', () => {
+    expect(inferRule(rows([[['2026-08-23'],'2026년 8월 23일']]))).toBeUndefined()
+  })
+
+  // 같은 모양이라도 자료를 굳혀 넣지 않으면 괜찮다.
+  it('keeps a rule whose text is punctuation the person typed', () => {
+    const rule=inferRule(rows([[['2026-08-23'],'2026년 08월 23일']]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['2027-01-15'])).toBe('2027년 01월 15일')
+  })
+
+  it('keeps a label that owes nothing to the row', () => {
+    const rule=inferRule(rows([[['1234'],'ID-1234']]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['5678'])).toBe('ID-5678')
+  })
+
+  // 본보기를 하나 더 주면 굳혀 넣을 수 없게 되므로 규칙이 잡힌다.
+  it('accepts what a second example makes safe', () => {
+    const rule=inferRule(rows([
+      [['2026-08-23'],'23/08/2026'],
+      [['2027-01-15'],'15/01/2027'],
+    ]))
+    expect(rule).toBeDefined()
+    expect(applyRule(rule!,['2028-12-01'])).toBe('01/12/2028')
+  })
+
+  // 자릿수 맞추기는 한 줄만 보고는 알 수 없고, 두 줄을 보면 어긋난다.
+  it('does not pretend to pad numbers', () => {
+    expect(inferRule(rows([[['7'],'007'],[['12'],'012']]))).toBeUndefined()
+  })
+})

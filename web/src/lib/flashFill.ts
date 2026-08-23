@@ -64,10 +64,31 @@ function extract(rule:Extract,sources:string[]):string|undefined{
 export function inferRule(examples:FillExample[]):FillRule|undefined{
   const usable=examples.filter(example=>example.output.trim()!=='')
   if(usable.length===0)return undefined
+  const fits=(candidate:FillRule)=>usable.every(example=>applyRule(candidate,example.sources)===example.output)
   for(const candidate of candidateRules(usable[0])){
-    if(usable.every(example=>applyRule(candidate,example.sources)===example.output))return candidate
+    if(!fits(candidate))continue
+    // 본보기가 둘 이상이면 서로 어긋나는 규칙은 이미 걸러졌다.
+    if(usable.length>1)return candidate
+    if(!bakesInData(candidate,usable[0].sources))return candidate
   }
+  // 본보기가 하나뿐인데 규칙이 자료를 글자로 굳혀 넣었다면, 그것은 이 줄에서만
+  // 맞는 규칙이다. 2026-08-23 에서 "2026년 8월 23일" 을 만들 때 "8월" 을 글자로
+  // 넣으면 다음 줄도 8월이 된다 — 조용히, 틀리게. 본보기를 하나 더 받는 편이 낫다.
   return undefined
+}
+
+/** 규칙의 글자 조각이 이 줄의 자료에서 온 것처럼 보이는지. */
+function bakesInData(rule:FillRule,sources:string[]):boolean{
+  const haystack=sources.join('\u0000').toLowerCase()
+  for(const part of rule.parts){
+    if(!('literal' in part))continue
+    for(const letter of part.literal.toLowerCase()){
+      // 글자와 숫자만 따진다. 구분자와 띄어쓰기는 사람이 적은 것이다.
+      if(!/[\p{L}\p{N}]/u.test(letter))continue
+      if(haystack.includes(letter))return true
+    }
+  }
+  return false
 }
 
 const MAX_CANDIDATES=400
