@@ -91,17 +91,7 @@ func (e *Evaluator) Evaluate(input string, cells map[string]any) Result {
 	for address, value := range cells {
 		normalized[normalizeAddress(address)] = value
 	}
-	value, evalErr := root.eval(normalized)
-	// A LAMBDA on its own is a function, not a result. Storing it would put
-	// something in the cell that nothing can display or calculate with.
-	if _, isFunction := value.(lambdaValue); isFunction && evalErr == nil {
-		evalErr = formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
-	}
-	// Infinity and NaN cannot be written as JSON, so a result that overflowed
-	// used to reach the browser as an empty response body rather than a value.
-	if evalErr == nil && !finiteValue(value) {
-		evalErr = formulaError("#NUM!", "the result is outside the range a number can hold")
-	}
+	value, evalErr := storableResult(root.eval(normalized))
 	dependencies := make([]string, 0, len(parser.dependencies))
 	for dependency := range parser.dependencies {
 		dependencies = append(dependencies, dependency)
@@ -1299,6 +1289,31 @@ func publicValue(value any) any {
 	default:
 		return value
 	}
+}
+
+// storableResult applies the checks a value has to pass before anything can
+// keep it. 수식은 두 갈래로 셈한다 — 미리보기는 Evaluate 로, 칸에 실제로
+// 담기는 값은 graph.go 의 Recalculate 로 간다. 두 갈래가 같은 답을 내야
+// 하므로 검사도 한자리에 모아 둔다.
+//
+// 예전에는 이 검사가 Evaluate 에만 있었다. 그래서 =EXP(1000) 을 미리보기로
+// 보면 #NUM! 인데 칸에 적으면 무한대가 그대로 흘러갔고, JSON 으로 옮길 수
+// 없어 저장 요청이 통째로 500 이 되었다. 저장 대기줄은 500 을 지우지 않고
+// 다시 보내므로, 그 워크북은 그 뒤로 아무것도 저장하지 못했다.
+func storableResult(value any, evalErr error) (any, error) {
+	if evalErr != nil {
+		return value, evalErr
+	}
+	// A LAMBDA on its own is a function, not a result. Storing it would put
+	// something in the cell that nothing can display or calculate with.
+	if _, isFunction := value.(lambdaValue); isFunction {
+		return value, formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
+	}
+	// Infinity and NaN cannot be written as JSON.
+	if !finiteValue(value) {
+		return value, formulaError("#NUM!", "the result is outside the range a number can hold")
+	}
+	return value, nil
 }
 
 // finiteValue reports whether every number in a result can be written down.

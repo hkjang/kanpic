@@ -193,7 +193,7 @@ func (e *Evaluator) Recalculate(cells map[string]CellState, changed []string) (G
 				values[address] = forced
 				results[address] = RecalculatedCell{Address: address, Dependencies: dependencies[address], Error: forced}
 			} else if root := nodes[address]; root != nil {
-				value, err := root.eval(values)
+				value, err := storableResult(root.eval(values))
 				if err != nil {
 					formulaErr, ok := err.(*Error)
 					if !ok {
