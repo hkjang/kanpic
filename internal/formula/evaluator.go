@@ -1358,6 +1358,12 @@ func storableResult(value any, evalErr error) (any, error) {
 	if _, isFunction := value.(lambdaValue); isFunction {
 		return value, formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
 	}
+	// 오류가 값으로 돌아오는 자리가 있다. 배열 안의 오류 칸을 INDEX 로
+	// 꺼내면 오류 자체가 값이 된다. 그대로 두면 칸에 {code, message} 라는
+	// 덩어리가 담겨 #N/A 대신 낯선 글자가 보인다.
+	if formulaErr, isError := value.(*Error); isError {
+		return value, formulaErr
+	}
 	// Infinity and NaN cannot be written as JSON.
 	if !finiteValue(value) {
 		return value, formulaError("#NUM!", "the result is outside the range a number can hold")
@@ -1566,6 +1572,18 @@ var elementwiseFunctions = map[string]struct{}{
 	// 이어 붙여야 한다. =CONCAT({"a";"b"},"!") 는 "ab!" 다.
 }
 
+// answersAboutErrors 는 오류가 든 값에도 답을 내는 함수들이다. 오류를
+// 그대로 흘려보내면 안 되고, 오류를 받아서 답해야 한다.
+//
+//	=ISNUMBER(오류)   FALSE — "숫자가 아니다" 가 옳은 답이다
+//	=ERROR.TYPE(오류) 7     — 오류를 들여다보라고 있는 함수다
+//
+// 나머지 함수는 오류를 그대로 흘려보낸다. =ABS(오류) 는 오류다.
+var answersAboutErrors = map[string]struct{}{
+	"ISBLANK": {}, "ISNUMBER": {}, "ISTEXT": {}, "ISNONTEXT": {},
+	"ISLOGICAL": {}, "TYPE": {}, "ERROR.TYPE": {},
+}
+
 // broadcastElementwise 는 배열이 섞인 인수를 칸마다 갈라 같은 함수를 다시
 // 부른다. 셈하는 자리를 따로 두지 않고 그대로 되부르므로, 함수 하나를
 // 고치면 홑값과 배열이 함께 고쳐진다.
@@ -1590,11 +1608,49 @@ func broadcastElementwise(name string, n functionNode, evaluated []any, cells ma
 		rows, columns, found = selected.rows, selected.columns, true
 	}
 	if !found {
+		// 배열이 없으면 칸마다 나눌 것도 없다. 다만 위에서 오류를 값으로
+		// 받아 왔으므로, 흘려보내는 함수라면 여기서 오류로 돌려주어야
+		// 한다. 그러지 않으면 "#N/A" 라는 글자를 값으로 알고 셈한다.
+		if _, answers := answersAboutErrors[name]; !answers {
+			for _, value := range evaluated {
+				if formulaErr, isError := value.(*Error); isError {
+					return nil, true, formulaErr
+				}
+			}
+		}
 		return nil, false, nil
 	}
 	// 칸 하나짜리 배열은 홑값과 같게 다룬다.
 	result := arrayValue{rows: rows, columns: columns, values: make([]any, rows*columns)}
 	for index := range result.values {
+		// 오류가 든 칸은 그 칸만 오류로 남긴다. 함수에 넘기지 않는다.
+		// 오류에도 답하는 함수는 그대로 넘겨 답하게 둔다.
+		var carried *Error
+		_, answers := answersAboutErrors[name]
+		for _, value := range evaluated {
+			if answers {
+				break
+			}
+			if formulaErr, isError := value.(*Error); isError {
+				carried = formulaErr
+				break
+			}
+			if !isArrayOperand(value) {
+				continue
+			}
+			selected, err := toArray(value)
+			if err != nil {
+				return nil, true, err
+			}
+			if formulaErr, isError := selected.values[index].(*Error); isError {
+				carried = formulaErr
+				break
+			}
+		}
+		if carried != nil {
+			result.values[index] = carried
+			continue
+		}
 		piece := functionNode{name: name, arguments: make([]node, len(evaluated))}
 		for position, value := range evaluated {
 			if !isArrayOperand(value) {
@@ -1656,6 +1712,16 @@ func toleratesErrors(name string) bool {
 	// =IF(ISNUMBER(A2),A2,0) 은 오류를 피해 가려고 쓰는 흔한 꼴인데,
 	// 그 ISNUMBER 가 오류에 걸려 멈추면 피할 방법이 없어진다.
 	case "ISBLANK", "ISNUMBER", "ISTEXT", "ISNONTEXT", "ISLOGICAL", "TYPE", "ERROR.TYPE":
+		return true
+	}
+	// 칸마다 셈하는 함수도 범위를 통째로 멈추지 않고 받는다. 오류가 든
+	// 칸은 그 칸만 오류가 되고 나머지는 제 값이 나와야 한다.
+	//
+	// 그러지 않으면 조용히 틀린 답이 나온다. 열에 #N/A 가 하나 있을 때
+	// =SUMPRODUCT(--ISNUMBER(FIND("서울",A1:A100))) 이 FIND 에서 통째로
+	// 멈추고, 바깥의 ISNUMBER 가 "숫자가 아니다" 라고 답해 개수가 0 이
+	// 된다. 오류도 아니고 맞지도 않은 답이다.
+	if _, elementwise := elementwiseFunctions[name]; elementwise {
 		return true
 	}
 	// ISEVEN 과 ISODD 는 오류를 그대로 낸다. 짝수인지 묻기 전에 수여야

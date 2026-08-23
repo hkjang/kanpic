@@ -1383,3 +1383,55 @@ func TestFunctionsWithSeveralArgumentsSpreadTogether(t *testing.T) {
 		}
 	}
 }
+
+// 범위에 오류가 든 칸이 하나 섞여 있어도, 칸마다 셈하는 함수는 그 칸만
+// 오류로 남기고 나머지는 제 값을 내야 한다.
+//
+// 그러지 않으면 **조용히 틀린 답** 이 나온다. FIND 가 범위를 통째로
+// 멈추면 바깥의 ISNUMBER 가 "숫자가 아니다" 라고 답해 개수가 0 이 된다.
+// 오류도 아니고 맞지도 않은 답이라 눈으로 가려낼 수 없다.
+func TestOneBadCellDoesNotSilenceTheWholeRange(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": 1.0,
+		"A2": "서울 지점",
+		"A3": 3.0,
+		"A4": formulaError("#N/A", "no value"),
+		"A5": "서울 본사",
+	}
+	// 오류 칸이 있어도 "서울" 이 든 칸을 센다. 고치기 전에는 0 이었다.
+	assertClose(t, "FIND idiom", evaluateNumber(t, `=SUMPRODUCT(--ISNUMBER(FIND("서울",A1:A5)))`, cells), 2, 1e-9)
+	assertClose(t, "ISNUMBER", evaluateNumber(t, `=SUMPRODUCT(--ISNUMBER(A1:A5))`, cells), 2, 1e-9)
+
+	// 오류가 든 칸은 그 칸만 오류다.
+	if result := New().Evaluate("=INDEX(ABS(A1:A5),4)", cells); result.Error == nil {
+		t.Errorf("=INDEX(ABS(A1:A5),4) = %v, 그 칸은 오류여야 한다", result.Value)
+	}
+	if result := New().Evaluate("=INDEX(ABS({-1;-2}),2)", cells); result.Error != nil || result.Value != 2.0 {
+		t.Errorf("=INDEX(ABS({-1;-2}),2) = %v err=%v, want 2", result.Value, result.Error)
+	}
+
+	// 오류에도 답하는 함수는 오류를 받아 답한다. 흘려보내지 않는다.
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=ISNUMBER(A4)", false},
+		{"=ISBLANK(A4)", false},
+		{"=TYPE(A4)", 16.0},
+		{"=ERROR.TYPE(A4)", 7.0},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+	// 흘려보내는 함수는 홑값 오류를 그대로 낸다.
+	if result := New().Evaluate("=ABS(A4)", cells); result.Error == nil {
+		t.Errorf("=ABS(A4) = %v, 오류여야 한다", result.Value)
+	}
+}
