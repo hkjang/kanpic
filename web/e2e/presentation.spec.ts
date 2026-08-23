@@ -21,16 +21,17 @@ test('a range becomes a deck, and the menu stays hidden when nobody set one up',
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
-  const entry=page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 만들기…'})
+  const group=page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션',exact:true})
 
   if(!configured.enabled){
     // 설정되지 않은 기능은 메뉴에 없어야 한다.
-    await expect(entry).toHaveCount(0)
+    await expect(group).toHaveCount(0)
     await request.delete(`/api/v1/workbooks/${workbook.id}`)
     return
   }
 
-  await entry.click()
+  await group.click()
+  await page.getByRole('menuitem',{name:'프레젠테이션 만들기…'}).click()
   const dialog=page.getByRole('dialog',{name:'프레젠테이션 만들기'})
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('프레젠테이션 제목').fill(`영업실적 ${stamp}`)
@@ -82,7 +83,8 @@ test('the panel says when a deck has fallen behind, and refreshes it in place', 
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
-  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 목록'}).click()
+  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션',exact:true}).click()
+  await page.getByRole('menuitem',{name:'만든 프레젠테이션 목록'}).click()
 
   const card=page.locator('.presentation-panel-list article')
   await expect(card).toHaveCount(1)
@@ -121,7 +123,8 @@ test('a roadmap becomes a process, not a table', async ({ page, request }) => {
   await page.goto(`/workbooks/${workbook.id}`)
   await expect(page.locator('.grid-canvas')).toBeVisible()
   await page.getByRole('menubar',{name:'워크북 메뉴'}).getByRole('menuitem',{name:'데이터',exact:true}).click()
-  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션 만들기…'}).click()
+  await page.getByRole('menu',{name:'데이터 메뉴'}).getByRole('menuitem',{name:'프레젠테이션',exact:true}).click()
+  await page.getByRole('menuitem',{name:'프레젠테이션 만들기…'}).click()
   const dialog=page.getByRole('dialog',{name:'프레젠테이션 만들기'})
   await expect(dialog).toBeVisible()
 

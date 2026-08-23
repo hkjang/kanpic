@@ -31,6 +31,7 @@ import { CommentPanel } from '../components/CommentPanel'
 import { ConflictPanel } from '../components/ConflictPanel'
 import { ConditionalFormatDialog } from '../components/ConditionalFormatDialog'
 import { PresentationPanel,type PresentationRecord } from '../components/PresentationPanel'
+import { GoalSeekDialog,type GoalSeekOutcome } from '../components/GoalSeekDialog'
 import { PresentationDialog,type PresentationAnalysis,type PresentationDeck,type PresentationResult,type PresentationTemplate } from '../components/PresentationDialog'
 import { DataValidationDialog } from '../components/DataValidationDialog'
 import { FilterDialog } from '../components/FilterDialog'
@@ -111,7 +112,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const functionCatalog=useFunctionCatalog()
@@ -1018,10 +1019,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
       {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
-      ...(presentationEnabled?[
+      {kind:'item',label:'목표값 찾기…',onSelect:()=>setGoalSeekOpen(true)},
+      ...(presentationEnabled?[{kind:'submenu' as const,label:'프레젠테이션',items:[
         {kind:'item' as const,label:'프레젠테이션 만들기…',onSelect:()=>setPresentationOpen(true)},
-        {kind:'item' as const,label:'프레젠테이션 목록',onSelect:()=>setRightPanel('presentations')},
-      ]:[]),
+        {kind:'item' as const,label:'만든 프레젠테이션 목록',onSelect:()=>setRightPanel('presentations')},
+      ]}]:[]),
       {kind:'item',label:'슬라이서 추가',disabled:!canWrite,onSelect:()=>void addSlicer().catch(error=>alert(error instanceof Error?error.message:'슬라이서를 추가하지 못했습니다.'))},
       {kind:'item',label:'데이터 검증…',onSelect:()=>setValidationOpen(true)},
       {kind:'item',label:'피벗 테이블…',onSelect:()=>setPivotDialog(null)},
@@ -1198,6 +1200,16 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {formatOpen&&<FormatDialog style={activeCell?.style} onClose={()=>setFormatOpen(false)} onApply={applyFormat}/>}
     {filterOpen&&<FilterDialog range={editorSelection} views={filterViews.data?.items??[]} result={filterResult.data} onClose={()=>setFilterOpen(false)} onCreate={createFilter} onUpdate={updateFilter} onDelete={deleteFilter}/>} 
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 
+    {goalSeekOpen&&activeSheet&&<GoalSeekDialog
+      defaultTarget={address(editorSelection.startRow,editorSelection.startColumn)}
+      canWrite={canWrite}
+      onClose={()=>setGoalSeekOpen(false)}
+      onSeek={async input=>(await api<{result:GoalSeekOutcome}>(`/api/v1/sheets/${activeSheet.id}/goal-seek`,{method:'POST',body:JSON.stringify(input)})).result}
+      onApply={async(cell,value)=>{
+        const parsed=parseFilterRange(`${cell}:${cell}`)
+        if(!parsed)throw new Error('바꿀 셀 주소가 올바르지 않습니다.')
+        await writeCells([{row:parsed.startRow,column:parsed.startColumn,value}])
+      }}/>}
     {presentationOpen&&activeSheet&&<PresentationDialog range={workingRegion()} onClose={()=>setPresentationOpen(false)} onPreview={previewPresentation} onCreate={createPresentation} onLoadTemplates={loadPresentationTemplates} onDownload={downloadPresentation}/>}
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}

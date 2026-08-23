@@ -200,6 +200,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:unmerge", s.unmergeRange)
 	mux.HandleFunc("PATCH /api/v1/sheets/{sheetId}/ranges:sort", s.sortRange)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/goal-seek", s.goalSeek)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/filter-views", s.listFilterViews)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/filter-views", s.createFilterView)
 	mux.HandleFunc("GET /api/v1/filter-views/{filterViewId}", s.getFilterView)
