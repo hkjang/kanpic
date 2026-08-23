@@ -378,11 +378,15 @@ func (r *PostgresRepository) ListWorkbooks(ctx context.Context, workspaceID stri
 	if err != nil {
 		return nil, err
 	}
+	sheets, err := r.listSheetsFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range items {
 		items[i].Favorite = favorites[items[i].ID]
-		items[i].Sheets, err = r.listSheets(ctx, r.pool, items[i].ID)
-		if err != nil {
-			return nil, err
+		items[i].Sheets = sheets[items[i].ID]
+		if items[i].Sheets == nil {
+			items[i].Sheets = []Sheet{}
 		}
 		items[i].SharedCount = len(shares[items[i].ID])
 		access := resolveAccess(items[i].ID, principal, sharingFromWorkbook(items[i], shares[items[i].ID]), closure)
@@ -2176,6 +2180,33 @@ func (r *PostgresRepository) listSheets(ctx context.Context, db queryer, workboo
 		_ = json.Unmarshal(data, &properties)
 		item.Color, item.Hidden, item.Layout = properties.Color, properties.Hidden, normalizeSheetLayout(properties.Layout)
 		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+// listSheetsFor reads the sheets of many workbooks in one query. Asking per
+// workbook inside a loop turned one page of the workbook list into as many
+// round trips as it had workbooks.
+func (r *PostgresRepository) listSheetsFor(ctx context.Context, ids []string) (map[string][]Sheet, error) {
+	result := make(map[string][]Sheet, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT id::text,workbook_id::text,name,position,properties,created_at FROM sheets WHERE workbook_id = ANY($1::uuid[]) ORDER BY workbook_id,position,id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item Sheet
+		var data []byte
+		if err := rows.Scan(&item.ID, &item.WorkbookID, &item.Name, &item.Position, &data, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		var properties sheetProperties
+		_ = json.Unmarshal(data, &properties)
+		item.Color, item.Hidden, item.Layout = properties.Color, properties.Hidden, normalizeSheetLayout(properties.Layout)
+		result[item.WorkbookID] = append(result[item.WorkbookID], item)
 	}
 	return result, rows.Err()
 }

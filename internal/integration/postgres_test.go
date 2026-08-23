@@ -3391,3 +3391,79 @@ func TestPostgresAutomationOverviewReportsTheGlobalSwitchAndFailedTriggers(t *te
 		t.Fatalf("overview with execution switched off: %#v, %v", off, err)
 	}
 }
+
+// The workbook list asked the database for one workbook's sheets at a time, so
+// a home page with five thousand workbooks made five thousand round trips and
+// took 1.8 seconds. The sheets are now read in one query.
+//
+// The guard is the number of connection acquisitions rather than elapsed time:
+// a clock makes a flaky test, while "the query count does not grow with the
+// number of workbooks" is the property that actually matters.
+func TestPostgresWorkbookListReadsEverySheetInOneQuery(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("list-owner-%d", time.Now().UnixNano())
+	workspace := fmt.Sprintf("list-%d", time.Now().UnixNano())
+	created := make([]workbook.Workbook, 0, 24)
+	for index := 0; index < 24; index++ {
+		book, createErr := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: fmt.Sprintf("목록 %d", index), WorkspaceID: workspace, OwnerID: owner})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+		created = append(created, book)
+	}
+	// One workbook gets extra sheets, so the batched read has to keep each
+	// workbook's own sheets together and in position order.
+	for _, name := range []string{"둘째", "셋째"} {
+		if _, err := repository.CreateSheet(ctx, created[0].ID, workbook.CreateSheetInput{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	principal := workbook.AccessPrincipal{UserID: owner, Authenticated: true}
+	measure := func() (int64, []workbook.Workbook) {
+		t.Helper()
+		before := pool.Stat().AcquireCount()
+		items, listErr := repository.ListWorkbooks(ctx, workspace, principal)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		return pool.Stat().AcquireCount() - before, items
+	}
+	acquires, items := measure()
+	if len(items) != 24 {
+		t.Fatalf("listed %d workbooks", len(items))
+	}
+	// 워크북 스물넷을 한 줄씩 물으면 스물넷을 넘는다. 몇 번인지를 못박기보다
+	// 워크북 수에 따라 늘지 않는다는 것을 본다.
+	if acquires > 10 {
+		t.Fatalf("listing 24 workbooks took %d connection acquisitions", acquires)
+	}
+	for _, item := range items {
+		if len(item.Sheets) == 0 {
+			t.Fatalf("%s came back without sheets", item.Title)
+		}
+		if item.ID == created[0].ID {
+			names := make([]string, 0, len(item.Sheets))
+			for _, sheet := range item.Sheets {
+				names = append(names, sheet.Name)
+			}
+			if !reflect.DeepEqual(names, []string{"Sheet1", "둘째", "셋째"}) {
+				t.Fatalf("sheets of the multi-sheet workbook = %v", names)
+			}
+		} else if len(item.Sheets) != 1 {
+			t.Fatalf("%s has %d sheets", item.Title, len(item.Sheets))
+		}
+	}
+}
