@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { compareNatural } from './naturalOrder'
 
 const ordered=(values:string[])=>[...values].sort(compareNatural)
@@ -55,5 +56,28 @@ describe('the browser orders text the way the server does', () => {
     // 이 한 쌍이 두 방식을 가른다.
     expect(compareNatural('😀','￦')).toBe(1)
     expect('😀'<'￦').toBe(true)
+  })
+})
+
+// 정렬은 화면에서 먼저 반영하고 서버가 다시 확정한다. 두 곳의 비교가
+// 어긋나면 줄이 눈앞에서 한 번 튄다. 실제로 두 번 어긋났었다 — UTF-16
+// 조각과 UTF-8 바이트를 견주던 것, 대소문자를 낮추는 방식이 다르던 것.
+//
+// testdata/sort-order.json 을 서버의 internal/workbook/sort_order_test.go
+// 와 함께 읽는다. 한쪽만 고치면 양쪽 다 걸린다.
+//
+// 목록에는 그리스어 낱말 끝 시그마, 튀르키예어 İ, 독일어 ß, 미리 합친
+// 글자와 나눠 적은 글자, 이어붙인 이모지, 아랍 숫자가 섞여 있다.
+describe('the grid sorts the way the server does',()=>{
+  it('agrees on every string in testdata/sort-order.json',()=>{
+    const fixture=JSON.parse(readFileSync('../testdata/sort-order.json','utf8')) as {corpus:string[];sorted:string[];sortedCaseSensitive:string[]}
+    expect(fixture.corpus.length).toBeGreaterThan(100)
+    for(const [sensitive,want] of [[false,fixture.sorted],[true,fixture.sortedCaseSensitive]] as [boolean,string[]][]){
+      const items=[...fixture.corpus]
+      items.sort((left,right)=>compareNatural(sensitive?left:left.toLowerCase(),sensitive?right:right.toLowerCase()))
+      const first=items.findIndex((value,index)=>value!==want[index])
+      expect({sensitive,index:first,got:first<0?null:items[first],want:first<0?null:want[first]})
+        .toEqual({sensitive,index:-1,got:null,want:null})
+    }
   })
 })
