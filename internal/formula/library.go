@@ -617,6 +617,11 @@ func parseDate(value any) (time.Time, bool) {
 //
 // web/src/lib/cellFormat.ts 의 spreadsheetDate 가 **같은 셈** 을 한다.
 // 격자에 보이는 날짜와 수식이 읽는 날짜가 어긋나면 안 된다.
+// SerialDate 는 표 프로그램이 쓰는 날 수를 날짜로 바꾼다. 검증 규칙도
+// 같은 셈을 써야 하므로 밖에서 부를 수 있게 열어 둔다. 따로 셈하면
+// 격자에 보이는 날짜와 검증이 읽는 날짜가 어긋난다.
+func SerialDate(serial float64) (time.Time, bool) { return serialDate(serial) }
+
 func serialDate(serial float64) (time.Time, bool) {
 	// 9999-12-31 이 2958465 다. 그 너머는 날짜가 아니다.
 	if serial < 0 || serial > 2958465 || math.IsNaN(serial) {

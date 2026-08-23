@@ -6,6 +6,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"kanpic/internal/formula"
 )
 
 func validationRaw(value string) json.RawMessage { return json.RawMessage(value) }
@@ -220,5 +222,38 @@ func TestMemoryRangeDropdownFollowsItsSource(t *testing.T) {
 	}
 	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet, ActorID: "alice", BaseVersion: added.ServerVersion, IdempotencyKey: "pick-new", Cells: []CellInput{{Row: 3, Column: 1, Value: json.RawMessage(`"대구"`)}}}); err != nil {
 		t.Fatalf("a value added to the source must become valid: %v", err)
+	}
+}
+
+// 검증도 격자와 **같은 셈** 으로 날 수를 날짜로 읽어야 한다. 따로 세던
+// 시절에는 1900 년 윤년 어긋남을 보지 않아, 격자가 1900-01-01 로 그리는
+// 칸을 검증은 1899-12-31 로 읽었다. 사람 눈에는 1900-01-01 이 보이는데
+// "1900-01-01 이후여야 합니다" 라며 거절당했다.
+//
+// 하루 안의 자리도 잘라서 세고 있었다. 16:12 를 16:11 로 본다.
+func TestValidationReadsDateSerialsTheWayTheGridDraws(t *testing.T) {
+	t.Parallel()
+	// 1 번은 1900-01-01 이다. 엑셀이 1900 년을 윤년으로 잘못 세기 때문에
+	// 60 보다 작은 번호는 하루 뒤에서 세야 한다.
+	rule := DataValidation{Range: "A1:A3", RuleType: "date", Operator: "greater_or_equal", Value: validationRaw(`"1900-01-01"`), AllowBlank: true, DisplayStyle: "plain"}
+	evaluated, err := EvaluateDataValidation(rule, []Cell{
+		{Row: 1, Column: 1, Value: validationRaw(`1`)},     // 1900-01-01 — 통과해야 한다
+		{Row: 2, Column: 1, Value: validationRaw(`59`)},    // 1900-02-28 — 통과해야 한다
+		{Row: 3, Column: 1, Value: validationRaw(`45306`)}, // 2024-01-15 — 통과해야 한다
+	})
+	if err != nil {
+		t.Fatalf("date evaluation: %v", err)
+	}
+	if evaluated.ValidCells != 3 {
+		t.Fatalf("%d/3 칸만 통과했다. 격자가 그리는 날짜와 검증이 읽는 날짜가 어긋난다: %#v", evaluated.ValidCells, evaluated.InvalidCells)
+	}
+
+	// 하루 안의 자리는 초 단위로 반올림한다. 2.675 는 1900-01-02 16:12 다.
+	moment, ok := formula.SerialDate(2.675)
+	if !ok {
+		t.Fatal("2.675 를 날짜로 읽지 못했다")
+	}
+	if got := moment.Format("2006-01-02 15:04:05"); got != "1900-01-02 16:12:00" {
+		t.Fatalf("2.675 = %s, want 1900-01-02 16:12:00", got)
 	}
 }

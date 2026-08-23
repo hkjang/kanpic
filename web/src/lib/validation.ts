@@ -1,5 +1,6 @@
 import { parseFilterInput,parseFilterRange } from './filter'
 import type { DataValidation,ValidationOperator,ValidationOption,ValidationViolation } from '../types'
+import { spreadsheetDate } from './cellFormat'
 
 export type ValidationInputCell={row:number;column:number;value?:unknown;formula?:string}
 
@@ -34,7 +35,15 @@ export function comparisonNeedsSecond(operator:ValidationOperator){return operat
 
 function sameValue(left:unknown,right:unknown){return typeof left===typeof right&&Object.is(left,right)}
 function compare(actual:number,first:number,second:number,operator:ValidationOperator){if(!Number.isFinite(first))return false;switch(operator){case'between':return Number.isFinite(second)&&actual>=first&&actual<=second;case'not_between':return Number.isFinite(second)&&(actual<first||actual>second);case'equal':return actual===first;case'not_equal':return actual!==first;case'greater_than':return actual>first;case'greater_or_equal':return actual>=first;case'less_than':return actual<first;case'less_or_equal':return actual<=first;default:return false}}
-function dateValue(value:unknown){if(typeof value==='number'&&Number.isFinite(value))return Date.UTC(1899,11,30)+value*86_400_000;if(typeof value!=='string')return;const timestamp=Date.parse(value);return Number.isFinite(timestamp)?timestamp:undefined}
+// 날 수를 날짜로 바꾸는 셈은 격자와 같은 것을 쓴다. 여기서 따로 세던
+// 시절에는 1900년 윤년 어긋남을 보지 않아, 격자가 1900-01-01로 그리는 칸을
+// 검증은 1899-12-31로 읽었다.
+function dateValue(value:unknown){
+  if(typeof value==='number'){const moment=spreadsheetDate(value);return moment?moment.getTime():undefined}
+  if(typeof value!=='string')return
+  const timestamp=Date.parse(value)
+  return Number.isFinite(timestamp)?timestamp:undefined
+}
 
 /**
  * The two values a checkbox toggles between. The first option is the checked

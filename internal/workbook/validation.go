@@ -641,10 +641,11 @@ func validationDateRaw(raw json.RawMessage) (time.Time, bool) {
 }
 func validationDate(value any) (time.Time, bool) {
 	if number, ok := validationNumber(value); ok {
-		if number < 0 || number > 2_958_465 {
-			return time.Time{}, false
-		}
-		return time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC).Add(time.Duration(number * float64(24*time.Hour))), true
+		// 날 수를 날짜로 바꾸는 셈은 한 곳에만 둔다. 여기서 따로 세던
+		// 시절에는 1900 년 윤년 어긋남을 보지 않아 격자가 1900-01-01 로
+		// 그리는 칸을 검증은 1899-12-31 로 읽었고, 하루 안의 자리도 잘라서
+		// 16:12 를 16:11 로 보았다.
+		return formula.SerialDate(number)
 	}
 	text, ok := value.(string)
 	if !ok {

@@ -71,7 +71,9 @@ export function wrapText(text:string,maxWidth:number,measure:(text:string)=>numb
   return lines.length?lines:['']
 }
 
-function spreadsheetDate(value:unknown){
+// 날 수를 날짜로 바꾸는 셈은 한 곳에만 둔다. 검증(lib/validation.ts)도
+// 이것을 쓴다. 따로 세면 격자에 보이는 날짜와 검증이 읽는 날짜가 어긋난다.
+export function spreadsheetDate(value:unknown){
   // 엑셀은 1900년을 윤년으로 잘못 센다. 일련번호 60은 없는 날(1900-02-29)을
   // 가리키므로, 그보다 작은 번호는 하루 뒤에서 세기 시작해야 1900-01-01이
   // 1번이 된다. 서버의 internal/formula 의 serialDate 가 같은 셈을 한다.
