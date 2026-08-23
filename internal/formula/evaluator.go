@@ -442,7 +442,12 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		return result, err
 	}
 	evaluated := make([]any, 0, len(n.arguments))
+	tolerant := toleratesErrors(name)
 	for _, argument := range n.arguments {
+		if tolerant {
+			evaluated = append(evaluated, errorTolerantValue(argument, cells))
+			continue
+		}
 		value, err := argument.eval(cells)
 		if err != nil {
 			return nil, err
@@ -1482,6 +1487,48 @@ func truthy(value any) bool {
 	}
 	return display(value) != ""
 }
+
+// toleratesErrors 는 오류가 든 칸을 만나도 멈추지 않는 함수를 가린다.
+//
+// 보통은 범위 안에 오류가 하나라도 있으면 수식 전체가 그 오류가 된다.
+// =SUM(A1:A3) 은 그래야 한다 — 더할 수 없는 것이 섞여 있으니 합계도 알 수
+// 없다. 그런데 세는 함수는 다르다. 엑셀과 시트에서 COUNT 는 오류 칸을
+// 건너뛰고 숫자만 세고, COUNTA 는 오류 칸도 "비어 있지 않다" 고 센다.
+// AGGREGATE 는 아예 오류를 건너뛰라고 만든 함수다.
+//
+// 예전에는 이 셋도 함께 멈춰서, 열 어딘가에 #N/A 가 하나 있으면 그 열의
+// 개수를 셀 방법이 없었다.
+func toleratesErrors(name string) bool {
+	switch name {
+	case "COUNT", "COUNTA", "AGGREGATE":
+		return true
+	}
+	return false
+}
+
+// errorTolerantValue 는 인수 하나를 셈하되, 오류를 멈춤이 아니라 값으로
+// 돌려준다. 범위 안의 오류 칸은 자리에 그대로 남는다.
+func errorTolerantValue(argument node, cells map[string]any) any {
+	if ranged, ok := argument.(rangeNode); ok {
+		if ranged.rows*ranged.columns > 100_000 {
+			return formulaError("#VALUE!", "range is too large")
+		}
+		values := make([]any, 0, len(ranged.addresses))
+		for _, address := range ranged.addresses {
+			values = append(values, cells[address])
+		}
+		return arrayValue{rows: ranged.rows, columns: ranged.columns, values: values}
+	}
+	value, err := argument.eval(cells)
+	if err == nil {
+		return value
+	}
+	if formulaErr, ok := err.(*Error); ok {
+		return formulaErr
+	}
+	return formulaError("#ERROR!", err.Error())
+}
+
 func display(value any) string {
 	if value == nil {
 		return ""

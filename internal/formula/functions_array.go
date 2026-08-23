@@ -285,6 +285,8 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			total += product
 		}
 		return total, true, nil
+	case "AGGREGATE":
+		return evaluateAggregate(arguments)
 	case "SUBTOTAL":
 		if len(arguments) < 2 {
 			return nil, true, argError(name)
@@ -781,4 +783,132 @@ func evaluateSortBy(arguments []any) (any, bool, error) {
 		}
 	}
 	return arrayValue{rows: selected.rows, columns: selected.columns, values: values}, true, nil
+}
+
+// evaluateAggregate 은 엑셀·시트의 AGGREGATE 이다. SUBTOTAL 과 같은 집계를
+// 하되, **오류가 든 칸을 건너뛰라고 시킬 수 있다**.
+//
+//	=SUM(A1:A100)           칸 하나가 #N/A 면 합계도 #N/A 다
+//	=AGGREGATE(9,6,A1:A100) 그 칸만 빼고 더한다
+//
+// 첫 인수는 집계 방법, 둘째는 무엇을 건너뛸지다.
+//
+//	1 평균  2 COUNT  3 COUNTA  4 최대  5 최소  6 곱  7 표본표준편차
+//	8 모표준편차  9 합  10 표본분산  11 모분산  12 중앙값  13 최빈값
+//	14 K번째 큰 값  15 K번째 작은 값  16 백분위수  17 사분위수
+//	18 백분위수(경계 제외)  19 사분위수(경계 제외)
+//
+//	0,1,4,5 오류를 그대로 둔다   2,3,6,7 오류를 건너뛴다
+//
+// 숨긴 행을 건너뛰라는 값(1,3,5,7)은 받아들이되 따로 다루지 않는다.
+// 수식 안에서는 어느 행이 숨겨졌는지 알 수 없기 때문이다. SUBTOTAL 의
+// 100번대 코드도 같은 이유로 같은 답을 낸다.
+func evaluateAggregate(arguments []any) (any, bool, error) {
+	if len(arguments) < 3 {
+		return nil, true, argError("AGGREGATE")
+	}
+	code, err := integerValue(scalarOrFirst(arguments[0]), "AGGREGATE")
+	if err != nil {
+		return nil, true, err
+	}
+	options, err := integerValue(scalarOrFirst(arguments[1]), "AGGREGATE")
+	if err != nil {
+		return nil, true, err
+	}
+	if code < 1 || code > 19 {
+		return nil, true, formulaError("#VALUE!", "AGGREGATE function number must be 1 to 19")
+	}
+	if options < 0 || options > 7 {
+		return nil, true, formulaError("#VALUE!", "AGGREGATE options must be 0 to 7")
+	}
+	ignoreErrors := options == 2 || options == 3 || options == 6 || options == 7
+
+	// 14~19 는 마지막 인수가 K 다. 나머지는 모두 셈할 값이다.
+	data := arguments[2:]
+	var extra any
+	if code >= 14 {
+		if len(data) < 2 {
+			return nil, true, argError("AGGREGATE")
+		}
+		extra, data = data[len(data)-1], data[:len(data)-1]
+	}
+	values := make([]any, 0)
+	for _, argument := range data {
+		values = append(values, flatten(argument)...)
+	}
+	kept := make([]any, 0, len(values))
+	for _, value := range values {
+		if formulaErr, isError := value.(*Error); isError {
+			if !ignoreErrors {
+				return nil, true, formulaErr
+			}
+			continue
+		}
+		kept = append(kept, value)
+	}
+	if code <= 11 {
+		return evaluateSubtotal(code, []any{arrayValue{rows: len(kept), columns: 1, values: kept}})
+	}
+	switch code {
+	case 12:
+		return evaluateAggregateMedian(kept)
+	case 13:
+		return evaluateStatistics("MODE", kept)
+	case 14, 15:
+		name := "LARGE"
+		if code == 15 {
+			name = "SMALL"
+		}
+		return evaluateStatistics(name, append(append([]any{}, kept...), extra))
+	case 16, 17:
+		name := "PERCENTILE"
+		if code == 17 {
+			name = "QUARTILE"
+		}
+		return evaluateStatistics(name, append(append([]any{}, kept...), extra))
+	}
+	return evaluateExclusivePercentile(code, kept, extra)
+}
+
+func evaluateAggregateMedian(values []any) (any, bool, error) {
+	numbers := sortedNumbers(numericValues(values))
+	if len(numbers) == 0 {
+		return nil, true, formulaError("#NUM!", "AGGREGATE median needs numbers")
+	}
+	middle := len(numbers) / 2
+	if len(numbers)%2 == 1 {
+		return numbers[middle], true, nil
+	}
+	return (numbers[middle-1] + numbers[middle]) / 2, true, nil
+}
+
+// evaluateExclusivePercentile 은 경계를 뺀 백분위수다. 자리를 k*(n+1) 로
+// 잡으므로 0 번째와 n+1 번째는 자료 밖이 되어 #NUM! 이 된다. 경계를 넣는
+// 쪽(16, 17)은 k*(n-1)+1 로 잡아 양 끝이 최소·최대가 된다.
+func evaluateExclusivePercentile(code int, values []any, extra any) (any, bool, error) {
+	fraction, ok := toNumber(scalarOrFirst(extra))
+	if !ok {
+		return nil, true, formulaError("#VALUE!", "AGGREGATE requires a number")
+	}
+	if code == 19 {
+		if fraction < 1 || fraction > 3 || fraction != math.Trunc(fraction) {
+			return nil, true, formulaError("#NUM!", "AGGREGATE exclusive quartile takes 1 to 3")
+		}
+		fraction /= 4
+	}
+	numbers := sortedNumbers(numericValues(values))
+	if len(numbers) == 0 {
+		return nil, true, formulaError("#NUM!", "AGGREGATE needs numbers")
+	}
+	position := fraction * float64(len(numbers)+1)
+	if position < 1 || position > float64(len(numbers)) {
+		return nil, true, formulaError("#NUM!", "AGGREGATE exclusive percentile is outside the data")
+	}
+	lower := math.Floor(position)
+	remainder := position - lower
+	index := int(lower) - 1
+	if index+1 >= len(numbers) {
+		return numbers[index], true, nil
+	}
+	return numbers[index] + remainder*(numbers[index+1]-numbers[index]), true, nil
 }

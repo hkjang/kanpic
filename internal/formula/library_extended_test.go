@@ -1081,3 +1081,76 @@ func TestDatePatternsTellMonthsFromMinutes(t *testing.T) {
 		}
 	}
 }
+
+// 범위 안에 오류가 하나라도 있으면 수식 전체가 그 오류가 된다. 합계는
+// 그래야 한다 — 더할 수 없는 것이 섞여 있으니 합계도 알 수 없다.
+//
+// 그런데 **세는 함수** 는 다르다. 엑셀과 시트에서 COUNT 는 오류 칸을
+// 건너뛰고 숫자만 세고, COUNTA 는 오류 칸도 "비어 있지 않다" 고 센다.
+// 예전에는 이 둘도 함께 멈춰서, 열 어딘가에 #N/A 가 하나 있으면 그 열의
+// 개수를 셀 방법이 아예 없었다.
+func TestCountingFunctionsDoNotStopAtAnError(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 1.0, "A2": formulaError("#N/A", "no value"), "A3": 3.0}
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=COUNT(A1:A3)", 2.0},
+		{"=COUNTA(A1:A3)", 3.0},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+	// 더하는 쪽은 그대로 멈춘다.
+	if result := New().Evaluate("=SUM(A1:A3)", cells); result.Error == nil {
+		t.Errorf("=SUM(A1:A3) = %v, 오류여야 한다", result.Value)
+	}
+}
+
+// AGGREGATE 은 집계하면서 오류가 든 칸을 건너뛰라고 시킬 수 있다. 열
+// 하나에 #N/A 가 섞여 합계가 통째로 막히는 것이 흔한 일이라 있는 함수다.
+func TestAggregateSkipsErrorsWhenAsked(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 1.0, "A2": formulaError("#N/A", "no value"), "A3": 3.0, "A4": 5.0, "A5": 7.0}
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{"=AGGREGATE(9,6,A1:A5)", 16},     // 합
+		{"=AGGREGATE(1,6,A1:A5)", 4},      // 평균
+		{"=AGGREGATE(2,6,A1:A5)", 4},      // COUNT
+		{"=AGGREGATE(4,6,A1:A5)", 7},      // 최대
+		{"=AGGREGATE(5,6,A1:A5)", 1},      // 최소
+		{"=AGGREGATE(12,6,A1:A5)", 4},     // 중앙값 1,3,5,7
+		{"=AGGREGATE(14,6,A1:A5,2)", 5},   // 두 번째 큰 값
+		{"=AGGREGATE(15,6,A1:A5,2)", 3},   // 두 번째 작은 값
+		{"=AGGREGATE(16,6,A1:A5,0.5)", 4}, // 백분위수
+		{"=AGGREGATE(17,6,A1:A5,1)", 2.5}, // 사분위수
+		// 경계를 뺀 쪽은 자리를 k*(n+1) 로 잡는다. 0.25*5 = 1.25 이므로
+		// 첫째와 둘째 사이 1/4 자리, 곧 1 + 0.25*(3-1) = 1.5 다.
+		{"=AGGREGATE(18,6,A1:A5,0.25)", 1.5},
+		{"=AGGREGATE(19,6,A1:A5,1)", 1.5},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
+	}
+
+	// 건너뛰지 말라고 하면 오류를 그대로 낸다.
+	for _, formula := range []string{
+		"=AGGREGATE(9,4,A1:A5)",      // 아무것도 건너뛰지 않는다
+		"=AGGREGATE(9,0,A1:A5)",      // 기본값도 오류는 그대로다
+		"=AGGREGATE(20,6,A1:A5)",     // 없는 집계 번호
+		"=AGGREGATE(9,9,A1:A5)",      // 없는 옵션
+		"=AGGREGATE(18,6,A1:A5,0.1)", // 자료 밖
+	} {
+		if result := New().Evaluate(formula, cells); result.Error == nil {
+			t.Errorf("%s = %v, 오류여야 한다", formula, result.Value)
+		}
+	}
+}
