@@ -304,6 +304,23 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const applySheetLayout=async(command:LayoutCommand)=>{if(!activeSheet||!writable())return;if(!navigator.onLine){alert('시트 레이아웃은 서버에 연결된 상태에서 변경할 수 있습니다.');throw new Error('offline')}editor.setSaveState('saving');try{await flushOutbox((_operation,result)=>{const applied=result as MutationResult;updateVersion(applied.server_version);editor.reportEdit(applied)});if((await listOutbox()).length>0)throw new Error('저장 대기 중인 변경을 먼저 서버에 반영해야 합니다.');const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`),sheet=latest.sheets.find(item=>item.id===activeSheet.id);if(!sheet)throw new Error('시트를 찾을 수 없습니다.');const idempotencyKey=newIdempotencyKey();const result=await api<SheetLayoutResult>(`/api/v1/sheets/${activeSheet.id}/layout:apply`,{method:'PATCH',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...command,expected_revision:sheet.layout?.revision??1,idempotency_key:idempotencyKey,client_id:collaborationClientId()})});setActiveSheet(current=>current?.id===result.sheet_id?{...current,layout:result.layout}:current);updateVersion(result.server_version);editor.setSaveState('saved');await client.invalidateQueries({queryKey:['workbook',workbookId]})}catch(error){editor.setSaveState('error');const message=error instanceof Error?error.message:'시트 레이아웃을 변경하지 못했습니다.';if(message!=='offline')alert(message);throw error}}
   // Header drags, auto-fit and menu commands can fire back to back, so layout
   // mutations run one at a time and never race on the sheet layout revision.
+  /**
+   * 인쇄 영역은 "이 범위만 종이에 낸다" 는 시트의 성질이다. 정해 두지
+   * 않으면 내용이 있는 곳 전체가 나간다.
+   *
+   * 엑셀 파일에서 가져올 때도 함께 따라온다. 원래 문서가 표 한 덩어리만
+   * 내도록 짜여 있었다면 그 뜻이 지켜져야 한다.
+   */
+  const setPrintArea=async()=>{
+    if(!activeSheet)return
+    const bounds=selectedBounds(useEditorStore.getState())
+    const range=`${address(bounds.startRow,bounds.startColumn)}:${address(bounds.endRow,bounds.endColumn)}`
+    await applyLayout({action:'print_area_set',range})
+  }
+  const clearPrintArea=async()=>{
+    if(!activeSheet?.layout?.print_area)return
+    await applyLayout({action:'print_area_clear'})
+  }
   const applyLayout=(command:LayoutCommand)=>{
     const next=layoutQueue.current.catch(()=>{}).then(()=>applySheetLayout(command))
     layoutQueue.current=next
@@ -738,7 +755,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     // 표시 없는 숫자 뭉치가 된다.
     const conditional=await printConditional(activeSheet.id,printed.cells)
     const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,conditional,
-      columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0})
+      columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0,
+      printArea:activeSheet.layout?.print_area})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
     frame.src='/print-frame'
@@ -998,6 +1016,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
       {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>void printSheet()},
+      {kind:'item',label:'인쇄 영역으로 설정',onSelect:()=>void setPrintArea()},
+      {kind:'item',label:'인쇄 영역 해제',disabled:!activeSheet?.layout?.print_area,onSelect:()=>void clearPrintArea()},
       {kind:'separator'},
       {kind:'item',label:'공유 설정…',onSelect:()=>setShareOpen(true)},
       {kind:'item',label:'버전 이력',onSelect:()=>setRightPanel('history')},

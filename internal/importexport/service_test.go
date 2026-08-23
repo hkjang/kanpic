@@ -1027,8 +1027,13 @@ func TestXLSXImportReportsNamesItCannotKeep(t *testing.T) {
 	if len(parsed.NamedRanges) != 1 || parsed.NamedRanges[0].Name != "쓸_수_있는_이름" {
 		t.Fatalf("kept names = %#v", parsed.NamedRanges)
 	}
-	if len(parsed.Preview.Warnings) != 1 || !strings.Contains(parsed.Preview.Warnings[0], "이름 정의 2개") {
+	// 인쇄 영역은 이제 시트로 옮겨 담으므로 빠진 것으로 세지 않는다.
+	// 남는 것은 시트 전용 이름 하나뿐이다.
+	if len(parsed.Preview.Warnings) != 1 || !strings.Contains(parsed.Preview.Warnings[0], "이름 정의 1개") {
 		t.Fatalf("import warnings = %#v", parsed.Preview.Warnings)
+	}
+	if len(parsed.Sheets) == 0 || parsed.Sheets[0].Layout == nil || parsed.Sheets[0].Layout.PrintArea != "A1:B2" {
+		t.Fatalf("print area = %#v", parsed.Sheets[0].Layout)
 	}
 }
 
@@ -1087,13 +1092,18 @@ func TestImportReportsEachKindOfNameItLeaves(t *testing.T) {
 	if len(parsed.NamedRanges) != 1 || parsed.NamedRanges[0].Name != "단가" {
 		t.Fatalf("named ranges=%+v", parsed.NamedRanges)
 	}
+	// 인쇄 영역은 이제 시트의 성질로 옮겨 담는다. 빠진 것은 시트 전용
+	// 이름과 상수를 가리키는 이름, 둘이다.
+	if len(parsed.Sheets) == 0 || parsed.Sheets[0].Layout == nil || parsed.Sheets[0].Layout.PrintArea != "A1:B2" {
+		t.Fatalf("print area = %#v", parsed.Sheets[0].Layout)
+	}
 	warning := strings.Join(parsed.Preview.Warnings, " | ")
-	if !strings.Contains(warning, "이름 정의 3개") {
+	if !strings.Contains(warning, "이름 정의 2개") {
 		t.Fatalf("warnings=%q", warning)
 	}
 	// 상수를 가리키는 이름도 이유를 밝혀야 한다. 예전에는 세 가지만 늘어놓아
 	// 자기 것이 왜 빠졌는지 알 수 없었다.
-	for _, want := range []string{"시트 전용 1개", "인쇄 영역 1개", "값·수식을 가리키는 이름 1개"} {
+	for _, want := range []string{"시트 전용 1개", "값·수식을 가리키는 이름 1개"} {
 		if !strings.Contains(warning, want) {
 			t.Fatalf("warnings %q is missing %q", warning, want)
 		}

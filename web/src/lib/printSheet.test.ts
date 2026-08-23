@@ -265,3 +265,31 @@ describe('printed conditional formatting', () => {
     expect(html).not.toContain('undefined')
   })
 })
+
+// 인쇄 영역을 정해 두면 그 범위만 종이에 나가야 한다. 정해 두지 않으면
+// 내용이 있는 곳 전체가 나간다.
+//
+// 엑셀 파일에서 가져온 인쇄 영역도 같은 자리에 담기므로, 원래 문서가 표
+// 한 덩어리만 내도록 짜여 있었다면 그 뜻이 그대로 지켜진다.
+describe('the print area limits what goes on paper',()=>{
+  const cells=new Map<string,Cell>()
+  for(const [row,column,value] of [[1,1,'품목'],[1,2,'수량'],[2,1,'연필'],[2,2,10],[9,5,'영역 밖']] as Array<[number,number,unknown]>)
+    cells.set(`${row}:${column}`,{sheet_id:'s',row,column,value,updated_at:'now'} as Cell)
+
+  it('prints only the area when one is set',()=>{
+    const limited=printableDocument(cells,{title:'t',sheetName:'s',gridlines:false,headers:true,printArea:'A1:B2'})
+    expect(limited).toContain('연필')
+    expect(limited).not.toContain('영역 밖')
+  })
+
+  it('prints everything that has content when none is set',()=>{
+    const whole=printableDocument(cells,{title:'t',sheetName:'s',gridlines:false,headers:true})
+    expect(whole).toContain('연필')
+    expect(whole).toContain('영역 밖')
+  })
+
+  it('falls back to the used region when the area cannot be read',()=>{
+    const broken=printableDocument(cells,{title:'t',sheetName:'s',gridlines:false,headers:true,printArea:'말이 안 되는 값'})
+    expect(broken).toContain('영역 밖')
+  })
+})

@@ -307,8 +307,22 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 	for _, sheetName := range sheetNames {
 		known[sheetName] = struct{}{}
 	}
-	named, skippedNames := importDefinedNames(file, known)
+	named, printAreas, skippedNames := importDefinedNames(file, known)
 	parsed.NamedRanges = named
+	// 인쇄 영역은 이름의 모습으로 담겨 있지만 이름이 아니라 시트의 성질이다.
+	// 시트마다 제 자리에 옮겨 둔다.
+	for index := range parsed.Sheets {
+		area, found := printAreas[parsed.Sheets[index].Name]
+		if !found {
+			continue
+		}
+		// 다른 배치 정보가 없는 시트는 Layout 이 비어 있다. 인쇄 영역만
+		// 있는 경우에도 담을 자리를 만들어 준다.
+		if parsed.Sheets[index].Layout == nil {
+			parsed.Sheets[index].Layout = &workbook.SheetLayout{}
+		}
+		parsed.Sheets[index].Layout.PrintArea = area
+	}
 	parsed.Preview.Warnings = append(parsed.Preview.Warnings, unsupportedXLSXParts(archive, skippedNames)...)
 	return parsed, nil
 }
@@ -317,12 +331,13 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 // target is not a plain range on a sheet in this file - a print area, a
 // constant, a formula, a reference into another workbook - has no kanpic
 // equivalent, so it is counted and reported rather than approximated.
-func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, SkippedNames) {
+func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, map[string]string, SkippedNames) {
 	definitions := file.GetDefinedName()
 	if len(definitions) == 0 {
-		return nil, SkippedNames{}
+		return nil, nil, SkippedNames{}
 	}
 	named := make([]workbook.ImportNamedRange, 0, len(definitions))
+	printAreas := make(map[string]string)
 	skipped := SkippedNames{}
 	seen := make(map[string]struct{}, len(definitions))
 	for _, definition := range definitions {
@@ -330,6 +345,17 @@ func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]
 		// 이름과 함께 세되, 세는 자리는 나눠 둔다 — 무엇이 빠졌는지 알아야
 		// 사람이 그것을 다시 만들지 말지 정할 수 있다.
 		if strings.HasPrefix(definition.Name, "_xlnm.") {
+			// 인쇄 영역은 이름의 모습을 하고 있지만 시트의 성질이다. 이제
+			// 시트로 옮겨 담으므로 세지 않는다. 그 밖의 _xlnm 이름 —
+			// 반복할 제목 행 같은 것 — 은 아직 갈 곳이 없어 센다.
+			if definition.Name == "_xlnm.Print_Area" {
+				if sheetName, area, ok := splitDefinedNameTarget(definition.RefersTo); ok {
+					if _, exists := sheetNames[sheetName]; exists {
+						printAreas[sheetName] = area
+						continue
+					}
+				}
+			}
 			skipped.PrintArea++
 			continue
 		}
@@ -358,7 +384,7 @@ func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]
 		seen[key] = struct{}{}
 		named = append(named, workbook.ImportNamedRange{Name: definition.Name, SheetName: sheetName, Range: area})
 	}
-	return named, skipped
+	return named, printAreas, skipped
 }
 
 // SkippedNames counts, by reason, the defined names an import left behind.

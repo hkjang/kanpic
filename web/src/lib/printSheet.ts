@@ -8,6 +8,8 @@ export type PrintOptions={
   title:string
   sheetName:string
   region?:GridRegion
+  // printArea 는 시트에 정해 둔 인쇄 영역이다. "A1:D20" 꼴.
+  printArea?:string
   gridlines:boolean
   headers:boolean
   /**
@@ -74,6 +76,18 @@ export function columnPages(startColumn:number,endColumn:number,widthOf:(column:
 const escapeHTML=(value:string)=>value.replace(/[&<>"]/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[character] as string))
 
 /** The smallest rectangle that holds every non-empty cell of the sheet. */
+// printAreaRegion 은 "A1:D20" 을 격자 범위로 옮긴다. 읽을 수 없는 값이면
+// 아무것도 돌려주지 않아 내용이 있는 곳 전체를 내게 한다.
+export function printAreaRegion(area:string|undefined):GridRegion|undefined{
+  const parsed=/^([A-Z]+)([1-9]\d*):([A-Z]+)([1-9]\d*)$/.exec((area??'').trim().toUpperCase())
+  if(!parsed)return
+  const column=(letters:string)=>{let value=0;for(const letter of letters)value=value*26+letter.charCodeAt(0)-64;return value}
+  const startRow=Number(parsed[2]),endRow=Number(parsed[4])
+  const startColumn=column(parsed[1]),endColumn=column(parsed[3])
+  return{startRow:Math.min(startRow,endRow),startColumn:Math.min(startColumn,endColumn),
+         endRow:Math.max(startRow,endRow),endColumn:Math.max(startColumn,endColumn)}
+}
+
 export function usedRegion(cells:Map<string,Cell>):GridRegion|undefined{
   let startRow=Infinity,startColumn=Infinity,endRow=0,endColumn=0
   cells.forEach(cell=>{
@@ -167,7 +181,9 @@ function printIcon(icon:{style:string;index:number;count:number}){
  * directly, so printing goes through a document the browser can paginate.
  */
 export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
-  const region=options.region??usedRegion(cells)
+  // 인쇄 영역을 정해 두었으면 그 범위만 낸다. 정해 두지 않았으면 내용이
+  // 있는 곳 전체를 낸다 — 사람이 따로 말하기 전까지는 그쪽이 기대하는 바다.
+  const region=options.region??printAreaRegion(options.printArea)??usedRegion(cells)
   const widthOf=options.columnWidth??(()=>DEFAULT_PRINT_COLUMN_WIDTH)
   const tables:string[]=[]
   let printedRows=0

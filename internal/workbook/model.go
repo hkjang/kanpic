@@ -69,6 +69,11 @@ type SheetLayout struct {
 	FrozenRows    int              `json:"frozen_rows"`
 	FrozenColumns int              `json:"frozen_columns"`
 	Slicers       []Slicer         `json:"slicers,omitempty"`
+	// PrintArea limits printing to one range. Empty means print everything
+	// that has content, which is what people expect until they say otherwise.
+	// Excel keeps this as the defined name _xlnm.Print_Area, so an imported
+	// workbook brings its own along.
+	PrintArea string `json:"print_area,omitempty"`
 }
 
 // Slicer is a filter control pinned to the sheet. It edits one column of one
@@ -106,6 +111,8 @@ type SheetLayoutMutation struct {
 	FrozenRows       int     `json:"frozen_rows,omitempty"`
 	FrozenColumns    int     `json:"frozen_columns,omitempty"`
 	Slicer           *Slicer `json:"slicer,omitempty"`
+	// Range carries the print area for print_area_set.
+	Range string `json:"range,omitempty"`
 }
 
 type SheetLayoutResult struct {

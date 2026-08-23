@@ -7,6 +7,8 @@ import (
 
 	"kanpic/internal/formula"
 	"kanpic/pkg/identity"
+
+	"kanpic/pkg/cellrange"
 )
 
 const (
@@ -204,6 +206,21 @@ func normalizeSheetLayoutMutation(input SheetLayoutMutation) (SheetLayoutMutatio
 		return SheetLayoutMutation{}, fmt.Errorf("%w: expected_revision must be positive", ErrInvalid)
 	}
 	switch input.Action {
+	case "print_area_set":
+		// 범위 하나만 받는다. 엑셀은 여러 조각을 인쇄 영역으로 둘 수 있지만,
+		// 조각마다 쪽을 나누는 규칙까지 따라가야 하므로 여기서는 하나로
+		// 묶는다. 여러 조각인 파일을 읽어 올 때는 전체를 감싸는 범위로
+		// 넓혀 담는다.
+		selected, err := cellrange.Parse(strings.TrimSpace(input.Range))
+		if err != nil {
+			return SheetLayoutMutation{}, fmt.Errorf("%w: print area must be a range like A1:D20", ErrInvalid)
+		}
+		// 사람이 적은 모양을 그대로 두지 않고 A1:D20 꼴로 다듬는다. $ 나
+		// 소문자로 적어도 저장된 값은 하나뿐이라 뒤에서 견주기 쉽다.
+		input.Range = cellrange.Address(selected.Start.Row, selected.Start.Column) + ":" + cellrange.Address(selected.End.Row, selected.End.Column)
+		return input, nil
+	case "print_area_clear":
+		return input, nil
 	case "freeze":
 		if input.FrozenRows < 0 || input.FrozenRows > MaxFrozenRows || input.FrozenColumns < 0 || input.FrozenColumns > MaxFrozenColumns {
 			return SheetLayoutMutation{}, fmt.Errorf("%w: frozen rows must be at most %d and frozen columns at most %d", ErrInvalid, MaxFrozenRows, MaxFrozenColumns)
@@ -261,6 +278,14 @@ func applySheetLayoutMutation(current SheetLayout, input SheetLayoutMutation) (S
 	next := cloneSheetLayout(normalizeSheetLayout(current))
 	if input.Action == "freeze" {
 		next.FrozenRows, next.FrozenColumns = input.FrozenRows, input.FrozenColumns
+		next.Revision++
+		return next, nil
+	}
+	if input.Action == "print_area_set" || input.Action == "print_area_clear" {
+		next.PrintArea = ""
+		if input.Action == "print_area_set" {
+			next.PrintArea = input.Range
+		}
 		next.Revision++
 		return next, nil
 	}

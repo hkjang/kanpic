@@ -132,3 +132,48 @@ func TestMemorySlicerLifecycleAndStructureTransform(t *testing.T) {
 		t.Fatalf("slicers after deleting their column = %#v", got)
 	}
 }
+
+// 인쇄 영역은 "이 범위만 종이에 낸다" 는 시트의 성질이다. 정해 두지 않으면
+// 내용이 있는 곳 전체가 나간다 — 사람이 따로 말하기 전까지는 그쪽이
+// 기대하는 바다.
+//
+// 엑셀은 이것을 _xlnm.Print_Area 라는 이름으로 담는다. 예전에는 가져올 때
+// "인쇄 영역 1개를 빼고 가져왔습니다" 라고만 알리고 버렸다.
+func TestPrintAreaIsKeptOnTheSheet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "print", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+
+	// 사람이 적은 모양을 그대로 두지 않고 A1:D20 꼴로 다듬는다.
+	applied, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{
+		SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "pa-1",
+		ExpectedRevision: sheet.Layout.Revision, Action: "print_area_set", Range: "b2:d10",
+	})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if applied.Layout.PrintArea != "B2:D10" {
+		t.Fatalf("print area = %q, want B2:D10", applied.Layout.PrintArea)
+	}
+
+	cleared, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{
+		SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "pa-2",
+		ExpectedRevision: applied.Layout.Revision, Action: "print_area_clear",
+	})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if cleared.Layout.PrintArea != "" {
+		t.Fatalf("print area after clear = %q, want empty", cleared.Layout.PrintArea)
+	}
+
+	// 범위가 아닌 값은 받지 않는다. 받아 두면 인쇄할 때가 되어서야 드러난다.
+	if _, err := repository.ApplySheetLayout(ctx, SheetLayoutMutation{
+		SheetID: sheet.ID, ActorID: "alice", IdempotencyKey: "pa-3",
+		ExpectedRevision: cleared.Layout.Revision, Action: "print_area_set", Range: "말이 안 되는 값",
+	}); err == nil {
+		t.Error("범위가 아닌 인쇄 영역이 받아들여졌다")
+	}
+}
