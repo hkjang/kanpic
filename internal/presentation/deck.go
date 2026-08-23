@@ -53,7 +53,12 @@ func Build(analysis Analysis, options DeckOptions) Deck {
 		})
 	}
 	if chart := chartComponent(analysis); chart != nil {
-		deck.Slides = append(deck.Slides, Slide{Kind: SlideContent, Title: chartTitle(analysis), Component: chart})
+		slide := Slide{Kind: SlideContent, Title: chartTitle(analysis), Component: chart}
+		// 묶었다는 것을 말하지 않으면 읽는 사람은 이것을 원본 줄로 읽는다.
+		if analysis.Grouped {
+			slide.Lead = strconv.Itoa(analysis.RowCount) + "행을 " + groupLabel(analysis) + "별로 합쳤습니다."
+		}
+		deck.Slides = append(deck.Slides, slide)
 	}
 	if options.IncludeTable {
 		if table, omitted := tableComponent(analysis); table != nil {
@@ -179,6 +184,12 @@ func chartComponent(analysis Analysis) *Component {
 	if caption == "" {
 		caption = strings.TrimSpace(analysis.Columns[analysis.Dimension].Name)
 	}
+	// 묶은 범위는 묶은 값을 그린다. 이 분기가 종류별 분기보다 먼저 와야 한다 —
+	// 슬라이드는 합쳤다고 적어 놓고 그림은 원본 줄을 그리면 글과 그림이 서로
+	// 다른 말을 하게 된다.
+	if analysis.Grouped {
+		return groupedComponent(analysis, caption)
+	}
 	if analysis.Chart == ChartLine {
 		// 추이는 한 줄이 한 계열이고 첫 줄이 시간 축이다.
 		axis := make([]string, 0, len(names))
@@ -229,6 +240,38 @@ func chartComponent(analysis Analysis) *Component {
 // steps, dated rows as a timeline. The label is what names the row and the
 // detail is what it says; a date beside a stage is kept with the detail rather
 // than replacing it.
+// groupedComponent draws the totals rather than the rows they came from.
+func groupedComponent(analysis Analysis, caption string) *Component {
+	if len(analysis.Groups) == 0 {
+		return nil
+	}
+	heading := strings.TrimSpace(caption + " 합계")
+	if analysis.Chart == ChartLine {
+		axis := make([]string, 0, len(analysis.Groups))
+		series := make([]string, 0, len(analysis.Groups))
+		for _, group := range analysis.Groups {
+			axis = append(axis, group.Label)
+			series = append(series, formatNumber(group.Total))
+		}
+		return &Component{Kind: "line", Caption: heading, Rows: []Row{
+			{Label: axisLabel(analysis), Fields: []string{strings.Join(axis, ", ")}},
+			{Label: strings.TrimSpace(analysis.Columns[analysis.Measures[0]].Name), Fields: []string{strings.Join(series, ", ")}},
+		}}
+	}
+	kind := "bars"
+	switch analysis.Chart {
+	case ChartShare:
+		kind = "share"
+	case ChartComparison:
+		kind = "comparison"
+	}
+	rows := make([]Row, 0, len(analysis.Groups))
+	for _, group := range analysis.Groups {
+		rows = append(rows, Row{Label: group.Label, Fields: []string{group.Text}})
+	}
+	return &Component{Kind: kind, Caption: heading, Rows: rows}
+}
+
 func orderedComponent(analysis Analysis) *Component {
 	kind := "steps"
 	if analysis.Chart == ChartTimeline {
@@ -280,6 +323,13 @@ func axisLabel(analysis Analysis) string {
 	return "구분"
 }
 
+func groupLabel(analysis Analysis) string {
+	if name := strings.TrimSpace(analysis.Columns[analysis.Dimension].Name); name != "" {
+		return name
+	}
+	return "항목"
+}
+
 func chartTitle(analysis Analysis) string {
 	if analysis.Chart == ChartSteps {
 		return "진행 순서"
@@ -295,6 +345,8 @@ func chartTitle(analysis Analysis) string {
 	switch {
 	case analysis.Chart == ChartLine && measure != "":
 		return measure + " 추이"
+	case analysis.Grouped && dimension != "" && measure != "":
+		return dimension + "별 " + measure + " 합계"
 	case dimension != "" && measure != "":
 		return dimension + "별 " + measure
 	case measure != "":

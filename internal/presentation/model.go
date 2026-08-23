@@ -66,6 +66,16 @@ type Value struct {
 }
 
 // Analysis is what the range turned out to be.
+// Group is one category's total across rows that repeat it. Raw rows are the
+// normal shape of a spreadsheet — one line per transaction — and nobody puts
+// two hundred of those on a slide. What they mean is the total per category.
+type Group struct {
+	Label string  `json:"label"`
+	Text  string  `json:"text"`
+	Total float64 `json:"total"`
+	Rows  int     `json:"rows"`
+}
+
 type Analysis struct {
 	Source    SourceRef `json:"source"`
 	HasHeader bool      `json:"has_header"`
@@ -77,6 +87,11 @@ type Analysis struct {
 	Chart     string    `json:"chart"`
 	Insights  []Insight `json:"insights"`
 	Headline  string    `json:"headline"`
+	// Groups is set when the rows repeat their category and the measure is one
+	// that can be added up. The chart and the findings then speak about the
+	// totals, while the table slide still shows the rows themselves.
+	Groups  []Group `json:"groups,omitempty"`
+	Grouped bool    `json:"grouped"`
 }
 
 // Shapes a range can have. The shape decides the slides; the chart decides how

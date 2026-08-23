@@ -164,7 +164,7 @@ func (c *Client) Export(ctx context.Context, id, format string) ([]byte, string,
 	c.authorize(request)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("%w: ptium export: %s", presentation.ErrUpstream, err)
+		return nil, "", "", unreachable("export", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -172,10 +172,13 @@ func (c *Client) Export(ctx context.Context, id, format string) ([]byte, string,
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaxExportBytes+1))
 	if err != nil {
-		return nil, "", "", fmt.Errorf("%w: ptium export: %s", presentation.ErrUpstream, err)
+		return nil, "", "", unreachable("export", err)
 	}
 	if len(data) > MaxExportBytes {
-		return nil, "", "", fmt.Errorf("%w: ptium export: file is larger than %d bytes", presentation.ErrUpstream, MaxExportBytes)
+		return nil, "", "", &presentation.UpstreamError{
+			Summary: "프레젠테이션 파일이 너무 큽니다.",
+			Detail:  fmt.Sprintf("ptium export: file is larger than %d bytes", MaxExportBytes),
+		}
 	}
 	contentType := response.Header.Get("Content-Type")
 	if contentType == "" {
@@ -215,7 +218,7 @@ func (c *Client) call(ctx context.Context, method, path string, body any, into a
 	c.authorize(request)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("%w: ptium %s %s: %s", presentation.ErrUpstream, method, path, err)
+		return unreachable(method+" "+path, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -244,6 +247,15 @@ func (c *Client) authorize(request *http.Request) {
 
 // statusError reads Ptium's error envelope so the person who pressed the button
 // sees what Ptium said rather than a bare status code.
+// unreachable is a failure to talk to the service at all. The address belongs
+// in the log; the reader is told which side is at fault and nothing more.
+func unreachable(what string, err error) *presentation.UpstreamError {
+	return &presentation.UpstreamError{
+		Summary: "프레젠테이션 서비스에 연결하지 못했습니다. 관리자에게 문의하세요.",
+		Detail:  fmt.Sprintf("ptium %s: %v", what, err),
+	}
+}
+
 func (c *Client) statusError(what string, response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 16<<10))
 	var envelope struct {
@@ -252,17 +264,33 @@ func (c *Client) statusError(what string, response *http.Response) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &envelope) == nil && envelope.Error.Message != "" {
-		return fmt.Errorf("%w: ptium %s: %s (%s)", presentation.ErrUpstream, what, envelope.Error.Message, response.Status)
+	message := ""
+	if json.Unmarshal(body, &envelope) == nil {
+		message = strings.TrimSpace(envelope.Error.Message)
 	}
-	trimmed := strings.TrimSpace(string(body))
-	if len(trimmed) > 200 {
-		trimmed = trimmed[:200]
+	detail := fmt.Sprintf("ptium %s: %s", what, response.Status)
+	if message != "" {
+		detail += ": " + message
+	} else if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		if len(trimmed) > 200 {
+			trimmed = trimmed[:200]
+		}
+		detail += ": " + trimmed
 	}
-	if trimmed == "" {
-		return fmt.Errorf("%w: ptium %s: %s", presentation.ErrUpstream, what, response.Status)
+	summary := ""
+	switch {
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		// 열쇠 문제는 사용자가 고칠 수 없다. 무엇이 문제인지만 말한다.
+		summary = "프레젠테이션 서비스가 인증을 거부했습니다. 관리자에게 문의하세요."
+	case response.StatusCode >= 500:
+		summary = "프레젠테이션 서비스에 오류가 발생했습니다."
+	case message != "":
+		// 서비스가 덱에 대해 한 말은 대개 가장 쓸모 있는 문장이다.
+		summary = "프레젠테이션 서비스가 요청을 거절했습니다: " + message
+	default:
+		summary = "프레젠테이션 서비스가 요청을 거절했습니다."
 	}
-	return fmt.Errorf("%w: ptium %s: %s (%s)", presentation.ErrUpstream, what, trimmed, response.Status)
+	return &presentation.UpstreamError{Summary: summary, Detail: detail}
 }
 
 var _ presentation.Provider = (*Client)(nil)

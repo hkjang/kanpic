@@ -1079,9 +1079,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, presentation.ErrInvalid):
 		status, code, message = http.StatusBadRequest, "invalid_request", err.Error()
 	case errors.Is(err, presentation.ErrUpstream):
-		// 프레젠테이션 서비스가 한 말을 그대로 전한다. "요청을 처리하지
-		// 못했습니다" 로는 주소가 틀린 건지 키가 만료된 건지 알 수 없다.
-		status, code, message = http.StatusBadGateway, "presentation_failed", err.Error()
+		// 운영자에게 필요한 것과 누른 사람에게 필요한 것이 다르다. 자세한
+		// 것은 로그로 가고, 화면에는 어느 쪽 문제인지만 나간다 — 내부 주소는
+		// 워크북을 읽을 수 있다고 알아야 할 것이 아니다.
+		status, code, message = http.StatusBadGateway, "presentation_failed", "프레젠테이션 서비스를 사용할 수 없습니다."
+		var upstream *presentation.UpstreamError
+		if errors.As(err, &upstream) {
+			message = upstream.UserMessage()
+		}
 		s.logger.Error("presentation service failed", "error", err, "path", r.URL.Path)
 	default:
 		s.logger.Error("request failed", "error", err, "path", r.URL.Path)

@@ -333,3 +333,113 @@ func TestAnalyzeFindsAHeaderInATableWithNoNumbers(t *testing.T) {
 		t.Fatalf("names header=%v rows=%d", names.HasHeader, names.RowCount)
 	}
 }
+
+// 스프레드시트의 보통 모습은 항목마다 한 줄이 아니라 사건마다 한 줄이다.
+// 그런 범위를 원본 그대로 그리면 이름이 겹치는 막대가 스무 개 서고, 표로
+// 떨어뜨리면 스무 줄 중 열 줄만 보인다. 뜻은 항목별 합계다.
+func TestAnalyzeTotalsRowsThatRepeatTheirCategory(t *testing.T) {
+	t.Parallel()
+	rows := [][]any{{"부서", "매출"}}
+	for index := 0; index < 20; index++ {
+		rows = append(rows, []any{[]string{"영업1", "영업2", "영업3"}[index%3], (index + 1) * 10})
+	}
+	analysis := Analyze(SourceRef{}, rangeOf(t, "A1:B21"), sheetOf(rows))
+	if !analysis.Grouped || len(analysis.Groups) != 3 {
+		t.Fatalf("grouped=%v groups=%+v", analysis.Grouped, analysis.Groups)
+	}
+	if analysis.Shape != ShapeCategories || analysis.Chart != ChartBars {
+		t.Fatalf("shape=%s chart=%s", analysis.Shape, analysis.Chart)
+	}
+	// 1..20 을 10배 한 값을 셋으로 나눠 담았다. 합계는 2100 이다.
+	total := 0.0
+	for _, group := range analysis.Groups {
+		total += group.Total
+	}
+	if total != 2100 {
+		t.Fatalf("groups total %v", total)
+	}
+	// 최고는 한 건의 매출이 아니라 부서의 합계여야 한다.
+	for _, insight := range analysis.Insights {
+		if insight.Kind == InsightTop && insight.Number < 600 {
+			t.Fatalf("the top figure is one row rather than a total: %+v", insight)
+		}
+	}
+
+	deck := Build(analysis, DeckOptions{IncludeTable: true})
+	var chart *Slide
+	for index := range deck.Slides {
+		if deck.Slides[index].Component != nil && deck.Slides[index].Component.Kind == "bars" {
+			chart = &deck.Slides[index]
+		}
+	}
+	if chart == nil || len(chart.Component.Rows) != 3 {
+		t.Fatalf("chart=%+v", chart)
+	}
+	// 묶었다는 것을 말해야 한다. 말하지 않으면 읽는 사람은 원본 줄로 읽는다.
+	if !strings.Contains(chart.Lead, "20행") || !strings.Contains(chart.Lead, "합쳤습니다") {
+		t.Fatalf("chart lead=%q", chart.Lead)
+	}
+}
+
+// 비율은 더하면 안 된다. 108% + 91% + 103% 은 어떤 질문의 답도 아니다.
+func TestAnalyzeNeverAddsUpRates(t *testing.T) {
+	t.Parallel()
+	analysis := Analyze(SourceRef{}, rangeOf(t, "A1:B5"), sheetOf([][]any{
+		{"부서", "목표달성률"},
+		{"영업1", "108%"}, {"영업1", "96%"}, {"영업2", "91%"}, {"영업2", "88%"},
+	}))
+	if analysis.Grouped {
+		t.Fatalf("rates were added up: %+v", analysis.Groups)
+	}
+}
+
+// 항목마다 한 줄인 표는 이미 요약이다. 묶을 것이 없다.
+func TestAnalyzeLeavesASummarisedTableAlone(t *testing.T) {
+	t.Parallel()
+	analysis := Analyze(SourceRef{}, rangeOf(t, "A1:B4"), sheetOf([][]any{
+		{"부서", "매출"}, {"영업1", 120}, {"영업2", 95}, {"영업3", 110},
+	}))
+	if analysis.Grouped {
+		t.Fatalf("a table with one row per item was grouped: %+v", analysis.Groups)
+	}
+}
+
+// 합쳤다고 적어 놓고 원본 줄을 그리면 글과 그림이 서로 다른 말을 한다.
+// 어떤 종류의 그림이든 묶은 값을 그려야 한다.
+func TestGroupedChartsDrawTheTotalsTheSlideClaims(t *testing.T) {
+	t.Parallel()
+	rows := [][]any{{"일자", "금액"}}
+	for index := 0; index < 12; index++ {
+		rows = append(rows, []any{[]string{"2026-01", "2026-02", "2026-03"}[index%3], (index + 1) * 100})
+	}
+	analysis := Analyze(SourceRef{}, rangeOf(t, "A1:B13"), sheetOf(rows))
+	if !analysis.Grouped || analysis.Chart != ChartLine {
+		t.Fatalf("grouped=%v chart=%s", analysis.Grouped, analysis.Chart)
+	}
+	deck := Build(analysis, DeckOptions{})
+	var chart *Slide
+	for index := range deck.Slides {
+		if deck.Slides[index].Component != nil && deck.Slides[index].Component.Kind == "line" {
+			chart = &deck.Slides[index]
+		}
+	}
+	if chart == nil {
+		t.Fatalf("no line chart in %+v", deck.Slides)
+	}
+	if !strings.Contains(chart.Lead, "합쳤습니다") {
+		t.Fatalf("lead=%q", chart.Lead)
+	}
+	// 축은 원본 열두 줄이 아니라 묶은 세 점이어야 한다.
+	axis := strings.Split(chart.Component.Rows[0].Fields[0], ", ")
+	if len(axis) != 3 {
+		t.Fatalf("axis=%v", axis)
+	}
+	series := strings.Split(chart.Component.Rows[1].Fields[0], ", ")
+	if len(series) != 3 {
+		t.Fatalf("series=%v", series)
+	}
+	// 1..12 을 100배 해 셋으로 나눠 담았다. 첫 묶음은 1+4+7+10 = 22 → 2200.
+	if series[0] != "2200" {
+		t.Fatalf("first total=%q", series[0])
+	}
+}

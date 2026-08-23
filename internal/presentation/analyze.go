@@ -68,6 +68,7 @@ func Analyze(source SourceRef, selected cellrange.Range, cells []workbook.Cell) 
 		analysis.Columns = append(analysis.Columns, column)
 	}
 	assignRoles(&analysis)
+	groupRepeats(&analysis)
 	decideShape(&analysis)
 	analysis.Insights = findInsights(analysis)
 	sort.SliceStable(analysis.Insights, func(first, second int) bool {
@@ -429,6 +430,57 @@ func dateColumnIndex(analysis *Analysis) int {
 	return -1
 }
 
+// groupRepeats totals a measure per category when the rows repeat it.
+//
+// A spreadsheet's normal shape is one row per event, not one row per category.
+// Twenty rows of sales across three departments is a table nobody can read on a
+// slide and a chart with twenty unnamed bars; what it means is three numbers.
+//
+// Only a plain measure is added up. Summing a column of percentages produces a
+// number that is not any kind of answer — 108% + 91% + 103% is not a target
+// attainment — so a range whose first measure is a rate is left alone.
+func groupRepeats(analysis *Analysis) {
+	if analysis.Dimension < 0 || len(analysis.Measures) == 0 || analysis.RowCount < 2 {
+		return
+	}
+	measure := analysis.Columns[analysis.Measures[0]]
+	if measure.Role != RoleMeasure || measure.Kind != ColumnNumber {
+		return
+	}
+	labels := analysis.Columns[analysis.Dimension].Values
+	order := []string{}
+	totals := map[string]*Group{}
+	for position, label := range labels {
+		if label.Blank || position >= len(measure.Values) {
+			continue
+		}
+		value := measure.Values[position]
+		if !value.IsNum {
+			continue
+		}
+		group, seen := totals[label.Text]
+		if !seen {
+			group = &Group{Label: label.Text}
+			totals[label.Text] = group
+			order = append(order, label.Text)
+		}
+		group.Total += value.Number
+		group.Rows++
+	}
+	// 반복이 없으면 묶을 것이 없다. 항목마다 한 줄인 표는 이미 요약이다.
+	if len(order) == 0 || len(order) == len(labels) {
+		return
+	}
+	unit := commonUnit(measure)
+	analysis.Groups = make([]Group, 0, len(order))
+	for _, label := range order {
+		group := *totals[label]
+		group.Text = formatNumber(group.Total) + unit
+		analysis.Groups = append(analysis.Groups, group)
+	}
+	analysis.Grouped = true
+}
+
 func decideShape(analysis *Analysis) {
 	switch {
 	case analysis.RowCount == 0 || len(analysis.Columns) == 0:
@@ -459,6 +511,9 @@ func decideShape(analysis *Analysis) {
 		}
 	case analysis.Columns[analysis.Dimension].Kind == ColumnDate:
 		analysis.Shape, analysis.Chart = ShapeSeries, ChartLine
+	case analysis.Grouped && len(analysis.Groups) <= MaxChartRows:
+		// 묶고 나면 막대 몇 개다. 스무 줄짜리 표가 아니라.
+		analysis.Shape, analysis.Chart = ShapeCategories, ChartBars
 	case analysis.RowCount > MaxChartRows:
 		analysis.Shape, analysis.Chart = ShapeTable, ChartNone
 	default:
@@ -501,6 +556,9 @@ func findInsights(analysis Analysis) []Insight {
 			return names[row].Text
 		}
 		return ""
+	}
+	if analysis.Grouped {
+		return groupInsights(analysis)
 	}
 	primary := analysis.Columns[analysis.Measures[0]]
 	if top, ok := extreme(primary, true); ok {
@@ -576,6 +634,34 @@ func insightRank(kind string) int {
 	}
 }
 
+// groupInsights answers about the totals. Saying the biggest sale was 200 when
+// the question is which department sold most would be a different question
+// answered with the same word.
+func groupInsights(analysis Analysis) []Insight {
+	insights := []Insight{}
+	if len(analysis.Groups) == 0 {
+		return insights
+	}
+	name := strings.TrimSpace(analysis.Columns[analysis.Measures[0]].Name)
+	high, low, total := analysis.Groups[0], analysis.Groups[0], 0.0
+	for _, group := range analysis.Groups {
+		if group.Total > high.Total {
+			high = group
+		}
+		if group.Total < low.Total {
+			low = group
+		}
+		total += group.Total
+	}
+	unit := commonUnit(analysis.Columns[analysis.Measures[0]])
+	insights = append(insights, Insight{Kind: InsightTop, Label: name, Value: high.Text, Detail: high.Label, Number: high.Total})
+	if len(analysis.Groups) > 1 {
+		insights = append(insights, Insight{Kind: InsightBottom, Label: name, Value: low.Text, Detail: low.Label, Number: low.Total})
+		insights = append(insights, Insight{Kind: InsightTotal, Label: name, Value: formatNumber(total) + unit, Number: total})
+	}
+	return insights
+}
+
 func extreme(column Column, highest bool) (int, bool) {
 	found, at := false, 0
 	for index, value := range column.Values {
@@ -624,9 +710,9 @@ func writeHeadline(analysis Analysis) string {
 	}
 	switch {
 	case short != nil && short.Detail != "":
-		return short.Detail + "의 " + short.Label + "이 " + short.Value + "로 목표에 못 미칩니다."
+		return short.Detail + "의 " + withParticle(short.Label, "이", "가") + " " + withInstrumental(short.Value) + " 목표에 못 미칩니다."
 	case top != nil && top.Detail != "":
-		return top.Detail + "이(가) " + top.Label + " " + top.Value + "로 가장 높습니다."
+		return withParticle(top.Detail, "이", "가") + " " + top.Label + " " + withInstrumental(top.Value) + " 가장 높습니다."
 	case analysis.RowCount > 0:
 		return strconv.Itoa(analysis.RowCount) + "개 항목을 정리했습니다."
 	default:

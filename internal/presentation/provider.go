@@ -16,6 +16,26 @@ var ErrNotConfigured = errors.New("presentation provider is not configured")
 // different problems with different owners.
 var ErrUpstream = errors.New("presentation service failed")
 
+// UpstreamError separates what the person who pressed the button should read
+// from what the operator needs in the log.
+//
+// The two are not the same text. "dial tcp 10.0.3.14:8080: connection refused"
+// tells an operator exactly what is wrong and tells a user nothing except the
+// address of an internal service they had no reason to learn. What the service
+// itself said about the deck, on the other hand, is usually the most useful
+// sentence there is, so that one is passed through.
+type UpstreamError struct {
+	Summary string
+	Detail  string
+}
+
+func (e *UpstreamError) Error() string { return e.Detail }
+
+func (e *UpstreamError) Is(target error) bool { return target == ErrUpstream }
+
+// UserMessage is what may be shown to whoever asked.
+func (e *UpstreamError) UserMessage() string { return e.Summary }
+
 // Result is what came back from making a deck. Warnings are the provider's own
 // account of what it had to change; they are shown to the person who asked
 // rather than swallowed, because a deck that quietly says less than its author
