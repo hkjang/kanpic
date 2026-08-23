@@ -500,6 +500,12 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		}
 		return flipped, nil
 	}
+	// 칸 하나씩 셈하는 함수에 배열이 들어오면 칸마다 따로 셈해 배열로
+	// 돌려준다. 아래에서 인수를 낱낱이 펴 버리면 배열 하나와 값 여럿을
+	// 가릴 수 없게 되므로, 펴기 전에 다룬다.
+	if result, handled, err := broadcastElementwise(name, n, evaluated, cells); handled {
+		return result, err
+	}
 	values := make([]any, 0)
 	for _, value := range evaluated {
 		// A skipped argument keeps its slot here. Dropping it would slide
@@ -1533,6 +1539,83 @@ func truthy(value any) bool {
 //
 // 예전에는 이 셋도 함께 멈춰서, 열 어딘가에 #N/A 가 하나 있으면 그 열의
 // 개수를 셀 방법이 없었다.
+// elementwiseFunctions 는 값 하나를 받아 값 하나를 내는 함수들이다.
+// 배열을 주면 칸마다 따로 셈해 같은 모양의 배열이 나와야 한다.
+//
+// 표에서 조건에 맞는 칸을 세는 가장 흔한 꼴이 이것을 쓴다.
+//
+//	=SUMPRODUCT(--ISNUMBER(A1:A100))    숫자가 든 칸의 개수
+//	=SUMPRODUCT(--(LEN(A1:A100)>0))     비어 있지 않은 칸의 개수
+//
+// 모으는 함수(SUM, COUNT 같은)는 여기 넣지 않는다. 그쪽은 배열을 펴서
+// 하나로 줄이는 것이 하는 일이다.
+var elementwiseFunctions = map[string]struct{}{
+	"ABS": {}, "INT": {}, "SIGN": {}, "SQRT": {}, "TRUNC": {},
+	"ROUND": {}, "ROUNDUP": {}, "ROUNDDOWN": {},
+	"EXP": {}, "LN": {}, "LOG10": {},
+	"LEN": {}, "UPPER": {}, "LOWER": {}, "PROPER": {}, "TRIM": {},
+	"VALUE": {}, "N": {}, "T": {}, "TEXT": {},
+	"ISNUMBER": {}, "ISTEXT": {}, "ISNONTEXT": {}, "ISBLANK": {}, "ISLOGICAL": {},
+	"ISEVEN": {}, "ISODD": {}, "TYPE": {},
+}
+
+// broadcastElementwise 는 배열이 섞인 인수를 칸마다 갈라 같은 함수를 다시
+// 부른다. 셈하는 자리를 따로 두지 않고 그대로 되부르므로, 함수 하나를
+// 고치면 홑값과 배열이 함께 고쳐진다.
+//
+// 배열이 여럿이면 모양이 같아야 한다. 홑값은 칸마다 되풀이해 쓴다.
+func broadcastElementwise(name string, n functionNode, evaluated []any, cells map[string]any) (any, bool, error) {
+	if _, ok := elementwiseFunctions[name]; !ok {
+		return nil, false, nil
+	}
+	rows, columns, found := 0, 0, false
+	for _, value := range evaluated {
+		if !isArrayOperand(value) {
+			continue
+		}
+		selected, err := toArray(value)
+		if err != nil {
+			return nil, true, err
+		}
+		if found && (selected.rows != rows || selected.columns != columns) {
+			return nil, true, formulaError("#VALUE!", name+" needs arrays of the same shape")
+		}
+		rows, columns, found = selected.rows, selected.columns, true
+	}
+	if !found {
+		return nil, false, nil
+	}
+	// 칸 하나짜리 배열은 홑값과 같게 다룬다.
+	result := arrayValue{rows: rows, columns: columns, values: make([]any, rows*columns)}
+	for index := range result.values {
+		piece := functionNode{name: name, arguments: make([]node, len(evaluated))}
+		for position, value := range evaluated {
+			if !isArrayOperand(value) {
+				piece.arguments[position] = literalNode{value: value}
+				continue
+			}
+			selected, err := toArray(value)
+			if err != nil {
+				return nil, true, err
+			}
+			piece.arguments[position] = literalNode{value: selected.values[index]}
+		}
+		item, err := piece.eval(cells)
+		if err != nil {
+			if formulaErr, isError := err.(*Error); isError {
+				item = formulaErr
+			} else {
+				return nil, true, err
+			}
+		}
+		result.values[index] = item
+	}
+	if len(result.values) == 1 {
+		return result.values[0], true, nil
+	}
+	return result, true, nil
+}
+
 // errorAnswer 는 칸 하나에 대해 ISERROR·ISERR·ISNA 가 낼 답을 고른다.
 func errorAnswer(name string, value any) bool {
 	code := ""

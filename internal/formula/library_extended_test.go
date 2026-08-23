@@ -1282,3 +1282,53 @@ func TestCountingAroundErrorsFollowsTheDocumentedShapes(t *testing.T) {
 		}
 	}
 }
+
+// 값 하나를 받아 값 하나를 내는 함수에 배열을 주면, 칸마다 따로 셈해
+// 같은 모양의 배열이 나와야 한다. 표에서 조건에 맞는 칸을 세는 가장
+// 흔한 꼴이 이것을 쓴다.
+//
+//	=SUMPRODUCT(--ISNUMBER(A1:A100))   숫자가 든 칸의 개수
+//	=SUMPRODUCT(--(LEN(A1:A100)>0))    비어 있지 않은 칸의 개수
+//
+// 예전에는 인수를 낱낱이 펴는 자리보다 뒤에서 셈해서, 배열 하나가 값
+// 여럿이 되어 "인수는 하나여야 한다" 에 걸렸다. ISNUMBER 도 LEN 도 ABS
+// 도 배열을 받으면 모두 #VALUE! 였다.
+func TestScalarFunctionsSpreadOverArrays(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{"A1": 1.0, "A2": "글", "A3": 3.0, "A4": nil, "A5": -2.0}
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{`=SUMPRODUCT(--ISNUMBER(A1:A5))`, 3},
+		{`=SUMPRODUCT(--ISTEXT(A1:A5))`, 1},
+		{`=SUMPRODUCT(--ISBLANK(A1:A5))`, 1},
+		{`=SUMPRODUCT(--(LEN(A1:A5)>0))`, 4},
+		{`=SUMPRODUCT(ABS(A1:A5))`, 6},
+		{`=SUMPRODUCT(LEN({"ab";"cde"}))`, 5},
+		{`=SUMPRODUCT(--(UPPER({"a";"b"})="A"))`, 1},
+		{`=SUMPRODUCT(--(ROUND({1.4;1.6},0)=2))`, 1},
+		{`=INDEX(ABS({-1;2}),1)`, 1},
+		// 글자는 어떤 수보다도 크다. 엑셀이 그렇게 견준다.
+		{`=SUMPRODUCT(--(A1:A5>0))`, 3},
+
+		// 홑값은 그대로다.
+		{`=ABS(-3)`, 3},
+		{`=LEN("abc")`, 3},
+		{`=ROUND(1.005,2)`, 1.01},
+		// 모으는 함수는 배열을 하나로 줄인다. 그것이 하는 일이다.
+		{`=SUM(A1:A5)`, 2},
+		{`=COUNT(A1:A5)`, 3},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, cells), testCase.want, 1e-9)
+	}
+
+	// 두 인수를 함께 펼 때는 칸끼리 짝지어 셈한다.
+	if result := New().Evaluate(`=INDEX(TEXT({0.5;45306},"hh:mm"),1)`, cells); result.Error != nil || result.Value != "12:00" {
+		t.Errorf(`TEXT 배열 = %v err=%v, want "12:00"`, result.Value, result.Error)
+	}
+	// 모양이 다른 배열끼리는 짝지을 수 없다.
+	if result := New().Evaluate(`=ROUND({1;2;3},{1;2})`, cells); result.Error == nil {
+		t.Errorf("모양이 다른 배열 = %v, 오류여야 한다", result.Value)
+	}
+}
