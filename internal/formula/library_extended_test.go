@@ -913,3 +913,56 @@ func TestRoundingFollowsTheDecimalPeopleTyped(t *testing.T) {
 		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, map[string]any{}), testCase.want, 1e-12)
 	}
 }
+
+// 배수로 맞추는 함수도 십진수를 따라야 한다. 나눗셈을 이진 실수로 하면
+// 0.1+0.2 를 0.1 단위로 올릴 때 0.4 가 나온다. 0.30000000000000004 를
+// 0.1 로 나누면 3.0000000000000004 가 되기 때문이다.
+//
+// 화면에 보이는 자릿수도 마찬가지다. TEXT 는 Go 의 FormatFloat 에 그대로
+// 맡기고 있어서 1.005 를 "1.00" 으로 냈다. 브라우저의 Intl.NumberFormat 은
+// "1.01" 을 낸다. 격자에 보이는 값과 TEXT 의 답이 서로 달랐던 것이다.
+// web/src/lib/cellFormat.test.ts 가 브라우저 쪽에서 같은 값을 고정한다.
+func TestMultiplesAndDisplayFollowTheSameDecimal(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{"=MROUND(1.005,0.01)", 1.01},
+		{"=MROUND(2.675,0.01)", 2.68},
+		{"=MROUND(0.615,0.01)", 0.62},
+		{"=CEILING(0.1+0.2,0.1)", 0.3},
+		{"=FLOOR(0.1+0.2,0.1)", 0.3},
+		{"=CEILING(1.001,0.01)", 1.01},
+		// 부호가 같은 음수 쪽은 0 에서 먼 쪽이 올림이다.
+		{"=CEILING(-4.42,-0.05)", -4.45},
+		{"=FLOOR(-4.42,-0.05)", -4.4},
+		{"=MROUND(-7,-2)", -8},
+		{"=MROUND(7,2)", 8},
+		{"=CEILING(2.5)", 3},
+		{"=FLOOR(2.5)", 2},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, map[string]any{}), testCase.want, 1e-12)
+	}
+
+	for _, testCase := range []struct {
+		formula string
+		want    string
+	}{
+		{`=TEXT(1.005,"0.00")`, "1.01"},
+		{`=TEXT(2.675,"0.00")`, "2.68"},
+		{`=TEXT(8.475,"0.00")`, "8.48"},
+		{`=TEXT(-2.5,"0")`, "-3"},
+		{`=TEXT(1234.5,"#,##0.00")`, "1,234.50"},
+		{`=FIXED(1.005,2)`, "1.01"},
+	} {
+		result := New().Evaluate(testCase.formula, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %q", testCase.formula, result.Value, testCase.want)
+		}
+	}
+}

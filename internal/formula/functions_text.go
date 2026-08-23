@@ -219,7 +219,11 @@ func formatNumber(number float64, decimals int, grouped bool) string {
 	if decimals < 0 {
 		decimals = 0
 	}
-	text := strconv.FormatFloat(number, 'f', decimals, 64)
+	// 화면에 보이는 자릿수도 사람이 적은 십진수를 따라야 한다. 그냥
+	// FormatFloat 에 맡기면 이진 실수를 그대로 반올림하므로 1.005 가
+	// "1.00" 이 된다. 브라우저의 Intl.NumberFormat 은 "1.01" 을 내므로,
+	// 그대로 두면 화면과 TEXT 의 답이 서로 달라진다.
+	text := strconv.FormatFloat(decimalRound(number, decimals, roundHalfAway), 'f', decimals, 64)
 	negative := strings.HasPrefix(text, "-")
 	text = strings.TrimPrefix(text, "-")
 	whole, fraction := text, ""

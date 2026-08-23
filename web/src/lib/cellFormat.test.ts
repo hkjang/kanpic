@@ -20,3 +20,22 @@ describe('cell display formats',()=>{
     expect(wrapText('abcdefgh',3,text=>text.length)).toEqual(['abc','def','gh'])
   })
 })
+
+// 격자에 보이는 자릿수는 사람이 적은 십진수를 따라야 한다. 1.005 는 이진
+// 실수로 1.00499999999999989… 로 담기지만 엑셀과 시트는 1.01 로 보여준다.
+// Intl.NumberFormat 은 가장 짧은 십진수 표기를 기준으로 반올림하므로 이미
+// 맞게 나온다 — (1.005).toFixed(2) 는 "1.00" 이라 쓸 수 없다.
+//
+// 서버의 TEXT 는 Go 의 FormatFloat 에 그대로 맡기고 있어서 "1.00" 을 냈다.
+// 격자와 TEXT 가 다른 답을 내고 있었던 것이다. 아래 값은 서버의
+// internal/formula/library_extended_test.go 와 **같은 값** 을 고정한다.
+describe('the grid rounds the way the server does',()=>{
+  it('rounds the decimal people typed, not the binary float',()=>{
+    expect(formatCellValue(1.005,{number_format:'0.00'},'en-US')).toBe('1.01')
+    expect(formatCellValue(2.675,{number_format:'0.00'},'en-US')).toBe('2.68')
+    expect(formatCellValue(8.475,{number_format:'0.00'},'en-US')).toBe('8.48')
+    expect(formatCellValue(1234.5,{number_format:'#,##0.00'},'en-US')).toBe('1,234.50')
+    // toFixed 를 쓰면 아래가 "1.00" 이 된다. 쓰지 않는 이유다.
+    expect((1.005).toFixed(2)).toBe('1.00')
+  })
+})

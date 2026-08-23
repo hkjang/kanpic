@@ -33,6 +33,18 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 		if number*factor < 0 {
 			return nil, true, formulaError("#NUM!", name+" needs a factor with the same sign as the number")
 		}
+		// ROUND 와 같은 십진 셈을 쓴다. 배수를 이진 실수로 나누면
+		// CEILING(0.1+0.2, 0.1) 이 0.3 이 아니라 0.4 가 된다.
+		mode := roundHalfAway
+		switch name {
+		case "CEILING":
+			mode = roundAwayFromZero
+		case "FLOOR":
+			mode = roundTowardZero
+		}
+		if result, ok := decimalMultiple(number, factor, mode); ok {
+			return result, true, nil
+		}
 		switch name {
 		case "CEILING":
 			return math.Ceil(number/factor) * factor, true, nil

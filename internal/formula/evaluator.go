@@ -1364,7 +1364,7 @@ func decimalRound(number float64, digits int, mode roundMode) float64 {
 	if number == 0 || math.IsNaN(number) || math.IsInf(number, 0) {
 		return number
 	}
-	value, ok := new(big.Rat).SetString(strconv.FormatFloat(number, 'g', numericDigits, 64))
+	value, ok := decimalRat(number)
 	if !ok {
 		return number
 	}
@@ -1387,6 +1387,36 @@ func decimalRound(number float64, digits int, mode roundMode) float64 {
 	}
 	rounded, _ := result.Float64()
 	return rounded
+}
+
+// decimalRat 은 실수를 표 프로그램이 보는 십진수로 옮긴다. 열다섯 자리로
+// 다듬은 뒤 분수로 담으므로 이진 실수의 어긋남이 따라오지 않는다.
+func decimalRat(number float64) (*big.Rat, bool) {
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return nil, false
+	}
+	return new(big.Rat).SetString(strconv.FormatFloat(number, 'g', numericDigits, 64))
+}
+
+// decimalMultiple 은 어떤 수를 배수 단위로 맞춘다. CEILING, FLOOR, MROUND 가
+// 쓴다. 나눗셈을 이진 실수로 하면 0.1+0.2 를 0.1 단위로 올릴 때 0.4 가
+// 나온다. 0.30000000000000004 를 0.1 로 나누면 3.0000000000000004 가 되기
+// 때문이다. 십진수로 나누면 3 이 되어 0.3 이 나온다.
+//
+// 부호가 다른 경우는 부르는 쪽에서 이미 걸러내므로 몫은 늘 0 이상이다.
+func decimalMultiple(number, factor float64, mode roundMode) (float64, bool) {
+	value, ok := decimalRat(number)
+	if !ok {
+		return 0, false
+	}
+	step, stepOK := decimalRat(factor)
+	if !stepOK || step.Sign() == 0 {
+		return 0, false
+	}
+	quotient := new(big.Rat).Quo(value, step)
+	rounded := new(big.Rat).SetInt(roundRat(quotient, mode))
+	result, _ := new(big.Rat).Mul(rounded, step).Float64()
+	return result, true
 }
 
 // roundMode 는 딱 중간에 놓인 값과 나머지를 어느 쪽으로 보낼지 정한다.
