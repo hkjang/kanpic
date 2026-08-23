@@ -566,6 +566,7 @@ type rangeSortRequest struct {
 	Keys           []workbook.SortKey `json:"keys"`
 	HeaderRows     int                `json:"header_rows"`
 	CaseSensitive  bool               `json:"case_sensitive"`
+	LiteralOrder   bool               `json:"literal_order"`
 }
 
 func (s *Server) formatRange(w http.ResponseWriter, r *http.Request) {
@@ -734,7 +735,7 @@ func (s *Server) applyRangeSort(ctx context.Context, sheetID, actor string, inpu
 	if err != nil {
 		return workbook.MutationResult{}, nil, err
 	}
-	cells, err := workbook.BuildSortCells(existing, selected, workbook.SortOptions{Keys: input.Keys, HeaderRows: input.HeaderRows, CaseSensitive: input.CaseSensitive})
+	cells, err := workbook.BuildSortCells(existing, selected, workbook.SortOptions{Keys: input.Keys, HeaderRows: input.HeaderRows, CaseSensitive: input.CaseSensitive, LiteralOrder: input.LiteralOrder})
 	if err != nil {
 		return workbook.MutationResult{}, nil, err
 	}

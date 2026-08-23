@@ -21,6 +21,10 @@ type SortOptions struct {
 	Keys          []SortKey `json:"keys"`
 	HeaderRows    int       `json:"header_rows"`
 	CaseSensitive bool      `json:"case_sensitive"`
+	// LiteralOrder compares text character by character, the way Excel does.
+	// The default reads the digits inside a value as a number, so 2월 comes
+	// before 10월 and 항목2 before 항목10.
+	LiteralOrder bool `json:"literal_order"`
 }
 
 type sortScalar struct {
@@ -97,7 +101,7 @@ func BuildSortCells(existing []Cell, selected cellrange.Range, options SortOptio
 	}
 	sort.SliceStable(records, func(left, right int) bool {
 		for index := range options.Keys {
-			comparison := compareSortScalars(records[left].values[index], records[right].values[index])
+			comparison := compareSortScalars(records[left].values[index], records[right].values[index], options.LiteralOrder)
 			if comparison != 0 {
 				if records[left].values[index].blank || records[right].values[index].blank {
 					return comparison < 0
@@ -154,7 +158,7 @@ func sortableValue(cell Cell, caseSensitive bool) (sortScalar, error) {
 	}
 }
 
-func compareSortScalars(left, right sortScalar) int {
+func compareSortScalars(left, right sortScalar, literal bool) int {
 	if left.blank != right.blank {
 		if left.blank {
 			return 1
@@ -183,7 +187,10 @@ func compareSortScalars(left, right sortScalar) int {
 			return 1
 		}
 	default:
-		return strings.Compare(left.text, right.text)
+		if literal {
+			return strings.Compare(left.text, right.text)
+		}
+		return compareNatural(left.text, right.text)
 	}
 	return 0
 }

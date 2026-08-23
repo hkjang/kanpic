@@ -1114,6 +1114,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           if(cycled){
             event.preventDefault()
             setDraft(cycled.text);setCaret(cycled.end)
+            if(field){field.value=cycled.text;field.setSelectionRange(cycled.start,cycled.end)}
             requestAnimationFrame(()=>field?.setSelectionRange(cycled.start,cycled.end))
           }
           return
@@ -1124,6 +1125,10 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
           const at=field?.selectionStart??draft.length,to=field?.selectionEnd??at
           const next=draft.slice(0,at)+'\n'+draft.slice(to)
           setDraft(next);setCaret(at+1)
+          // 캐럿을 다음 프레임에만 옮기면 그 사이에 친 글자가 이전 자리로
+          // 들어간다. 값과 캐럿을 지금 맞춰 두고, React 가 다시 그린 뒤에도
+          // 한 번 더 맞춘다.
+          if(field){field.value=next;field.setSelectionRange(at+1,at+1)}
           requestAnimationFrame(()=>field?.setSelectionRange(at+1,at+1))
           return
         }
