@@ -327,3 +327,95 @@ func TestConditionalRankValidation(t *testing.T) {
 		t.Fatalf("default rank rule = %#v, %v", rule, err)
 	}
 }
+
+func TestConditionalIconSetSplitsTheRangeLikeExcel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "icons", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	// 0 부터 100 까지 고르게 놓으면 각 값이 곧 백분율이다. 엑셀은 3개짜리를
+	// 33%, 67% 에서 나누므로 33 은 가운데, 32 는 아래 아이콘이어야 한다.
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`0`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`32`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`33`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`66`)},
+		{Row: 5, Column: 1, Value: json.RawMessage(`67`)},
+		{Row: 6, Column: 1, Value: json.RawMessage(`100`)},
+		{Row: 7, Column: 1, Value: json.RawMessage(`"글자"`)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A1:A7")
+	icons := func(key, style string, reverse bool) map[int]int {
+		t.Helper()
+		rule, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", CreateConditionalFormatInput{
+			IdempotencyKey: key, Name: key, Range: "A1:A7", RuleType: "icon_set", IconStyle: style, IconReverse: reverse, Priority: 1})
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		evaluation, err := repository.EvaluateConditionalFormats(ctx, sheet.ID, selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[int]int{}
+		for _, item := range evaluation.Items {
+			if item.Icon == nil {
+				t.Fatalf("%s: row %d matched without an icon", key, item.Row)
+			}
+			if item.Icon.Style != style {
+				t.Fatalf("%s: row %d carries style %q", key, item.Row, item.Icon.Style)
+			}
+			got[item.Row] = item.Icon.Index
+		}
+		if err := repository.DeleteConditionalFormat(ctx, rule.ID, "alice", nil); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	// 글자는 아이콘을 받지 않는다 — 7행이 빠진 여섯 칸만 나온다.
+	if got := icons("three", "3TrafficLights1", false); !reflect.DeepEqual(got, map[int]int{1: 0, 2: 0, 3: 1, 4: 1, 5: 2, 6: 2}) {
+		t.Fatalf("three icons = %v", got)
+	}
+	// 뒤집으면 큰 값이 첫 아이콘을 받는다. 오류가 적을수록 좋은 열에 쓴다.
+	if got := icons("reversed", "3TrafficLights1", true); !reflect.DeepEqual(got, map[int]int{1: 2, 2: 2, 3: 1, 4: 1, 5: 0, 6: 0}) {
+		t.Fatalf("reversed icons = %v", got)
+	}
+	// 5개짜리는 20/40/60/80 에서 나뉜다.
+	if got := icons("five", "5Arrows", false); !reflect.DeepEqual(got, map[int]int{1: 0, 2: 1, 3: 1, 4: 3, 5: 3, 6: 4}) {
+		t.Fatalf("five icons = %v", got)
+	}
+}
+
+func TestConditionalIconSetValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "icon rules", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	if _, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", CreateConditionalFormatInput{
+		IdempotencyKey: "unknown", Name: "unknown", Range: "A1:A6", RuleType: "icon_set", IconStyle: "3Flags", Priority: 1,
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an icon set kanpic cannot draw was accepted: %v", err)
+	}
+	// 종류를 고르지 않으면 신호등이다. 색 눈금이나 막대의 설정은 남지 않는다.
+	rule, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", CreateConditionalFormatInput{
+		IdempotencyKey: "default", Name: "기본", Range: "A1:A6", RuleType: "icon_set", Priority: 1,
+		BarColor: "#38a3a5", MinColor: "#dcfce7", Style: json.RawMessage(`{"background":"#fee2e2"}`), StopIfTrue: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.IconStyle != "3TrafficLights1" || rule.BarColor != "" || rule.MinColor != "" || len(rule.Style) != 0 || rule.StopIfTrue {
+		t.Fatalf("icon set rule kept fields it does not use: %+v", rule)
+	}
+	// 규칙 종류를 바꾸면 아이콘 설정은 사라진다.
+	changed, err := repository.UpdateConditionalFormat(ctx, rule.ID, "alice", UpdateConditionalFormatInput{
+		RuleType: stringPointer("data_bar"), ExpectedRevision: &rule.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.IconStyle != "" || changed.IconReverse {
+		t.Fatalf("data bar rule kept the icon set: %+v", changed)
+	}
+}

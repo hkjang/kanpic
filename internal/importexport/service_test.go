@@ -472,6 +472,7 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 	create("scale", workbook.CreateConditionalFormatInput{Range: "B1:B20", RuleType: "color_scale", MinColor: "#dcfce7", MaxColor: "#ef4444"})
 	create("bar", workbook.CreateConditionalFormatInput{Range: "C1:C20", RuleType: "data_bar", BarColor: "#38a3a5"})
 	create("custom", workbook.CreateConditionalFormatInput{Range: "D1:D20", RuleType: "custom_formula", Formula: `=$A1>100`, Style: raw(map[string]any{"background": "#dbeafe"})})
+	create("icons", workbook.CreateConditionalFormatInput{Range: "E1:E20", RuleType: "icon_set", IconStyle: "3Arrows", IconReverse: true})
 
 	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
 	if err != nil {
@@ -493,7 +494,7 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 		}
 		kinds[area] = options[0].Type
 	}
-	expected := map[string]string{"A1:A20": "cell", "B1:B20": "2_color_scale", "C1:C20": "data_bar", "D1:D20": "formula"}
+	expected := map[string]string{"A1:A20": "cell", "B1:B20": "2_color_scale", "C1:C20": "data_bar", "D1:D20": "formula", "E1:E20": "icon_set"}
 	for area, kind := range expected {
 		if kinds[area] != kind {
 			t.Fatalf("range %s exported as %q, want %q (all: %#v)", area, kinds[area], kind, kinds)
@@ -506,6 +507,9 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 		}
 		if area == "D1:D20" && options[0].Criteria != "$A1>100" {
 			t.Fatalf("formula rule = %#v", options[0])
+		}
+		if area == "E1:E20" && (options[0].IconStyle != "3Arrows" || !options[0].ReverseIcons) {
+			t.Fatalf("icon set rule = %#v", options[0])
 		}
 	}
 
@@ -526,7 +530,7 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) != 4 {
+	if len(stored) != 5 {
 		t.Fatalf("stored conditional formats = %#v", stored)
 	}
 	byArea := make(map[string]workbook.ConditionalFormat, len(stored))
@@ -544,6 +548,9 @@ func TestXLSXExportCarriesConditionalFormats(t *testing.T) {
 	}
 	if rule := byArea["D1:D20"]; rule.RuleType != "custom_formula" || rule.Formula != "=$A1>100" {
 		t.Fatalf("restored custom formula = %#v", rule)
+	}
+	if rule := byArea["E1:E20"]; rule.RuleType != "icon_set" || rule.IconStyle != "3Arrows" || !rule.IconReverse {
+		t.Fatalf("restored icon set = %#v", rule)
 	}
 }
 

@@ -12,6 +12,7 @@ import { dataRegion, populatedCell } from '../lib/dataRegion'
 import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
+import { drawConditionalIcon,iconGlyph,iconGutter } from '../lib/conditionalIcon'
 import { hashesWhenTooNarrow } from '../lib/cellWidth'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
 import { cycleReference } from '../lib/referenceCycle'
@@ -246,6 +247,11 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       const conditional=conditionalCells.get(cellKey(cell.row,cell.column)),style={...(cell.style??{}),...(conditional?.style??{})},validation=validationForCell(validations,cell.row,cell.column),validationOption=validation?.rule_type==='list'?optionForValue(validation,cell.value):undefined
       context.fillStyle=typeof style.background==='string'?style.background:'#fff';context.fillRect(x+1,y+1,width-2,height-2)
       if(conditional?.data_bar){context.save();context.globalAlpha=.3;context.fillStyle=conditional.data_bar.color;context.fillRect(x+3,y+4,Math.max(0,(width-6)*conditional.data_bar.ratio),Math.max(0,height-8));context.restore()}
+      // 아이콘은 왼쪽 자리를 차지하고, 값은 그만큼 오른쪽으로 물러난다.
+      const glyph=conditional?.icon?iconGlyph(conditional.icon):null
+      const iconSize=glyph?Math.max(0,Math.min(13*zoom,height-6,width-10)):0
+      const iconGap=glyph&&iconSize>4?iconGutter(iconSize):0
+      if(glyph&&iconGap)drawConditionalIcon(context,glyph,x+4,y+(height-iconSize)/2,iconSize)
       if(validation?.display_style==='chip'&&validationOption?.color){context.fillStyle=validationOption.color;context.beginPath();context.roundRect(x+4,y+4,width-8,height-8,6);context.fill()}
       // A checkbox cell is drawn as a box, which is the only way the state is
       // readable at a glance and clickable without opening an editor.
@@ -285,12 +291,12 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       context.fillStyle=formulaError?'#c2413b':link?'#1155cc':typeof style.color==='string'?style.color:'#1c2733';context.font=`${style.italic===true?'italic ':''}${style.bold||formulaError?'600':'400'} ${fontSize*zoom}px ${fontFamily}`
       const alignment=validation?.display_style==='chip'?'left':style.horizontal_align==='left'||style.horizontal_align==='center'||style.horizontal_align==='right'?style.horizontal_align:typeof cell.value==='number'?'right':'left'
       context.textAlign=alignment
-      const text=showFormulas&&cell.formula?cell.formula:validationOption?optionLabel(validationOption):formatCellValue(cell.value,style),textX=alignment==='right'?x+width-7:alignment==='center'?x+width/2:x+(validation?.display_style==='chip'?10:7)
+      const text=showFormulas&&cell.formula?cell.formula:validationOption?optionLabel(validationOption):formatCellValue(cell.value,style),textX=alignment==='right'?x+width-7:alignment==='center'?x+iconGap+(width-iconGap)/2:x+iconGap+(validation?.display_style==='chip'?10:7)
       const vertical=style.vertical_align==='top'||style.vertical_align==='bottom'||style.vertical_align==='middle'?style.vertical_align:'middle'
       const textY=vertical==='top'?y+Math.max(4,fontSize*zoom/2+3):vertical==='bottom'?y+height-Math.max(4,fontSize*zoom/2+3):y+height/2
       // A value with a line break in it is wrapped whether or not wrapping was
       // asked for; drawing it on one line would hide the break entirely.
-      const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,width-12),textMode=style.text_mode==='wrap'||style.wrap===true||text.includes('\n')?'wrap':style.text_mode==='clip'?'clip':'overflow'
+      const rotation=typeof style.text_rotation==='number'?style.text_rotation:0,maxTextWidth=Math.max(0,width-12-iconGap),textMode=style.text_mode==='wrap'||style.wrap===true||text.includes('\n')?'wrap':style.text_mode==='clip'?'clip':'overflow'
       // Overflowing text spills across empty neighbours and is cut off at the
       // first cell that holds something, instead of being condensed to fit.
       const room=textMode==='overflow'&&rotation===0

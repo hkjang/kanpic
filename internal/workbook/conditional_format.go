@@ -25,6 +25,23 @@ const (
 	MaxRankCount = 1_000
 )
 
+// conditionalIconCuts are the percent cut-offs Excel writes for its own icon
+// set presets. Three icons change at 33 and 67 rather than at exact thirds, so
+// a cell sitting on 33% has to land on the middle icon here too.
+var conditionalIconCuts = map[int][]float64{
+	3: {33, 67},
+	4: {25, 50, 75},
+	5: {20, 40, 60, 80},
+}
+
+// conditionalIconCounts lists the icon sets kanpic can draw, with how many
+// icons each one holds. The names match the ones Excel writes into a workbook,
+// so a rule made here survives a round trip through XLSX.
+var conditionalIconCounts = map[string]int{
+	"3Arrows": 3, "3TrafficLights1": 3, "3Symbols": 3,
+	"4Arrows": 4, "5Arrows": 5, "5Quarters": 5,
+}
+
 var conditionalValueOperators = map[string]struct{}{
 	"equals": {}, "not_equals": {}, "greater_than": {}, "greater_or_equal": {},
 	"less_than": {}, "less_or_equal": {}, "between": {}, "not_between": {},
@@ -49,6 +66,8 @@ type ConditionalFormat struct {
 	MidColor        string          `json:"mid_color,omitempty"`
 	MaxColor        string          `json:"max_color,omitempty"`
 	BarColor        string          `json:"bar_color,omitempty"`
+	IconStyle       string          `json:"icon_style,omitempty"`
+	IconReverse     bool            `json:"icon_reverse,omitempty"`
 	Priority        int             `json:"priority"`
 	StopIfTrue      bool            `json:"stop_if_true"`
 	Revision        int64           `json:"revision"`
@@ -72,6 +91,8 @@ type CreateConditionalFormatInput struct {
 	MidColor       string          `json:"mid_color,omitempty"`
 	MaxColor       string          `json:"max_color,omitempty"`
 	BarColor       string          `json:"bar_color,omitempty"`
+	IconStyle      string          `json:"icon_style,omitempty"`
+	IconReverse    bool            `json:"icon_reverse,omitempty"`
 	Priority       int             `json:"priority,omitempty"`
 	StopIfTrue     bool            `json:"stop_if_true,omitempty"`
 }
@@ -89,6 +110,8 @@ type UpdateConditionalFormatInput struct {
 	MidColor         *string          `json:"mid_color,omitempty"`
 	MaxColor         *string          `json:"max_color,omitempty"`
 	BarColor         *string          `json:"bar_color,omitempty"`
+	IconStyle        *string          `json:"icon_style,omitempty"`
+	IconReverse      *bool            `json:"icon_reverse,omitempty"`
 	Priority         *int             `json:"priority,omitempty"`
 	StopIfTrue       *bool            `json:"stop_if_true,omitempty"`
 	ExpectedRevision *int64           `json:"expected_revision,omitempty"`
@@ -99,11 +122,20 @@ type ConditionalDataBar struct {
 	Ratio float64 `json:"ratio"`
 }
 
+// ConditionalIcon is one icon out of a set. Index counts from the lowest
+// icon up, so the client can pick the glyph without knowing the thresholds.
+type ConditionalIcon struct {
+	Style string `json:"style"`
+	Index int    `json:"index"`
+	Count int    `json:"count"`
+}
+
 type ConditionalFormatCell struct {
 	Row            int                 `json:"row"`
 	Column         int                 `json:"column"`
 	Style          json.RawMessage     `json:"style,omitempty"`
 	DataBar        *ConditionalDataBar `json:"data_bar,omitempty"`
+	Icon           *ConditionalIcon    `json:"icon,omitempty"`
 	MatchedRuleIDs []string            `json:"matched_rule_ids"`
 }
 
@@ -177,6 +209,8 @@ func importedConditionalInput(imported ImportConditionalFormat, index int) (Crea
 		MidColor:       imported.MidColor,
 		MaxColor:       imported.MaxColor,
 		BarColor:       imported.BarColor,
+		IconStyle:      imported.IconStyle,
+		IconReverse:    imported.IconReverse,
 		StopIfTrue:     imported.StopIfTrue,
 	}
 	if input.Range == "" || input.RuleType == "" {
@@ -190,7 +224,8 @@ func NewConditionalFormat(sheetID, actor string, input CreateConditionalFormatIn
 		SheetID: sheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey), Name: input.Name, Range: input.Range,
 		RuleType: input.RuleType, Operator: input.Operator, Formula: input.Formula, Value: cloneJSON(input.Value), Value2: cloneJSON(input.Value2),
 		Style: cloneJSON(input.Style), MinColor: input.MinColor, MidColor: input.MidColor, MaxColor: input.MaxColor,
-		BarColor: input.BarColor, Priority: input.Priority, StopIfTrue: input.StopIfTrue, CreatedBy: actor, UpdatedBy: actor,
+		BarColor: input.BarColor, IconStyle: input.IconStyle, IconReverse: input.IconReverse,
+		Priority: input.Priority, StopIfTrue: input.StopIfTrue, CreatedBy: actor, UpdatedBy: actor,
 	}
 	if rule.CreateKey == "" {
 		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: idempotency_key is required", ErrInvalid)
@@ -227,6 +262,9 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 	}
 	if rule.Priority < 1 || rule.Priority > 1000 {
 		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: priority must be between 1 and 1000", ErrInvalid)
+	}
+	if rule.RuleType != "icon_set" {
+		rule.IconStyle, rule.IconReverse = "", false
 	}
 	switch rule.RuleType {
 	case "value":
@@ -334,8 +372,18 @@ func NormalizeConditionalFormat(rule ConditionalFormat) (ConditionalFormat, cell
 		rule.Operator, rule.Value, rule.Value2, rule.Style, rule.Formula = "", nil, nil, nil, ""
 		rule.MinColor, rule.MidColor, rule.MaxColor = "", "", ""
 		rule.StopIfTrue = false
+	case "icon_set":
+		if rule.IconStyle == "" {
+			rule.IconStyle = "3TrafficLights1"
+		}
+		if _, ok := conditionalIconCounts[rule.IconStyle]; !ok {
+			return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: icon_style must be one of %s", ErrInvalid, conditionalIconStyleList())
+		}
+		rule.Operator, rule.Value, rule.Value2, rule.Style, rule.Formula = "", nil, nil, nil, ""
+		rule.MinColor, rule.MidColor, rule.MaxColor, rule.BarColor = "", "", "", ""
+		rule.StopIfTrue = false
 	default:
-		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, custom_formula, duplicate, rank, color_scale, or data_bar", ErrInvalid)
+		return ConditionalFormat{}, cellrange.Range{}, fmt.Errorf("%w: rule_type must be value, custom_formula, duplicate, rank, color_scale, data_bar, or icon_set", ErrInvalid)
 	}
 	return rule, selected, nil
 }
@@ -380,6 +428,12 @@ func ApplyConditionalFormatUpdate(current ConditionalFormat, actor string, input
 	}
 	if input.BarColor != nil {
 		updated.BarColor = *input.BarColor
+	}
+	if input.IconStyle != nil {
+		updated.IconStyle = *input.IconStyle
+	}
+	if input.IconReverse != nil {
+		updated.IconReverse = *input.IconReverse
 	}
 	if input.Priority != nil {
 		updated.Priority = *input.Priority
@@ -478,7 +532,7 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 					continue
 				}
 				value := values[key]
-				matched, patch, bar := false, json.RawMessage(nil), (*ConditionalDataBar)(nil)
+				matched, patch, bar, icon := false, json.RawMessage(nil), (*ConditionalDataBar)(nil), (*ConditionalIcon)(nil)
 				if rule.RuleType == "custom_formula" {
 					// The formula is written for the top-left cell of the range
 					// and moves with each cell, which is what makes one rule
@@ -488,7 +542,7 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 					matched = evaluated.Error == nil && conditionalTruthy(evaluated.Value)
 					patch = cloneJSON(rule.Style)
 				} else {
-					matched, patch, bar = evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber, threshold)
+					matched, patch, bar, icon = evaluateConditionalRule(rule, value, duplicates, minimum, maximum, hasNumber, threshold)
 				}
 				if !matched {
 					continue
@@ -504,6 +558,9 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 				}
 				if bar != nil {
 					item.DataBar = bar
+				}
+				if icon != nil {
+					item.Icon = icon
 				}
 				item.MatchedRuleIDs = append(item.MatchedRuleIDs, rule.ID)
 				items[key] = item
@@ -529,22 +586,22 @@ func EvaluateConditionalFormats(sheetID string, workbookVersion int64, requested
 	return result, nil
 }
 
-func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[string]int, minimum, maximum float64, hasNumber bool, threshold *float64) (bool, json.RawMessage, *ConditionalDataBar) {
+func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[string]int, minimum, maximum float64, hasNumber bool, threshold *float64) (bool, json.RawMessage, *ConditionalDataBar, *ConditionalIcon) {
 	switch rule.RuleType {
 	case "value":
 		matched := conditionalValueMatches(value, rule)
-		return matched, cloneJSON(rule.Style), nil
+		return matched, cloneJSON(rule.Style), nil, nil
 	case "duplicate":
 		if conditionalBlank(value) {
-			return false, nil, nil
+			return false, nil, nil, nil
 		}
 		count := duplicates[validationCanonical(value)]
 		matched := rule.Operator == "duplicate" && count > 1 || rule.Operator == "unique" && count == 1
-		return matched, cloneJSON(rule.Style), nil
+		return matched, cloneJSON(rule.Style), nil, nil
 	case "rank":
 		number, ok := numericChartValue(value)
 		if !ok || threshold == nil {
-			return false, nil, nil
+			return false, nil, nil, nil
 		}
 		// 문턱값에 걸친 값은 모두 넣는다. 상위 3개를 물었는데 3등이 둘이면
 		// 둘 다 상위 3개다. 엑셀도 같은 답을 낸다.
@@ -552,24 +609,30 @@ func evaluateConditionalRule(rule ConditionalFormat, value any, duplicates map[s
 		if rule.Operator == "top" || rule.Operator == "top_percent" {
 			matched = number >= *threshold
 		}
-		return matched, cloneJSON(rule.Style), nil
+		return matched, cloneJSON(rule.Style), nil, nil
 	case "color_scale":
 		number, ok := numericChartValue(value)
 		if !ok || !hasNumber {
-			return false, nil, nil
+			return false, nil, nil, nil
 		}
 		ratio := conditionalRatio(number, minimum, maximum)
 		color := interpolateConditionalScale(rule.MinColor, rule.MidColor, rule.MaxColor, ratio)
 		patch, _ := json.Marshal(map[string]string{"background": color})
-		return true, patch, nil
+		return true, patch, nil, nil
 	case "data_bar":
 		number, ok := numericChartValue(value)
 		if !ok || !hasNumber {
-			return false, nil, nil
+			return false, nil, nil, nil
 		}
-		return true, nil, &ConditionalDataBar{Color: rule.BarColor, Ratio: conditionalRatio(number, minimum, maximum)}
+		return true, nil, &ConditionalDataBar{Color: rule.BarColor, Ratio: conditionalRatio(number, minimum, maximum)}, nil
+	case "icon_set":
+		number, ok := numericChartValue(value)
+		if !ok || !hasNumber {
+			return false, nil, nil, nil
+		}
+		return true, nil, nil, conditionalIconFor(rule, conditionalRatio(number, minimum, maximum))
 	default:
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 }
 
@@ -692,6 +755,43 @@ func conditionalCellValue(cell Cell) any {
 
 func conditionalBlank(value any) bool {
 	return value == nil || strings.TrimSpace(validationText(value)) == ""
+}
+
+// SupportedIconStyle reports whether kanpic can draw an icon set by that name.
+func SupportedIconStyle(style string) bool {
+	_, ok := conditionalIconCounts[style]
+	return ok
+}
+
+func conditionalIconStyleList() string {
+	names := make([]string, 0, len(conditionalIconCounts))
+	for name := range conditionalIconCounts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// conditionalIconFor picks the icon for one cell. The cut-offs are Excel's
+// defaults - even thirds, quarters or fifths of the range - so a workbook
+// exported to XLSX shows the same icons there.
+func conditionalIconFor(rule ConditionalFormat, ratio float64) *ConditionalIcon {
+	cuts, ok := conditionalIconCuts[conditionalIconCounts[rule.IconStyle]]
+	if !ok {
+		return nil
+	}
+	count := len(cuts) + 1
+	percent := ratio * 100
+	index := 0
+	for _, cut := range cuts {
+		if percent >= cut {
+			index++
+		}
+	}
+	if rule.IconReverse {
+		index = count - 1 - index
+	}
+	return &ConditionalIcon{Style: rule.IconStyle, Index: index, Count: count}
 }
 
 func conditionalRatio(value, minimum, maximum float64) float64 {

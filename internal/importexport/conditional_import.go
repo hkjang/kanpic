@@ -24,9 +24,26 @@ var importCriteria = map[string]string{
 }
 
 // importConditionalFormats maps the rules of an XLSX sheet back to kanpic ones.
-// Excel expresses far more than kanpic does — icon sets, date periods, top-N —
+// Excel expresses far more than kanpic does — date periods, above-average —
 // so anything without a faithful equivalent is left out rather than turned into
 // the nearest rule that happens to compile.
+// nearestIconStyle keeps a rule kanpic cannot draw exactly rather than dropping
+// it: an unknown set becomes the one with the same number of icons, so a
+// three-flag rule still shows three steps instead of vanishing on import.
+func nearestIconStyle(style string) string {
+	switch {
+	case workbook.SupportedIconStyle(style):
+		return style
+	case strings.HasPrefix(style, "3"):
+		return "3TrafficLights1"
+	case strings.HasPrefix(style, "4"):
+		return "4Arrows"
+	case strings.HasPrefix(style, "5"):
+		return "5Arrows"
+	}
+	return ""
+}
+
 func importConditionalFormats(file *excelize.File, name string) []workbook.ImportConditionalFormat {
 	found, err := file.GetConditionalFormats(name)
 	if err != nil || len(found) == 0 {
@@ -84,6 +101,11 @@ func importConditionalFormats(file *excelize.File, name string) []workbook.Impor
 					rule.MidColor = canonicalColor(item.MidColor)
 				}
 				if rule.MinColor == "" || rule.MaxColor == "" {
+					continue
+				}
+			case "icon_set":
+				rule.RuleType, rule.IconStyle, rule.IconReverse = "icon_set", nearestIconStyle(item.IconStyle), item.ReverseIcons
+				if rule.IconStyle == "" {
 					continue
 				}
 			case "data_bar":

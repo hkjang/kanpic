@@ -564,8 +564,10 @@ type ImportConditionalFormat struct {
 	MinColor   string          `json:"min_color,omitempty"`
 	MidColor   string          `json:"mid_color,omitempty"`
 	MaxColor   string          `json:"max_color,omitempty"`
-	BarColor   string          `json:"bar_color,omitempty"`
-	StopIfTrue bool            `json:"stop_if_true,omitempty"`
+	BarColor    string          `json:"bar_color,omitempty"`
+	IconStyle   string          `json:"icon_style,omitempty"`
+	IconReverse bool            `json:"icon_reverse,omitempty"`
+	StopIfTrue  bool            `json:"stop_if_true,omitempty"`
 }
 
 type ImportWorkbookInput struct {

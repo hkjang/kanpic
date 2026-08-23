@@ -1041,6 +1041,30 @@ func TestPostgresConditionalFormatsPersistEvaluateTransformCopyAndRestore(t *tes
 	if err != nil || len(evaluated.Items) != 2 || evaluated.Items[0].Row != 2 || evaluated.Items[1].Row != 3 {
 		t.Fatalf("conditional evaluation=%#v err=%v", evaluated, err)
 	}
+	// 아이콘 집합의 설정은 컬럼 두 개에 따로 들어간다. 구조체와 API 에는
+	// 닿았지만 INSERT 문에서 빠지는 실수는 만든 응답만 보면 보이지 않으므로,
+	// 저장소에서 다시 읽어 확인한다.
+	icons, err := repository.CreateConditionalFormat(ctx, sheet.ID, "alice", workbook.CreateConditionalFormatInput{
+		IdempotencyKey: "conditional-icons", Name: "icons", Range: "B1:B3", RuleType: "icon_set", IconStyle: "5Arrows", IconReverse: true, Priority: 2})
+	if err != nil {
+		t.Fatalf("icon set create err=%v", err)
+	}
+	reread, err := repository.GetConditionalFormat(ctx, icons.ID)
+	if err != nil || reread.IconStyle != "5Arrows" || !reread.IconReverse {
+		t.Fatalf("icon set reread=%#v err=%v", reread, err)
+	}
+	flipped := false
+	turned, err := repository.UpdateConditionalFormat(ctx, icons.ID, "bob", workbook.UpdateConditionalFormatInput{IconReverse: &flipped, ExpectedRevision: &reread.Revision})
+	if err != nil {
+		t.Fatalf("icon set update err=%v", err)
+	}
+	if stored, storeErr := repository.GetConditionalFormat(ctx, turned.ID); storeErr != nil || stored.IconReverse || stored.IconStyle != "5Arrows" {
+		t.Fatalf("icon set after update=%#v err=%v", stored, storeErr)
+	}
+	if err := repository.DeleteConditionalFormat(ctx, icons.ID, "alice", nil); err != nil {
+		t.Fatalf("icon set delete err=%v", err)
+	}
+
 	name := "repeated values"
 	expected := created.Revision
 	updated, err := repository.UpdateConditionalFormat(ctx, created.ID, "bob", workbook.UpdateConditionalFormatInput{Name: &name, ExpectedRevision: &expected})

@@ -22,6 +22,22 @@ describe('ConditionalFormatDialog',()=>{
     expect(create.mock.calls[0][0]).toMatchObject({name:'점수 분포',range:'B2:D8',rule_type:'color_scale',min_color:'#dcfce7',mid_color:'#fef3c7',max_color:'#ef4444',priority:1,stop_if_true:false})
   })
 
+  // 아이콘 규칙은 색이 아니라 종류와 방향을 보낸다. 막대 색이 함께 가면
+  // 서버가 규칙을 데이터 막대로 오해할 여지가 생긴다.
+  it('creates an icon set without the settings other rule types use',async()=>{
+    const create=vi.fn().mockResolvedValue({...rule,id:'format-3',rule_type:'icon_set',icon_style:'5Arrows'})
+    render(<ConditionalFormatDialog range={{startRow:1,startColumn:3,endRow:20,endColumn:3}} rules={[]} onClose={vi.fn()} onCreate={create} onUpdate={vi.fn()} onDelete={vi.fn()}/>)
+    fireEvent.change(screen.getByLabelText('조건부 서식 유형'),{target:{value:'icon_set'}})
+    fireEvent.change(screen.getByLabelText('아이콘 종류'),{target:{value:'5Arrows'}})
+    fireEvent.click(screen.getByLabelText('아이콘 순서 뒤집기'))
+    expect(screen.getByLabelText('화살표 5개 미리보기')).toBeTruthy()
+    fireEvent.click(screen.getByText('규칙 저장'))
+    await waitFor(()=>expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0][0]).toMatchObject({range:'C1:C20',rule_type:'icon_set',icon_style:'5Arrows',icon_reverse:true,stop_if_true:false})
+    expect(create.mock.calls[0][0].bar_color).toBeUndefined()
+    expect(create.mock.calls[0][0].style).toBeUndefined()
+  })
+
   it('updates a duplicate rule with its revision and can delete it',async()=>{
     const update=vi.fn().mockResolvedValue({...rule,name:'반복 값',revision:2})
     const remove=vi.fn().mockResolvedValue(undefined)

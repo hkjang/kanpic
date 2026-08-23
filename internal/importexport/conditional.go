@@ -89,6 +89,11 @@ func exportConditionalFormat(rule workbook.ConditionalFormat, styleFor func(json
 			options.Type, options.MidType, options.MidValue, options.MidColor = "3_color_scale", "percentile", "50", hexColor(rule.MidColor)
 		}
 		return options
+	case "icon_set":
+		return &excelize.ConditionalFormatOptions{
+			Type: "icon_set", Criteria: "=",
+			IconStyle: rule.IconStyle, ReverseIcons: rule.IconReverse,
+		}
 	case "data_bar":
 		return &excelize.ConditionalFormatOptions{
 			Type: "data_bar", Criteria: "=",
