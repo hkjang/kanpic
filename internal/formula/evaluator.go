@@ -1500,9 +1500,21 @@ func truthy(value any) bool {
 // 개수를 셀 방법이 없었다.
 func toleratesErrors(name string) bool {
 	switch name {
-	case "COUNT", "COUNTA", "AGGREGATE":
+	// 세는 함수. 오류 칸을 건너뛰거나 "비어 있지 않다" 고 센다.
+	case "COUNT", "COUNTA", "COUNTBLANK", "AGGREGATE":
+		return true
+	// 값이 무엇인지 묻는 함수. 오류를 만나도 답할 수 있어야 한다.
+	// =IF(ISNUMBER(A2),A2,0) 은 오류를 피해 가려고 쓰는 흔한 꼴인데,
+	// 그 ISNUMBER 가 오류에 걸려 멈추면 피할 방법이 없어진다.
+	case "ISBLANK", "ISNUMBER", "ISTEXT", "ISNONTEXT", "ISLOGICAL", "TYPE", "ERROR.TYPE":
 		return true
 	}
+	// ISEVEN 과 ISODD 는 오류를 그대로 낸다. 짝수인지 묻기 전에 수여야
+	// 하기 때문이다. 엑셀도 그렇게 한다.
+	//
+	// SUMIF 와 COUNTIF 는 손대지 않았다. 조건에 맞는 것만 골라 세는
+	// 함수라 오류를 어떻게 다뤄야 하는지 확인하지 못했다. 확인한 뒤에
+	// 고칠 일이다.
 	return false
 }
 

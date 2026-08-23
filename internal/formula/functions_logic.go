@@ -103,8 +103,27 @@ func evaluateInformation(name string, values []any) (any, bool, error) {
 			return float64(2), true, nil
 		case bool:
 			return float64(4), true, nil
+		case *Error:
+			return float64(16), true, nil
+		case arrayValue, []any, [][]any:
+			return float64(64), true, nil
 		}
 		return float64(1), true, nil
+	case "ERROR.TYPE":
+		// 오류가 어떤 오류인지 번호로 알려준다. 오류를 들여다보라고 있는
+		// 함수이므로, 인수의 오류에 걸려 멈추면 쓸 수가 없다.
+		if len(values) != 1 {
+			return nil, true, argError(name)
+		}
+		formulaErr, isError := values[0].(*Error)
+		if !isError {
+			return nil, true, formulaError("#N/A", "ERROR.TYPE needs an error value")
+		}
+		codes := map[string]float64{"#NULL!": 1, "#DIV/0!": 2, "#VALUE!": 3, "#REF!": 4, "#NAME?": 5, "#NUM!": 6, "#N/A": 7}
+		if code, known := codes[formulaErr.Code]; known {
+			return code, true, nil
+		}
+		return nil, true, formulaError("#N/A", "ERROR.TYPE does not know "+formulaErr.Code)
 	case "XOR":
 		if len(values) == 0 {
 			return nil, true, argError(name)

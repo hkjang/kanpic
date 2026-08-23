@@ -169,6 +169,7 @@ var catalog = []FunctionDoc{
 	{"ISNA", "논리", "ISNA(값)", "값이 #N/A이면 TRUE입니다."},
 	{"ISBLANK", "논리", "ISBLANK(값)", "셀이 비어 있으면 TRUE입니다."},
 	{"ISNUMBER", "논리", "ISNUMBER(값)", "값이 숫자이면 TRUE입니다."},
+	{"ERROR.TYPE", "논리", "ERROR.TYPE(값)", "오류의 종류를 번호로 알려줍니다. #N/A는 7입니다."},
 	{"ISTEXT", "논리", "ISTEXT(값)", "값이 텍스트이면 TRUE입니다."},
 	{"ISNONTEXT", "논리", "ISNONTEXT(값)", "값이 텍스트가 아니면 TRUE입니다."},
 	{"ISLOGICAL", "논리", "ISLOGICAL(값)", "값이 TRUE/FALSE이면 TRUE입니다."},

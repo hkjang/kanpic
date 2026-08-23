@@ -1154,3 +1154,63 @@ func TestAggregateSkipsErrorsWhenAsked(t *testing.T) {
 		}
 	}
 }
+
+// 값이 무엇인지 묻는 함수는 오류를 만나도 답할 수 있어야 한다.
+//
+//	=IF(ISNUMBER(A2),A2,0)
+//
+// 이것은 오류를 피해 가려고 쓰는 가장 흔한 꼴이다. 그런데 그 ISNUMBER 가
+// A2 의 오류에 걸려 함께 멈추면, 피해 갈 방법 자체가 없어진다. 오류를
+// 다루려고 쓰는 도구가 오류 때문에 막혀 있었다.
+//
+// ERROR.TYPE 은 아예 쓸 수가 없었다. 오류를 들여다보라고 있는 함수인데
+// 인수의 오류에 먼저 걸렸다.
+func TestAskingWhatAValueIsWorksOnErrorsToo(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": 1.0,
+		"A2": formulaError("#N/A", "no value"),
+		"A3": formulaError("#DIV/0!", "divide by zero"),
+		"A4": nil,
+	}
+	for _, testCase := range []struct {
+		formula string
+		want    any
+	}{
+		{"=ISBLANK(A2)", false},
+		{"=ISBLANK(A4)", true},
+		{"=ISNUMBER(A2)", false},
+		{"=ISNUMBER(A1)", true},
+		{"=ISTEXT(A2)", false},
+		{"=ISNONTEXT(A2)", true},
+		{"=ISLOGICAL(A2)", false},
+		{"=TYPE(A2)", 16.0},
+		{"=TYPE(A1)", 1.0},
+		{`=TYPE("a")`, 2.0},
+		{"=TYPE(TRUE)", 4.0},
+		// 오류의 종류를 번호로 알려준다. #N/A 는 7, #DIV/0! 는 2 다.
+		{"=ERROR.TYPE(A2)", 7.0},
+		{"=ERROR.TYPE(A3)", 2.0},
+		{"=COUNTBLANK(A1:A4)", 1.0},
+		// 오류를 피해 가는 흔한 꼴이 이제 통한다.
+		{"=IF(ISNUMBER(A2),A2,0)", 0.0},
+	} {
+		result := New().Evaluate(testCase.formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", testCase.formula, result.Error)
+			continue
+		}
+		if result.Value != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, result.Value, testCase.want)
+		}
+	}
+
+	// 오류가 아닌 값에는 ERROR.TYPE 이 답할 것이 없다.
+	if result := New().Evaluate("=ERROR.TYPE(A1)", cells); result.Error == nil {
+		t.Errorf("=ERROR.TYPE(A1) = %v, #N/A 여야 한다", result.Value)
+	}
+	// 짝수인지 묻기 전에 수여야 하므로 이쪽은 그대로 멈춘다.
+	if result := New().Evaluate("=ISEVEN(A2)", cells); result.Error == nil {
+		t.Errorf("=ISEVEN(A2) = %v, 오류여야 한다", result.Value)
+	}
+}
