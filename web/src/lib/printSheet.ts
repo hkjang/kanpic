@@ -80,6 +80,19 @@ export function usedRegion(cells:Map<string,Cell>):GridRegion|undefined{
   return {startRow,startColumn,endRow,endColumn}
 }
 
+// 셀 서식의 값은 사람이 적은 것이 그대로 온다. 인쇄물의 style 속성에 그대로
+// 넣으면 값 하나가 속성을 빠져나가 문서 전체의 모양을 바꿀 수 있다. 인쇄
+// 문서에서는 스크립트도 바깥 연결도 막혀 있으므로 훔칠 것은 없지만, 자기
+// 인쇄물이 엉뚱하게 나오는 것도 고장이다.
+const safeColor=(value:string)=>/^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\([0-9.,%\s]+\))$/.test(value.trim())?value.trim():''
+const safeFont=(value:string)=>/^[\w\s가-힣,'-]{1,120}$/.test(value.trim())?value.trim():''
+const safeKeyword=(value:string,allowed:string[])=>allowed.includes(value)?value:''
+
+// cellCSSForTest exposes the style builder so the escaping above can be tested
+// on its own; building a whole document to check one attribute would hide what
+// the test is actually about.
+export function cellCSSForTest(style?:Record<string,unknown>){return cellCSS(style)}
+
 function cellCSS(style?:Record<string,unknown>){
   if(!style)return ''
   const rules:string[]=[]
@@ -87,12 +100,18 @@ function cellCSS(style?:Record<string,unknown>){
   if(style.italic===true)rules.push('font-style:italic')
   const decorations=[style.underline===true?'underline':'',style.strike===true?'line-through':''].filter(Boolean)
   if(decorations.length)rules.push(`text-decoration:${decorations.join(' ')}`)
-  if(typeof style.color==='string')rules.push(`color:${style.color}`)
-  if(typeof style.background==='string')rules.push(`background:${style.background}`)
-  if(typeof style.font_size==='number')rules.push(`font-size:${style.font_size}px`)
-  if(typeof style.font_family==='string')rules.push(`font-family:${style.font_family}`)
-  if(typeof style.horizontal_align==='string')rules.push(`text-align:${style.horizontal_align}`)
-  if(typeof style.vertical_align==='string')rules.push(`vertical-align:${style.vertical_align==='middle'?'middle':style.vertical_align}`)
+  if(typeof style.color==='string'&&safeColor(style.color))rules.push(`color:${safeColor(style.color)}`)
+  if(typeof style.background==='string'&&safeColor(style.background))rules.push(`background:${safeColor(style.background)}`)
+  if(typeof style.font_size==='number'&&Number.isFinite(style.font_size))rules.push(`font-size:${Math.max(4,Math.min(400,style.font_size))}px`)
+  if(typeof style.font_family==='string'&&safeFont(style.font_family))rules.push(`font-family:${safeFont(style.font_family)}`)
+  if(typeof style.horizontal_align==='string'){
+    const align=safeKeyword(style.horizontal_align,['left','center','right','justify'])
+    if(align)rules.push(`text-align:${align}`)
+  }
+  if(typeof style.vertical_align==='string'){
+    const align=safeKeyword(style.vertical_align,['top','middle','bottom'])
+    if(align)rules.push(`vertical-align:${align}`)
+  }
   if(style.text_mode==='wrap'||style.wrap===true)rules.push('white-space:pre-wrap')
   return rules.join(';')
 }

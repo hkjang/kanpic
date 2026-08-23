@@ -101,6 +101,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET "+printFramePath, s.printFrame)
 	mux.HandleFunc("GET /api/v1/version", s.versionInfo)
 	mux.HandleFunc("GET /api/v1/workbooks", s.listWorkbooks)
 	mux.HandleFunc("POST /api/v1/workbooks", s.createWorkbook)
@@ -972,6 +973,12 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		} else if r.URL.Path == printFramePath {
+			// 인쇄 문서는 자기만의 정책을 가진다. 앱의 정책은 인라인 스타일을
+			// 막는데, 인쇄물은 셀마다 다른 색과 굵기를 스타일로 싣는다. 그래서
+			// 이 문서에만 스타일을 허용하되, 그 대신 스크립트도 바깥으로 나가는
+			// 연결도 전부 막는다 — 이 안에서 할 수 있는 일은 종이에 그리는 것뿐이다.
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'")
 		} else {
 			nonce := identity.New()
 			r = r.WithContext(context.WithValue(r.Context(), nonceKey{}, nonce))

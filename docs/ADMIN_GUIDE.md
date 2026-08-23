@@ -297,6 +297,7 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 - 해당 API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다.
 - `spreadsheet.presentation.*` MCP 도구는 REST와 **같은** 워크북 권한 검사를 지납니다. 도구 인자 `sheet_id`·`workbook_id`·`presentation_id`가 각각 같은 리소스 해석표를 타므로 에이전트 경로가 공유 규칙을 우회하지 않습니다. API 키 scope는 `presentation.read`(미리보기·조회)와 `presentation.write`(만들기·다시 만들기)입니다. PPTX 내려받기는 MCP에 노출하지 않습니다.
 - 프레젠테이션 만들기는 원본 워크북의 **읽기** 권한으로 판정합니다. 덱을 내려받는 것도 마찬가지입니다 — 덱은 프레젠테이션 서비스의 공용 계정 아래 만들어지므로, kanpic이 `presentations` 테이블에 기록해 둔 워크북을 기준으로 권한을 따집니다. kanpic이 만들지 않은 덱은 어떤 사용자에게도 내려주지 않습니다.
+- 인쇄 문서는 `/print-frame` 에서 받은 빈 페이지 안에 만들어지며, 그 응답만 **자기 정책** 을 가집니다: `default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:`. 앱 본체의 정책은 그대로 인라인 스타일을 막습니다. 인쇄 문서에서는 스크립트도 바깥으로 나가는 연결도 허용되지 않으므로, 할 수 있는 일은 종이에 그리는 것뿐입니다.
 - `presentation.*` 설정은 관리자만 볼 수 있고 `presentation.api_key`는 저장 시 암호화됩니다. 브라우저에는 전달되지 않으며, 프레젠테이션 서비스 호출은 전부 kanpic 서버에서 나갑니다. 서비스 계정에는 `presentations:read`와 `presentations:write`만 주는 것을 권장합니다.
 - 조건부 서식 조회·평가는 `format.read`, 생성·변경·삭제는 `format.write`를 추가로 검사합니다. 같은 기능은 REST와 `spreadsheet.conditional_format.*` MCP 도구에서 동일한 저장소와 revision 계약을 사용합니다.
 - 공개 AI 설정 조회는 `spreadsheet.ai.config.get`, 계획·조회·승인·Undo는 `spreadsheet.ai.action.plan|list|get|approve|undo`로 제공합니다. 모든 호출에 `ai.use`가 필요하고 계획은 `range.read`, 수식 생성·오류 수정 승인은 `formula.write`, 데이터 정제 승인과 Undo는 `range.write`를 추가로 검사합니다. 설명·요약·이상치 탐지는 승인할 수 없습니다.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { columnPages, printableDocument, usedRegion } from './printSheet'
+import { columnPages, printableDocument, usedRegion , cellCSSForTest } from './printSheet'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown,Record<string,unknown>?]>){
@@ -197,5 +197,32 @@ describe('repeating the frozen rows', ()=>{
     const html=printableDocument(long,{title:'긴 표',sheetName:'시트1',gridlines:true,headers:true,frozenRows:1,hiddenRows:new Set([1])})
     expect(html).not.toContain('제품')
     expect(html).toContain('품목2')
+  })
+})
+
+// 인쇄물의 style 속성은 사람이 적은 서식 값으로 만들어진다. 값 하나가 속성을
+// 빠져나가면 그 뒤로 문서 전체의 모양이 바뀐다.
+describe('print styles', () => {
+  it('keeps a style value from escaping its attribute', () => {
+    const escaped=cellCSSForTest({color:'red;} body{display:none} .x{',background:'"><script>',font_family:'Inter"; x:y'})
+    expect(escaped).not.toContain('}')
+    expect(escaped).not.toContain('"')
+    expect(escaped).not.toContain('<')
+  })
+
+  it('still carries the formats people actually use', () => {
+    const css=cellCSSForTest({background:'#ff0000',color:'rgb(0, 0, 255)',bold:true,font_size:14,font_family:'Pretendard',horizontal_align:'center'})
+    expect(css).toContain('background:#ff0000')
+    expect(css).toContain('color:rgb(0, 0, 255)')
+    expect(css).toContain('font-weight:700')
+    expect(css).toContain('font-size:14px')
+    expect(css).toContain('font-family:Pretendard')
+    expect(css).toContain('text-align:center')
+  })
+
+  // 글자 크기는 종이에 그려진다. 터무니없는 값이 오면 한 칸이 한 장을 잡아먹는다.
+  it('bounds a font size to something printable', () => {
+    expect(cellCSSForTest({font_size:100000})).toContain('font-size:400px')
+    expect(cellCSSForTest({font_size:0})).toContain('font-size:4px')
   })
 })

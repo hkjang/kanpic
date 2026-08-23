@@ -667,7 +667,14 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0})
     const frame=document.createElement('iframe')
     frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0'
+    frame.src='/print-frame'
+    const ready=new Promise<void>((resolve,reject)=>{
+      frame.addEventListener('load',()=>resolve(),{once:true})
+      frame.addEventListener('error',()=>reject(new Error('print frame')),{once:true})
+      window.setTimeout(()=>reject(new Error('print frame timed out')),8000)
+    })
     document.body.appendChild(frame)
+    try{await ready}catch{frame.remove();alert('인쇄 화면을 열지 못했습니다.');return}
     const target=frame.contentWindow?.document
     if(!target){frame.remove();alert('인쇄 화면을 열지 못했습니다.');return}
     target.open();target.write(html);target.close()
