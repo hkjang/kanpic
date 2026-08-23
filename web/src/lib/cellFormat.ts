@@ -15,15 +15,39 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
   }
   if(typeof value!=='number'||!Number.isFinite(value))return String(value)
   const section=(value<0?format.split(';')[1]:format.split(';')[0])??format
-  if(/[eE][+-]0+/.test(section)){
-    const decimals=(section.match(/\.(0+)/)?.[1].length??2)
-    return value.toExponential(decimals).replace('e','E')
+  const scientific=section.match(/^0(?:\.(0+))?[eE]([+-])(0+)$/)
+  if(scientific){
+    // 지수 자리는 서식에 적은 0 개수만큼 채운다. toExponential 은 자리를
+    // 채우지 않아 "5.00E-1" 이 되었다. 엑셀·시트는 "5.00E-01" 이다.
+    const mantissaDecimals=scientific[1]?.length??0,exponentDigits=scientific[3].length
+    // toExponential 은 이진 실수를 반올림하므로 1.005가 1.00E+00이 된다.
+    // 소수점만 옮겨 십진수 자리에서 반올림하면 1.01E+00이 되고, 서버가
+    // 내는 답과 같아진다.
+    let exponent=value===0?0:Math.floor(Math.log10(Math.abs(value)))
+    const unit=10**mantissaDecimals
+    let scaled=value===0?0:Math.round(Math.abs(shiftDecimalPoint(value,mantissaDecimals-exponent)))
+    // log10 은 10의 거듭제곱에서 한 자리 어긋날 수 있다. 자릿수를 보고 맞춘다.
+    if(scaled>=unit*10){scaled=Math.round(scaled/10);exponent+=1}
+    else if(scaled>0&&scaled<unit){scaled=Math.round(scaled*10);exponent-=1}
+    const digits=String(scaled).padStart(mantissaDecimals+1,'0')
+    const point=digits.length-mantissaDecimals
+    const mantissa=(value<0?'-':'')+(mantissaDecimals?digits.slice(0,point)+'.'+digits.slice(point):digits)
+    const marker=exponent<0?'-':scientific[2]==='-'?'':'+'
+    return `${mantissa}E${marker}${String(Math.abs(exponent)).padStart(exponentDigits,'0')}`
   }
-  const percent=section.includes('%'),parenthesized=value<0&&section.includes('(')&&section.includes(')'),numeric=(parenthesized?Math.abs(value):value)*(percent?100:1)
+  // 백분율은 100을 곱한 뒤 반올림한다. 이진 실수로 곱하면 1.005가
+  // 100.49999…가 되어 100%로 내려앉는다. 사람이 적은 십진수 자리에서
+  // 소수점만 옮기면 100.5가 되어 101%가 된다. 서버가 내는 답과 같다.
+  const percent=section.includes('%'),parenthesized=value<0&&section.includes('(')&&section.includes(')')
+  const base=parenthesized?Math.abs(value):value
+  const numeric=percent?shiftDecimalPoint(base,2):base
   const decimals=section.match(/\.(0+)/)?.[1].length??0
   const useGrouping=section.includes(',')
   const minimumIntegerDigits=Math.min(21,Math.max(1,(section.split('.')[0].match(/0/g)??[]).length))
   let rendered=new Intl.NumberFormat(locale,{useGrouping,minimumIntegerDigits,minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(numeric)
+  // -0.2를 정수 자리로 반올림하면 -0이 된다. 칸에 "-0"이 보이면 잘못
+  // 그린 것처럼 읽히므로 부호를 뗀다. 서버도 그렇게 적는다.
+  if(/^-0(?:[.,]0*)?$/.test(rendered))rendered=rendered.slice(1)
   if(percent)rendered+='%'
   const currency=section.match(/[₩$€¥]/)?.[0]
   if(currency)rendered=currency+rendered
@@ -51,7 +75,10 @@ function spreadsheetDate(value:unknown){
   // 엑셀은 1900년을 윤년으로 잘못 센다. 일련번호 60은 없는 날(1900-02-29)을
   // 가리키므로, 그보다 작은 번호는 하루 뒤에서 세기 시작해야 1900-01-01이
   // 1번이 된다. 서버의 internal/formula 의 serialDate 가 같은 셈을 한다.
-  if(typeof value==='number'&&Number.isFinite(value))return new Date((value<60?Date.UTC(1899,11,31):Date.UTC(1899,11,30))+value*86400000)
+  // 음수는 날짜가 아니다. 표 프로그램에 1900년보다 앞선 날은 없다.
+  // 서버의 serialDate 도 음수를 되돌린다.
+  if(typeof value==='number'&&Number.isFinite(value)&&value>=0)
+    return new Date((value<60?Date.UTC(1899,11,31):Date.UTC(1899,11,30))+Math.round(value*86400)*1000)
   if(typeof value==='string'){
     const parsed=new Date(value)
     if(Number.isFinite(parsed.getTime()))return parsed
@@ -118,6 +145,23 @@ function formatDate(date:Date,format:string,locale:string){
     index+=token.length
   }
   return out
+}
+
+// shiftDecimalPoint 는 소수점만 옮긴다. 100을 곱하면 이진 실수의 어긋남이
+// 따라오지만, 사람이 적은 십진수 표기에서 점을 옮기면 따라오지 않는다.
+// 서버는 같은 일을 분수로 한다(internal/formula 의 decimalRound).
+function shiftDecimalPoint(value:number,places:number){
+  if(!Number.isFinite(value)||value===0)return value
+  const text=value.toPrecision(15)
+  if(text.includes('e')||text.includes('E'))return value*10**places
+  const negative=text.startsWith('-'),body=negative?text.slice(1):text
+  const point=body.indexOf('.'),digits=body.replace('.',''),whole=point<0?body.length:point
+  const moved=whole+places
+  let shifted:string
+  if(moved<=0)shifted='0.'+'0'.repeat(-moved)+digits
+  else if(moved>=digits.length)shifted=digits+'0'.repeat(moved-digits.length)
+  else shifted=digits.slice(0,moved)+'.'+digits.slice(moved)
+  return Number((negative?'-':'')+shifted)
 }
 
 function isDateFormat(format:string){

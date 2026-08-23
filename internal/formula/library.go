@@ -627,5 +627,8 @@ func serialDate(serial float64) (time.Time, bool) {
 		epoch = time.Date(1899, 12, 31, 0, 0, 0, 0, time.UTC)
 	}
 	days := math.Floor(serial)
-	return epoch.AddDate(0, 0, int(days)).Add(time.Duration((serial - days) * 24 * float64(time.Hour))), true
+	// 하루 안의 자리는 초 단위로 반올림한다. 그냥 곱해서 자르면 0.675 일이
+	// 16시간 11분 59.999초가 되어 16:11 로 보인다. 16:12 여야 한다.
+	seconds := math.Round((serial - days) * 24 * 60 * 60)
+	return epoch.AddDate(0, 0, int(days)).Add(time.Duration(seconds) * time.Second), true
 }

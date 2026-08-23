@@ -1,0 +1,4212 @@
+{
+ "_comment": [
+  "격자(web/src/lib/cellFormat.ts)와 서버의 TEXT(internal/formula)가",
+  "같은 값을 같은 글자로 적어야 한다. 두 곳에서 따로 셈하므로 어긋나기 쉽다.",
+  "이 파일을 양쪽 시험이 함께 읽는다. 한쪽만 고치면 양쪽 다 걸린다.",
+  "locale 은 en-US 로 고정한다. 달·요일 이름이 locale 을 타기 때문이다.",
+  "값을 고칠 때는 엑셀·구글 시트가 내는 답과 맞대어 본 뒤에 고칠 것."
+ ],
+ "locale": "en-US",
+ "cases": [
+  {
+   "value": 0,
+   "format": "General",
+   "text": "0"
+  },
+  {
+   "value": 0,
+   "format": "@",
+   "text": "0"
+  },
+  {
+   "value": 0,
+   "format": "0",
+   "text": "0"
+  },
+  {
+   "value": 0,
+   "format": "0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0,
+   "format": "0.000",
+   "text": "0.000"
+  },
+  {
+   "value": 0,
+   "format": "#,##0",
+   "text": "0"
+  },
+  {
+   "value": 0,
+   "format": "#,##0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0,
+   "format": "0.0%",
+   "text": "0.0%"
+  },
+  {
+   "value": 0,
+   "format": "0%",
+   "text": "0%"
+  },
+  {
+   "value": 0,
+   "format": "0.00%",
+   "text": "0.00%"
+  },
+  {
+   "value": 0,
+   "format": "0.00E+00",
+   "text": "0.00E+00"
+  },
+  {
+   "value": 0,
+   "format": "₩#,##0",
+   "text": "₩0"
+  },
+  {
+   "value": 0,
+   "format": "$#,##0.00",
+   "text": "$0.00"
+  },
+  {
+   "value": 0,
+   "format": "#,##0;(#,##0)",
+   "text": "0"
+  },
+  {
+   "value": 0,
+   "format": "0.00;(0.00)",
+   "text": "0.00"
+  },
+  {
+   "value": 0,
+   "format": "0.00;-0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0,
+   "format": "yyyy-mm-dd",
+   "text": "1899-12-31"
+  },
+  {
+   "value": 0,
+   "format": "mm/dd/yyyy",
+   "text": "12/31/1899"
+  },
+  {
+   "value": 0,
+   "format": "dd/mm/yyyy",
+   "text": "31/12/1899"
+  },
+  {
+   "value": 0,
+   "format": "yyyy년 m월 d일",
+   "text": "1899년 12월 31일"
+  },
+  {
+   "value": 0,
+   "format": "mmm d",
+   "text": "Dec 31"
+  },
+  {
+   "value": 0,
+   "format": "mmmm",
+   "text": "December"
+  },
+  {
+   "value": 0,
+   "format": "ddd",
+   "text": "Sun"
+  },
+  {
+   "value": 0,
+   "format": "dddd",
+   "text": "Sunday"
+  },
+  {
+   "value": 0,
+   "format": "yy",
+   "text": "99"
+  },
+  {
+   "value": 0,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 0,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 0,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 0,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 0,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 0,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1899-12-31 00:00"
+  },
+  {
+   "value": 0,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 0,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1899-12-31 00:00:00"
+  },
+  {
+   "value": 0,
+   "format": "mmm yyyy",
+   "text": "Dec 1899"
+  },
+  {
+   "value": 0,
+   "format": "d-mmm-yy",
+   "text": "31-Dec-99"
+  },
+  {
+   "value": 1,
+   "format": "General",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "@",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.000",
+   "text": "1.000"
+  },
+  {
+   "value": 1,
+   "format": "#,##0",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "#,##0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.0%",
+   "text": "100.0%"
+  },
+  {
+   "value": 1,
+   "format": "0%",
+   "text": "100%"
+  },
+  {
+   "value": 1,
+   "format": "0.00%",
+   "text": "100.00%"
+  },
+  {
+   "value": 1,
+   "format": "0.00E+00",
+   "text": "1.00E+00"
+  },
+  {
+   "value": 1,
+   "format": "₩#,##0",
+   "text": "₩1"
+  },
+  {
+   "value": 1,
+   "format": "$#,##0.00",
+   "text": "$1.00"
+  },
+  {
+   "value": 1,
+   "format": "#,##0;(#,##0)",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0.00;(0.00)",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.00;-0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd",
+   "text": "1900-01-01"
+  },
+  {
+   "value": 1,
+   "format": "mm/dd/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1,
+   "format": "dd/mm/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 1월 1일"
+  },
+  {
+   "value": 1,
+   "format": "mmm d",
+   "text": "Jan 1"
+  },
+  {
+   "value": 1,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 1,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 1,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 1,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 1,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 1,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 1,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 1,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 1,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-01-01 00:00"
+  },
+  {
+   "value": 1,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-01-01 00:00:00"
+  },
+  {
+   "value": 1,
+   "format": "mmm yyyy",
+   "text": "Jan 1900"
+  },
+  {
+   "value": 1,
+   "format": "d-mmm-yy",
+   "text": "1-Jan-00"
+  },
+  {
+   "value": -1,
+   "format": "General",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "@",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "0",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "0.00",
+   "text": "-1.00"
+  },
+  {
+   "value": -1,
+   "format": "0.000",
+   "text": "-1.000"
+  },
+  {
+   "value": -1,
+   "format": "#,##0",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "#,##0.00",
+   "text": "-1.00"
+  },
+  {
+   "value": -1,
+   "format": "0.0%",
+   "text": "-100.0%"
+  },
+  {
+   "value": -1,
+   "format": "0%",
+   "text": "-100%"
+  },
+  {
+   "value": -1,
+   "format": "0.00%",
+   "text": "-100.00%"
+  },
+  {
+   "value": -1,
+   "format": "0.00E+00",
+   "text": "-1.00E+00"
+  },
+  {
+   "value": -1,
+   "format": "₩#,##0",
+   "text": "₩-1"
+  },
+  {
+   "value": -1,
+   "format": "$#,##0.00",
+   "text": "$-1.00"
+  },
+  {
+   "value": -1,
+   "format": "#,##0;(#,##0)",
+   "text": "(1)"
+  },
+  {
+   "value": -1,
+   "format": "0.00;(0.00)",
+   "text": "(1.00)"
+  },
+  {
+   "value": -1,
+   "format": "0.00;-0.00",
+   "text": "-1.00"
+  },
+  {
+   "value": -1,
+   "format": "yyyy-mm-dd",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "mm/dd/yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "dd/mm/yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "yyyy년 m월 d일",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "mmm d",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "mmmm",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "ddd",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "dddd",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "yy",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "hh:mm",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "h:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "hh:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "m:ss",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "h:m",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "h:mm am/pm",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "mmm yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -1,
+   "format": "d-mmm-yy",
+   "text": "-1"
+  },
+  {
+   "value": 0.5,
+   "format": "General",
+   "text": "0.5"
+  },
+  {
+   "value": 0.5,
+   "format": "@",
+   "text": "0.5"
+  },
+  {
+   "value": 0.5,
+   "format": "0",
+   "text": "1"
+  },
+  {
+   "value": 0.5,
+   "format": "0.00",
+   "text": "0.50"
+  },
+  {
+   "value": 0.5,
+   "format": "0.000",
+   "text": "0.500"
+  },
+  {
+   "value": 0.5,
+   "format": "#,##0",
+   "text": "1"
+  },
+  {
+   "value": 0.5,
+   "format": "#,##0.00",
+   "text": "0.50"
+  },
+  {
+   "value": 0.5,
+   "format": "0.0%",
+   "text": "50.0%"
+  },
+  {
+   "value": 0.5,
+   "format": "0%",
+   "text": "50%"
+  },
+  {
+   "value": 0.5,
+   "format": "0.00%",
+   "text": "50.00%"
+  },
+  {
+   "value": 0.5,
+   "format": "0.00E+00",
+   "text": "5.00E-01"
+  },
+  {
+   "value": 0.5,
+   "format": "₩#,##0",
+   "text": "₩1"
+  },
+  {
+   "value": 0.5,
+   "format": "$#,##0.00",
+   "text": "$0.50"
+  },
+  {
+   "value": 0.5,
+   "format": "#,##0;(#,##0)",
+   "text": "1"
+  },
+  {
+   "value": 0.5,
+   "format": "0.00;(0.00)",
+   "text": "0.50"
+  },
+  {
+   "value": 0.5,
+   "format": "0.00;-0.00",
+   "text": "0.50"
+  },
+  {
+   "value": 0.5,
+   "format": "yyyy-mm-dd",
+   "text": "1899-12-31"
+  },
+  {
+   "value": 0.5,
+   "format": "mm/dd/yyyy",
+   "text": "12/31/1899"
+  },
+  {
+   "value": 0.5,
+   "format": "dd/mm/yyyy",
+   "text": "31/12/1899"
+  },
+  {
+   "value": 0.5,
+   "format": "yyyy년 m월 d일",
+   "text": "1899년 12월 31일"
+  },
+  {
+   "value": 0.5,
+   "format": "mmm d",
+   "text": "Dec 31"
+  },
+  {
+   "value": 0.5,
+   "format": "mmmm",
+   "text": "December"
+  },
+  {
+   "value": 0.5,
+   "format": "ddd",
+   "text": "Sun"
+  },
+  {
+   "value": 0.5,
+   "format": "dddd",
+   "text": "Sunday"
+  },
+  {
+   "value": 0.5,
+   "format": "yy",
+   "text": "99"
+  },
+  {
+   "value": 0.5,
+   "format": "hh:mm",
+   "text": "12:00"
+  },
+  {
+   "value": 0.5,
+   "format": "h:mm:ss",
+   "text": "12:00:00"
+  },
+  {
+   "value": 0.5,
+   "format": "hh:mm:ss",
+   "text": "12:00:00"
+  },
+  {
+   "value": 0.5,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 0.5,
+   "format": "h:m",
+   "text": "12:0"
+  },
+  {
+   "value": 0.5,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1899-12-31 12:00"
+  },
+  {
+   "value": 0.5,
+   "format": "h:mm am/pm",
+   "text": "12:00 PM"
+  },
+  {
+   "value": 0.5,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1899-12-31 12:00:00"
+  },
+  {
+   "value": 0.5,
+   "format": "mmm yyyy",
+   "text": "Dec 1899"
+  },
+  {
+   "value": 0.5,
+   "format": "d-mmm-yy",
+   "text": "31-Dec-99"
+  },
+  {
+   "value": 1.005,
+   "format": "General",
+   "text": "1.005"
+  },
+  {
+   "value": 1.005,
+   "format": "@",
+   "text": "1.005"
+  },
+  {
+   "value": 1.005,
+   "format": "0",
+   "text": "1"
+  },
+  {
+   "value": 1.005,
+   "format": "0.00",
+   "text": "1.01"
+  },
+  {
+   "value": 1.005,
+   "format": "0.000",
+   "text": "1.005"
+  },
+  {
+   "value": 1.005,
+   "format": "#,##0",
+   "text": "1"
+  },
+  {
+   "value": 1.005,
+   "format": "#,##0.00",
+   "text": "1.01"
+  },
+  {
+   "value": 1.005,
+   "format": "0.0%",
+   "text": "100.5%"
+  },
+  {
+   "value": 1.005,
+   "format": "0%",
+   "text": "101%"
+  },
+  {
+   "value": 1.005,
+   "format": "0.00%",
+   "text": "100.50%"
+  },
+  {
+   "value": 1.005,
+   "format": "0.00E+00",
+   "text": "1.01E+00"
+  },
+  {
+   "value": 1.005,
+   "format": "₩#,##0",
+   "text": "₩1"
+  },
+  {
+   "value": 1.005,
+   "format": "$#,##0.00",
+   "text": "$1.01"
+  },
+  {
+   "value": 1.005,
+   "format": "#,##0;(#,##0)",
+   "text": "1"
+  },
+  {
+   "value": 1.005,
+   "format": "0.00;(0.00)",
+   "text": "1.01"
+  },
+  {
+   "value": 1.005,
+   "format": "0.00;-0.00",
+   "text": "1.01"
+  },
+  {
+   "value": 1.005,
+   "format": "yyyy-mm-dd",
+   "text": "1900-01-01"
+  },
+  {
+   "value": 1.005,
+   "format": "mm/dd/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1.005,
+   "format": "dd/mm/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1.005,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 1월 1일"
+  },
+  {
+   "value": 1.005,
+   "format": "mmm d",
+   "text": "Jan 1"
+  },
+  {
+   "value": 1.005,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 1.005,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 1.005,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 1.005,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 1.005,
+   "format": "hh:mm",
+   "text": "00:07"
+  },
+  {
+   "value": 1.005,
+   "format": "h:mm:ss",
+   "text": "0:07:12"
+  },
+  {
+   "value": 1.005,
+   "format": "hh:mm:ss",
+   "text": "00:07:12"
+  },
+  {
+   "value": 1.005,
+   "format": "m:ss",
+   "text": "7:12"
+  },
+  {
+   "value": 1.005,
+   "format": "h:m",
+   "text": "0:7"
+  },
+  {
+   "value": 1.005,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-01-01 00:07"
+  },
+  {
+   "value": 1.005,
+   "format": "h:mm am/pm",
+   "text": "12:07 AM"
+  },
+  {
+   "value": 1.005,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-01-01 00:07:12"
+  },
+  {
+   "value": 1.005,
+   "format": "mmm yyyy",
+   "text": "Jan 1900"
+  },
+  {
+   "value": 1.005,
+   "format": "d-mmm-yy",
+   "text": "1-Jan-00"
+  },
+  {
+   "value": 2.675,
+   "format": "General",
+   "text": "2.675"
+  },
+  {
+   "value": 2.675,
+   "format": "@",
+   "text": "2.675"
+  },
+  {
+   "value": 2.675,
+   "format": "0",
+   "text": "3"
+  },
+  {
+   "value": 2.675,
+   "format": "0.00",
+   "text": "2.68"
+  },
+  {
+   "value": 2.675,
+   "format": "0.000",
+   "text": "2.675"
+  },
+  {
+   "value": 2.675,
+   "format": "#,##0",
+   "text": "3"
+  },
+  {
+   "value": 2.675,
+   "format": "#,##0.00",
+   "text": "2.68"
+  },
+  {
+   "value": 2.675,
+   "format": "0.0%",
+   "text": "267.5%"
+  },
+  {
+   "value": 2.675,
+   "format": "0%",
+   "text": "268%"
+  },
+  {
+   "value": 2.675,
+   "format": "0.00%",
+   "text": "267.50%"
+  },
+  {
+   "value": 2.675,
+   "format": "0.00E+00",
+   "text": "2.68E+00"
+  },
+  {
+   "value": 2.675,
+   "format": "₩#,##0",
+   "text": "₩3"
+  },
+  {
+   "value": 2.675,
+   "format": "$#,##0.00",
+   "text": "$2.68"
+  },
+  {
+   "value": 2.675,
+   "format": "#,##0;(#,##0)",
+   "text": "3"
+  },
+  {
+   "value": 2.675,
+   "format": "0.00;(0.00)",
+   "text": "2.68"
+  },
+  {
+   "value": 2.675,
+   "format": "0.00;-0.00",
+   "text": "2.68"
+  },
+  {
+   "value": 2.675,
+   "format": "yyyy-mm-dd",
+   "text": "1900-01-02"
+  },
+  {
+   "value": 2.675,
+   "format": "mm/dd/yyyy",
+   "text": "01/02/1900"
+  },
+  {
+   "value": 2.675,
+   "format": "dd/mm/yyyy",
+   "text": "02/01/1900"
+  },
+  {
+   "value": 2.675,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 1월 2일"
+  },
+  {
+   "value": 2.675,
+   "format": "mmm d",
+   "text": "Jan 2"
+  },
+  {
+   "value": 2.675,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 2.675,
+   "format": "ddd",
+   "text": "Tue"
+  },
+  {
+   "value": 2.675,
+   "format": "dddd",
+   "text": "Tuesday"
+  },
+  {
+   "value": 2.675,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 2.675,
+   "format": "hh:mm",
+   "text": "16:12"
+  },
+  {
+   "value": 2.675,
+   "format": "h:mm:ss",
+   "text": "16:12:00"
+  },
+  {
+   "value": 2.675,
+   "format": "hh:mm:ss",
+   "text": "16:12:00"
+  },
+  {
+   "value": 2.675,
+   "format": "m:ss",
+   "text": "12:00"
+  },
+  {
+   "value": 2.675,
+   "format": "h:m",
+   "text": "16:12"
+  },
+  {
+   "value": 2.675,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-01-02 16:12"
+  },
+  {
+   "value": 2.675,
+   "format": "h:mm am/pm",
+   "text": "4:12 PM"
+  },
+  {
+   "value": 2.675,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-01-02 16:12:00"
+  },
+  {
+   "value": 2.675,
+   "format": "mmm yyyy",
+   "text": "Jan 1900"
+  },
+  {
+   "value": 2.675,
+   "format": "d-mmm-yy",
+   "text": "2-Jan-00"
+  },
+  {
+   "value": -2.675,
+   "format": "General",
+   "text": "-2.675"
+  },
+  {
+   "value": -2.675,
+   "format": "@",
+   "text": "-2.675"
+  },
+  {
+   "value": -2.675,
+   "format": "0",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "0.00",
+   "text": "-2.68"
+  },
+  {
+   "value": -2.675,
+   "format": "0.000",
+   "text": "-2.675"
+  },
+  {
+   "value": -2.675,
+   "format": "#,##0",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "#,##0.00",
+   "text": "-2.68"
+  },
+  {
+   "value": -2.675,
+   "format": "0.0%",
+   "text": "-267.5%"
+  },
+  {
+   "value": -2.675,
+   "format": "0%",
+   "text": "-268%"
+  },
+  {
+   "value": -2.675,
+   "format": "0.00%",
+   "text": "-267.50%"
+  },
+  {
+   "value": -2.675,
+   "format": "0.00E+00",
+   "text": "-2.68E+00"
+  },
+  {
+   "value": -2.675,
+   "format": "₩#,##0",
+   "text": "₩-3"
+  },
+  {
+   "value": -2.675,
+   "format": "$#,##0.00",
+   "text": "$-2.68"
+  },
+  {
+   "value": -2.675,
+   "format": "#,##0;(#,##0)",
+   "text": "(3)"
+  },
+  {
+   "value": -2.675,
+   "format": "0.00;(0.00)",
+   "text": "(2.68)"
+  },
+  {
+   "value": -2.675,
+   "format": "0.00;-0.00",
+   "text": "-2.68"
+  },
+  {
+   "value": -2.675,
+   "format": "yyyy-mm-dd",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "mm/dd/yyyy",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "dd/mm/yyyy",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "yyyy년 m월 d일",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "mmm d",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "mmmm",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "ddd",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "dddd",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "yy",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "hh:mm",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "h:mm:ss",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "hh:mm:ss",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "m:ss",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "h:m",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "h:mm am/pm",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "mmm yyyy",
+   "text": "-3"
+  },
+  {
+   "value": -2.675,
+   "format": "d-mmm-yy",
+   "text": "-3"
+  },
+  {
+   "value": 1234.5678,
+   "format": "General",
+   "text": "1234.5678"
+  },
+  {
+   "value": 1234.5678,
+   "format": "@",
+   "text": "1234.5678"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0",
+   "text": "1235"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.00",
+   "text": "1234.57"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.000",
+   "text": "1234.568"
+  },
+  {
+   "value": 1234.5678,
+   "format": "#,##0",
+   "text": "1,235"
+  },
+  {
+   "value": 1234.5678,
+   "format": "#,##0.00",
+   "text": "1,234.57"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.0%",
+   "text": "123456.8%"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0%",
+   "text": "123457%"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.00%",
+   "text": "123456.78%"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.00E+00",
+   "text": "1.23E+03"
+  },
+  {
+   "value": 1234.5678,
+   "format": "₩#,##0",
+   "text": "₩1,235"
+  },
+  {
+   "value": 1234.5678,
+   "format": "$#,##0.00",
+   "text": "$1,234.57"
+  },
+  {
+   "value": 1234.5678,
+   "format": "#,##0;(#,##0)",
+   "text": "1,235"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.00;(0.00)",
+   "text": "1234.57"
+  },
+  {
+   "value": 1234.5678,
+   "format": "0.00;-0.00",
+   "text": "1234.57"
+  },
+  {
+   "value": 1234.5678,
+   "format": "yyyy-mm-dd",
+   "text": "1903-05-18"
+  },
+  {
+   "value": 1234.5678,
+   "format": "mm/dd/yyyy",
+   "text": "05/18/1903"
+  },
+  {
+   "value": 1234.5678,
+   "format": "dd/mm/yyyy",
+   "text": "18/05/1903"
+  },
+  {
+   "value": 1234.5678,
+   "format": "yyyy년 m월 d일",
+   "text": "1903년 5월 18일"
+  },
+  {
+   "value": 1234.5678,
+   "format": "mmm d",
+   "text": "May 18"
+  },
+  {
+   "value": 1234.5678,
+   "format": "mmmm",
+   "text": "May"
+  },
+  {
+   "value": 1234.5678,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 1234.5678,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 1234.5678,
+   "format": "yy",
+   "text": "03"
+  },
+  {
+   "value": 1234.5678,
+   "format": "hh:mm",
+   "text": "13:37"
+  },
+  {
+   "value": 1234.5678,
+   "format": "h:mm:ss",
+   "text": "13:37:38"
+  },
+  {
+   "value": 1234.5678,
+   "format": "hh:mm:ss",
+   "text": "13:37:38"
+  },
+  {
+   "value": 1234.5678,
+   "format": "m:ss",
+   "text": "37:38"
+  },
+  {
+   "value": 1234.5678,
+   "format": "h:m",
+   "text": "13:37"
+  },
+  {
+   "value": 1234.5678,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1903-05-18 13:37"
+  },
+  {
+   "value": 1234.5678,
+   "format": "h:mm am/pm",
+   "text": "1:37 PM"
+  },
+  {
+   "value": 1234.5678,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1903-05-18 13:37:38"
+  },
+  {
+   "value": 1234.5678,
+   "format": "mmm yyyy",
+   "text": "May 1903"
+  },
+  {
+   "value": 1234.5678,
+   "format": "d-mmm-yy",
+   "text": "18-May-03"
+  },
+  {
+   "value": -1234.5678,
+   "format": "General",
+   "text": "-1234.5678"
+  },
+  {
+   "value": -1234.5678,
+   "format": "@",
+   "text": "-1234.5678"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.00",
+   "text": "-1234.57"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.000",
+   "text": "-1234.568"
+  },
+  {
+   "value": -1234.5678,
+   "format": "#,##0",
+   "text": "-1,235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "#,##0.00",
+   "text": "-1,234.57"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.0%",
+   "text": "-123456.8%"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0%",
+   "text": "-123457%"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.00%",
+   "text": "-123456.78%"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.00E+00",
+   "text": "-1.23E+03"
+  },
+  {
+   "value": -1234.5678,
+   "format": "₩#,##0",
+   "text": "₩-1,235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "$#,##0.00",
+   "text": "$-1,234.57"
+  },
+  {
+   "value": -1234.5678,
+   "format": "#,##0;(#,##0)",
+   "text": "(1,235)"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.00;(0.00)",
+   "text": "(1234.57)"
+  },
+  {
+   "value": -1234.5678,
+   "format": "0.00;-0.00",
+   "text": "-1234.57"
+  },
+  {
+   "value": -1234.5678,
+   "format": "yyyy-mm-dd",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "mm/dd/yyyy",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "dd/mm/yyyy",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "yyyy년 m월 d일",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "mmm d",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "mmmm",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "ddd",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "dddd",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "yy",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "hh:mm",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "h:mm:ss",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "hh:mm:ss",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "m:ss",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "h:m",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "h:mm am/pm",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "mmm yyyy",
+   "text": "-1235"
+  },
+  {
+   "value": -1234.5678,
+   "format": "d-mmm-yy",
+   "text": "-1235"
+  },
+  {
+   "value": 0.256,
+   "format": "General",
+   "text": "0.256"
+  },
+  {
+   "value": 0.256,
+   "format": "@",
+   "text": "0.256"
+  },
+  {
+   "value": 0.256,
+   "format": "0",
+   "text": "0"
+  },
+  {
+   "value": 0.256,
+   "format": "0.00",
+   "text": "0.26"
+  },
+  {
+   "value": 0.256,
+   "format": "0.000",
+   "text": "0.256"
+  },
+  {
+   "value": 0.256,
+   "format": "#,##0",
+   "text": "0"
+  },
+  {
+   "value": 0.256,
+   "format": "#,##0.00",
+   "text": "0.26"
+  },
+  {
+   "value": 0.256,
+   "format": "0.0%",
+   "text": "25.6%"
+  },
+  {
+   "value": 0.256,
+   "format": "0%",
+   "text": "26%"
+  },
+  {
+   "value": 0.256,
+   "format": "0.00%",
+   "text": "25.60%"
+  },
+  {
+   "value": 0.256,
+   "format": "0.00E+00",
+   "text": "2.56E-01"
+  },
+  {
+   "value": 0.256,
+   "format": "₩#,##0",
+   "text": "₩0"
+  },
+  {
+   "value": 0.256,
+   "format": "$#,##0.00",
+   "text": "$0.26"
+  },
+  {
+   "value": 0.256,
+   "format": "#,##0;(#,##0)",
+   "text": "0"
+  },
+  {
+   "value": 0.256,
+   "format": "0.00;(0.00)",
+   "text": "0.26"
+  },
+  {
+   "value": 0.256,
+   "format": "0.00;-0.00",
+   "text": "0.26"
+  },
+  {
+   "value": 0.256,
+   "format": "yyyy-mm-dd",
+   "text": "1899-12-31"
+  },
+  {
+   "value": 0.256,
+   "format": "mm/dd/yyyy",
+   "text": "12/31/1899"
+  },
+  {
+   "value": 0.256,
+   "format": "dd/mm/yyyy",
+   "text": "31/12/1899"
+  },
+  {
+   "value": 0.256,
+   "format": "yyyy년 m월 d일",
+   "text": "1899년 12월 31일"
+  },
+  {
+   "value": 0.256,
+   "format": "mmm d",
+   "text": "Dec 31"
+  },
+  {
+   "value": 0.256,
+   "format": "mmmm",
+   "text": "December"
+  },
+  {
+   "value": 0.256,
+   "format": "ddd",
+   "text": "Sun"
+  },
+  {
+   "value": 0.256,
+   "format": "dddd",
+   "text": "Sunday"
+  },
+  {
+   "value": 0.256,
+   "format": "yy",
+   "text": "99"
+  },
+  {
+   "value": 0.256,
+   "format": "hh:mm",
+   "text": "06:08"
+  },
+  {
+   "value": 0.256,
+   "format": "h:mm:ss",
+   "text": "6:08:38"
+  },
+  {
+   "value": 0.256,
+   "format": "hh:mm:ss",
+   "text": "06:08:38"
+  },
+  {
+   "value": 0.256,
+   "format": "m:ss",
+   "text": "8:38"
+  },
+  {
+   "value": 0.256,
+   "format": "h:m",
+   "text": "6:8"
+  },
+  {
+   "value": 0.256,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1899-12-31 06:08"
+  },
+  {
+   "value": 0.256,
+   "format": "h:mm am/pm",
+   "text": "6:08 AM"
+  },
+  {
+   "value": 0.256,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1899-12-31 06:08:38"
+  },
+  {
+   "value": 0.256,
+   "format": "mmm yyyy",
+   "text": "Dec 1899"
+  },
+  {
+   "value": 0.256,
+   "format": "d-mmm-yy",
+   "text": "31-Dec-99"
+  },
+  {
+   "value": -0.256,
+   "format": "General",
+   "text": "-0.256"
+  },
+  {
+   "value": -0.256,
+   "format": "@",
+   "text": "-0.256"
+  },
+  {
+   "value": -0.256,
+   "format": "0",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "0.00",
+   "text": "-0.26"
+  },
+  {
+   "value": -0.256,
+   "format": "0.000",
+   "text": "-0.256"
+  },
+  {
+   "value": -0.256,
+   "format": "#,##0",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "#,##0.00",
+   "text": "-0.26"
+  },
+  {
+   "value": -0.256,
+   "format": "0.0%",
+   "text": "-25.6%"
+  },
+  {
+   "value": -0.256,
+   "format": "0%",
+   "text": "-26%"
+  },
+  {
+   "value": -0.256,
+   "format": "0.00%",
+   "text": "-25.60%"
+  },
+  {
+   "value": -0.256,
+   "format": "0.00E+00",
+   "text": "-2.56E-01"
+  },
+  {
+   "value": -0.256,
+   "format": "₩#,##0",
+   "text": "₩0"
+  },
+  {
+   "value": -0.256,
+   "format": "$#,##0.00",
+   "text": "$-0.26"
+  },
+  {
+   "value": -0.256,
+   "format": "#,##0;(#,##0)",
+   "text": "(0)"
+  },
+  {
+   "value": -0.256,
+   "format": "0.00;(0.00)",
+   "text": "(0.26)"
+  },
+  {
+   "value": -0.256,
+   "format": "0.00;-0.00",
+   "text": "-0.26"
+  },
+  {
+   "value": -0.256,
+   "format": "yyyy-mm-dd",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "mm/dd/yyyy",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "dd/mm/yyyy",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "yyyy년 m월 d일",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "mmm d",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "mmmm",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "ddd",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "dddd",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "yy",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "hh:mm",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "h:mm:ss",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "hh:mm:ss",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "m:ss",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "h:m",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "h:mm am/pm",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "mmm yyyy",
+   "text": "0"
+  },
+  {
+   "value": -0.256,
+   "format": "d-mmm-yy",
+   "text": "0"
+  },
+  {
+   "value": 1234567,
+   "format": "General",
+   "text": "1234567"
+  },
+  {
+   "value": 1234567,
+   "format": "@",
+   "text": "1234567"
+  },
+  {
+   "value": 1234567,
+   "format": "0",
+   "text": "1234567"
+  },
+  {
+   "value": 1234567,
+   "format": "0.00",
+   "text": "1234567.00"
+  },
+  {
+   "value": 1234567,
+   "format": "0.000",
+   "text": "1234567.000"
+  },
+  {
+   "value": 1234567,
+   "format": "#,##0",
+   "text": "1,234,567"
+  },
+  {
+   "value": 1234567,
+   "format": "#,##0.00",
+   "text": "1,234,567.00"
+  },
+  {
+   "value": 1234567,
+   "format": "0.0%",
+   "text": "123456700.0%"
+  },
+  {
+   "value": 1234567,
+   "format": "0%",
+   "text": "123456700%"
+  },
+  {
+   "value": 1234567,
+   "format": "0.00%",
+   "text": "123456700.00%"
+  },
+  {
+   "value": 1234567,
+   "format": "0.00E+00",
+   "text": "1.23E+06"
+  },
+  {
+   "value": 1234567,
+   "format": "₩#,##0",
+   "text": "₩1,234,567"
+  },
+  {
+   "value": 1234567,
+   "format": "$#,##0.00",
+   "text": "$1,234,567.00"
+  },
+  {
+   "value": 1234567,
+   "format": "#,##0;(#,##0)",
+   "text": "1,234,567"
+  },
+  {
+   "value": 1234567,
+   "format": "0.00;(0.00)",
+   "text": "1234567.00"
+  },
+  {
+   "value": 1234567,
+   "format": "0.00;-0.00",
+   "text": "1234567.00"
+  },
+  {
+   "value": 1234567,
+   "format": "yyyy-mm-dd",
+   "text": "5280-02-15"
+  },
+  {
+   "value": 1234567,
+   "format": "mm/dd/yyyy",
+   "text": "02/15/5280"
+  },
+  {
+   "value": 1234567,
+   "format": "dd/mm/yyyy",
+   "text": "15/02/5280"
+  },
+  {
+   "value": 1234567,
+   "format": "yyyy년 m월 d일",
+   "text": "5280년 2월 15일"
+  },
+  {
+   "value": 1234567,
+   "format": "mmm d",
+   "text": "Feb 15"
+  },
+  {
+   "value": 1234567,
+   "format": "mmmm",
+   "text": "February"
+  },
+  {
+   "value": 1234567,
+   "format": "ddd",
+   "text": "Thu"
+  },
+  {
+   "value": 1234567,
+   "format": "dddd",
+   "text": "Thursday"
+  },
+  {
+   "value": 1234567,
+   "format": "yy",
+   "text": "80"
+  },
+  {
+   "value": 1234567,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 1234567,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 1234567,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 1234567,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 1234567,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 1234567,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "5280-02-15 00:00"
+  },
+  {
+   "value": 1234567,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 1234567,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "5280-02-15 00:00:00"
+  },
+  {
+   "value": 1234567,
+   "format": "mmm yyyy",
+   "text": "Feb 5280"
+  },
+  {
+   "value": 1234567,
+   "format": "d-mmm-yy",
+   "text": "15-Feb-80"
+  },
+  {
+   "value": 0.000123,
+   "format": "General",
+   "text": "0.000123"
+  },
+  {
+   "value": 0.000123,
+   "format": "@",
+   "text": "0.000123"
+  },
+  {
+   "value": 0.000123,
+   "format": "0",
+   "text": "0"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.000",
+   "text": "0.000"
+  },
+  {
+   "value": 0.000123,
+   "format": "#,##0",
+   "text": "0"
+  },
+  {
+   "value": 0.000123,
+   "format": "#,##0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.0%",
+   "text": "0.0%"
+  },
+  {
+   "value": 0.000123,
+   "format": "0%",
+   "text": "0%"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.00%",
+   "text": "0.01%"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.00E+00",
+   "text": "1.23E-04"
+  },
+  {
+   "value": 0.000123,
+   "format": "₩#,##0",
+   "text": "₩0"
+  },
+  {
+   "value": 0.000123,
+   "format": "$#,##0.00",
+   "text": "$0.00"
+  },
+  {
+   "value": 0.000123,
+   "format": "#,##0;(#,##0)",
+   "text": "0"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.00;(0.00)",
+   "text": "0.00"
+  },
+  {
+   "value": 0.000123,
+   "format": "0.00;-0.00",
+   "text": "0.00"
+  },
+  {
+   "value": 0.000123,
+   "format": "yyyy-mm-dd",
+   "text": "1899-12-31"
+  },
+  {
+   "value": 0.000123,
+   "format": "mm/dd/yyyy",
+   "text": "12/31/1899"
+  },
+  {
+   "value": 0.000123,
+   "format": "dd/mm/yyyy",
+   "text": "31/12/1899"
+  },
+  {
+   "value": 0.000123,
+   "format": "yyyy년 m월 d일",
+   "text": "1899년 12월 31일"
+  },
+  {
+   "value": 0.000123,
+   "format": "mmm d",
+   "text": "Dec 31"
+  },
+  {
+   "value": 0.000123,
+   "format": "mmmm",
+   "text": "December"
+  },
+  {
+   "value": 0.000123,
+   "format": "ddd",
+   "text": "Sun"
+  },
+  {
+   "value": 0.000123,
+   "format": "dddd",
+   "text": "Sunday"
+  },
+  {
+   "value": 0.000123,
+   "format": "yy",
+   "text": "99"
+  },
+  {
+   "value": 0.000123,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 0.000123,
+   "format": "h:mm:ss",
+   "text": "0:00:11"
+  },
+  {
+   "value": 0.000123,
+   "format": "hh:mm:ss",
+   "text": "00:00:11"
+  },
+  {
+   "value": 0.000123,
+   "format": "m:ss",
+   "text": "0:11"
+  },
+  {
+   "value": 0.000123,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 0.000123,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1899-12-31 00:00"
+  },
+  {
+   "value": 0.000123,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 0.000123,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1899-12-31 00:00:11"
+  },
+  {
+   "value": 0.000123,
+   "format": "mmm yyyy",
+   "text": "Dec 1899"
+  },
+  {
+   "value": 0.000123,
+   "format": "d-mmm-yy",
+   "text": "31-Dec-99"
+  },
+  {
+   "value": 45306,
+   "format": "General",
+   "text": "45306"
+  },
+  {
+   "value": 45306,
+   "format": "@",
+   "text": "45306"
+  },
+  {
+   "value": 45306,
+   "format": "0",
+   "text": "45306"
+  },
+  {
+   "value": 45306,
+   "format": "0.00",
+   "text": "45306.00"
+  },
+  {
+   "value": 45306,
+   "format": "0.000",
+   "text": "45306.000"
+  },
+  {
+   "value": 45306,
+   "format": "#,##0",
+   "text": "45,306"
+  },
+  {
+   "value": 45306,
+   "format": "#,##0.00",
+   "text": "45,306.00"
+  },
+  {
+   "value": 45306,
+   "format": "0.0%",
+   "text": "4530600.0%"
+  },
+  {
+   "value": 45306,
+   "format": "0%",
+   "text": "4530600%"
+  },
+  {
+   "value": 45306,
+   "format": "0.00%",
+   "text": "4530600.00%"
+  },
+  {
+   "value": 45306,
+   "format": "0.00E+00",
+   "text": "4.53E+04"
+  },
+  {
+   "value": 45306,
+   "format": "₩#,##0",
+   "text": "₩45,306"
+  },
+  {
+   "value": 45306,
+   "format": "$#,##0.00",
+   "text": "$45,306.00"
+  },
+  {
+   "value": 45306,
+   "format": "#,##0;(#,##0)",
+   "text": "45,306"
+  },
+  {
+   "value": 45306,
+   "format": "0.00;(0.00)",
+   "text": "45306.00"
+  },
+  {
+   "value": 45306,
+   "format": "0.00;-0.00",
+   "text": "45306.00"
+  },
+  {
+   "value": 45306,
+   "format": "yyyy-mm-dd",
+   "text": "2024-01-15"
+  },
+  {
+   "value": 45306,
+   "format": "mm/dd/yyyy",
+   "text": "01/15/2024"
+  },
+  {
+   "value": 45306,
+   "format": "dd/mm/yyyy",
+   "text": "15/01/2024"
+  },
+  {
+   "value": 45306,
+   "format": "yyyy년 m월 d일",
+   "text": "2024년 1월 15일"
+  },
+  {
+   "value": 45306,
+   "format": "mmm d",
+   "text": "Jan 15"
+  },
+  {
+   "value": 45306,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 45306,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 45306,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 45306,
+   "format": "yy",
+   "text": "24"
+  },
+  {
+   "value": 45306,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 45306,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 45306,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 45306,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 45306,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 45306,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "2024-01-15 00:00"
+  },
+  {
+   "value": 45306,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 45306,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "2024-01-15 00:00:00"
+  },
+  {
+   "value": 45306,
+   "format": "mmm yyyy",
+   "text": "Jan 2024"
+  },
+  {
+   "value": 45306,
+   "format": "d-mmm-yy",
+   "text": "15-Jan-24"
+  },
+  {
+   "value": 45306.25,
+   "format": "General",
+   "text": "45306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "@",
+   "text": "45306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "0",
+   "text": "45306"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.00",
+   "text": "45306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.000",
+   "text": "45306.250"
+  },
+  {
+   "value": 45306.25,
+   "format": "#,##0",
+   "text": "45,306"
+  },
+  {
+   "value": 45306.25,
+   "format": "#,##0.00",
+   "text": "45,306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.0%",
+   "text": "4530625.0%"
+  },
+  {
+   "value": 45306.25,
+   "format": "0%",
+   "text": "4530625%"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.00%",
+   "text": "4530625.00%"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.00E+00",
+   "text": "4.53E+04"
+  },
+  {
+   "value": 45306.25,
+   "format": "₩#,##0",
+   "text": "₩45,306"
+  },
+  {
+   "value": 45306.25,
+   "format": "$#,##0.00",
+   "text": "$45,306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "#,##0;(#,##0)",
+   "text": "45,306"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.00;(0.00)",
+   "text": "45306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "0.00;-0.00",
+   "text": "45306.25"
+  },
+  {
+   "value": 45306.25,
+   "format": "yyyy-mm-dd",
+   "text": "2024-01-15"
+  },
+  {
+   "value": 45306.25,
+   "format": "mm/dd/yyyy",
+   "text": "01/15/2024"
+  },
+  {
+   "value": 45306.25,
+   "format": "dd/mm/yyyy",
+   "text": "15/01/2024"
+  },
+  {
+   "value": 45306.25,
+   "format": "yyyy년 m월 d일",
+   "text": "2024년 1월 15일"
+  },
+  {
+   "value": 45306.25,
+   "format": "mmm d",
+   "text": "Jan 15"
+  },
+  {
+   "value": 45306.25,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 45306.25,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 45306.25,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 45306.25,
+   "format": "yy",
+   "text": "24"
+  },
+  {
+   "value": 45306.25,
+   "format": "hh:mm",
+   "text": "06:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "h:mm:ss",
+   "text": "6:00:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "hh:mm:ss",
+   "text": "06:00:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "h:m",
+   "text": "6:0"
+  },
+  {
+   "value": 45306.25,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "2024-01-15 06:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "h:mm am/pm",
+   "text": "6:00 AM"
+  },
+  {
+   "value": 45306.25,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "2024-01-15 06:00:00"
+  },
+  {
+   "value": 45306.25,
+   "format": "mmm yyyy",
+   "text": "Jan 2024"
+  },
+  {
+   "value": 45306.25,
+   "format": "d-mmm-yy",
+   "text": "15-Jan-24"
+  },
+  {
+   "value": 45306.75,
+   "format": "General",
+   "text": "45306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "@",
+   "text": "45306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "0",
+   "text": "45307"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.00",
+   "text": "45306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.000",
+   "text": "45306.750"
+  },
+  {
+   "value": 45306.75,
+   "format": "#,##0",
+   "text": "45,307"
+  },
+  {
+   "value": 45306.75,
+   "format": "#,##0.00",
+   "text": "45,306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.0%",
+   "text": "4530675.0%"
+  },
+  {
+   "value": 45306.75,
+   "format": "0%",
+   "text": "4530675%"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.00%",
+   "text": "4530675.00%"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.00E+00",
+   "text": "4.53E+04"
+  },
+  {
+   "value": 45306.75,
+   "format": "₩#,##0",
+   "text": "₩45,307"
+  },
+  {
+   "value": 45306.75,
+   "format": "$#,##0.00",
+   "text": "$45,306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "#,##0;(#,##0)",
+   "text": "45,307"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.00;(0.00)",
+   "text": "45306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "0.00;-0.00",
+   "text": "45306.75"
+  },
+  {
+   "value": 45306.75,
+   "format": "yyyy-mm-dd",
+   "text": "2024-01-15"
+  },
+  {
+   "value": 45306.75,
+   "format": "mm/dd/yyyy",
+   "text": "01/15/2024"
+  },
+  {
+   "value": 45306.75,
+   "format": "dd/mm/yyyy",
+   "text": "15/01/2024"
+  },
+  {
+   "value": 45306.75,
+   "format": "yyyy년 m월 d일",
+   "text": "2024년 1월 15일"
+  },
+  {
+   "value": 45306.75,
+   "format": "mmm d",
+   "text": "Jan 15"
+  },
+  {
+   "value": 45306.75,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 45306.75,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 45306.75,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 45306.75,
+   "format": "yy",
+   "text": "24"
+  },
+  {
+   "value": 45306.75,
+   "format": "hh:mm",
+   "text": "18:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "h:mm:ss",
+   "text": "18:00:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "hh:mm:ss",
+   "text": "18:00:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "h:m",
+   "text": "18:0"
+  },
+  {
+   "value": 45306.75,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "2024-01-15 18:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "h:mm am/pm",
+   "text": "6:00 PM"
+  },
+  {
+   "value": 45306.75,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "2024-01-15 18:00:00"
+  },
+  {
+   "value": 45306.75,
+   "format": "mmm yyyy",
+   "text": "Jan 2024"
+  },
+  {
+   "value": 45306.75,
+   "format": "d-mmm-yy",
+   "text": "15-Jan-24"
+  },
+  {
+   "value": 45306.5,
+   "format": "General",
+   "text": "45306.5"
+  },
+  {
+   "value": 45306.5,
+   "format": "@",
+   "text": "45306.5"
+  },
+  {
+   "value": 45306.5,
+   "format": "0",
+   "text": "45307"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.00",
+   "text": "45306.50"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.000",
+   "text": "45306.500"
+  },
+  {
+   "value": 45306.5,
+   "format": "#,##0",
+   "text": "45,307"
+  },
+  {
+   "value": 45306.5,
+   "format": "#,##0.00",
+   "text": "45,306.50"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.0%",
+   "text": "4530650.0%"
+  },
+  {
+   "value": 45306.5,
+   "format": "0%",
+   "text": "4530650%"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.00%",
+   "text": "4530650.00%"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.00E+00",
+   "text": "4.53E+04"
+  },
+  {
+   "value": 45306.5,
+   "format": "₩#,##0",
+   "text": "₩45,307"
+  },
+  {
+   "value": 45306.5,
+   "format": "$#,##0.00",
+   "text": "$45,306.50"
+  },
+  {
+   "value": 45306.5,
+   "format": "#,##0;(#,##0)",
+   "text": "45,307"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.00;(0.00)",
+   "text": "45306.50"
+  },
+  {
+   "value": 45306.5,
+   "format": "0.00;-0.00",
+   "text": "45306.50"
+  },
+  {
+   "value": 45306.5,
+   "format": "yyyy-mm-dd",
+   "text": "2024-01-15"
+  },
+  {
+   "value": 45306.5,
+   "format": "mm/dd/yyyy",
+   "text": "01/15/2024"
+  },
+  {
+   "value": 45306.5,
+   "format": "dd/mm/yyyy",
+   "text": "15/01/2024"
+  },
+  {
+   "value": 45306.5,
+   "format": "yyyy년 m월 d일",
+   "text": "2024년 1월 15일"
+  },
+  {
+   "value": 45306.5,
+   "format": "mmm d",
+   "text": "Jan 15"
+  },
+  {
+   "value": 45306.5,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 45306.5,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 45306.5,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 45306.5,
+   "format": "yy",
+   "text": "24"
+  },
+  {
+   "value": 45306.5,
+   "format": "hh:mm",
+   "text": "12:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "h:mm:ss",
+   "text": "12:00:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "hh:mm:ss",
+   "text": "12:00:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "h:m",
+   "text": "12:0"
+  },
+  {
+   "value": 45306.5,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "2024-01-15 12:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "h:mm am/pm",
+   "text": "12:00 PM"
+  },
+  {
+   "value": 45306.5,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "2024-01-15 12:00:00"
+  },
+  {
+   "value": 45306.5,
+   "format": "mmm yyyy",
+   "text": "Jan 2024"
+  },
+  {
+   "value": 45306.5,
+   "format": "d-mmm-yy",
+   "text": "15-Jan-24"
+  },
+  {
+   "value": 1,
+   "format": "General",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "@",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.000",
+   "text": "1.000"
+  },
+  {
+   "value": 1,
+   "format": "#,##0",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "#,##0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.0%",
+   "text": "100.0%"
+  },
+  {
+   "value": 1,
+   "format": "0%",
+   "text": "100%"
+  },
+  {
+   "value": 1,
+   "format": "0.00%",
+   "text": "100.00%"
+  },
+  {
+   "value": 1,
+   "format": "0.00E+00",
+   "text": "1.00E+00"
+  },
+  {
+   "value": 1,
+   "format": "₩#,##0",
+   "text": "₩1"
+  },
+  {
+   "value": 1,
+   "format": "$#,##0.00",
+   "text": "$1.00"
+  },
+  {
+   "value": 1,
+   "format": "#,##0;(#,##0)",
+   "text": "1"
+  },
+  {
+   "value": 1,
+   "format": "0.00;(0.00)",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "0.00;-0.00",
+   "text": "1.00"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd",
+   "text": "1900-01-01"
+  },
+  {
+   "value": 1,
+   "format": "mm/dd/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1,
+   "format": "dd/mm/yyyy",
+   "text": "01/01/1900"
+  },
+  {
+   "value": 1,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 1월 1일"
+  },
+  {
+   "value": 1,
+   "format": "mmm d",
+   "text": "Jan 1"
+  },
+  {
+   "value": 1,
+   "format": "mmmm",
+   "text": "January"
+  },
+  {
+   "value": 1,
+   "format": "ddd",
+   "text": "Mon"
+  },
+  {
+   "value": 1,
+   "format": "dddd",
+   "text": "Monday"
+  },
+  {
+   "value": 1,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 1,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 1,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 1,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 1,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 1,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-01-01 00:00"
+  },
+  {
+   "value": 1,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 1,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-01-01 00:00:00"
+  },
+  {
+   "value": 1,
+   "format": "mmm yyyy",
+   "text": "Jan 1900"
+  },
+  {
+   "value": 1,
+   "format": "d-mmm-yy",
+   "text": "1-Jan-00"
+  },
+  {
+   "value": 59,
+   "format": "General",
+   "text": "59"
+  },
+  {
+   "value": 59,
+   "format": "@",
+   "text": "59"
+  },
+  {
+   "value": 59,
+   "format": "0",
+   "text": "59"
+  },
+  {
+   "value": 59,
+   "format": "0.00",
+   "text": "59.00"
+  },
+  {
+   "value": 59,
+   "format": "0.000",
+   "text": "59.000"
+  },
+  {
+   "value": 59,
+   "format": "#,##0",
+   "text": "59"
+  },
+  {
+   "value": 59,
+   "format": "#,##0.00",
+   "text": "59.00"
+  },
+  {
+   "value": 59,
+   "format": "0.0%",
+   "text": "5900.0%"
+  },
+  {
+   "value": 59,
+   "format": "0%",
+   "text": "5900%"
+  },
+  {
+   "value": 59,
+   "format": "0.00%",
+   "text": "5900.00%"
+  },
+  {
+   "value": 59,
+   "format": "0.00E+00",
+   "text": "5.90E+01"
+  },
+  {
+   "value": 59,
+   "format": "₩#,##0",
+   "text": "₩59"
+  },
+  {
+   "value": 59,
+   "format": "$#,##0.00",
+   "text": "$59.00"
+  },
+  {
+   "value": 59,
+   "format": "#,##0;(#,##0)",
+   "text": "59"
+  },
+  {
+   "value": 59,
+   "format": "0.00;(0.00)",
+   "text": "59.00"
+  },
+  {
+   "value": 59,
+   "format": "0.00;-0.00",
+   "text": "59.00"
+  },
+  {
+   "value": 59,
+   "format": "yyyy-mm-dd",
+   "text": "1900-02-28"
+  },
+  {
+   "value": 59,
+   "format": "mm/dd/yyyy",
+   "text": "02/28/1900"
+  },
+  {
+   "value": 59,
+   "format": "dd/mm/yyyy",
+   "text": "28/02/1900"
+  },
+  {
+   "value": 59,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 2월 28일"
+  },
+  {
+   "value": 59,
+   "format": "mmm d",
+   "text": "Feb 28"
+  },
+  {
+   "value": 59,
+   "format": "mmmm",
+   "text": "February"
+  },
+  {
+   "value": 59,
+   "format": "ddd",
+   "text": "Wed"
+  },
+  {
+   "value": 59,
+   "format": "dddd",
+   "text": "Wednesday"
+  },
+  {
+   "value": 59,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 59,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 59,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 59,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 59,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 59,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 59,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-02-28 00:00"
+  },
+  {
+   "value": 59,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 59,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-02-28 00:00:00"
+  },
+  {
+   "value": 59,
+   "format": "mmm yyyy",
+   "text": "Feb 1900"
+  },
+  {
+   "value": 59,
+   "format": "d-mmm-yy",
+   "text": "28-Feb-00"
+  },
+  {
+   "value": 61,
+   "format": "General",
+   "text": "61"
+  },
+  {
+   "value": 61,
+   "format": "@",
+   "text": "61"
+  },
+  {
+   "value": 61,
+   "format": "0",
+   "text": "61"
+  },
+  {
+   "value": 61,
+   "format": "0.00",
+   "text": "61.00"
+  },
+  {
+   "value": 61,
+   "format": "0.000",
+   "text": "61.000"
+  },
+  {
+   "value": 61,
+   "format": "#,##0",
+   "text": "61"
+  },
+  {
+   "value": 61,
+   "format": "#,##0.00",
+   "text": "61.00"
+  },
+  {
+   "value": 61,
+   "format": "0.0%",
+   "text": "6100.0%"
+  },
+  {
+   "value": 61,
+   "format": "0%",
+   "text": "6100%"
+  },
+  {
+   "value": 61,
+   "format": "0.00%",
+   "text": "6100.00%"
+  },
+  {
+   "value": 61,
+   "format": "0.00E+00",
+   "text": "6.10E+01"
+  },
+  {
+   "value": 61,
+   "format": "₩#,##0",
+   "text": "₩61"
+  },
+  {
+   "value": 61,
+   "format": "$#,##0.00",
+   "text": "$61.00"
+  },
+  {
+   "value": 61,
+   "format": "#,##0;(#,##0)",
+   "text": "61"
+  },
+  {
+   "value": 61,
+   "format": "0.00;(0.00)",
+   "text": "61.00"
+  },
+  {
+   "value": 61,
+   "format": "0.00;-0.00",
+   "text": "61.00"
+  },
+  {
+   "value": 61,
+   "format": "yyyy-mm-dd",
+   "text": "1900-03-01"
+  },
+  {
+   "value": 61,
+   "format": "mm/dd/yyyy",
+   "text": "03/01/1900"
+  },
+  {
+   "value": 61,
+   "format": "dd/mm/yyyy",
+   "text": "01/03/1900"
+  },
+  {
+   "value": 61,
+   "format": "yyyy년 m월 d일",
+   "text": "1900년 3월 1일"
+  },
+  {
+   "value": 61,
+   "format": "mmm d",
+   "text": "Mar 1"
+  },
+  {
+   "value": 61,
+   "format": "mmmm",
+   "text": "March"
+  },
+  {
+   "value": 61,
+   "format": "ddd",
+   "text": "Thu"
+  },
+  {
+   "value": 61,
+   "format": "dddd",
+   "text": "Thursday"
+  },
+  {
+   "value": 61,
+   "format": "yy",
+   "text": "00"
+  },
+  {
+   "value": 61,
+   "format": "hh:mm",
+   "text": "00:00"
+  },
+  {
+   "value": 61,
+   "format": "h:mm:ss",
+   "text": "0:00:00"
+  },
+  {
+   "value": 61,
+   "format": "hh:mm:ss",
+   "text": "00:00:00"
+  },
+  {
+   "value": 61,
+   "format": "m:ss",
+   "text": "0:00"
+  },
+  {
+   "value": 61,
+   "format": "h:m",
+   "text": "0:0"
+  },
+  {
+   "value": 61,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1900-03-01 00:00"
+  },
+  {
+   "value": 61,
+   "format": "h:mm am/pm",
+   "text": "12:00 AM"
+  },
+  {
+   "value": 61,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1900-03-01 00:00:00"
+  },
+  {
+   "value": 61,
+   "format": "mmm yyyy",
+   "text": "Mar 1900"
+  },
+  {
+   "value": 61,
+   "format": "d-mmm-yy",
+   "text": "1-Mar-00"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "General",
+   "text": "0.5104166666666666"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "@",
+   "text": "0.5104166666666666"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0",
+   "text": "1"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.00",
+   "text": "0.51"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.000",
+   "text": "0.510"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "#,##0",
+   "text": "1"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "#,##0.00",
+   "text": "0.51"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.0%",
+   "text": "51.0%"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0%",
+   "text": "51%"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.00%",
+   "text": "51.04%"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.00E+00",
+   "text": "5.10E-01"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "₩#,##0",
+   "text": "₩1"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "$#,##0.00",
+   "text": "$0.51"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "#,##0;(#,##0)",
+   "text": "1"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.00;(0.00)",
+   "text": "0.51"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "0.00;-0.00",
+   "text": "0.51"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "yyyy-mm-dd",
+   "text": "1899-12-31"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "mm/dd/yyyy",
+   "text": "12/31/1899"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "dd/mm/yyyy",
+   "text": "31/12/1899"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "yyyy년 m월 d일",
+   "text": "1899년 12월 31일"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "mmm d",
+   "text": "Dec 31"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "mmmm",
+   "text": "December"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "ddd",
+   "text": "Sun"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "dddd",
+   "text": "Sunday"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "yy",
+   "text": "99"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "hh:mm",
+   "text": "12:15"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "h:mm:ss",
+   "text": "12:15:00"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "hh:mm:ss",
+   "text": "12:15:00"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "m:ss",
+   "text": "15:00"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "h:m",
+   "text": "12:15"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1899-12-31 12:15"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "h:mm am/pm",
+   "text": "12:15 PM"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1899-12-31 12:15:00"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "mmm yyyy",
+   "text": "Dec 1899"
+  },
+  {
+   "value": 0.5104166666666666,
+   "format": "d-mmm-yy",
+   "text": "31-Dec-99"
+  },
+  {
+   "value": 99999.999,
+   "format": "General",
+   "text": "99999.999"
+  },
+  {
+   "value": 99999.999,
+   "format": "@",
+   "text": "99999.999"
+  },
+  {
+   "value": 99999.999,
+   "format": "0",
+   "text": "100000"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.00",
+   "text": "100000.00"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.000",
+   "text": "99999.999"
+  },
+  {
+   "value": 99999.999,
+   "format": "#,##0",
+   "text": "100,000"
+  },
+  {
+   "value": 99999.999,
+   "format": "#,##0.00",
+   "text": "100,000.00"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.0%",
+   "text": "9999999.9%"
+  },
+  {
+   "value": 99999.999,
+   "format": "0%",
+   "text": "10000000%"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.00%",
+   "text": "9999999.90%"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.00E+00",
+   "text": "1.00E+05"
+  },
+  {
+   "value": 99999.999,
+   "format": "₩#,##0",
+   "text": "₩100,000"
+  },
+  {
+   "value": 99999.999,
+   "format": "$#,##0.00",
+   "text": "$100,000.00"
+  },
+  {
+   "value": 99999.999,
+   "format": "#,##0;(#,##0)",
+   "text": "100,000"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.00;(0.00)",
+   "text": "100000.00"
+  },
+  {
+   "value": 99999.999,
+   "format": "0.00;-0.00",
+   "text": "100000.00"
+  },
+  {
+   "value": 99999.999,
+   "format": "yyyy-mm-dd",
+   "text": "2173-10-13"
+  },
+  {
+   "value": 99999.999,
+   "format": "mm/dd/yyyy",
+   "text": "10/13/2173"
+  },
+  {
+   "value": 99999.999,
+   "format": "dd/mm/yyyy",
+   "text": "13/10/2173"
+  },
+  {
+   "value": 99999.999,
+   "format": "yyyy년 m월 d일",
+   "text": "2173년 10월 13일"
+  },
+  {
+   "value": 99999.999,
+   "format": "mmm d",
+   "text": "Oct 13"
+  },
+  {
+   "value": 99999.999,
+   "format": "mmmm",
+   "text": "October"
+  },
+  {
+   "value": 99999.999,
+   "format": "ddd",
+   "text": "Wed"
+  },
+  {
+   "value": 99999.999,
+   "format": "dddd",
+   "text": "Wednesday"
+  },
+  {
+   "value": 99999.999,
+   "format": "yy",
+   "text": "73"
+  },
+  {
+   "value": 99999.999,
+   "format": "hh:mm",
+   "text": "23:58"
+  },
+  {
+   "value": 99999.999,
+   "format": "h:mm:ss",
+   "text": "23:58:34"
+  },
+  {
+   "value": 99999.999,
+   "format": "hh:mm:ss",
+   "text": "23:58:34"
+  },
+  {
+   "value": 99999.999,
+   "format": "m:ss",
+   "text": "58:34"
+  },
+  {
+   "value": 99999.999,
+   "format": "h:m",
+   "text": "23:58"
+  },
+  {
+   "value": 99999.999,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "2173-10-13 23:58"
+  },
+  {
+   "value": 99999.999,
+   "format": "h:mm am/pm",
+   "text": "11:58 PM"
+  },
+  {
+   "value": 99999.999,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "2173-10-13 23:58:34"
+  },
+  {
+   "value": 99999.999,
+   "format": "mmm yyyy",
+   "text": "Oct 2173"
+  },
+  {
+   "value": 99999.999,
+   "format": "d-mmm-yy",
+   "text": "13-Oct-73"
+  },
+  {
+   "value": -0.5,
+   "format": "General",
+   "text": "-0.5"
+  },
+  {
+   "value": -0.5,
+   "format": "@",
+   "text": "-0.5"
+  },
+  {
+   "value": -0.5,
+   "format": "0",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "0.00",
+   "text": "-0.50"
+  },
+  {
+   "value": -0.5,
+   "format": "0.000",
+   "text": "-0.500"
+  },
+  {
+   "value": -0.5,
+   "format": "#,##0",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "#,##0.00",
+   "text": "-0.50"
+  },
+  {
+   "value": -0.5,
+   "format": "0.0%",
+   "text": "-50.0%"
+  },
+  {
+   "value": -0.5,
+   "format": "0%",
+   "text": "-50%"
+  },
+  {
+   "value": -0.5,
+   "format": "0.00%",
+   "text": "-50.00%"
+  },
+  {
+   "value": -0.5,
+   "format": "0.00E+00",
+   "text": "-5.00E-01"
+  },
+  {
+   "value": -0.5,
+   "format": "₩#,##0",
+   "text": "₩-1"
+  },
+  {
+   "value": -0.5,
+   "format": "$#,##0.00",
+   "text": "$-0.50"
+  },
+  {
+   "value": -0.5,
+   "format": "#,##0;(#,##0)",
+   "text": "(1)"
+  },
+  {
+   "value": -0.5,
+   "format": "0.00;(0.00)",
+   "text": "(0.50)"
+  },
+  {
+   "value": -0.5,
+   "format": "0.00;-0.00",
+   "text": "-0.50"
+  },
+  {
+   "value": -0.5,
+   "format": "yyyy-mm-dd",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "mm/dd/yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "dd/mm/yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "yyyy년 m월 d일",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "mmm d",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "mmmm",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "ddd",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "dddd",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "yy",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "hh:mm",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "h:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "hh:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "m:ss",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "h:m",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "h:mm am/pm",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "mmm yyyy",
+   "text": "-1"
+  },
+  {
+   "value": -0.5,
+   "format": "d-mmm-yy",
+   "text": "-1"
+  },
+  {
+   "value": 12345.6789,
+   "format": "General",
+   "text": "12345.6789"
+  },
+  {
+   "value": 12345.6789,
+   "format": "@",
+   "text": "12345.6789"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0",
+   "text": "12346"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.00",
+   "text": "12345.68"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.000",
+   "text": "12345.679"
+  },
+  {
+   "value": 12345.6789,
+   "format": "#,##0",
+   "text": "12,346"
+  },
+  {
+   "value": 12345.6789,
+   "format": "#,##0.00",
+   "text": "12,345.68"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.0%",
+   "text": "1234567.9%"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0%",
+   "text": "1234568%"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.00%",
+   "text": "1234567.89%"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.00E+00",
+   "text": "1.23E+04"
+  },
+  {
+   "value": 12345.6789,
+   "format": "₩#,##0",
+   "text": "₩12,346"
+  },
+  {
+   "value": 12345.6789,
+   "format": "$#,##0.00",
+   "text": "$12,345.68"
+  },
+  {
+   "value": 12345.6789,
+   "format": "#,##0;(#,##0)",
+   "text": "12,346"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.00;(0.00)",
+   "text": "12345.68"
+  },
+  {
+   "value": 12345.6789,
+   "format": "0.00;-0.00",
+   "text": "12345.68"
+  },
+  {
+   "value": 12345.6789,
+   "format": "yyyy-mm-dd",
+   "text": "1933-10-18"
+  },
+  {
+   "value": 12345.6789,
+   "format": "mm/dd/yyyy",
+   "text": "10/18/1933"
+  },
+  {
+   "value": 12345.6789,
+   "format": "dd/mm/yyyy",
+   "text": "18/10/1933"
+  },
+  {
+   "value": 12345.6789,
+   "format": "yyyy년 m월 d일",
+   "text": "1933년 10월 18일"
+  },
+  {
+   "value": 12345.6789,
+   "format": "mmm d",
+   "text": "Oct 18"
+  },
+  {
+   "value": 12345.6789,
+   "format": "mmmm",
+   "text": "October"
+  },
+  {
+   "value": 12345.6789,
+   "format": "ddd",
+   "text": "Wed"
+  },
+  {
+   "value": 12345.6789,
+   "format": "dddd",
+   "text": "Wednesday"
+  },
+  {
+   "value": 12345.6789,
+   "format": "yy",
+   "text": "33"
+  },
+  {
+   "value": 12345.6789,
+   "format": "hh:mm",
+   "text": "16:17"
+  },
+  {
+   "value": 12345.6789,
+   "format": "h:mm:ss",
+   "text": "16:17:37"
+  },
+  {
+   "value": 12345.6789,
+   "format": "hh:mm:ss",
+   "text": "16:17:37"
+  },
+  {
+   "value": 12345.6789,
+   "format": "m:ss",
+   "text": "17:37"
+  },
+  {
+   "value": 12345.6789,
+   "format": "h:m",
+   "text": "16:17"
+  },
+  {
+   "value": 12345.6789,
+   "format": "yyyy-mm-dd hh:mm",
+   "text": "1933-10-18 16:17"
+  },
+  {
+   "value": 12345.6789,
+   "format": "h:mm am/pm",
+   "text": "4:17 PM"
+  },
+  {
+   "value": 12345.6789,
+   "format": "yyyy-mm-dd hh:mm:ss",
+   "text": "1933-10-18 16:17:37"
+  },
+  {
+   "value": 12345.6789,
+   "format": "mmm yyyy",
+   "text": "Oct 1933"
+  },
+  {
+   "value": 12345.6789,
+   "format": "d-mmm-yy",
+   "text": "18-Oct-33"
+  }
+ ]
+}

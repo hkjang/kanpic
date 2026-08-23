@@ -2,6 +2,7 @@ package formula
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -157,7 +158,10 @@ func evaluateRegex(name string, values []any) (any, bool, error) {
 // into TEXT: digit and thousands patterns, percentages, and date patterns.
 func formatValue(value any, pattern string) string {
 	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
+	// "General" 은 "있는 그대로", "@" 는 "글자로" 라는 뜻이다. 둘 다 값을
+	// 손대지 않는다. 예전에는 이것을 숫자 서식으로 읽어 =TEXT(0.5,"General")
+	// 이 "1" 이 되었다. 격자는 있는 그대로 보여주고 있었다.
+	if pattern == "" || strings.EqualFold(pattern, "general") || pattern == "@" {
 		return display(value)
 	}
 	if moment, ok := parseDate(value); ok && isDatePattern(pattern) {
@@ -172,6 +176,10 @@ func formatValue(value any, pattern string) string {
 	section := sections[0]
 	if number < 0 && len(sections) > 1 {
 		section, number = sections[1], -number
+	}
+	// 0.00E+00 처럼 지수로 적는 서식. E 뒤의 0 개수만큼 지수 자리를 채운다.
+	if match := scientificPattern.FindStringSubmatch(section); match != nil {
+		return renderScientific(number, len(match[1]), len(match[3]), match[2])
 	}
 	prefix, suffix, digits := "", "", section
 	if index := strings.IndexAny(section, "0#"); index > 0 {
@@ -330,6 +338,45 @@ func secondFollows(letters []rune, index int) bool {
 		return token == "ss" || token == "s"
 	}
 	return false
+}
+
+// scientificPattern 은 0.00E+00 꼴을 집는다. 소수 자리와 지수 자리 수를
+// 따로 세어야 하므로 묶음을 나눠 둔다.
+var scientificPattern = regexp.MustCompile(`(?i)^0(?:\.(0+))?E([+-])(0+)$`)
+
+// renderScientific 은 엑셀·시트가 지수를 적는 방식을 따른다.
+//
+//	0.00E+00  에 0.5   →  5.00E-01
+//	0.00E+00  에 1234  →  1.23E+03
+//
+// 지수 자리는 서식에 적은 0 개수만큼 채운다. 예전에는 서버가 이 꼴을
+// 아예 못 알아보고 "0.500000" 처럼 적었고, 격자는 자리를 채우지 않아
+// "5.00E-1" 이었다. 둘 다 틀렸고 틀린 모양도 달랐다.
+func renderScientific(number float64, mantissaDecimals, exponentDigits int, sign string) string {
+	exponent := 0
+	mantissa := number
+	if number != 0 {
+		exponent = int(math.Floor(math.Log10(math.Abs(number))))
+		mantissa = number / math.Pow(10, float64(exponent))
+		// 반올림하다 10 이 되면 자리를 하나 올린다. 9.99 가 10.0 이 되는 경우다.
+		mantissa = decimalRound(mantissa, mantissaDecimals, roundHalfAway)
+		if math.Abs(mantissa) >= 10 {
+			mantissa /= 10
+			exponent++
+		}
+	}
+	marker := "+"
+	if exponent < 0 {
+		marker = "-"
+	} else if sign == "-" {
+		// "0.00E-00" 은 양의 지수에 부호를 적지 않는다.
+		marker = ""
+	}
+	magnitude := exponent
+	if magnitude < 0 {
+		magnitude = -magnitude
+	}
+	return fmt.Sprintf("%.*fE%s%0*d", mantissaDecimals, mantissa, marker, exponentDigits, magnitude)
 }
 
 func formatNumber(number float64, decimals int, grouped bool) string {

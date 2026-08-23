@@ -6,7 +6,9 @@ describe('cell display formats',()=>{
     expect(formatCellValue(1234.5,{number_format:'#,##0.00'},'en-US')).toBe('1,234.50')
     expect(formatCellValue(.125,{number_format:'0.0%'},'en-US')).toBe('12.5%')
     expect(formatCellValue(2500,{number_format:'₩#,##0'},'en-US')).toBe('₩2,500')
-    expect(formatCellValue(1234,{number_format:'0.00E+00'},'en-US')).toBe('1.23E+3')
+    // 서식의 E+00 은 지수를 두 자리로 적으라는 뜻이다. 예전에는 자리를
+    // 채우지 않아 1.23E+3 이었고, 이 시험이 그것을 고정하고 있었다.
+    expect(formatCellValue(1234,{number_format:'0.00E+00'},'en-US')).toBe('1.23E+03')
     expect(formatCellValue(42,{number_format:'00000'},'en-US')).toBe('00042')
   })
   it('formats Excel serial dates and times without timezone drift',()=>{
