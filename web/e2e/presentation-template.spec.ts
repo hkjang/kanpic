@@ -29,7 +29,10 @@ test('the presentation dialog groups designs and remembers the last choice', asy
   const picker=page.getByRole('combobox',{name:'프레젠테이션 템플릿'})
   await expect(picker).toBeVisible()
 
-  // 색 묶음으로 나뉘어 있어야 한다.
+  // 색 묶음으로 나뉘어 있어야 한다. 목록은 프레젠테이션 서비스에서 오므로
+  // 도착할 때까지 기다린다. evaluateAll 은 기다려 주지 않아, 곧바로 부르면
+  // 아직 비어 있는 목록을 재고 만다.
+  await expect(picker.locator('optgroup').first()).toBeAttached({timeout:15_000})
   const families=await picker.locator('optgroup').evaluateAll(groups=>groups.map(g=>(g as HTMLOptGroupElement).label))
   expect(families.length).toBeGreaterThan(1)
 

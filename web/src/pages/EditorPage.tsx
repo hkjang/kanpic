@@ -236,7 +236,20 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const presentationList=useQuery({queryKey:['presentations',workbookId],queryFn:()=>api<{items:PresentationRecord[]}>(`/api/v1/workbooks/${workbookId}/presentations`),enabled:presentationEnabled})
   const refreshPresentationList=()=>client.invalidateQueries({queryKey:['presentations',workbookId]})
   const refreshPresentation=async(record:PresentationRecord)=>{await api(`/api/v1/presentations/${record.id}/refresh`,{method:'POST',body:'{}'});await refreshPresentationList()}
-  const workbookList=useQuery({queryKey:['workbooks'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks'),staleTime:60_000})
+  /**
+   * 빠른 이동에 띄울 워크북. 예전에는 limit 없이 불러 전부 받아 놓고
+   * 스무 개만 썼다. 워크북이 208개인 곳에서 편집기를 열 때마다 134KB 를
+   * 받으면서, 정작 스물한 번째부터는 이름을 적어도 찾히지 않았다.
+   *
+   * 이제 앞의 스무 개만 받고, 그 밖의 것은 적은 이름으로 서버에 묻는다.
+   */
+  const workbookList=useQuery({queryKey:['workbooks','quick'],queryFn:()=>api<{items:Workbook[]}>('/api/v1/workbooks?limit=20'),staleTime:60_000})
+  const [quickQuery,setQuickQuery]=useState('')
+  const workbookSearch=useQuery({
+    queryKey:['workbook-quick-search',quickQuery],
+    queryFn:()=>api<{items:Workbook[]}>(`/api/v1/workbooks?limit=20&q=${encodeURIComponent(quickQuery)}`),
+    enabled:quickOpen&&quickQuery.trim().length>=2,
+  })
   const namedRanges=useQuery({queryKey:['named-ranges',workbookId],queryFn:()=>api<{items:NamedRange[]}>(`/api/v1/workbooks/${workbookId}/named-ranges`)})
 	const charts=useQuery({queryKey:['charts',workbookId,activeSheet?.id],queryFn:()=>api<{items:Chart[]}>(`/api/v1/workbooks/${workbookId}/charts?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
 	const pivots=useQuery({queryKey:['pivots',workbookId,activeSheet?.id],queryFn:()=>api<{items:Pivot[]}>(`/api/v1/workbooks/${workbookId}/pivots?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
@@ -969,7 +982,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
-    ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).slice(0,20).map(item=>({
+    ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).map(item=>({
       id:`workbook:${item.id}`,group:'워크북',label:item.title,
       hint:item.access_role==='owner'?'내 소유':`${userLabel(item.owner_id,collaboratorDirectory)} 소유`,
       icon:<Grid2X2/>,keywords:'workbook 워크북 파일',run:()=>{window.location.href=`/workbooks/${item.id}`},
@@ -1340,10 +1353,14 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       if(target.id===workbookId)void refreshWorkbook()
       else if(window.confirm(`'${target.title}' 워크북으로 복사했습니다. 지금 이동할까요?`))window.location.href=`/workbooks/${target.id}`
     }}/>}
-    {quickOpen&&<QuickSwitcher items={quickItems} onClose={()=>setQuickOpen(false)} dynamicItems={query=>{
+    {quickOpen&&<QuickSwitcher items={quickItems} onClose={()=>setQuickOpen(false)} onQuery={setQuickQuery} dynamicItems={query=>{
+      const found=(workbookSearch.data?.items??[])
+        .filter(item=>item.id!==workbookId&&!(workbookList.data?.items??[]).some(loaded=>loaded.id===item.id))
+        .map(item=>({id:`found:${item.id}`,group:'워크북 검색',label:item.title,hint:'이름으로 찾은 워크북',
+          icon:<Grid2X2/>,run:()=>{window.location.href=`/workbooks/${item.id}`}}))
       const target=parseNavigationRange(query)
-      if(!target)return []
-      return [{id:'address',group:'셀 이동',label:query.trim().toUpperCase(),hint:`${activeSheet.name} 시트의 이 범위로 이동`,icon:<Search/>,run:()=>navigateToRange(activeSheet.id,query)}]
+      if(!target)return found
+      return [{id:'address',group:'셀 이동',label:query.trim().toUpperCase(),hint:`${activeSheet.name} 시트의 이 범위로 이동`,icon:<Search/>,run:()=>navigateToRange(activeSheet.id,query)},...found]
     }}/>}
     {shareOpen&&<ShareDialog workbook={workbook.data} onClose={()=>setShareOpen(false)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbook',workbookId]})}}/>}
     {shortcutsOpen&&<WorkbookShortcutsDialog onClose={()=>setShortcutsOpen(false)}/>}
