@@ -47,7 +47,7 @@ func (s *Server) resolveCellConflict(w http.ResponseWriter, r *http.Request) {
 	}
 	if !result.Operation.Duplicate {
 		cell := result.Conflict.CurrentCell
-		s.collab.PublishOperation(result.Conflict.WorkbookID, result.Conflict.SheetID, input.ActorID, input.ClientID, []workbook.CellInput{{Row: result.Conflict.Row, Column: result.Conflict.Column, Value: cell.Value, Formula: cell.Formula, Style: cell.Style}}, result.Operation)
+		s.publishCells(r.Context(), result.Conflict.WorkbookID, result.Conflict.SheetID, input.ActorID, input.ClientID, []workbook.CellInput{{Row: result.Conflict.Row, Column: result.Conflict.Column, Value: cell.Value, Formula: cell.Formula, Style: cell.Style}}, result.Operation)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

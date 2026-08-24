@@ -30,6 +30,7 @@ const (
 	EventMention       = "comment.mention"
 	EventAccessRequest = "access_request.created"
 	EventAccessDecided = "access_request.decided"
+	EventWatchChanged  = "watch.changed"
 	EventTest          = "test"
 )
 

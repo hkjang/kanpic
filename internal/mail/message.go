@@ -115,6 +115,30 @@ func CommentPosted(actor, workbookTitle, workbookID, rangeAddress, body string, 
 	}
 }
 
+// WatchChanged 는 지켜보던 범위가 바뀌었을 때 보낸다. 무엇이 몇 칸
+// 바뀌었는지만 적는다 — 바뀐 값을 메일에 실으면 워크북을 볼 권한이 없는
+// 곳으로 자료가 새어 나간다.
+func WatchChanged(actor, workbookTitle, workbookID, label string, ranges []string, firstCell string, cells int) Notification {
+	where := strings.Join(ranges, ", ")
+	if strings.TrimSpace(where) == "" {
+		where = "시트 전체"
+	}
+	if strings.TrimSpace(label) != "" {
+		where = label + " (" + where + ")"
+	}
+	return Notification{
+		Event:      EventWatchChanged,
+		Subject:    fmt.Sprintf("[kanpic] %s의 %s이(가) 바뀌었습니다", workbookTitle, where),
+		WorkbookID: workbookID,
+		Lines: []string{
+			fmt.Sprintf("%s 님이 '%s'에서 지켜보시는 %s을(를) 바꿨습니다.", actor, workbookTitle, where),
+			fmt.Sprintf("%s부터 %d개 칸이 바뀌었습니다.", firstCell, cells),
+			"",
+			"바뀐 값은 이 메일에 담지 않습니다. 워크북을 열어 확인하세요.",
+		},
+	}
+}
+
 // Mentioned is sent to somebody named with @ in a comment.
 func Mentioned(actor, workbookTitle, workbookID, rangeAddress, body string) Notification {
 	return Notification{

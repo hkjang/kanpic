@@ -113,6 +113,7 @@ var defaults = []Setting{
 	{Key: "mail.timeout_seconds", Value: json.RawMessage(`10`), ValueType: "number", Description: "SMTP 연결 제한 시간(초)"},
 	{Key: "mail.notify_share", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "워크북 공유 시 메일 발송"},
 	{Key: "mail.notify_comment", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글과 답글 작성 시 메일 발송"},
+	{Key: "mail.notify_watch", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "지켜보는 범위가 바뀌었을 때 메일 발송"},
 	{Key: "mail.notify_mention", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "댓글 멘션 시 메일 발송"},
 	{Key: "mail.notify_access_request", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "액세스 요청과 처리 결과 메일 발송"},
 	{Key: "analytics.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "방문자 추적 코드 삽입 사용"},

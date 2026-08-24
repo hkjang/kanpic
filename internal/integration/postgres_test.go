@@ -4125,3 +4125,90 @@ func TestPostgresNamedFunctionsFlowThroughToCells(t *testing.T) {
 		t.Fatalf("지운 뒤 목록=%#v, %v", remaining, err)
 	}
 }
+
+// "이 범위가 바뀌면 알려줘" 는 저장 경로 스물한 곳 어디로 들어와도 같아야
+// 한다. 여기서는 저장소 계약이 지켜지는지 본다 — 누가 무엇을 지켜보는지,
+// 남의 것은 보이지 않는지.
+func TestPostgresWatchRulesAreOwnedByTheWatcher(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("watch-owner-%d", time.Now().UnixNano())
+	other := owner + "-other"
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "변경 알림", WorkspaceID: "integration", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	created, err := repository.CreateWatchRule(ctx, book.ID, owner, workbook.CreateWatchRuleInput{
+		IdempotencyKey: "watch-1", SheetID: sheet.ID, Range: "a1:b10", Label: "매출표",
+	})
+	if err != nil {
+		t.Fatalf("만들기: %v", err)
+	}
+	// 범위는 한 가지 모양으로 다듬어 저장한다.
+	if created.Range != "A1:B10" || created.Watcher != owner || !created.Enabled {
+		t.Fatalf("저장된 규칙=%#v", created)
+	}
+	// 같은 열쇠로 다시 부르면 같은 것이 돌아온다.
+	again, err := repository.CreateWatchRule(ctx, book.ID, owner, workbook.CreateWatchRuleInput{
+		IdempotencyKey: "watch-1", SheetID: sheet.ID, Range: "Z1:Z9",
+	})
+	if err != nil || again.ID != created.ID {
+		t.Fatalf("멱등성=%#v, %v", again, err)
+	}
+	// 남이 무엇을 지켜보는지는 보이지 않는다. 누가 무엇을 보고 있는지는
+	// 그 사람의 일이다.
+	mine, err := repository.ListWatchRules(ctx, book.ID, owner)
+	if err != nil || len(mine) != 1 {
+		t.Fatalf("내 목록=%#v, %v", mine, err)
+	}
+	theirs, err := repository.ListWatchRules(ctx, book.ID, other)
+	if err != nil || len(theirs) != 0 {
+		t.Fatalf("남의 목록=%#v, %v", theirs, err)
+	}
+	// 셀이 바뀔 때 찾는 길에서는 시트의 모든 규칙이 보인다.
+	sheetRules, err := repository.SheetWatchRules(ctx, sheet.ID)
+	if err != nil || len(sheetRules) != 1 {
+		t.Fatalf("시트 규칙=%#v, %v", sheetRules, err)
+	}
+	// 꺼 두면 셀이 바뀌어도 찾지 않는다.
+	disabled := false
+	if _, err := repository.UpdateWatchRule(ctx, created.ID, owner, workbook.UpdateWatchRuleInput{Enabled: &disabled, ExpectedRevision: &created.Revision}); err != nil {
+		t.Fatalf("끄기: %v", err)
+	}
+	if off, err := repository.SheetWatchRules(ctx, sheet.ID); err != nil || len(off) != 0 {
+		t.Fatalf("꺼 둔 규칙=%#v, %v", off, err)
+	}
+	// 지난 리비전으로 고치려 하면 막는다.
+	if _, err := repository.UpdateWatchRule(ctx, created.ID, owner, workbook.UpdateWatchRuleInput{Enabled: &disabled, ExpectedRevision: &created.Revision}); !errors.Is(err, workbook.ErrVersionConflict) {
+		t.Errorf("지난 리비전=%v", err)
+	}
+	if err := repository.DeleteWatchRule(ctx, created.ID, owner, nil); err != nil {
+		t.Fatalf("지우기: %v", err)
+	}
+	if remaining, err := repository.ListWatchRules(ctx, book.ID, owner); err != nil || len(remaining) != 0 {
+		t.Fatalf("지운 뒤=%#v, %v", remaining, err)
+	}
+	// 다른 워크북의 시트를 지켜볼 수는 없다.
+	stranger, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "남의 워크북", WorkspaceID: "integration", OwnerID: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), stranger.ID, "integration-cleanup")
+	if _, err := repository.CreateWatchRule(ctx, book.ID, owner, workbook.CreateWatchRuleInput{
+		IdempotencyKey: "watch-cross", SheetID: stranger.Sheets[0].ID,
+	}); !errors.Is(err, workbook.ErrInvalid) {
+		t.Errorf("남의 시트=%v", err)
+	}
+}

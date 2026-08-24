@@ -71,7 +71,7 @@ func (s *Server) replaceWorkbook(w http.ResponseWriter, r *http.Request) {
 		if sheet.Operation.Duplicate {
 			continue
 		}
-		s.collab.PublishOperation(sheet.Operation.WorkbookID, sheet.SheetID, input.ActorID, input.ClientID, sheet.Cells, sheet.Operation)
+		s.publishCells(r.Context(), sheet.Operation.WorkbookID, sheet.SheetID, input.ActorID, input.ClientID, sheet.Cells, sheet.Operation)
 		s.triggerCellAutomations(r, sheet.Operation, sheet.Cells)
 	}
 	writeJSON(w, http.StatusOK, result)

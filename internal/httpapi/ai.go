@@ -163,7 +163,7 @@ func (s *Server) executeAIAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !result.Operation.Duplicate {
-		s.collab.PublishOperation(result.Action.WorkbookID, result.Action.SheetID, input.ActorID, input.ClientID, result.Changes, result.Operation)
+		s.publishCells(r.Context(), result.Action.WorkbookID, result.Action.SheetID, input.ActorID, input.ClientID, result.Changes, result.Operation)
 		s.triggerCellAutomations(r, result.Operation, result.Changes)
 	}
 	writeJSON(w, http.StatusOK, result)

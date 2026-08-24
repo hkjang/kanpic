@@ -41,6 +41,7 @@ type snapshot struct {
 	conditionalFormats map[string]ConditionalFormat
 	namedRanges        map[string]NamedRange
 	namedFunctions     map[string]NamedFunction
+	watchRules         map[string]WatchRule
 	charts             map[string]Chart
 	pivots             map[string]Pivot
 }
@@ -70,6 +71,7 @@ type MemoryRepository struct {
 	conditionalFormats map[string]ConditionalFormat
 	namedRanges        map[string]NamedRange
 	namedFunctions     map[string]NamedFunction
+	watchRules         map[string]WatchRule
 	charts             map[string]Chart
 	pivots             map[string]Pivot
 	pivotCache         map[string]PivotData
@@ -98,6 +100,7 @@ func NewMemoryRepository() *MemoryRepository {
 		conditionalFormats: make(map[string]ConditionalFormat),
 		namedRanges:        make(map[string]NamedRange),
 		namedFunctions:     make(map[string]NamedFunction),
+		watchRules:         make(map[string]WatchRule),
 		charts:             make(map[string]Chart),
 		pivots:             make(map[string]Pivot),
 		pivotCache:         make(map[string]PivotData),

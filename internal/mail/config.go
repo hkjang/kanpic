@@ -20,6 +20,7 @@ var eventSettings = map[string]string{
 	EventMention:       "mail.notify_mention",
 	EventAccessRequest: "mail.notify_access_request",
 	EventAccessDecided: "mail.notify_access_request",
+	EventWatchChanged:  "mail.notify_watch",
 }
 
 // ConfigFromValues builds the configuration from an already loaded settings

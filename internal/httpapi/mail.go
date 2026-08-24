@@ -128,3 +128,42 @@ func (s *Server) adminSendTestMail(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "recipient": recipient})
 }
+
+// publishCells 는 셀이 바뀌었다는 것을 함께 보고 있는 사람에게 알리고,
+// 그 범위를 지켜보겠다고 해 둔 사람에게 메일을 보낸다.
+//
+// 둘을 한 자리에 묶은 까닭은, 셀을 바꾸는 자리가 스물한 곳이라 하나씩
+// 붙이면 새 경로를 더할 때마다 한쪽을 빠뜨리기 때문이다. 빠뜨린 경로에서는
+// 지켜보겠다고 해 둔 사람에게 아무 말도 가지 않는데, 그것은 조용한 실패다.
+func (s *Server) publishCells(ctx context.Context, workbookID, sheetID, actorID, clientID string, cells []workbook.CellInput, result workbook.MutationResult) {
+	s.collab.PublishOperation(workbookID, sheetID, actorID, clientID, cells, result)
+	s.notifyWatchers(ctx, workbookID, sheetID, actorID, cells, result)
+}
+
+// notifyWatchers 는 이번 저장으로 바뀐 칸을 지켜보던 사람에게 알린다.
+// 사람마다 한 통이고, 자기가 바꾼 것은 자기에게 보내지 않는다.
+func (s *Server) notifyWatchers(ctx context.Context, workbookID, sheetID, actorID string, cells []workbook.CellInput, result workbook.MutationResult) {
+	if s.mail == nil || result.Duplicate || len(cells) == 0 {
+		return
+	}
+	rules, err := s.repository.SheetWatchRules(ctx, sheetID)
+	if err != nil || len(rules) == 0 {
+		return
+	}
+	changed := make([]workbook.CellCoordinate, 0, len(cells))
+	for _, cell := range cells {
+		changed = append(changed, workbook.CellCoordinate{Row: cell.Row, Column: cell.Column})
+	}
+	notices := workbook.WatchersToNotify(rules, actorID, changed)
+	if len(notices) == 0 {
+		return
+	}
+	book, err := s.repository.GetWorkbook(ctx, workbookID)
+	if err != nil {
+		return
+	}
+	label := s.actorLabel(ctx, actorID)
+	for _, notice := range notices {
+		s.notifyMail(ctx, mail.WatchChanged(label, book.Title, workbookID, notice.Label, notice.Ranges, notice.FirstCell, notice.Cells), actorID, []string{notice.Watcher})
+	}
+}

@@ -95,7 +95,9 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 			SetScheduledExecutionListener(func(automation.ExecutionResult))
 		}); ok {
 			scheduled.SetScheduledExecutionListener(func(result automation.ExecutionResult) {
-				s.publishAutomationResult(result.Run.ActorID, "scheduler", result)
+				// 예정된 실행에는 요청이 없다. 지켜보는 사람에게는 사람이
+				// 고쳤을 때와 똑같이 알려야 하므로 배경 문맥을 쓴다.
+				s.publishAutomationResult(context.Background(), result.Run.ActorID, "scheduler", result)
 			})
 		}
 	}
@@ -182,6 +184,10 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("DELETE /api/v1/pivots/{pivotId}", s.deletePivot)
 	mux.HandleFunc("GET /api/v1/me/notifications", s.listMentionNotifications)
 	mux.HandleFunc("PATCH /api/v1/me/notifications/{notificationId}", s.markMentionNotificationRead)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/watch-rules", s.listWatchRules)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/watch-rules", s.createWatchRule)
+	mux.HandleFunc("PATCH /api/v1/watch-rules/{watchRuleId}", s.updateWatchRule)
+	mux.HandleFunc("DELETE /api/v1/watch-rules/{watchRuleId}", s.deleteWatchRule)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/named-functions", s.listNamedFunctions)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/named-functions", s.createNamedFunction)
 	mux.HandleFunc("GET /api/v1/named-functions/{namedFunctionId}", s.getNamedFunction)
@@ -627,7 +633,7 @@ func (s *Server) formatRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !result.Duplicate && result.AppliedCells > 0 {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -705,7 +711,7 @@ func (s *Server) noteRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !result.Duplicate && result.AppliedCells > 0 {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -729,7 +735,7 @@ func (s *Server) changeRangeMerge(w http.ResponseWriter, r *http.Request, merge 
 		return
 	}
 	if !result.Duplicate && result.AppliedCells > 0 {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -767,7 +773,7 @@ func (s *Server) sortRange(w http.ResponseWriter, r *http.Request) {
 	}
 	var failures []automationFailure
 	if !result.Duplicate && result.AppliedCells > 0 {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, cells, result)
 		failures = s.triggerCellAutomations(r, result, cells)
 	}
 	writeJSON(w, http.StatusOK, cellMutationResponse{MutationResult: result, AutomationFailures: failures})
@@ -809,7 +815,7 @@ func (s *Server) applyCellsWithLimit(w http.ResponseWriter, r *http.Request, lim
 	}
 	var failures []automationFailure
 	if !result.Duplicate {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, input.Cells, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, input.Cells, result)
 		failures = s.triggerCellAutomations(r, result, input.Cells)
 	}
 	writeJSON(w, http.StatusOK, cellMutationResponse{MutationResult: result, AutomationFailures: failures})
@@ -838,7 +844,7 @@ func (s *Server) undoOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !result.Duplicate {
-		s.collab.PublishOperation(result.WorkbookID, result.SheetID, actorID(r), input.ClientID, nil, result)
+		s.publishCells(r.Context(), result.WorkbookID, result.SheetID, actorID(r), input.ClientID, nil, result)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -1293,6 +1299,11 @@ func requiredScope(r *http.Request) string {
 	}
 	if strings.Contains(path, "cells:") {
 		return "range.write"
+	}
+	// 지켜보기는 자기에게 메일을 보내는 설정이다. 워크북을 읽을 수 있으면
+	// 걸 수 있고, 남의 것은 건드릴 수 없다.
+	if strings.Contains(path, "/watch-rules") {
+		return "workbook.read"
 	}
 	// 이름 있는 수식은 그것을 쓰는 모든 칸의 셈을 바꾼다. 셀 하나를
 	// 고치는 것보다 넓게 미치므로 수식 권한으로 지킨다.

@@ -131,7 +131,7 @@ func (s *Server) executeAutomationAction(w http.ResponseWriter, r *http.Request)
 		s.writeAutomationError(w, r, err)
 		return
 	}
-	s.publishAutomationResult(input.ActorID, input.ClientID, result)
+	s.publishAutomationResult(r.Context(), input.ActorID, input.ClientID, result)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -184,7 +184,7 @@ func (s *Server) invokeAutomationWebhook(w http.ResponseWriter, r *http.Request,
 		s.writeAutomationError(w, r, err)
 		return
 	}
-	s.publishAutomationResult(principal.UserID, "webhook:"+principal.KeyID, result)
+	s.publishAutomationResult(r.Context(), principal.UserID, "webhook:"+principal.KeyID, result)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -220,7 +220,7 @@ func (s *Server) undoAutomationRun(w http.ResponseWriter, r *http.Request) {
 		s.writeAutomationError(w, r, err)
 		return
 	}
-	s.publishAutomationResult(input.ActorID, input.ClientID, result)
+	s.publishAutomationResult(r.Context(), input.ActorID, input.ClientID, result)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -258,7 +258,7 @@ func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workb
 			failures = append(failures, automationFailure{AutomationID: run.Run.AutomationID, RunID: run.Run.ID, Message: run.Run.ErrorMessage})
 			continue
 		}
-		s.publishAutomationResult(run.Run.ActorID, "automation:"+run.Run.AutomationID, run)
+		s.publishAutomationResult(triggerContext, run.Run.ActorID, "automation:"+run.Run.AutomationID, run)
 	}
 	if len(failures) == 0 {
 		return nil
@@ -266,11 +266,11 @@ func (s *Server) triggerCellAutomationsContext(ctx context.Context, result workb
 	return failures
 }
 
-func (s *Server) publishAutomationResult(actor, clientID string, result automation.ExecutionResult) {
+func (s *Server) publishAutomationResult(ctx context.Context, actor, clientID string, result automation.ExecutionResult) {
 	if result.Run.Duplicate || result.Operation.OperationID == "" || result.Operation.Duplicate {
 		return
 	}
-	s.collab.PublishOperation(result.Operation.WorkbookID, result.Operation.SheetID, actor, clientID, result.Changes, result.Operation)
+	s.publishCells(ctx, result.Operation.WorkbookID, result.Operation.SheetID, actor, clientID, result.Changes, result.Operation)
 }
 
 func (s *Server) writeAutomationError(w http.ResponseWriter, r *http.Request, err error) {

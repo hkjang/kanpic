@@ -559,6 +559,10 @@ func (r *MemoryRepository) WorkbookIDForResource(_ context.Context, kind, id str
 		if named, ok := r.namedFunctions[id]; ok {
 			return named.WorkbookID, nil
 		}
+	case "watchRuleId":
+		if rule, ok := r.watchRules[id]; ok {
+			return rule.WorkbookID, nil
+		}
 	case "commentId":
 		if thread, ok := r.comments[id]; ok {
 			return thread.WorkbookID, nil

@@ -267,7 +267,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			if sheet.Operation.Duplicate {
 				continue
 			}
-			s.collab.PublishOperation(sheet.Operation.WorkbookID, sheet.SheetID, actor, input.ClientID, sheet.Cells, sheet.Operation)
+			s.publishCells(ctx, sheet.Operation.WorkbookID, sheet.SheetID, actor, input.ClientID, sheet.Cells, sheet.Operation)
 		}
 		return result, nil
 	case "spreadsheet.template.list":
@@ -535,7 +535,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		}
 		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, ClientID: input.ClientID, Cells: input.Cells, OperationType: operationType})
 		if err == nil && !result.Duplicate {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, input.Cells, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, input.ClientID, input.Cells, result)
 			s.triggerCellAutomations(r, result, input.Cells)
 		}
 		return result, err
@@ -547,7 +547,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input.Range = stringArg(args, "range")
 		result, cells, err := s.applyRangeFormat(ctx, stringArg(args, "sheet_id"), actor, input)
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}
 		return result, err
 	case "spreadsheet.range.merge", "spreadsheet.range.unmerge":
@@ -558,7 +558,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input.Range = stringArg(args, "range")
 		result, cells, err := s.applyRangeMerge(ctx, stringArg(args, "sheet_id"), actor, input, name == "spreadsheet.range.merge")
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 		}
 		return result, err
 	case "spreadsheet.range.sort":
@@ -569,7 +569,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input.Range = stringArg(args, "range")
 		result, cells, err := s.applyRangeSort(ctx, stringArg(args, "sheet_id"), actor, input)
 		if err == nil && !result.Duplicate && result.AppliedCells > 0 {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, input.ClientID, cells, result)
 			s.triggerCellAutomations(r, result, cells)
 		}
 		return result, err
@@ -950,7 +950,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		cells := []workbook.CellInput{{Row: input.Row, Column: input.Column, Formula: input.Formula}}
 		result, err := s.repository.ApplyCells(ctx, workbook.CellMutation{SheetID: input.SheetID, ActorID: actor, BaseVersion: input.BaseVersion, IdempotencyKey: input.IdempotencyKey, Cells: cells})
 		if err == nil && !result.Duplicate {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, "", cells, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, "", cells, result)
 			s.triggerCellAutomations(r, result, cells)
 		}
 		return result, err
@@ -963,7 +963,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		clientID := stringArg(args, "client_id")
 		result, err := s.repository.UndoOperation(ctx, workbook.UndoOperationInput{OperationID: stringArg(args, "operation_id"), ActorID: actor, ClientID: clientID, IdempotencyKey: stringArg(args, "idempotency_key")})
 		if err == nil && !result.Duplicate {
-			s.collab.PublishOperation(result.WorkbookID, result.SheetID, actor, clientID, nil, result)
+			s.publishCells(ctx, result.WorkbookID, result.SheetID, actor, clientID, nil, result)
 		}
 		return result, err
 	case "spreadsheet.conflict.list":
@@ -986,7 +986,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		result, err := s.repository.ResolveCellConflict(ctx, stringArg(args, "conflict_id"), input)
 		if err == nil && !result.Operation.Duplicate {
 			cell := result.Conflict.CurrentCell
-			s.collab.PublishOperation(result.Conflict.WorkbookID, result.Conflict.SheetID, actor, input.ClientID, []workbook.CellInput{{Row: result.Conflict.Row, Column: result.Conflict.Column, Value: cell.Value, Formula: cell.Formula, Style: cell.Style}}, result.Operation)
+			s.publishCells(ctx, result.Conflict.WorkbookID, result.Conflict.SheetID, actor, input.ClientID, []workbook.CellInput{{Row: result.Conflict.Row, Column: result.Conflict.Column, Value: cell.Value, Formula: cell.Formula, Style: cell.Style}}, result.Operation)
 		}
 		return result, err
 	case "spreadsheet.ai.config.get":
@@ -1046,7 +1046,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 			result, err = s.ai.Undo(ctx, stringArg(args, "action_id"), input)
 		}
 		if err == nil && !result.Operation.Duplicate {
-			s.collab.PublishOperation(result.Action.WorkbookID, result.Action.SheetID, actor, input.ClientID, result.Changes, result.Operation)
+			s.publishCells(ctx, result.Action.WorkbookID, result.Action.SheetID, actor, input.ClientID, result.Changes, result.Operation)
 			s.triggerCellAutomations(r, result.Operation, result.Changes)
 		}
 		return result, err
@@ -1113,7 +1113,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input.ActorID = actor
 		result, err := s.automations.Run(ctx, item.ID, input)
 		if err == nil {
-			s.publishAutomationResult(actor, input.ClientID, result)
+			s.publishAutomationResult(ctx, actor, input.ClientID, result)
 		}
 		return result, err
 	case "spreadsheet.automation.webhook.invoke":
@@ -1143,7 +1143,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input := automation.RunInput{ActorID: principal.UserID, ClientID: clientID, IdempotencyKey: stringArg(args, "idempotency_key"), TriggerType: automation.TriggerWebhook, TriggerKeyID: principal.KeyID, PayloadDigest: hex.EncodeToString(digest[:]), PayloadBytes: len(payload)}
 		result, err := s.automations.Run(ctx, stringArg(args, "automation_id"), input)
 		if err == nil {
-			s.publishAutomationResult(principal.UserID, input.ClientID, result)
+			s.publishAutomationResult(ctx, principal.UserID, input.ClientID, result)
 		}
 		return result, err
 	case "spreadsheet.automation.run.list":
@@ -1166,7 +1166,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		input.ActorID = actor
 		result, err := s.automations.Undo(ctx, stringArg(args, "run_id"), input)
 		if err == nil {
-			s.publishAutomationResult(actor, input.ClientID, result)
+			s.publishAutomationResult(ctx, actor, input.ClientID, result)
 		}
 		return result, err
 	case "spreadsheet.import.preview":

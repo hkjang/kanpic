@@ -1120,7 +1120,7 @@ func TestAutomationAuthorizationBindsPreviewAndRunUndoToWorkbook(t *testing.T) {
 
 func TestAutomationDuplicatePublishAndCellTriggerCancellationSafety(t *testing.T) {
 	server := &Server{}
-	server.publishAutomationResult("actor", "client", automation.ExecutionResult{
+	server.publishAutomationResult(context.Background(), "actor", "client", automation.ExecutionResult{
 		Run:       automation.Run{Duplicate: true},
 		Operation: workbook.MutationResult{OperationID: "already-published"},
 	})

@@ -131,6 +131,12 @@ type Repository interface {
 	PivotDrilldown(context.Context, string, PivotDrilldownInput) (PivotDrilldownResult, error)
 	UpdatePivot(context.Context, string, string, UpdatePivotInput) (Pivot, error)
 	DeletePivot(context.Context, string, string, *int64) error
+	CreateWatchRule(context.Context, string, string, CreateWatchRuleInput) (WatchRule, error)
+	ListWatchRules(context.Context, string, string) ([]WatchRule, error)
+	SheetWatchRules(context.Context, string) ([]WatchRule, error)
+	GetWatchRule(context.Context, string) (WatchRule, error)
+	UpdateWatchRule(context.Context, string, string, UpdateWatchRuleInput) (WatchRule, error)
+	DeleteWatchRule(context.Context, string, string, *int64) error
 	CreateNamedFunction(context.Context, string, string, CreateNamedFunctionInput) (NamedFunction, error)
 	ListNamedFunctions(context.Context, string) ([]NamedFunction, error)
 	GetNamedFunction(context.Context, string) (NamedFunction, error)
