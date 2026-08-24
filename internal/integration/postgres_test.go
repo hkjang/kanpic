@@ -3585,3 +3585,97 @@ func TestPostgresBrowseWorkbooksPagesSearchesAndFilters(t *testing.T) {
 		t.Fatalf("shared filter = %d", shared.Total)
 	}
 }
+
+// 요약은 사람이 손으로 하기에 가장 지루한 일이다. 에이전트가 할 수 있는
+// 것에 피벗이 빠져 있어 "부서별 매출 합계" 같은 요청은 셀마다 SUMIF 를 박아
+// 넣는 수밖에 없었다. 그러면 자료가 늘 때마다 수식을 다시 손봐야 한다.
+//
+// 여기서는 계획부터 되돌리기까지 실제로 돌려 본다. 만든 것을 되돌렸는데
+// 피벗이 남으면, 되돌렸다는 말과 화면이 어긋난다.
+func TestPostgresWorkbookAgentCreatesAndRollsBackPivot(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-pivot-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 피벗", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "pivot-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"부서"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"영업"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`100`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"영업"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`50`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`"개발"`)}, {Row: 4, Column: 2, Value: json.RawMessage(`70`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-pivot-test","context_length":16384}]}`))
+			return
+		}
+		plan := `{"summary":"부서별 매출 요약","explanation":"원본을 그대로 두고 피벗으로 부서별 합계를 냅니다.","findings":[],"changes":[],"tool_calls":[{"name":"create_pivot","arguments":{"source_range":"A1:B4","name":"부서별 매출","rows":[{"column":1,"name":"부서"}],"values":[{"column":2,"aggregation":"sum"}]}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 300, "completion_tokens": 100}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-pivot-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B4", Message: "부서별 매출 합계를 요약해줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "pivot-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || run.State != kanpicai.AgentWaitingApproval || len(run.Action.ToolCalls) != 1 || run.Action.ToolCalls[0].Name != "create_pivot" {
+		t.Fatalf("pivot agent plan=%#v, %v", run, err)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "pivot-agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed {
+		t.Fatalf("pivot agent execution=%#v, %v", executed, err)
+	}
+	pivots, err := repository.ListPivots(ctx, book.ID, sheet.ID)
+	if err != nil || len(pivots) != 1 || pivots[0].Name != "부서별 매출" || len(pivots[0].Values) != 1 {
+		t.Fatalf("pivots=%#v, %v", pivots, err)
+	}
+	// 요약이 실제로 맞는지까지 본다. 정의만 저장되고 계산이 어긋나면 사람은
+	// 승인 화면을 믿고 틀린 숫자를 받는다.
+	data, err := repository.GetPivotData(ctx, pivots[0].ID)
+	if err != nil || len(data.Rows) != 2 {
+		t.Fatalf("pivot data=%#v, %v", data, err)
+	}
+	totals := map[string]any{}
+	for _, row := range data.Rows {
+		if len(row.Labels) != 1 || len(row.Values) != 1 {
+			t.Fatalf("pivot row=%#v", row)
+		}
+		totals[row.Labels[0]] = row.Values[0]
+	}
+	if fmt.Sprint(totals["영업"]) != "150" || fmt.Sprint(totals["개발"]) != "70" {
+		t.Fatalf("pivot totals=%#v", totals)
+	}
+	// 원본은 그대로여야 한다. 피벗은 읽기만 한다.
+	cells, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "A1:B4"))
+	if err != nil || len(cells) != 8 {
+		t.Fatalf("source cells=%d, %v", len(cells), err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, run.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "pivot-agent-rollback", ExpectedRevision: executed.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("pivot rollback=%#v, %v", rolledBack, err)
+	}
+	remaining, err := repository.ListPivots(ctx, book.ID, sheet.ID)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("rollback left pivots=%#v, %v", remaining, err)
+	}
+}

@@ -175,6 +175,15 @@ var pivotAggregations = map[string]struct{}{
 	"min": {}, "max": {}, "median": {}, "product": {},
 	"stdev": {}, "stdevp": {}, "var": {}, "varp": {},
 }
+
+// SupportedPivotAggregation tells callers outside this package whether a name
+// is one we can compute. 계획을 세우는 자리에서도 같은 목록을 봐야 한다 —
+// 목록을 두 곳에 적어 두면 한쪽만 늘어난다.
+func SupportedPivotAggregation(name string) bool {
+	_, found := pivotAggregations[strings.ToLower(strings.TrimSpace(name))]
+	return found
+}
+
 var pivotFilterOperators = map[string]struct{}{"equals": {}, "not_equals": {}, "contains": {}, "greater_than": {}, "greater_or_equal": {}, "less_than": {}, "less_or_equal": {}, "in": {}, "is_blank": {}, "not_blank": {}}
 
 // pivotFromInput builds the pivot a create request describes. Both repositories

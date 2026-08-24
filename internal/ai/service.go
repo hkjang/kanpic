@@ -790,6 +790,80 @@ type createConditionalFormatArguments struct {
 	BarColor string          `json:"bar_color,omitempty"`
 }
 
+// createPivotArguments 는 "부서별 매출 피벗 만들어줘" 가 만들어 내는 요약이다.
+//
+// 피벗은 원본을 건드리지 않고 따로 셈해 보여 준다. 그래서 셀을 고쳐 쓰는
+// 것보다 안전하고, 되돌리면 피벗만 지우면 된다.
+type createPivotArguments struct {
+	SheetID       string `json:"sheet_id,omitempty"`
+	SourceSheetID string `json:"source_sheet_id,omitempty"`
+	Name          string `json:"name,omitempty"`
+	SourceRange   string `json:"source_range"`
+	// 첫 줄이 머리글인지는 자료를 보아야 안다. 적지 않으면 머리글로 본다 —
+	// 표를 고를 때 머리글까지 함께 고르는 것이 보통이기 때문이다.
+	FirstRowHeaders *bool               `json:"first_row_headers,omitempty"`
+	Rows            []pivotDimensionArg `json:"rows,omitempty"`
+	Columns         []pivotDimensionArg `json:"columns,omitempty"`
+	Values          []pivotValueArg     `json:"values"`
+}
+
+type pivotDimensionArg struct {
+	Column int    `json:"column"`
+	Name   string `json:"name,omitempty"`
+	Group  string `json:"group,omitempty"`
+}
+
+type pivotValueArg struct {
+	Column      int    `json:"column"`
+	Name        string `json:"name,omitempty"`
+	Aggregation string `json:"aggregation"`
+}
+
+// validateCreatePivot 은 모델이 적어 보낸 피벗이 말이 되는지 본다. 열 번호는
+// 고른 범위 안의 자리를 가리켜야 하고, 잴 것이 없으면 요약이 아니다.
+func validateCreatePivot(input PlanInput, raw json.RawMessage) (createPivotArguments, error) {
+	var arguments createPivotArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: create_pivot arguments are not an object", ErrGateway)
+	}
+	arguments.SourceRange = strings.TrimSpace(arguments.SourceRange)
+	if arguments.SourceRange == "" {
+		arguments.SourceRange = input.Range
+	}
+	source, err := cellrange.Parse(arguments.SourceRange)
+	if err != nil {
+		return arguments, fmt.Errorf("%w: create_pivot source_range is not a range", ErrGateway)
+	}
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return arguments, fmt.Errorf("%w: the selected range is not a range", ErrGateway)
+	}
+	if source.Start.Row < selected.Start.Row || source.Start.Column < selected.Start.Column ||
+		source.End.Row > selected.End.Row || source.End.Column > selected.End.Column {
+		return arguments, fmt.Errorf("%w: create_pivot source_range must stay inside the selected range", ErrGateway)
+	}
+	if len(arguments.Values) == 0 {
+		return arguments, fmt.Errorf("%w: create_pivot needs at least one value field", ErrGateway)
+	}
+	// 열 번호는 원본 범위 안의 자리다. 밖을 가리키면 엉뚱한 열을 세게 된다.
+	width := source.End.Column - source.Start.Column + 1
+	inside := func(column int) bool { return column >= 1 && column <= width }
+	for _, value := range arguments.Values {
+		if !inside(value.Column) {
+			return arguments, fmt.Errorf("%w: create_pivot value column %d is outside the source range", ErrGateway, value.Column)
+		}
+		if !workbook.SupportedPivotAggregation(value.Aggregation) {
+			return arguments, fmt.Errorf("%w: create_pivot aggregation %q is not one we can compute", ErrGateway, value.Aggregation)
+		}
+	}
+	for _, dimension := range append(append([]pivotDimensionArg{}, arguments.Rows...), arguments.Columns...) {
+		if !inside(dimension.Column) {
+			return arguments, fmt.Errorf("%w: create_pivot dimension column %d is outside the source range", ErrGateway, dimension.Column)
+		}
+	}
+	return arguments, nil
+}
+
 // validateCreateConditionalFormat 은 모델이 적어 보낸 규칙이 말이 되는지
 // 본다. 범위는 사람이 고른 범위 안에 있어야 한다 — 고르지도 않은 곳을
 // 물들이는 것은 사람이 시킨 일이 아니다.
@@ -987,6 +1061,16 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_pivot":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_pivot requires agent mode", ErrGateway)
+			}
+			arguments, err := validateCreatePivot(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_conditional_format":
 			if input.Mode != ModeAgent {
 				return nil, fmt.Errorf("%w: create_conditional_format requires agent mode", ErrGateway)

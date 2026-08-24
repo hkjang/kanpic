@@ -108,6 +108,28 @@ describe('AIPanel',()=>{
     expect(screen.queryByRole('button',{name:/변경 적용/})).not.toBeInTheDocument()
   })
 
+  // 승인 화면에 도구 이름과 JSON 만 떴다. create_pivot 과 열 번호를 보고
+  // 승인 여부를 정하라는 것은 무리다. 무엇이 어디에 생기는지 한 줄로 먼저
+  // 말해 주어야 한다.
+  it('says in words what a pivot tool call will make',async()=>{
+    const pivotAction:AIAction={...action,id:'run-pivot',mode:'agent',request:'부서별 매출 합계를 요약해줘',summary:'부서별 매출 요약',changes:[],tool_calls:[{name:'create_pivot',arguments:{source_range:'A1:B4',name:'부서별 매출',rows:[{column:1,name:'부서'}],values:[{column:2,name:'매출',aggregation:'sum'}]},status:'planned',risk:'MEDIUM'}]}
+    const pivotRun:AgentRun={...run,id:'run-pivot',action:pivotAction,goal:pivotAction.summary,plan:{...run.plan,run_id:'run-pivot',goal:pivotAction.summary}}
+    vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL)=>{
+      const path=String(input)
+      if(path==='/api/v1/ai/config')return response({enabled:true,model:'offline-model',max_input_cells:200,max_changes:100})
+      if(path==='/api/v1/workbooks/book-1/agent/messages')return response(pivotRun,201)
+      return response({items:[]})
+    }))
+    renderPanel()
+    await screen.findByLabelText('현재 채팅 범위')
+    fireEvent.change(screen.getByLabelText('AI 요청'),{target:{value:'부서별 매출 합계를 요약해줘'}})
+    fireEvent.click(screen.getByRole('button',{name:'AI 메시지 보내기'}))
+    expect(await screen.findByText('피벗 요약 만들기')).toBeInTheDocument()
+    expect(screen.getByText('A1:B4 · 부서별 · 매출 합계')).toBeInTheDocument()
+    // 한 줄로 줄이면서 빠뜨린 것을 확인할 곳은 남아 있어야 한다.
+    expect(screen.getByText(/"aggregation": "sum"/)).toBeInTheDocument()
+  })
+
   it('keeps the composer open and sends follow-up turns in the same conversation',async()=>{
     const followAction:AIAction={...action,id:'run-2',mode:'chart',request:'막대 차트를 선 차트로 바꿔줘',summary:'기존 차트를 선 차트로 변경',changes:[],tool_calls:[{name:'update_chart',arguments:{chart_id:'chart-1',type:'line',expected_revision:1},status:'planned',risk:'MEDIUM'}]}
     const followRun:AgentRun={...run,id:'run-2',action:followAction,goal:followAction.summary,messages:[...run.messages,{id:'m3',conversation_id:'conversation-1',agent_run_id:'run-2',role:'user',content:followAction.request,created_at:action.created_at},{id:'m4',conversation_id:'conversation-1',agent_run_id:'run-2',role:'assistant',content:followAction.summary,created_at:action.created_at}],plan:{...run.plan,run_id:'run-2',goal:followAction.summary}}

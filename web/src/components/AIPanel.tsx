@@ -214,7 +214,7 @@ function AgentPlanView({run}:{run:AgentRun}){
   return <section className="agent-plan" aria-label="Agent 실행 계획">
     <header><ListChecks/><div><strong>{run.plan.goal}</strong><small>{riskLabel(run.risk)} · {agentStateLabel(run.state)}</small></div></header>
     <ol>{run.plan.steps.map(step=><li className={step.status} key={step.id||step.position}><span>{step.status==='completed'?<Check/>:step.status==='failed'?<AlertTriangle/>:step.status==='cancelled'?<XCircle/>:<Clock3/>}</span><div><strong>{step.description}</strong><small><code>{step.tool}</code> · {stepStatusLabel(step.status)}</small></div></li>)}</ol>
-    {run.action.tool_calls?.length>0&&<div className="agent-tools"><Wrench/><span>{run.action.tool_calls.map(tool=>`${tool.name} (${stepStatusLabel(tool.status)})`).join(', ')}</span></div>}
+    {run.action.tool_calls?.length>0&&<div className="agent-tools"><Wrench/><span>{run.action.tool_calls.map(tool=>`${toolLabel(tool.name)} (${stepStatusLabel(tool.status)})`).join(', ')}</span></div>}
   </section>
 }
 
@@ -229,7 +229,7 @@ function ActionPreview({action,onApprove,onCancel,onUndo,pending,onRetry}:{actio
     <p>{action.explanation}</p>
     {findings.length>0&&<div className="ai-finding-list">{findings.map((finding,index)=><article className={finding.severity} key={`${finding.address||'range'}:${index}`}><header><span>{finding.address||'전체 범위'}</span><em>{severityLabel(finding.severity)}</em></header><strong>{finding.title}</strong><p>{finding.description}</p>{finding.address&&<code>현재: {snapshotText(finding.cell??{})}</code>}</article>)}</div>}
     {action.changes.length>0&&<div className="ai-change-list">{action.changes.map(change=><article key={`${change.row}:${change.column}`}><strong>{change.address}</strong><div><small>현재</small><code>{action.mode==='format'?JSON.stringify(change.before.style??{}):snapshotText(change.before)}</code></div><span>→</span><div><small>제안</small><code>{action.mode==='format'?JSON.stringify(change.after.style??{}):snapshotText(change.after)}</code></div></article>)}</div>}
-    {action.tool_calls?.map((tool,index)=><article className="agent-tool-preview" key={tool.id||tool.idempotency_key||`${tool.name}:${index}`}><header><Wrench/><strong>{tool.name}</strong><em>{riskLabel(tool.risk)}</em></header><pre>{JSON.stringify(tool.arguments,null,2)}</pre></article>)}
+    {action.tool_calls?.map((tool,index)=><article className="agent-tool-preview" key={tool.id||tool.idempotency_key||`${tool.name}:${index}`}><header><Wrench/><strong>{toolLabel(tool.name)}</strong><em>{riskLabel(tool.risk)}</em></header>{toolSummary(tool)&&<p className="agent-tool-summary">{toolSummary(tool)}</p>}<pre>{JSON.stringify(tool.arguments,null,2)}</pre></article>)}
     <div className="ai-plan-meta"><span>기준 버전 v{action.base_version}</span>{action.changes.length>0&&<span>{action.changes.length}셀 변경</span>}{findings.length>0&&<span>{findings.length}개 발견</span>}<span>{action.model}</span>{usage?.prompt_tokens?<span>입력 {usage.prompt_tokens.toLocaleString()}토큰</span>:null}{usage?.completion_tokens?<span>응답 {usage.completion_tokens.toLocaleString()}토큰</span>:null}{usage&&(usage.attempts??1)>1?<span>재시도 {(usage.attempts??1)-1}회</span>:null}</div>
     {action.status==='failed'&&<div className="ai-error"><AlertTriangle/>{action.error_message||'작업이 실패했습니다.'}</div>}
     {action.status==='planned'&&!readOnly&&<div className="ai-approval"><p><ShieldCheck/> 위 변경만 하나의 ChangeSet으로 적용되고 전체 Undo할 수 있습니다.</p><div><button onClick={onCancel} disabled={pending}><XCircle/> 취소</button><button className="primary" aria-label="검토한 계획 승인 및 변경 적용" onClick={onApprove} disabled={pending}><Check/> 변경 적용</button></div></div>}
@@ -245,4 +245,22 @@ function statusLabel(status:AIAction['status'],mode:AIAction['mode']){if(status=
 function severityLabel(severity:'info'|'warning'|'critical'){return {info:'정보',warning:'주의',critical:'심각'}[severity]}
 function agentStateLabel(state:AgentRun['state']){return {THINKING:'생각 중',READING_WORKBOOK:'워크북 읽는 중',PLANNING:'계획 중',WAITING_APPROVAL:'승인 대기',EXECUTING:'실행 중',VALIDATING:'검증 중',COMPLETED:'완료',FAILED:'실패',CANCELLED:'취소됨'}[state]}
 function stepStatusLabel(status:string){return {completed:'완료',waiting_approval:'승인 대기',pending:'대기',executing:'진행',validating:'검증',failed:'실패',cancelled:'취소',planned:'계획됨'}[status]||status}
+function toolLabel(name:string){return {create_chart:'차트 만들기',update_chart:'차트 바꾸기',create_report_sheet:'보고서 시트 만들기',create_conditional_format:'조건부 서식 만들기',create_pivot:'피벗 요약 만들기'}[name]||name}
+// 승인 화면에 도구 이름과 JSON 만 있었다. 무엇이 어디에 생기는지 한 줄로
+// 먼저 말해 주어야 사람이 승인할지 판단할 수 있다. JSON 은 그대로 남긴다 —
+// 한 줄로 줄이면서 빠뜨린 것을 확인할 곳이 있어야 한다.
+function toolSummary(tool:AgentToolCall){
+  const argument=(tool.arguments||{}) as Record<string,any>
+  const field=(item:any)=>String(item?.name||`열 ${item?.column??'?'}`)
+  if(tool.name==='create_pivot'){
+    const rows=(argument.rows||[]).map(field).join(', ')
+    const values=(argument.values||[]).map((item:any)=>`${field(item)} ${aggregationLabel(String(item?.aggregation||''))}`).join(', ')
+    return `${argument.source_range||''}${rows?` · ${rows}별`:''}${values?` · ${values}`:''}`
+  }
+  if(tool.name==='create_conditional_format')return `${argument.range||''}${argument.rule_type?` · ${String(argument.rule_type)}`:''}`
+  if(tool.name==='create_chart'||tool.name==='update_chart')return [argument.title,argument.source_range,argument.type].filter(Boolean).join(' · ')
+  if(tool.name==='create_report_sheet')return `${argument.name||'새 시트'} · ${(argument.cells||[]).length}셀${argument.chart?' · 차트 포함':''}`
+  return ''
+}
+function aggregationLabel(name:string){return {sum:'합계',average:'평균',count:'숫자 개수',counta:'개수',countunique:'고유 개수',min:'최소',max:'최대',median:'중앙값',product:'곱',stdev:'표본 표준편차',stdevp:'표준편차',var:'표본 분산',varp:'분산'}[name]||name}
 function riskLabel(risk:AIAction['risk']){return {READ:'읽기',LOW:'낮은 위험',MEDIUM:'중간 위험',HIGH:'높은 위험',CRITICAL:'매우 높은 위험'}[risk]||risk}

@@ -550,3 +550,84 @@ func TestConditionalFormatStaysInsideTheSelection(t *testing.T) {
 		t.Error("도구가 허용 목록에 없다")
 	}
 }
+
+// 요약은 사람이 손으로 하기에 가장 지루한 일인데, 에이전트가 할 수 있는
+// 것에 빠져 있었다. "부서별 매출 합계" 같은 요청은 원본을 건드리지 않고
+// 피벗으로 답하는 것이 맞다 — 셀에 SUMIF 를 박아 넣으면 자료가 늘 때마다
+// 수식을 다시 손봐야 한다.
+func TestGatewayAcceptsPivotTool(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "create_pivot",
+						"arguments": `{"source_range":"A1:C20","name":"부서별 매출","rows":[{"column":1,"name":"부서"}],"values":[{"column":3,"aggregation":"sum"}]}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1:C20")
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:C20", Request: "부서별 매출 합계"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_pivot" {
+		t.Fatalf("plan=%#v", plan.ToolCalls)
+	}
+	var arguments createPivotArguments
+	if err := json.Unmarshal(plan.ToolCalls[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	// 행과 값이 그대로 실려야 한다. 여기서 잃으면 피벗은 생기는데 빈 표다.
+	if len(arguments.Rows) != 1 || arguments.Rows[0].Column != 1 || len(arguments.Values) != 1 || arguments.Values[0].Aggregation != "sum" {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	if arguments.Name != "부서별 매출" {
+		t.Errorf("name=%q", arguments.Name)
+	}
+	if !supportedGatewayTool("create_pivot") {
+		t.Error("도구가 허용 목록에 없다")
+	}
+}
+
+// 피벗은 원본을 읽기만 하지만, 읽는 곳은 사람이 고른 범위 안이어야 한다.
+// 열 번호도 원본 안의 자리여야 한다 — 밖을 가리키면 승인 화면에는 그럴듯한
+// 계획이 뜨고 실행할 때가 되어서야 깨진다.
+func TestPivotArgumentsStayInsideTheSource(t *testing.T) {
+	t.Parallel()
+	selected := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:C20"}
+	values := `"values":[{"column":3,"aggregation":"sum"}]`
+	if _, err := validateCreatePivot(selected, json.RawMessage(`{"source_range":"A1:F40",`+values+`}`)); err == nil {
+		t.Error("선택 밖 원본이 통과했다")
+	}
+	// 원본을 적지 않으면 고른 범위를 그대로 쓴다.
+	blank, err := validateCreatePivot(selected, json.RawMessage(`{`+values+`}`))
+	if err != nil || blank.SourceRange != "A1:C20" {
+		t.Fatalf("blank=%#v err=%v", blank, err)
+	}
+	// 셀 자리가 아니라 원본 안의 몇 번째 열인지를 적는다. 4 는 세 열짜리 밖이다.
+	if _, err := validateCreatePivot(selected, json.RawMessage(`{"values":[{"column":4,"aggregation":"sum"}]}`)); err == nil {
+		t.Error("원본 밖 값 열이 통과했다")
+	}
+	if _, err := validateCreatePivot(selected, json.RawMessage(`{"rows":[{"column":9}],`+values+`}`)); err == nil {
+		t.Error("원본 밖 행 열이 통과했다")
+	}
+	// 셀 수 없는 방법은 실행할 때가 아니라 계획할 때 막아야 한다.
+	if _, err := validateCreatePivot(selected, json.RawMessage(`{"values":[{"column":3,"aggregation":"평균"}]}`)); err == nil {
+		t.Error("모르는 집계 방법이 통과했다")
+	}
+	if !workbook.SupportedPivotAggregation("COUNTA ") || workbook.SupportedPivotAggregation("mode") {
+		t.Error("집계 목록이 실제 계산과 어긋난다")
+	}
+	// 값이 없으면 무엇을 요약할지 알 수 없다.
+	if _, err := validateCreatePivot(selected, json.RawMessage(`{"rows":[{"column":1}]}`)); err == nil {
+		t.Error("값 없이 통과했다")
+	}
+}

@@ -523,6 +523,17 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
 			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
 		}
+	case "create_pivot":
+		var arguments createPivotArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{
+				"source_range": arguments.SourceRange, "rows": len(arguments.Rows), "values": len(arguments.Values),
+			})
+		}
+		var pivot workbook.Pivot
+		if json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" {
+			item.Result = marshalMemory(map[string]any{"id": pivot.ID, "name": pivot.Name, "source_range": pivot.SourceRange})
+		}
 	case "create_conditional_format":
 		var arguments createConditionalFormatArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -758,6 +769,44 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 			}
 			tool.Result, _ = json.Marshal(chart)
 			tool.Status = "completed"
+		case "create_pivot":
+			var arguments createPivotArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored create_pivot arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			sourceSheetID := strings.TrimSpace(arguments.SourceSheetID)
+			if sourceSheetID == "" {
+				sourceSheetID = sheetID
+			}
+			rows := make([]workbook.PivotDimension, 0, len(arguments.Rows))
+			for _, item := range arguments.Rows {
+				rows = append(rows, workbook.PivotDimension{Column: item.Column, Name: item.Name, Group: item.Group})
+			}
+			columns := make([]workbook.PivotDimension, 0, len(arguments.Columns))
+			for _, item := range arguments.Columns {
+				columns = append(columns, workbook.PivotDimension{Column: item.Column, Name: item.Name, Group: item.Group})
+			}
+			values := make([]workbook.PivotValueField, 0, len(arguments.Values))
+			for _, item := range arguments.Values {
+				values = append(values, workbook.PivotValueField{Column: item.Column, Name: item.Name, Aggregation: item.Aggregation})
+			}
+			pivot, err := s.workbooks.CreatePivot(ctx, action.WorkbookID, actorID, workbook.CreatePivotInput{
+				IdempotencyKey: tool.IdempotencyKey, SheetID: sheetID, SourceSheetID: sourceSheetID,
+				Name: arguments.Name, SourceRange: arguments.SourceRange, FirstRowHeaders: arguments.FirstRowHeaders,
+				Rows: rows, Columns: columns, Values: values,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(pivot)
+			tool.Status = "completed"
 		case "create_conditional_format":
 			var arguments createConditionalFormatArguments
 			if json.Unmarshal(tool.Arguments, &arguments) != nil {
@@ -920,6 +969,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var rule workbook.ConditionalFormat
 			passed := json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" && rule.SheetID != ""
 			checks = append(checks, ValidationCheck{Name: "conditional_format", Passed: passed, Message: "조건부 서식 규칙 생성을 확인했습니다."})
+		case "create_pivot":
+			var pivot workbook.Pivot
+			passed := json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" && len(pivot.Values) > 0
+			checks = append(checks, ValidationCheck{Name: "pivot", Passed: passed, Message: "피벗 생성과 값 필드를 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -1133,6 +1186,15 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
 				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "create_pivot":
+			// 피벗은 원본을 건드리지 않으므로 되돌리기는 피벗을 지우는 것이다.
+			var pivot workbook.Pivot
+			if json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" {
+				revision := pivot.Revision
+				if err := s.workbooks.DeletePivot(ctx, pivot.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}
