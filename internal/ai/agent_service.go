@@ -587,6 +587,12 @@ func suggestedFollowUps(action Action) []string {
 			return []string{"이 차트를 선 차트로 바꿔줘", "차트 제목과 축 이름을 더 명확하게 바꿔줘", "현재 차트를 기준으로 핵심 추세를 설명해줘"}
 		case "create_report_sheet":
 			return []string{"방금 만든 보고서 구성을 요약해줘", "보고서 차트를 선 차트로 바꿔줘", "같은 형식으로 더 간결한 보고서를 다시 계획해줘"}
+		case "create_pivot":
+			return []string{"이 피벗을 차트로도 보여줘", "합계 대신 평균으로 바꿔서 다시 계획해줘", "피벗 결과에서 눈에 띄는 점을 설명해줘"}
+		case "create_conditional_format":
+			return []string{"같은 규칙을 다른 열에도 적용해줘", "색을 더 눈에 띄게 바꿔줘", "이 규칙이 어떤 셀에 걸리는지 설명해줘"}
+		case "create_data_validation":
+			return []string{"고를 수 있는 값을 더 추가해줘", "빈 칸도 허용할지 바꿔줘", "이 규칙에 어긋나는 값이 이미 있는지 찾아줘"}
 		}
 	}
 	switch action.Mode {
