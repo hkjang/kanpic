@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { Building2, ChevronRight, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users } from 'lucide-react'
+import { Building2, ChevronRight, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users, Grid3X3 } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
+import { QuickSwitcher, type QuickItem } from '../components/QuickSwitcher'
 import './HomePage.css'
 
 /** 한 번에 받아 오는 워크북 수. 화면을 채우고도 남을 만큼이면 된다. */
@@ -118,6 +119,45 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   // 걸러 내는 일은 서버가 한다. 화면은 받은 페이지를 그대로 보여 준다.
   const visibleWorkbooks=workbooks.data?.items??[]
 
+  /**
+   * 빠른 이동은 편집기에만 있었다. 목록 화면에서 Ctrl/⌘+K 를 누르면 아무
+   * 일도 일어나지 않아, 단축키가 고장 난 것처럼 보였다.
+   *
+   * 여기서 찾을 것은 워크북과 이 화면에서 할 수 있는 일이다. 시트나 셀
+   * 주소는 워크북을 연 뒤에야 뜻이 생기므로 넣지 않는다.
+   */
+  const [quickOpen,setQuickOpen]=useState(false)
+  const [quickQuery,setQuickQuery]=useState('')
+  const searchResults=useQuery({
+    queryKey:['workbook-quick-search',quickQuery],
+    queryFn:()=>api<{items:Workbook[]}>(`/api/v1/workbooks?limit=20&q=${encodeURIComponent(quickQuery)}`),
+    enabled:quickOpen&&quickQuery.trim().length>=2,
+  })
+  useEffect(()=>{
+    const onKeyDown=(event:KeyboardEvent)=>{
+      if(!(event.metaKey||event.ctrlKey)||event.key.toLowerCase()!=='k')return
+      event.preventDefault()
+      setQuickOpen(true)
+    }
+    window.addEventListener('keydown',onKeyDown)
+    return()=>window.removeEventListener('keydown',onKeyDown)
+  },[])
+  const quickItems:QuickItem[]=[
+    ...visibleWorkbooks.map(workbook=>({
+      id:`workbook:${workbook.id}`,group:'워크북',label:workbook.title,
+      hint:workbook.deleted_at?'휴지통':undefined,icon:<Grid2X2/>,keywords:'workbook 워크북 열기',
+      run:()=>{window.location.href=`/workbooks/${workbook.id}`},
+    })),
+    {id:'home:new',group:'명령',label:'새 워크북',icon:<Plus/>,keywords:'new create 새로 만들기',run:()=>create.mutate(undefined)},
+    {id:'home:import',group:'명령',label:'파일 가져오기',icon:<FileUp/>,keywords:'import upload xlsx csv 가져오기 업로드',run:()=>inputRef.current?.click()},
+    {id:'home:gallery',group:'명령',label:'템플릿 갤러리',icon:<Grid3X3/>,keywords:'template gallery 템플릿 갤러리',run:()=>setGalleryOpen(true)},
+    {id:'home:recent',group:'목록',label:'최근 워크북',icon:<Clock3/>,keywords:'recent 최근',run:()=>setFilter('recent')},
+    {id:'home:owned',group:'목록',label:'내 소유',icon:<Lock/>,keywords:'owned mine 내 소유',run:()=>setFilter('owned')},
+    {id:'home:shared',group:'목록',label:'나와 공유됨',icon:<Users/>,keywords:'shared 공유',run:()=>setFilter('shared')},
+    {id:'home:favorite',group:'목록',label:'즐겨찾기',icon:<Star/>,keywords:'favorite star 즐겨찾기',run:()=>setFilter('favorite')},
+    {id:'home:trash',group:'목록',label:'휴지통',icon:<Trash/>,keywords:'trash deleted 휴지통 삭제',run:()=>setFilter('trash')},
+  ]
+
   return <div className="page-shell"><AppHeader build={build} session={session}/><main className="home-content">
     <section className="home-title"><div><span className="eyebrow">WORKSPACE</span><h1>좋은 아침이에요.</h1><p>오늘도 데이터에서 더 나은 답을 만들어 보세요.</p></div><div className="home-title-actions"><input ref={inputRef} type="file" hidden accept=".csv,.tsv,.xlsx" onChange={event=>chooseImport(event.target.files?.[0])}/><button className="secondary" onClick={()=>inputRef.current?.click()}><FileUp size={18}/> 파일 가져오기</button><button className="primary" onClick={()=>create.mutate(undefined)}><Plus size={18}/> 새 워크북</button></div></section>
     <section className="quick-start"><div className="section-heading"><h2>빠른 시작</h2><button className="link-button" onClick={()=>setGalleryOpen(true)}>템플릿 갤러리{templates.length>0?` (${templates.length})`:''} <ChevronRight size={14}/></button></div><div className="template-row">
@@ -152,6 +192,17 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
     </section>
     {renameTarget&&<RenameWorkbookDialog title={renameTitle} pending={update.isPending} onTitle={setRenameTitle} onClose={()=>setRenameTarget(undefined)} onSave={()=>void rename()}/>}
     {preview&&importFile&&<div className="modal-backdrop"><div className="modal import-modal"><div className="import-preview-icon"><UploadCloud/></div><h2>{importFile.name}</h2><p>{preview.format.toUpperCase()} · 비어 있지 않은 셀 {preview.total_cells.toLocaleString()}개</p><div className="import-sheet-list">{preview.sheets.map(sheet=><div key={sheet.name}><Grid2X2/><div><strong>{sheet.name}</strong><small>{sheet.rows.toLocaleString()}행 × {sheet.columns.toLocaleString()}열 · {sheet.non_empty_cells.toLocaleString()}개 셀</small></div></div>)}</div>{preview.warnings.length>0&&<div className="import-warnings">{preview.warnings.map(warning=><span key={warning}>{warning}</span>)}</div>}<div className="modal-actions"><button className="secondary" onClick={()=>{setPreview(undefined);setImportFile(undefined)}}>취소</button><button className="primary" disabled={importing} onClick={executeImport}>{importing?'가져오는 중…':'워크북으로 가져오기'}</button></div></div></div>}
+    {quickOpen&&<QuickSwitcher items={quickItems} placeholder="워크북 또는 명령 검색" onClose={()=>setQuickOpen(false)} onQuery={setQuickQuery} dynamicItems={typed=>{
+      // 받아 온 페이지에 없는 워크북은 이름으로 검색해 닿게 한다. 목록에
+      // 이미 보이는 것과 겹치지 않도록 같은 제목은 내보내지 않는다.
+      const needle=typed.trim()
+      if(needle.length<2)return []
+      const shown=new Set(visibleWorkbooks.map(workbook=>workbook.title))
+      return (searchResults.data?.items??[])
+        .filter(workbook=>!shown.has(workbook.title))
+        .map(workbook=>({id:`found:${workbook.id}`,group:'워크북 검색',label:workbook.title,
+          hint:'목록에 없는 워크북',icon:<Grid2X2/>,run:()=>{window.location.href=`/workbooks/${workbook.id}`}}))
+    }}/>}
     {galleryOpen&&<TemplateGallery onClose={()=>setGalleryOpen(false)} onCreate={useTemplate} pending={create.isPending?create.variables?.templateId:undefined}/>}
     {cardMenu&&<ContextMenu x={cardMenu.x} y={cardMenu.y} items={cardMenu.items} label={cardMenu.label} onClose={()=>setCardMenu(undefined)}/>}
     {shareTarget&&<ShareDialog workbook={shareTarget} onClose={()=>setShareTarget(undefined)} onChanged={()=>{void client.invalidateQueries({queryKey:['workbooks']})}}/>}

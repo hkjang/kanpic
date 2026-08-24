@@ -53,8 +53,11 @@ export function filterQuickItems(items:QuickItem[],query:string,limit=40){
  * A keyboard-first jump list: workbooks, sheets, cells and commands in one
  * dialog opened with Ctrl/⌘+K.
  */
-export function QuickSwitcher({items,dynamicItems,placeholder='워크북, 시트, 셀 주소 또는 명령 검색',onClose}:{items:QuickItem[];dynamicItems?:(query:string)=>QuickItem[];placeholder?:string;onClose:()=>void}){
+export function QuickSwitcher({items,dynamicItems,onQuery,placeholder='워크북, 시트, 셀 주소 또는 명령 검색',onClose}:{items:QuickItem[];dynamicItems?:(query:string)=>QuickItem[];onQuery?:(query:string)=>void;placeholder?:string;onClose:()=>void}){
   const [query,setQuery]=useState(''),[active,setActive]=useState(0)
+  // 적은 말을 밖으로 알린다. dynamicItems 는 그리는 중에 불리므로 그 안에서
+  // 상태를 바꿀 수 없다. 목록에 없는 것을 서버에 물어보려면 이 길이 필요하다.
+  useEffect(()=>{onQuery?.(query)},[query,onQuery])
   const input=useRef<HTMLInputElement>(null),list=useRef<HTMLDivElement>(null)
   const dialog=useDialog<HTMLElement>(onClose)
   // Some entries depend on what was typed, such as jumping to a cell address.

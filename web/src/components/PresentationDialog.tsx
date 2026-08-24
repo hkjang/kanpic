@@ -1,5 +1,5 @@
 import { Download,ExternalLink,Presentation } from 'lucide-react'
-import { useEffect,useState } from 'react'
+import { useEffect,useState, useMemo} from 'react'
 import { address } from '../lib/api'
 import type { MergeRange } from '../lib/merge'
 import { useDialog } from '../lib/useDialog'
@@ -14,6 +14,9 @@ export type PresentationResult = { id:string; title:string; status:string; slide
 const roleLabels:Record<string,string>={dimension:'항목',measure:'값',change:'증감',attainment:'달성률',share:'비중'}
 const shapeLabels:Record<string,string>={categories:'항목별 비교',series:'시간에 따른 추이',figures:'지표 몇 개',table:'표',empty:'내용 없음'}
 const componentLabels:Record<string,string>={kpi:'지표 타일',bars:'막대 차트',line:'선 차트',share:'비중',comparison:'비교',table:'표'}
+
+/** 마지막으로 고른 디자인을 기억해 두는 자리. 브라우저마다 따로 남는다. */
+const LAST_TEMPLATE_KEY='kanpic.presentation.template'
 
 export function PresentationDialog({range,onClose,onPreview,onCreate,onLoadTemplates,onDownload}:{
   range:MergeRange
@@ -35,6 +38,40 @@ export function PresentationDialog({range,onClose,onPreview,onCreate,onLoadTempl
   const dialog=useDialog<HTMLElement>(onClose)
 
   useEffect(()=>{onLoadTemplates().then(setTemplates).catch(()=>setTemplates([]))},[onLoadTemplates])
+  /**
+   * 쉰 가지가 한 줄로 늘어서면 고르기가 아니라 훑기가 된다. 이름이
+   * "Ptium <색> <배치>" 로 되어 있으므로 색으로 묶어 준다.
+   */
+  const templateGroups=useMemo(()=>{
+    const families=new Map<string,PresentationTemplate[]>()
+    for(const template of templates){
+      const parts=template.name.split(/\s+/)
+      const family=parts.length>2?parts[1]:'기타'
+      const bucket=families.get(family)
+      if(bucket)bucket.push(template)
+      else families.set(family,[template])
+    }
+    return [...families.entries()]
+  },[templates])
+  /**
+   * 고르는 순간 기억한다. 만들 때만 기억하면, 골라 두고 닫았다가 다시 연
+   * 사람에게는 아무것도 남지 않는다.
+   */
+  const rememberTemplate=(id:string)=>{
+    setTemplateId(id)
+    try{window.localStorage.setItem(LAST_TEMPLATE_KEY,id)}catch{/* 기억하지 못해도 고르는 데는 지장이 없다. */}
+  }
+  /**
+   * 고른 디자인을 기억한다. 기억하지 않으면 열 때마다 "기본 디자인" 으로
+   * 돌아가고, 그러면 아무것도 보내지 않아 만드는 덱이 늘 같은 모습이 된다.
+   */
+  useEffect(()=>{
+    if(templateId||templates.length===0)return
+    try{
+      const remembered=window.localStorage.getItem(LAST_TEMPLATE_KEY)
+      if(remembered&&templates.some(template=>template.id===remembered))setTemplateId(remembered)
+    }catch{/* 저장소를 못 읽어도 고르는 데는 지장이 없다. */}
+  },[templates,templateId])
 
   // 미리보기는 서버가 만든다. 여기서 따로 그리면 언젠가 만들어지는 것과 다른
   // 것을 보여 주게 된다.
@@ -62,9 +99,11 @@ export function PresentationDialog({range,onClose,onPreview,onCreate,onLoadTempl
     <div className="presentation-body">
       <section className="presentation-form">
         <label>제목<input aria-label="프레젠테이션 제목" maxLength={200} value={title} placeholder={preview?.deck.title??'범위에서 자동으로 정합니다'} onChange={event=>setTitle(event.target.value)}/></label>
-        <label>디자인<select aria-label="프레젠테이션 템플릿" value={templateId} onChange={event=>setTemplateId(event.target.value)}>
+        <label>디자인<select aria-label="프레젠테이션 템플릿" value={templateId} onChange={event=>rememberTemplate(event.target.value)}>
           <option value="">기본 디자인</option>
-          {templates.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}
+          {templateGroups.map(([family,items])=><optgroup key={family} label={family}>
+            {items.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}
+          </optgroup>)}
         </select></label>
         <label className="presentation-check"><input aria-label="상세 표 넣기" type="checkbox" checked={includeTable} onChange={event=>setIncludeTable(event.target.checked)}/> 원본 표를 슬라이드로 넣기</label>
         {preview&&<div className="presentation-reading">
