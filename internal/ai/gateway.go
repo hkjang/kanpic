@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -1258,13 +1259,17 @@ func rawJSONArrayHasItems(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &items) == nil && len(items) > 0
 }
 
+// workbookTools 는 에이전트가 쓸 수 있는 도구 전부다. 셀 수 있게 적어 두는
+// 이유는, 도구 하나를 더할 때 손봐야 하는 자리가 여럿이기 때문이다 —
+// 계획 검증, 실행, 되돌리기, 검사, 기억, 계획 목록 설명, scope. 빠뜨려도
+// 조용한 자리가 있어서 목록을 훑는 검사가 필요하다.
+var workbookTools = []string{
+	"create_chart", "update_chart", "create_report_sheet", "create_conditional_format",
+	"create_pivot", "create_data_validation", "create_filter_view", "sort_range",
+}
+
 func supportedGatewayTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "create_chart", "update_chart", "create_report_sheet", "create_conditional_format", "create_pivot", "create_data_validation", "create_filter_view", "sort_range":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(workbookTools, strings.TrimSpace(name))
 }
 
 func mustMarshalJSON(value any) []byte {

@@ -406,3 +406,61 @@ func TestAIInputNormalizationAndUnicodeTruncation(t *testing.T) {
 		t.Fatalf("unicode truncation=%q", actual)
 	}
 }
+
+// 도구 하나를 더할 때 손봐야 하는 자리가 여럿인데, 빠뜨려도 조용한 자리가
+// 있다. 계획 목록은 예전에 모르는 도구를 모두 "차트 생성" 이라고 적었고,
+// 기억 투영은 빠뜨리면 아무 말 없이 비어 있는다. 목록을 훑어서 잡는다.
+func TestEverySupportedToolIsWiredEverywhereItMustBe(t *testing.T) {
+	t.Parallel()
+	// 실행이 만드는 결과 모양은 도구마다 다르므로, 여기서는 이름만 있으면
+	// 되는 자리 — 설명, scope, 기억 — 를 본다.
+	samples := map[string]json.RawMessage{
+		"create_chart":              json.RawMessage(`{"type":"bar","source_range":"A1:B2"}`),
+		"update_chart":              json.RawMessage(`{"chart_id":"chart-1","type":"line"}`),
+		"create_report_sheet":       json.RawMessage(`{"name":"요약","cells":[{"row":1,"column":1,"value":"비밀"}]}`),
+		"create_conditional_format": json.RawMessage(`{"range":"A1:B2","rule_type":"rank"}`),
+		"create_pivot":              json.RawMessage(`{"source_range":"A1:B2","values":[{"column":2,"aggregation":"sum"}]}`),
+		"create_data_validation":    json.RawMessage(`{"range":"A1:A2","rule_type":"list","options":[{"value":"비밀"}]}`),
+		"create_filter_view":        json.RawMessage(`{"range":"A1:B2","criteria":[{"column":2,"operator":"is_blank"}]}`),
+		"sort_range":                json.RawMessage(`{"range":"A1:B2","keys":[{"column":2,"direction":"asc"}]}`),
+	}
+	descriptions := map[string]bool{}
+	for _, name := range workbookTools {
+		arguments, sampled := samples[name]
+		if !sampled {
+			t.Fatalf("%s 의 예시 인수가 없다 — 도구를 더했으면 이 검사도 늘려야 한다", name)
+		}
+		// 계획 목록: 도구마다 다른 말을 하고, 아무 말도 지어내지 않는다.
+		description := planStepDescription(name)
+		if description == "" || descriptions[description] {
+			t.Errorf("%s 의 계획 설명이 없거나 다른 도구와 같다: %q", name, description)
+		}
+		descriptions[description] = true
+		if !strings.Contains(name, "chart") && strings.Contains(description, "차트") && name != "create_report_sheet" {
+			t.Errorf("%s 가 차트를 만든다고 적혀 있다: %q", name, description)
+		}
+		// scope: 계획을 승인할 때 REST·MCP 와 같은 권한을 요구해야 한다.
+		if len(RequiredApprovalScopes(Action{Mode: ModeAgent, ToolCalls: []ToolCall{{Name: name, Arguments: arguments}}})) == 0 {
+			t.Errorf("%s 가 아무 scope 도 요구하지 않는다", name)
+		}
+		// 기억: 후속 요청이 "방금 만든 것" 을 가리키려면 무언가는 남아야 한다.
+		projected := projectMemoryTool(ToolCall{Name: name, Status: "completed", Arguments: arguments})
+		if len(projected.Arguments) == 0 {
+			t.Errorf("%s 가 작업 기억에 아무것도 남기지 않는다", name)
+		}
+		// 그러면서 셀 값은 남기지 않는다.
+		if strings.Contains(string(projected.Arguments), "비밀") {
+			t.Errorf("%s 의 작업 기억에 셀 값이 새어 나갔다: %s", name, projected.Arguments)
+		}
+	}
+	// 목록에 없는 것은 그대로 막힌다.
+	for _, name := range []string{"delete_sheet", "sort_range ", ""} {
+		if name != "sort_range " && supportedGatewayTool(name) {
+			t.Errorf("허용 목록에 없는 %q 가 통과했다", name)
+		}
+	}
+	// 공백은 다듬어서 본다.
+	if !supportedGatewayTool(" sort_range ") {
+		t.Error("공백이 붙은 이름이 막혔다")
+	}
+}
