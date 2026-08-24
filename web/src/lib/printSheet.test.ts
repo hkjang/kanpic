@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { columnPages, printableDocument, usedRegion , cellCSSForTest } from './printSheet'
+import { columnPages, printableDocument, printableWidth, usedRegion , cellCSSForTest } from './printSheet'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown,Record<string,unknown>?]>){
@@ -291,5 +291,53 @@ describe('the print area limits what goes on paper',()=>{
   it('falls back to the used region when the area cannot be read',()=>{
     const broken=printableDocument(cells,{title:'t',sheetName:'s',gridlines:false,headers:true,printArea:'말이 안 되는 값'})
     expect(broken).toContain('영역 밖')
+  })
+})
+
+describe('종이 방향과 여백', () => {
+  // 넓은 표를 세로로만 찍으면 열이 자꾸 다음 장으로 넘어간다. 가로로 놓으면
+  // 한 장에 훨씬 많이 들어가야 한다.
+  it('가로로 놓으면 한 장에 더 많은 열이 들어간다', () => {
+    const portrait=printableWidth('portrait','normal')
+    const landscape=printableWidth('landscape','normal')
+    expect(landscape).toBeGreaterThan(portrait)
+    expect(columnPages(1,20,()=>100,landscape).length).toBeLessThan(columnPages(1,20,()=>100,portrait).length)
+  })
+
+  it('여백을 좁히면 한 장에 더 들어간다', () => {
+    expect(printableWidth('portrait','narrow')).toBeGreaterThan(printableWidth('portrait','normal'))
+    expect(printableWidth('portrait','wide')).toBeLessThan(printableWidth('portrait','normal'))
+  })
+
+  it('종이 크기와 여백을 실제로 적어 낸다', () => {
+    const cells=new Map<string,Cell>([['1:1',{sheet_id:'s',row:1,column:1,value:'값',updated_at:''}]])
+    const wide=printableDocument(cells,{title:'가로',sheetName:'Sheet1',gridlines:true,headers:true,orientation:'landscape',margin:'narrow'})
+    expect(wide).toContain('size:A4 landscape')
+    expect(wide).toContain('margin:8mm')
+    const tall=printableDocument(cells,{title:'세로',sheetName:'Sheet1',gridlines:true,headers:true})
+    expect(tall).toContain('size:A4 portrait')
+    expect(tall).toContain('margin:14mm')
+  })
+
+  // 한 장 너비에 맞추라고 하면 열을 나누는 대신 표를 줄인다. 열이 서른 개인
+  // 표를 장마다 나누어 보는 것보다 한눈에 보는 편이 나을 때가 있다.
+  it('너비에 맞추면 표를 하나로 두고 줄인다', () => {
+    const cells=new Map<string,Cell>()
+    for(let column=1;column<=20;column+=1)cells.set(`1:${column}`,{sheet_id:'s',row:1,column,value:column,updated_at:''})
+    cells.set('2:1',{sheet_id:'s',row:2,column:1,value:'두 번째 줄',updated_at:''})
+    const split=printableDocument(cells,{title:'나누기',sheetName:'Sheet1',gridlines:true,headers:true,columnWidth:()=>120})
+    const fitted=printableDocument(cells,{title:'맞추기',sheetName:'Sheet1',gridlines:true,headers:true,columnWidth:()=>120,fit:'width'})
+    // 나누면 표가 여럿, 맞추면 하나다.
+    expect(split.match(/<table>/g)?.length ?? 0).toBeGreaterThan(1)
+    expect(fitted.match(/<table>/g)?.length ?? 0).toBe(1)
+    // 줄이는 것은 zoom 으로 한다. transform 은 장 나눔을 망가뜨린다.
+    expect(fitted).toMatch(/zoom:0\.\d+/)
+    expect(split).not.toContain('zoom:')
+  })
+
+  it('표가 종이보다 좁으면 줄이지 않는다', () => {
+    const cells=new Map<string,Cell>([['1:1',{sheet_id:'s',row:1,column:1,value:'값',updated_at:''}],['2:1',{sheet_id:'s',row:2,column:1,value:'값',updated_at:''}]])
+    const fitted=printableDocument(cells,{title:'작은 표',sheetName:'Sheet1',gridlines:true,headers:true,columnWidth:()=>100,fit:'width'})
+    expect(fitted).not.toContain('zoom:')
   })
 })

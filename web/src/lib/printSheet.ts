@@ -34,6 +34,41 @@ export type PrintOptions={
    * 말해 둔 것이므로, 종이에서도 장마다 다시 찍는다. 엑셀의 인쇄 제목이다.
    */
   frozenRows?:number
+  /**
+   * 종이를 세로로 쓸지 가로로 쓸지. 열이 많은 표는 가로로 놓으면 한 장에
+   * 훨씬 많이 들어간다.
+   */
+  orientation?:PrintOrientation
+  /**
+   * 여백. 좁게 잡으면 한 장에 더 들어가지만 프린터가 잘라 먹을 수 있다.
+   */
+  margin?:PrintMargin
+  /**
+   * 'width' 로 하면 열을 다음 장으로 넘기는 대신 표 전체를 줄여 한 장
+   * 너비에 맞춘다. 열이 서른 개인 표를 장마다 나누어 보는 것보다 한눈에
+   * 보는 편이 나을 때가 있다.
+   */
+  fit?:PrintFit
+}
+
+export type PrintOrientation='portrait'|'landscape'
+export type PrintMargin='narrow'|'normal'|'wide'
+export type PrintFit='none'|'width'
+
+/** 여백의 실제 크기(mm). 좌우 합쳐 이만큼이 종이에서 빠진다. */
+export const PRINT_MARGINS:Record<PrintMargin,number>={narrow:8,normal:14,wide:22}
+
+/** A4 의 짧은 쪽과 긴 쪽(mm). 브라우저가 실제로 어떤 용지를 쓸지는 알 수
+ *  없으므로 가장 흔한 A4 를 기준으로 삼는다. */
+const A4_SHORT=210
+const A4_LONG=297
+/** 96dpi 에서 1mm 는 약 3.7795px 이다. */
+const PX_PER_MM=3.7795
+
+/** 한 장에 들어가는 가로 폭(px). 방향과 여백에 따라 달라진다. */
+export function printableWidth(orientation:PrintOrientation='portrait',margin:PrintMargin='normal'){
+  const paper=orientation==='landscape'?A4_LONG:A4_SHORT
+  return Math.floor((paper-PRINT_MARGINS[margin]*2)*PX_PER_MM)
 }
 
 /**
@@ -56,7 +91,7 @@ const DEFAULT_PRINT_COLUMN_WIDTH=108
  * 종이 한 장에 들어갈 만큼씩 열을 끊는다. 예전에는 표를 종이 폭에 맞춰
  * 통째로 눌러 담아, 열이 서른 개면 한 열이 몇 밀리미터로 찌그러졌다.
  */
-export function columnPages(startColumn:number,endColumn:number,widthOf:(column:number)=>number){
+export function columnPages(startColumn:number,endColumn:number,widthOf:(column:number)=>number,pageWidth:number=PRINTABLE_WIDTH){
   const pages:Array<{start:number;end:number;widths:number[]}>=[]
   let current:{start:number;end:number;widths:number[]}|undefined
   let used=0
@@ -64,7 +99,7 @@ export function columnPages(startColumn:number,endColumn:number,widthOf:(column:
     const width=Math.max(1,Math.round(widthOf(column)))
     // 한 열이 종이보다 넓어도 혼자서는 한 장을 차지해야 한다. 그렇지 않으면
     // 어느 장에도 들어가지 못한다.
-    if(current&&used+width>PRINTABLE_WIDTH-ROW_HEAD_WIDTH){current=undefined;used=0}
+    if(current&&used+width>pageWidth-ROW_HEAD_WIDTH){current=undefined;used=0}
     if(!current){current={start:column,end:column,widths:[]};pages.push(current)}
     current.end=column
     current.widths.push(width)
@@ -181,16 +216,27 @@ function printIcon(icon:{style:string;index:number;count:number}){
  * directly, so printing goes through a document the browser can paginate.
  */
 export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
+  const orientation=options.orientation??'portrait'
+  const margin=options.margin??'normal'
+  const fit=options.fit??'none'
+  const pageWidth=printableWidth(orientation,margin)
   // 인쇄 영역을 정해 두었으면 그 범위만 낸다. 정해 두지 않았으면 내용이
   // 있는 곳 전체를 낸다 — 사람이 따로 말하기 전까지는 그쪽이 기대하는 바다.
   const region=options.region??printAreaRegion(options.printArea)??usedRegion(cells)
   const widthOf=options.columnWidth??(()=>DEFAULT_PRINT_COLUMN_WIDTH)
   const tables:string[]=[]
   let printedRows=0
+  // 가장 넓은 표가 종이보다 넓으면 그만큼 줄여야 한다.
+  let widestTable=0
   if(region){
     // 종이 폭을 넘는 열은 다음 장으로 넘긴다. 장마다 열 머리글과 행 번호를
     // 다시 찍어야 어느 칸이 무슨 열의 몇 행인지 알 수 있다.
-    for(const page of columnPages(region.startColumn,region.endColumn,widthOf)){
+    // 너비에 맞추라고 하면 열을 다음 장으로 넘기지 않는다. 대신 아래에서
+    // 표 전체를 줄여 한 장 너비에 담는다.
+    const pages=fit==='width'
+      ? [{start:region.startColumn,end:region.endColumn,widths:Array.from({length:region.endColumn-region.startColumn+1},(_,index)=>Math.max(1,Math.round(widthOf(region.startColumn+index))))}]
+      : columnPages(region.startColumn,region.endColumn,widthOf,pageWidth)
+    for(const page of pages){
       const columnGroup=[options.headers?`<col style="width:${ROW_HEAD_WIDTH}px">`:'']
         .concat(page.widths.map(width=>`<col style="width:${width}px">`)).join('')
       const headLines:string[]=[]
@@ -214,14 +260,20 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
       }
       printedRows=rows.length+headLines.length
       if(rows.length===0)continue
+      widestTable=Math.max(widestTable,page.widths.reduce((total,width)=>total+width,0)+(options.headers?ROW_HEAD_WIDTH:0))
       tables.push(`<table><colgroup>${columnGroup}</colgroup>${head}<tbody>${rows.join('')}</tbody></table>`)
     }
   }
+  // 표가 종이보다 넓으면 줄여서 담는다. transform 대신 zoom 을 쓰는 이유는
+  // zoom 은 줄인 크기로 다시 흘려 주어 장 나눔이 그대로 살기 때문이다.
+  const zoomRule=fit==='width'&&widestTable>pageWidth
+    ? `;zoom:${(pageWidth/widestTable).toFixed(4)}`
+    : ''
   const empty=printedRows===0?'<p class="empty">인쇄할 데이터가 없습니다.</p>':''
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHTML(options.title)}</title><style>
     td .mark{margin-right:4px}
-  @page{margin:14mm}
-  body{font:12px Inter,Pretendard,'Malgun Gothic',sans-serif;color:#1c2b33;margin:0}
+  @page{size:A4 ${orientation};margin:${PRINT_MARGINS[margin]}mm}
+  body{font:12px Inter,Pretendard,'Malgun Gothic',sans-serif;color:#1c2b33;margin:0${zoomRule}}
   header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
   h1{font-size:15px;margin:0}
   header span{font-size:11px;color:#61727c}
