@@ -523,6 +523,15 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
 			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
 		}
+	case "create_data_validation":
+		var arguments createDataValidationArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{"range": arguments.Range, "rule_type": arguments.RuleType})
+		}
+		var rule workbook.DataValidation
+		if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+			item.Result = marshalMemory(map[string]any{"id": rule.ID, "range": rule.Range, "rule_type": rule.RuleType})
+		}
 	case "create_pivot":
 		var arguments createPivotArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -769,6 +778,34 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 			}
 			tool.Result, _ = json.Marshal(chart)
 			tool.Status = "completed"
+		case "create_data_validation":
+			var arguments createDataValidationArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored create_data_validation arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			options := make([]workbook.ValidationOption, 0, len(arguments.Options))
+			for _, item := range arguments.Options {
+				options = append(options, workbook.ValidationOption{Value: item.Value, Label: item.Label, Color: item.Color})
+			}
+			rule, err := s.workbooks.CreateDataValidation(ctx, sheetID, actorID, workbook.CreateDataValidationInput{
+				IdempotencyKey: tool.IdempotencyKey, Range: arguments.Range, RuleType: arguments.RuleType,
+				Operator: arguments.Operator, Options: options, SourceRange: arguments.SourceRange,
+				Value: arguments.Value, Value2: arguments.Value2, Formula: arguments.Formula,
+				AllowBlank: arguments.AllowBlank, RejectInput: arguments.RejectInput,
+				ShowDropdown: arguments.ShowDropdown, HelpText: arguments.HelpText,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(rule)
+			tool.Status = "completed"
 		case "create_pivot":
 			var arguments createPivotArguments
 			if json.Unmarshal(tool.Arguments, &arguments) != nil {
@@ -973,6 +1010,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var pivot workbook.Pivot
 			passed := json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" && len(pivot.Values) > 0
 			checks = append(checks, ValidationCheck{Name: "pivot", Passed: passed, Message: "피벗 생성과 값 필드를 확인했습니다."})
+		case "create_data_validation":
+			var rule workbook.DataValidation
+			passed := json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" && rule.Range != ""
+			checks = append(checks, ValidationCheck{Name: "data_validation", Passed: passed, Message: "데이터 검증 규칙 생성을 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -1186,6 +1227,15 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
 				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "create_data_validation":
+			// 규칙이 남으면 셀은 제자리로 돌아왔는데 입력만 막힌다.
+			var rule workbook.DataValidation
+			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+				revision := rule.Revision
+				if err := s.workbooks.DeleteDataValidation(ctx, rule.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}

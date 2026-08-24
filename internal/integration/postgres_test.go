@@ -3679,3 +3679,91 @@ func TestPostgresWorkbookAgentCreatesAndRollsBackPivot(t *testing.T) {
 		t.Fatalf("rollback left pivots=%#v, %v", remaining, err)
 	}
 }
+
+// "상태 열은 진행/완료만 고르게 해줘" 는 서식으로는 못 한다. 색을 칠해 봐야
+// 잘못된 값은 그대로 들어간다. 규칙이 실제로 잘못된 입력을 막는지, 되돌리면
+// 규칙이 사라져 다시 넣을 수 있는지까지 본다.
+func TestPostgresWorkbookAgentCreatesAndRollsBackDataValidation(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-validation-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 입력 규칙", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "validation-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 2, Value: json.RawMessage(`"상태"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`"진행"`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-validation-test","context_length":16384}]}`))
+			return
+		}
+		plan := `{"summary":"상태 열 입력 제한","explanation":"상태 열에 진행/완료만 넣을 수 있게 합니다.","findings":[],"changes":[],"tool_calls":[{"name":"create_data_validation","arguments":{"range":"B2:B5","rule_type":"list","options":[{"value":"진행"},{"value":"완료"}],"reject_input":true}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 280, "completion_tokens": 90}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-validation-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "B1:B5", Message: "상태 열은 진행/완료만 고르게 해줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "validation-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || len(run.Action.ToolCalls) != 1 || run.Action.ToolCalls[0].Name != "create_data_validation" {
+		t.Fatalf("validation agent plan=%#v, %v", run, err)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "validation-agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed {
+		t.Fatalf("validation agent execution=%#v, %v", executed, err)
+	}
+	rules, err := repository.ListDataValidations(ctx, sheet.ID)
+	if err != nil || len(rules) != 1 || rules[0].Range != "B2:B5" || len(rules[0].Options) != 2 {
+		t.Fatalf("rules=%#v, %v", rules, err)
+	}
+	// 규칙이 저장만 되고 막지 못하면 아무 일도 하지 않은 것과 같다.
+	current, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: current.Version, IdempotencyKey: "validation-agent-reject", Cells: []workbook.CellInput{
+		{Row: 3, Column: 2, Value: json.RawMessage(`"보류"`)},
+	}}); !errors.Is(err, workbook.ErrValidation) {
+		t.Fatalf("규칙이 잘못된 값을 막지 못했다: %v", err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, run.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "validation-agent-rollback", ExpectedRevision: executed.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("validation rollback=%#v, %v", rolledBack, err)
+	}
+	remaining, err := repository.ListDataValidations(ctx, sheet.ID)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("rollback left rules=%#v, %v", remaining, err)
+	}
+	// 되돌렸으면 다시 넣을 수 있어야 한다. 규칙만 사라지고 막힘이 남으면
+	// 되돌렸다는 말과 화면이 어긋난다.
+	current, err = repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: current.Version, IdempotencyKey: "validation-agent-after-rollback", Cells: []workbook.CellInput{
+		{Row: 3, Column: 2, Value: json.RawMessage(`"보류"`)},
+	}}); err != nil {
+		t.Fatalf("되돌린 뒤에도 입력이 막힌다: %v", err)
+	}
+}

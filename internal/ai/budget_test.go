@@ -631,3 +631,81 @@ func TestPivotArgumentsStayInsideTheSource(t *testing.T) {
 		t.Error("값 없이 통과했다")
 	}
 }
+
+// "이 열은 목록에서만 고르게 해줘" 는 서식으로는 못 한다. 색을 칠해 봐야
+// 잘못된 값은 그대로 들어간다. 입력 규칙을 만들어야 애초에 막힌다.
+func TestGatewayAcceptsDataValidationTool(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "create_data_validation",
+						"arguments": `{"range":"B2:B20","rule_type":"list","options":[{"value":"진행"},{"value":"완료"}],"reject_input":true}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("B1:B20")
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "B1:B20", Request: "상태는 진행/완료만 고르게 해줘"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_data_validation" {
+		t.Fatalf("plan=%#v", plan.ToolCalls)
+	}
+	var arguments createDataValidationArguments
+	if err := json.Unmarshal(plan.ToolCalls[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	// 고를 값을 잃으면 규칙은 생기는데 목록이 비어 아무것도 못 넣는다.
+	if len(arguments.Options) != 2 || arguments.RejectInput == nil || !*arguments.RejectInput {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	if !supportedGatewayTool("create_data_validation") {
+		t.Error("도구가 허용 목록에 없다")
+	}
+}
+
+// 규칙마다 있어야 하는 것이 다르다. 빠진 채로 승인 화면에 오르면 사람은
+// 그럴듯한 계획을 승인하고 실행할 때가 되어서야 깨진다.
+func TestDataValidationNeedsWhatItsKindRequires(t *testing.T) {
+	t.Parallel()
+	selected := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "B1:B20"}
+	cases := []struct {
+		name     string
+		raw      string
+		accepted bool
+	}{
+		{"목록에 고를 값이 없다", `{"rule_type":"list"}`, false},
+		{"목록", `{"rule_type":"list","options":[{"value":"진행"}]}`, true},
+		{"범위 목록에 출처가 없다", `{"rule_type":"list_range"}`, false},
+		{"범위 목록의 출처는 고른 범위 밖이어도 된다", `{"rule_type":"list_range","source_range":"코드!A1:A9"}`, true},
+		{"숫자 조건에 견줄 값이 없다", `{"rule_type":"number","operator":"greater_than"}`, false},
+		{"숫자 조건", `{"rule_type":"number","operator":"greater_than","value":0}`, true},
+		{"수식 조건에 수식이 없다", `{"rule_type":"custom_formula","formula":"B1>0"}`, false},
+		{"수식 조건", `{"rule_type":"custom_formula","formula":"=B1>0"}`, true},
+		{"체크박스는 더 필요한 것이 없다", `{"rule_type":"checkbox"}`, true},
+		{"모르는 종류", `{"rule_type":"traffic_light"}`, false},
+		{"고른 범위 밖", `{"range":"D1:D50","rule_type":"checkbox"}`, false},
+	}
+	for _, item := range cases {
+		arguments, err := validateCreateDataValidation(selected, json.RawMessage(item.raw))
+		if item.accepted && err != nil {
+			t.Errorf("%s: %v", item.name, err)
+		}
+		if !item.accepted && err == nil {
+			t.Errorf("%s: 통과했다", item.name)
+		}
+		// 범위를 적지 않으면 고른 범위를 그대로 쓴다.
+		if item.accepted && err == nil && arguments.Range != "B1:B20" {
+			t.Errorf("%s: range=%q", item.name, arguments.Range)
+		}
+	}
+}

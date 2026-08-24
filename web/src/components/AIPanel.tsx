@@ -245,7 +245,7 @@ function statusLabel(status:AIAction['status'],mode:AIAction['mode']){if(status=
 function severityLabel(severity:'info'|'warning'|'critical'){return {info:'정보',warning:'주의',critical:'심각'}[severity]}
 function agentStateLabel(state:AgentRun['state']){return {THINKING:'생각 중',READING_WORKBOOK:'워크북 읽는 중',PLANNING:'계획 중',WAITING_APPROVAL:'승인 대기',EXECUTING:'실행 중',VALIDATING:'검증 중',COMPLETED:'완료',FAILED:'실패',CANCELLED:'취소됨'}[state]}
 function stepStatusLabel(status:string){return {completed:'완료',waiting_approval:'승인 대기',pending:'대기',executing:'진행',validating:'검증',failed:'실패',cancelled:'취소',planned:'계획됨'}[status]||status}
-function toolLabel(name:string){return {create_chart:'차트 만들기',update_chart:'차트 바꾸기',create_report_sheet:'보고서 시트 만들기',create_conditional_format:'조건부 서식 만들기',create_pivot:'피벗 요약 만들기'}[name]||name}
+function toolLabel(name:string){return {create_chart:'차트 만들기',update_chart:'차트 바꾸기',create_report_sheet:'보고서 시트 만들기',create_conditional_format:'조건부 서식 만들기',create_pivot:'피벗 요약 만들기',create_data_validation:'입력 규칙 만들기'}[name]||name}
 // 승인 화면에 도구 이름과 JSON 만 있었다. 무엇이 어디에 생기는지 한 줄로
 // 먼저 말해 주어야 사람이 승인할지 판단할 수 있다. JSON 은 그대로 남긴다 —
 // 한 줄로 줄이면서 빠뜨린 것을 확인할 곳이 있어야 한다.
@@ -257,10 +257,16 @@ function toolSummary(tool:AgentToolCall){
     const values=(argument.values||[]).map((item:any)=>`${field(item)} ${aggregationLabel(String(item?.aggregation||''))}`).join(', ')
     return `${argument.source_range||''}${rows?` · ${rows}별`:''}${values?` · ${values}`:''}`
   }
+  if(tool.name==='create_data_validation'){
+    const kind=validationLabel(String(argument.rule_type||''))
+    const detail=argument.rule_type==='list'?(argument.options||[]).map((item:any)=>String(item?.label??JSON.stringify(item?.value))).join(', '):argument.rule_type==='list_range'?String(argument.source_range||''):argument.rule_type==='custom_formula'?String(argument.formula||''):[argument.operator,argument.value,argument.value2].filter(v=>v!==undefined&&v!==null&&v!=='').join(' ')
+    return `${argument.range||''} · ${kind}${detail?` · ${detail}`:''}${argument.reject_input?' · 어긋나면 입력 거부':''}`
+  }
   if(tool.name==='create_conditional_format')return `${argument.range||''}${argument.rule_type?` · ${String(argument.rule_type)}`:''}`
   if(tool.name==='create_chart'||tool.name==='update_chart')return [argument.title,argument.source_range,argument.type].filter(Boolean).join(' · ')
   if(tool.name==='create_report_sheet')return `${argument.name||'새 시트'} · ${(argument.cells||[]).length}셀${argument.chart?' · 차트 포함':''}`
   return ''
 }
+function validationLabel(name:string){return {list:'목록에서 고르기',list_range:'범위의 값에서 고르기',checkbox:'체크박스',number:'숫자 조건',date:'날짜 조건',custom_formula:'수식 조건'}[name]||name}
 function aggregationLabel(name:string){return {sum:'합계',average:'평균',count:'숫자 개수',counta:'개수',countunique:'고유 개수',min:'최소',max:'최대',median:'중앙값',product:'곱',stdev:'표본 표준편차',stdevp:'표준편차',var:'표본 분산',varp:'분산'}[name]||name}
 function riskLabel(risk:AIAction['risk']){return {READ:'읽기',LOW:'낮은 위험',MEDIUM:'중간 위험',HIGH:'높은 위험',CRITICAL:'매우 높은 위험'}[risk]||risk}

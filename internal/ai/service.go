@@ -821,27 +821,102 @@ type pivotValueArg struct {
 
 // validateCreatePivot 은 모델이 적어 보낸 피벗이 말이 되는지 본다. 열 번호는
 // 고른 범위 안의 자리를 가리켜야 하고, 잴 것이 없으면 요약이 아니다.
+type createDataValidationArguments struct {
+	SheetID      string                     `json:"sheet_id,omitempty"`
+	Range        string                     `json:"range,omitempty"`
+	RuleType     string                     `json:"rule_type"`
+	Operator     string                     `json:"operator,omitempty"`
+	Options      []validationOptionArgument `json:"options,omitempty"`
+	SourceRange  string                     `json:"source_range,omitempty"`
+	Value        json.RawMessage            `json:"value,omitempty"`
+	Value2       json.RawMessage            `json:"value2,omitempty"`
+	Formula      string                     `json:"formula,omitempty"`
+	AllowBlank   *bool                      `json:"allow_blank,omitempty"`
+	RejectInput  *bool                      `json:"reject_input,omitempty"`
+	ShowDropdown *bool                      `json:"show_dropdown,omitempty"`
+	HelpText     string                     `json:"help_text,omitempty"`
+}
+
+type validationOptionArgument struct {
+	Value json.RawMessage `json:"value"`
+	Label string          `json:"label,omitempty"`
+	Color string          `json:"color,omitempty"`
+}
+
+// validateCreateDataValidation 은 검증 규칙이 말이 되는지 본다. 규칙이 붙는
+// 곳은 고른 범위 안이어야 한다. 목록의 출처는 보통 다른 시트의 표이므로
+// 거기까지 가두지는 않는다 — 다만 무엇을 고를 수 있는지는 있어야 한다.
+func validateCreateDataValidation(input PlanInput, raw json.RawMessage) (createDataValidationArguments, error) {
+	var arguments createDataValidationArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: create_data_validation arguments are not an object", ErrGateway)
+	}
+	arguments.RuleType = strings.ToLower(strings.TrimSpace(arguments.RuleType))
+	arguments.Operator = strings.ToLower(strings.TrimSpace(arguments.Operator))
+	target, err := rangeInsideSelection(input, arguments.Range, "create_data_validation")
+	if err != nil {
+		return arguments, err
+	}
+	arguments.Range = target
+	switch arguments.RuleType {
+	case "list":
+		if len(arguments.Options) == 0 {
+			return arguments, fmt.Errorf("%w: a list rule needs the values people may pick", ErrGateway)
+		}
+	case "list_range":
+		if strings.TrimSpace(arguments.SourceRange) == "" {
+			return arguments, fmt.Errorf("%w: a list_range rule needs the range holding the choices", ErrGateway)
+		}
+	case "number", "date":
+		// 무엇과 견줄지 없으면 통과하지 못할 값이 없다.
+		if len(arguments.Value) == 0 && strings.TrimSpace(arguments.Operator) != "is_valid" {
+			return arguments, fmt.Errorf("%w: a %s rule needs a value to compare against", ErrGateway, arguments.RuleType)
+		}
+	case "checkbox":
+	case "custom_formula":
+		if !strings.HasPrefix(strings.TrimSpace(arguments.Formula), "=") {
+			return arguments, fmt.Errorf("%w: a custom_formula rule needs a formula starting with =", ErrGateway)
+		}
+	default:
+		return arguments, fmt.Errorf("%w: create_data_validation rule_type must be list, list_range, checkbox, number, date, or custom_formula", ErrGateway)
+	}
+	return arguments, nil
+}
+
+// rangeInsideSelection 은 도구가 손댈 범위를 정한다. 적지 않으면 사람이 고른
+// 범위를 그대로 쓰고, 적었다면 그 안에 있어야 한다 — 고르지도 않은 곳을
+// 건드리는 것은 시킨 일이 아니고 승인 화면에서도 눈에 잘 띄지 않는다.
+func rangeInsideSelection(input PlanInput, requested, tool string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		requested = input.Range
+	}
+	target, err := cellrange.Parse(requested)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s range is not a range", ErrGateway, tool)
+	}
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return "", fmt.Errorf("%w: the selected range is not a range", ErrGateway)
+	}
+	if target.Start.Row < selected.Start.Row || target.Start.Column < selected.Start.Column ||
+		target.End.Row > selected.End.Row || target.End.Column > selected.End.Column {
+		return "", fmt.Errorf("%w: %s range must stay inside the selected range", ErrGateway, tool)
+	}
+	return requested, nil
+}
+
 func validateCreatePivot(input PlanInput, raw json.RawMessage) (createPivotArguments, error) {
 	var arguments createPivotArguments
 	if err := json.Unmarshal(raw, &arguments); err != nil {
 		return arguments, fmt.Errorf("%w: create_pivot arguments are not an object", ErrGateway)
 	}
-	arguments.SourceRange = strings.TrimSpace(arguments.SourceRange)
-	if arguments.SourceRange == "" {
-		arguments.SourceRange = input.Range
-	}
-	source, err := cellrange.Parse(arguments.SourceRange)
+	sourceRange, err := rangeInsideSelection(input, arguments.SourceRange, "create_pivot source_range")
 	if err != nil {
-		return arguments, fmt.Errorf("%w: create_pivot source_range is not a range", ErrGateway)
+		return arguments, err
 	}
-	selected, err := cellrange.Parse(input.Range)
-	if err != nil {
-		return arguments, fmt.Errorf("%w: the selected range is not a range", ErrGateway)
-	}
-	if source.Start.Row < selected.Start.Row || source.Start.Column < selected.Start.Column ||
-		source.End.Row > selected.End.Row || source.End.Column > selected.End.Column {
-		return arguments, fmt.Errorf("%w: create_pivot source_range must stay inside the selected range", ErrGateway)
-	}
+	arguments.SourceRange = sourceRange
+	source, _ := cellrange.Parse(sourceRange)
 	if len(arguments.Values) == 0 {
 		return arguments, fmt.Errorf("%w: create_pivot needs at least one value field", ErrGateway)
 	}
@@ -872,24 +947,13 @@ func validateCreateConditionalFormat(input PlanInput, raw json.RawMessage) (crea
 	if err := json.Unmarshal(raw, &arguments); err != nil {
 		return arguments, fmt.Errorf("%w: create_conditional_format arguments are not an object", ErrGateway)
 	}
-	arguments.Range = strings.TrimSpace(arguments.Range)
 	arguments.RuleType = strings.ToLower(strings.TrimSpace(arguments.RuleType))
 	arguments.Operator = strings.ToLower(strings.TrimSpace(arguments.Operator))
-	if arguments.Range == "" {
-		arguments.Range = input.Range
-	}
-	target, err := cellrange.Parse(arguments.Range)
+	target, err := rangeInsideSelection(input, arguments.Range, "create_conditional_format")
 	if err != nil {
-		return arguments, fmt.Errorf("%w: create_conditional_format range is not a range", ErrGateway)
+		return arguments, err
 	}
-	selected, err := cellrange.Parse(input.Range)
-	if err != nil {
-		return arguments, fmt.Errorf("%w: the selected range is not a range", ErrGateway)
-	}
-	if target.Start.Row < selected.Start.Row || target.Start.Column < selected.Start.Column ||
-		target.End.Row > selected.End.Row || target.End.Column > selected.End.Column {
-		return arguments, fmt.Errorf("%w: create_conditional_format range must stay inside the selected range", ErrGateway)
-	}
+	arguments.Range = target
 	if arguments.RuleType == "" {
 		return arguments, fmt.Errorf("%w: create_conditional_format needs a rule_type", ErrGateway)
 	}
@@ -1061,6 +1125,16 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_data_validation":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_data_validation requires agent mode", ErrGateway)
+			}
+			arguments, err := validateCreateDataValidation(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_pivot":
 			if input.Mode != ModeAgent {
 				return nil, fmt.Errorf("%w: create_pivot requires agent mode", ErrGateway)
