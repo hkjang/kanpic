@@ -505,3 +505,57 @@ func containsLabel(labels []string, want string) bool {
 	}
 	return false
 }
+
+// 선 그래프는 잴 것을 모두 그린다. 그런데 제목과 캡션은 첫 열 이름만 쓰고
+// 있었다. 매출·비용·이익 세 줄을 그려 놓고 "매출 추이" 라고 적으면, 읽는
+// 사람은 나머지 두 줄이 무엇인지 범례를 뒤져야 한다.
+//
+// 막대·비중·비교와 묶은 범위는 첫 열 하나만 그리므로 단수 제목이 맞다.
+// 고치면서 그쪽까지 복수로 만들면 이번에는 반대로 어긋난다.
+func TestChartTitleNamesWhatIsActuallyPlotted(t *testing.T) {
+	t.Parallel()
+	several := Analyze(SourceRef{}, rangeOf(t, "A1:D5"), sheetOf([][]any{
+		{"분기", "매출", "비용", "이익"},
+		{"1분기", 1200, 800, 400},
+		{"2분기", 1500, 900, 600},
+		{"3분기", 1100, 850, 250},
+		{"4분기", 1800, 1000, 800},
+	}))
+	if title := chartTitle(several); title != "매출·비용·이익 추이" {
+		t.Errorf("제목 = %q, 그린 것은 세 줄이다", title)
+	}
+	if chart := chartComponent(several); chart == nil || chart.Caption != "매출·비용·이익" {
+		t.Errorf("캡션 = %#v", chart)
+	}
+
+	// 하나만 그리면 단수 그대로다.
+	single := Analyze(SourceRef{}, rangeOf(t, "A1:B5"), sheetOf([][]any{
+		{"분기", "매출"}, {"1분기", 1200}, {"2분기", 1500}, {"3분기", 1100}, {"4분기", 1800},
+	}))
+	if title := chartTitle(single); title != "매출 추이" {
+		t.Errorf("제목 = %q, want 매출 추이", title)
+	}
+
+	// 막대는 첫 열만 그린다. 여러 열이 있어도 제목은 그 하나를 말해야 한다.
+	bars := Analyze(SourceRef{}, rangeOf(t, "A1:C4"), sheetOf([][]any{
+		{"지점", "매출", "비용"}, {"서울", 100, 60}, {"부산", 80, 50}, {"대구", 60, 40},
+	}))
+	if chartPlotsEveryMeasure(bars) {
+		t.Error("막대가 모든 열을 그리는 것으로 셈했다")
+	}
+	if title := chartTitle(bars); strings.Contains(title, "·") {
+		t.Errorf("제목 = %q, 막대는 첫 열만 그리므로 하나만 적어야 한다", title)
+	}
+
+	// 이름이 많으면 다 적는 것이 오히려 읽기 어렵다.
+	many := Analyze(SourceRef{}, rangeOf(t, "A1:F3"), sheetOf([][]any{
+		{"월", "가", "나", "다", "라", "마"},
+		{"1월", 1, 2, 3, 4, 5},
+		{"2월", 2, 3, 4, 5, 6},
+	}))
+	if chartPlotsEveryMeasure(many) {
+		if title := chartTitle(many); !strings.Contains(title, "외") {
+			t.Errorf("제목 = %q, 다섯 개를 다 적으면 읽기 어렵다", title)
+		}
+	}
+}

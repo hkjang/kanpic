@@ -181,6 +181,9 @@ func chartComponent(analysis Analysis) *Component {
 	names := analysis.Columns[analysis.Dimension].Values
 	primary := analysis.Columns[analysis.Measures[0]]
 	caption := strings.TrimSpace(primary.Name)
+	if chartPlotsEveryMeasure(analysis) {
+		caption = plottedMeasures(analysis, 3)
+	}
 	if caption == "" {
 		caption = strings.TrimSpace(analysis.Columns[analysis.Dimension].Name)
 	}
@@ -330,6 +333,37 @@ func groupLabel(analysis Analysis) string {
 	return "항목"
 }
 
+// plottedMeasures 는 그림에 실제로 들어간 열 이름을 적는다.
+//
+// 선 그래프는 잴 것을 모두 그리는데 제목과 캡션은 첫 열 이름만 쓰고 있었다.
+// 매출·비용·이익 세 줄을 그려 놓고 "매출 추이" 라고 적으면, 읽는 사람은
+// 나머지 두 줄이 무엇인지 범례를 뒤져야 한다. 글과 그림이 다른 말을 한다.
+//
+// 이름이 넷을 넘으면 다 적는 것이 오히려 읽기 어려우므로 줄여 적는다.
+func plottedMeasures(analysis Analysis, limit int) string {
+	names := make([]string, 0, len(analysis.Measures))
+	for _, index := range analysis.Measures {
+		if name := strings.TrimSpace(analysis.Columns[index].Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	switch {
+	case len(names) == 0:
+		return ""
+	case len(names) <= limit:
+		return strings.Join(names, "·")
+	default:
+		return names[0] + " 외 " + strconv.Itoa(len(names)-1) + "개"
+	}
+}
+
+// chartPlotsEveryMeasure reports whether the picture carries more than the
+// first column. Only the line chart does; bars, share and comparison draw the
+// first measure, and a grouped range draws its totals.
+func chartPlotsEveryMeasure(analysis Analysis) bool {
+	return analysis.Chart == ChartLine && !analysis.Grouped && len(analysis.Measures) > 1
+}
+
 func chartTitle(analysis Analysis) string {
 	if analysis.Chart == ChartSteps {
 		return "진행 순서"
@@ -341,6 +375,9 @@ func chartTitle(analysis Analysis) string {
 	measure := ""
 	if len(analysis.Measures) > 0 {
 		measure = strings.TrimSpace(analysis.Columns[analysis.Measures[0]].Name)
+	}
+	if chartPlotsEveryMeasure(analysis) {
+		measure = plottedMeasures(analysis, 3)
 	}
 	switch {
 	case analysis.Chart == ChartLine && measure != "":
