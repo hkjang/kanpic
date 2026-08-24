@@ -147,7 +147,9 @@ func (c *Client) applySource(ctx context.Context, target presentationRecord, dec
 	return presentation.Result{
 		ID: record.ID, Title: record.Title, Status: record.Status,
 		SlideCount: record.SlideCount, Template: record.TemplateName,
-		EditURL:  c.config.BaseURL + "/presentations/" + record.ID,
+		// 편집 화면은 /editor 까지 가야 열린다. 여기까지만 적어 보내면
+		// 보기 화면이 떠서, 사람이 고치려고 눌렀는데 고칠 수가 없다.
+		EditURL:  c.config.BaseURL + "/presentations/" + url.PathEscape(record.ID) + "/editor",
 		Warnings: warnings, Source: deck.Source,
 	}, nil
 }

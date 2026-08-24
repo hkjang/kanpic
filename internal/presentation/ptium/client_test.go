@@ -124,3 +124,32 @@ func TestCreateAppliesTheDeckAsSource(t *testing.T) {
 		t.Fatalf("the deck was not sent as source: %s", applied)
 	}
 }
+
+// 목록에서 "편집기에서 열기" 를 누르면 고칠 수 있는 화면이 떠야 한다.
+// /presentations/{id} 까지만 적어 보내면 보기 화면이 열려서, 고치려고
+// 누른 사람이 고칠 수가 없다. 화면은 떴으니 무엇이 잘못됐는지도 알기
+// 어렵다.
+func TestEditURLPointsAtTheEditor(t *testing.T) {
+	t.Parallel()
+	client := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"deck 1","title":"제목","status":"draft"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"applied":true,"presentation":{"id":"deck 1","title":"제목","status":"completed","slideCount":1,"templateName":"기본"}}}`))
+	})
+	result, err := client.Create(context.Background(), presentation.CreateRequest{Deck: presentation.Deck{
+		Title: "제목", Slides: []presentation.Slide{{Kind: presentation.SlideCover, Title: "제목"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(result.EditURL, "/editor") {
+		t.Fatalf("edit url = %q, /editor 로 끝나야 한다", result.EditURL)
+	}
+	// 아이디에 그대로 쓸 수 없는 글자가 있어도 주소가 깨지지 않아야 한다.
+	if !strings.Contains(result.EditURL, "/presentations/deck%201/editor") {
+		t.Fatalf("edit url = %q", result.EditURL)
+	}
+}
