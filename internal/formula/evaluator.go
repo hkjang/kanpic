@@ -474,6 +474,11 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		return evaluateConditionalAggregate(name, evaluated)
 	case "VLOOKUP", "HLOOKUP", "INDEX", "MATCH":
 		return evaluateLookup(name, evaluated)
+	case "CHITEST", "FTEST", "TTEST":
+		result, handled, err := evaluateHypothesisTests(name, evaluated)
+		if handled {
+			return result, err
+		}
 	case "PERCENTRANK", "TRIMMEAN", "ZTEST", "STEYX", "PROB":
 		result, handled, err := evaluateRangeStatistics(name, evaluated)
 		if handled {
@@ -643,7 +648,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	}
 	for _, group := range []func(string, []any) (any, bool, error){
 		evaluateMath, evaluateStatistics, evaluateFinance, evaluateText, evaluateDate, evaluateInformation,
-		evaluateEngineering, evaluateMathExtra, evaluateDistribution,
+		evaluateEngineering, evaluateMathExtra, evaluateDistribution, evaluateTestDistributions,
 	} {
 		if result, handled, err := group(name, values); handled {
 			return result, err
