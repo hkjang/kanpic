@@ -649,7 +649,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	for _, group := range []func(string, []any) (any, bool, error){
 		evaluateMath, evaluateStatistics, evaluateFinance, evaluateText, evaluateDate, evaluateInformation,
 		evaluateEngineering, evaluateMathExtra, evaluateDistribution, evaluateTestDistributions,
-		evaluateSecurities,
+		evaluateSecurities, evaluateCoupon, evaluateBond,
 	} {
 		if result, handled, err := group(name, values); handled {
 			return result, err
