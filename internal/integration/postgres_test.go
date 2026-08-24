@@ -3940,3 +3940,92 @@ func TestPostgresWorkbookAgentSortsAndRestoresTheOriginalOrder(t *testing.T) {
 		t.Fatalf("restored formula=%#v, %v", back, err)
 	}
 }
+
+// 도구 하나가 실패하면 앞서 성공한 도구는 어떻게 되는가. 차트가 남는 것도
+// 곤란하지만 정렬은 훨씬 나쁘다 — 있던 자료가 다시 쓰인 채로 남고, 실행이
+// 실패로 끝나면 되돌리기 경로도 없다.
+func TestPostgresWorkbookAgentUndoesEarlierToolsWhenALaterOneFails(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-partial-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 부분 실패", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "partial-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"부서"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"영업"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`70`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"개발"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`150`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-partial-test","context_length":16384}]}`))
+			return
+		}
+		// 두 번째 도구는 계획은 통과하지만 저장소가 거부한다 — 체크박스는
+		// 켠 값과 끈 값 딱 둘이어야 한다.
+		plan := `{"summary":"정렬 뒤 체크박스","explanation":"매출 순으로 세우고 상태 열에 체크박스를 넣습니다.","findings":[],"changes":[],"tool_calls":[` +
+			`{"name":"sort_range","arguments":{"range":"A1:B3","header_rows":1,"keys":[{"column":2,"direction":"desc"}]}},` +
+			`{"name":"create_pivot","arguments":{"source_range":"A1:B3","name":"부서별","rows":[{"column":1}],"values":[{"column":2,"aggregation":"sum"}]}},` +
+			`{"name":"create_data_validation","arguments":{"range":"A2:A3","rule_type":"checkbox","options":[{"value":"예"},{"value":"아니오"},{"value":"보류"}]}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 260, "completion_tokens": 90}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-partial-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B3", Message: "매출 순으로 세우고 체크박스를 넣어줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "partial-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || len(run.Action.ToolCalls) != 3 {
+		t.Fatalf("partial agent plan=%#v, %v", run, err)
+	}
+	if _, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "partial-agent-approve", ExpectedRevision: run.Action.Revision}); err == nil {
+		t.Fatal("두 번째 도구가 실패했는데 승인이 성공했다")
+	}
+	// 실패로 끝났으면 첫 도구가 바꾼 것도 남아 있으면 안 된다. 실패한 실행은
+	// 되돌리기 경로가 없으므로, 남으면 사람이 손으로 되돌려야 한다.
+	cells, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "A2:A3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		order = append(order, string(cell.Value))
+	}
+	if len(order) != 2 || order[0] != `"영업"` || order[1] != `"개발"` {
+		t.Fatalf("실패한 실행이 정렬을 남겼다: %#v", order)
+	}
+	// 만든 물건도 마찬가지다. 남으면 아무도 만들라고 하지 않은 것이 남는다.
+	pivots, err := repository.ListPivots(ctx, book.ID, sheet.ID)
+	if err != nil || len(pivots) != 0 {
+		t.Fatalf("실패한 실행이 피벗을 남겼다: %#v, %v", pivots, err)
+	}
+	// 되돌린 도구는 완료로 남아 있으면 안 된다 — 화면이 한 일과 어긋난다.
+	failed, err := service.GetRun(ctx, run.ID, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range failed.Action.ToolCalls {
+		if tool.Status == "completed" {
+			t.Errorf("되돌린 도구가 완료로 남았다: %s", tool.Name)
+		}
+	}
+}

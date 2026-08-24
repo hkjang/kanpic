@@ -731,7 +731,7 @@ func (s *Service) ApproveRun(ctx context.Context, runID string, input ApprovalIn
 			return AgentExecutionResult{}, err
 		}
 	}
-	if err := s.executeAgentTools(ctx, &action, input.ActorID); err != nil {
+	if err := s.executeAgentTools(ctx, &action, input.ActorID, input.ClientID); err != nil {
 		if operation != nil {
 			fresh, loadErr := s.Get(ctx, runID, input.ActorID)
 			if loadErr == nil {
@@ -780,7 +780,30 @@ func (s *Service) claimToolOnlyApproval(ctx context.Context, action Action, inpu
 	return nil
 }
 
-func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID string) error {
+// executeAgentTools 는 계획의 도구를 차례로 실행한다. 도중에 하나가 실패하면
+// 앞서 끝난 것을 되돌린다 — 실패한 실행은 되돌리기 경로가 없으므로, 남기면
+// 사람이 손으로 풀어야 한다. 정렬처럼 있던 자료를 다시 쓰는 도구에서 특히
+// 나쁘다.
+func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID, clientID string) error {
+	err := s.runAgentTools(ctx, action, actorID)
+	if err == nil {
+		return err
+	}
+	if undoErr := s.undoCompletedTools(ctx, *action, actorID, clientID); undoErr != nil {
+		// 보상까지 실패하면 원래 실패를 가리지 않고 둘 다 알린다.
+		return fmt.Errorf("%w (되돌리기도 실패했습니다: %v)", err, undoErr)
+	}
+	for index := range action.ToolCalls {
+		tool := &action.ToolCalls[index]
+		if tool.Status == "completed" {
+			tool.Status = "cancelled"
+			_ = s.saveToolCall(ctx, action.ID, *tool)
+		}
+	}
+	return err
+}
+
+func (s *Service) runAgentTools(ctx context.Context, action *Action, actorID string) error {
 	for index := range action.ToolCalls {
 		tool := &action.ToolCalls[index]
 		if tool.Status == "completed" {
@@ -1287,6 +1310,101 @@ func (s *Service) CancelRun(ctx context.Context, runID string, input ApprovalInp
 	return s.GetRun(ctx, runID, input.ActorID)
 }
 
+// undoCompletedTools 는 이미 끝난 도구를 거꾸로 되돌린다. 되돌리기와 부분
+// 실패 보상이 같은 자리를 쓴다 — 한쪽만 고치면 실패한 실행이 흔적을 남기고,
+// 실패한 실행에는 되돌리기 경로가 없어 사람이 손으로 풀어야 한다.
+func (s *Service) undoCompletedTools(ctx context.Context, action Action, actorID, clientID string) error {
+	for index := len(action.ToolCalls) - 1; index >= 0; index-- {
+		tool := action.ToolCalls[index]
+		if tool.Status != "completed" {
+			continue
+		}
+		switch tool.Name {
+		case "create_chart":
+			var chart workbook.Chart
+			if json.Unmarshal(tool.Result, &chart) == nil && chart.ID != "" {
+				revision := chart.Revision
+				if err := s.workbooks.DeleteChart(ctx, chart.ID, actorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "update_chart":
+			var result updateChartResult
+			if json.Unmarshal(tool.Result, &result) == nil && result.Before.ID != "" && result.After.ID == result.Before.ID {
+				expectedRevision := result.After.Revision
+				sheetID, sourceSheetID := result.Before.SheetID, result.Before.SourceSheetID
+				chartType, title, sourceRange := result.Before.Type, result.Before.Title, result.Before.SourceRange
+				firstRowHeaders, firstColumnLabels := result.Before.FirstRowHeaders, result.Before.FirstColumnLabels
+				legendPosition, xAxisTitle, yAxisTitle := result.Before.LegendPosition, result.Before.XAxisTitle, result.Before.YAxisTitle
+				position := result.Before.Position
+				if _, err := s.workbooks.UpdateChart(ctx, result.Before.ID, actorID, workbook.UpdateChartInput{
+					SheetID: &sheetID, SourceSheetID: &sourceSheetID, Type: &chartType, Title: &title, SourceRange: &sourceRange,
+					FirstRowHeaders: &firstRowHeaders, FirstColumnLabels: &firstColumnLabels, LegendPosition: &legendPosition,
+					XAxisTitle: &xAxisTitle, YAxisTitle: &yAxisTitle, Position: &position, ExpectedRevision: &expectedRevision,
+				}); err != nil {
+					return err
+				}
+			}
+		case "create_report_sheet":
+			var result createReportSheetResult
+			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
+				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "sort_range":
+			// 다른 도구는 만든 물건을 지우면 끝이지만, 정렬은 있던 자료를
+			// 다시 쓴 것이라 그 작업 자체를 되돌려야 한다.
+			var sorted sortRangeResult
+			if json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" {
+				if _, err := s.workbooks.UndoOperation(ctx, workbook.UndoOperationInput{
+					OperationID: sorted.Operation.OperationID, ActorID: actorID, ClientID: clientID,
+					IdempotencyKey: executionKey(action.ID, "sort-undo", tool.IdempotencyKey),
+				}); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "create_filter_view":
+			// 걸러내기가 남으면 되돌린 줄이 계속 숨어 있다.
+			var view workbook.FilterView
+			if json.Unmarshal(tool.Result, &view) == nil && view.ID != "" {
+				if err := s.workbooks.DeleteFilterView(ctx, view.ID, actorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "create_data_validation":
+			// 규칙이 남으면 셀은 제자리로 돌아왔는데 입력만 막힌다.
+			var rule workbook.DataValidation
+			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+				revision := rule.Revision
+				if err := s.workbooks.DeleteDataValidation(ctx, rule.ID, actorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "create_pivot":
+			// 피벗은 원본을 건드리지 않으므로 되돌리기는 피벗을 지우는 것이다.
+			var pivot workbook.Pivot
+			if json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" {
+				revision := pivot.Revision
+				if err := s.workbooks.DeletePivot(ctx, pivot.ID, actorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "create_conditional_format":
+			// 되돌리면 규칙을 지운다. 규칙이 남아 있으면 셀은 그대로인데 색만
+			// 남아, 되돌렸다는 말과 화면이 어긋난다.
+			var rule workbook.ConditionalFormat
+			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+				revision := rule.Revision
+				if err := s.workbooks.DeleteConditionalFormat(ctx, rule.ID, actorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, input ApprovalInput) (AgentExecutionResult, error) {
 	input = normalizeApprovalInput(input)
 	if err := validateExecutionInput(input); err != nil {
@@ -1319,93 +1437,8 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 	if appliedVersion > 0 && book.Version != appliedVersion {
 		return AgentExecutionResult{}, workbook.ErrVersionConflict
 	}
-	for index := len(action.ToolCalls) - 1; index >= 0; index-- {
-		tool := action.ToolCalls[index]
-		if tool.Status != "completed" {
-			continue
-		}
-		switch tool.Name {
-		case "create_chart":
-			var chart workbook.Chart
-			if json.Unmarshal(tool.Result, &chart) == nil && chart.ID != "" {
-				revision := chart.Revision
-				if err := s.workbooks.DeleteChart(ctx, chart.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "update_chart":
-			var result updateChartResult
-			if json.Unmarshal(tool.Result, &result) == nil && result.Before.ID != "" && result.After.ID == result.Before.ID {
-				expectedRevision := result.After.Revision
-				sheetID, sourceSheetID := result.Before.SheetID, result.Before.SourceSheetID
-				chartType, title, sourceRange := result.Before.Type, result.Before.Title, result.Before.SourceRange
-				firstRowHeaders, firstColumnLabels := result.Before.FirstRowHeaders, result.Before.FirstColumnLabels
-				legendPosition, xAxisTitle, yAxisTitle := result.Before.LegendPosition, result.Before.XAxisTitle, result.Before.YAxisTitle
-				position := result.Before.Position
-				if _, err := s.workbooks.UpdateChart(ctx, result.Before.ID, input.ActorID, workbook.UpdateChartInput{
-					SheetID: &sheetID, SourceSheetID: &sourceSheetID, Type: &chartType, Title: &title, SourceRange: &sourceRange,
-					FirstRowHeaders: &firstRowHeaders, FirstColumnLabels: &firstColumnLabels, LegendPosition: &legendPosition,
-					XAxisTitle: &xAxisTitle, YAxisTitle: &yAxisTitle, Position: &position, ExpectedRevision: &expectedRevision,
-				}); err != nil {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "create_report_sheet":
-			var result createReportSheetResult
-			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
-				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "sort_range":
-			// 다른 도구는 만든 물건을 지우면 끝이지만, 정렬은 있던 자료를
-			// 다시 쓴 것이라 그 작업 자체를 되돌려야 한다.
-			var sorted sortRangeResult
-			if json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" {
-				if _, err := s.workbooks.UndoOperation(ctx, workbook.UndoOperationInput{
-					OperationID: sorted.Operation.OperationID, ActorID: input.ActorID, ClientID: input.ClientID,
-					IdempotencyKey: executionKey(action.ID, "sort-undo", tool.IdempotencyKey),
-				}); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "create_filter_view":
-			// 걸러내기가 남으면 되돌린 줄이 계속 숨어 있다.
-			var view workbook.FilterView
-			if json.Unmarshal(tool.Result, &view) == nil && view.ID != "" {
-				if err := s.workbooks.DeleteFilterView(ctx, view.ID, input.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "create_data_validation":
-			// 규칙이 남으면 셀은 제자리로 돌아왔는데 입력만 막힌다.
-			var rule workbook.DataValidation
-			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
-				revision := rule.Revision
-				if err := s.workbooks.DeleteDataValidation(ctx, rule.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "create_pivot":
-			// 피벗은 원본을 건드리지 않으므로 되돌리기는 피벗을 지우는 것이다.
-			var pivot workbook.Pivot
-			if json.Unmarshal(tool.Result, &pivot) == nil && pivot.ID != "" {
-				revision := pivot.Revision
-				if err := s.workbooks.DeletePivot(ctx, pivot.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		case "create_conditional_format":
-			// 되돌리면 규칙을 지운다. 규칙이 남아 있으면 셀은 그대로인데 색만
-			// 남아, 되돌렸다는 말과 화면이 어긋난다.
-			var rule workbook.ConditionalFormat
-			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
-				revision := rule.Revision
-				if err := s.workbooks.DeleteConditionalFormat(ctx, rule.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
-					return AgentExecutionResult{}, err
-				}
-			}
-		}
+	if err := s.undoCompletedTools(ctx, action, input.ActorID, input.ClientID); err != nil {
+		return AgentExecutionResult{}, err
 	}
 	var operation *workbook.MutationResult
 	if action.OperationID != "" {
