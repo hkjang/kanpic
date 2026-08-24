@@ -3767,3 +3767,81 @@ func TestPostgresWorkbookAgentCreatesAndRollsBackDataValidation(t *testing.T) {
 		t.Fatalf("되돌린 뒤에도 입력이 막힌다: %v", err)
 	}
 }
+
+// "매출 100 이상만 보이게 해줘" 는 줄을 지우는 것이 아니다. 걸러내기는
+// 숨길 뿐이므로 자료가 그대로 남는다. 되돌리면 숨긴 것도 함께 풀려야 한다 —
+// 걸러내기가 남으면 되돌린 줄이 계속 숨어 있다.
+func TestPostgresWorkbookAgentCreatesAndRollsBackFilterView(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-filter-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 필터", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "filter-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"부서"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"영업"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`150`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"개발"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`70`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-filter-test","context_length":16384}]}`))
+			return
+		}
+		plan := `{"summary":"매출 100 이상만 보기","explanation":"줄을 지우지 않고 숨깁니다.","findings":[],"changes":[],"tool_calls":[{"name":"create_filter_view","arguments":{"name":"매출 100 이상","range":"A1:B3","criteria":[{"column":2,"operator":"greater_or_equal","value":100}]}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 260, "completion_tokens": 80}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-filter-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B3", Message: "매출 100 이상만 보이게 해줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "filter-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || len(run.Action.ToolCalls) != 1 || run.Action.ToolCalls[0].Name != "create_filter_view" {
+		t.Fatalf("filter agent plan=%#v, %v", run, err)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "filter-agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed {
+		t.Fatalf("filter agent execution=%#v, %v", executed, err)
+	}
+	views, err := repository.ListFilterViews(ctx, sheet.ID, actor)
+	if err != nil || len(views) != 1 || len(views[0].Criteria) != 1 {
+		t.Fatalf("filter views=%#v, %v", views, err)
+	}
+	// 만들어 놓고 꺼져 있으면 사람은 아무 변화도 보지 못한다.
+	if !views[0].Active {
+		t.Error("필터가 꺼진 채로 만들어졌다")
+	}
+	// 숨기기만 한다. 줄은 그대로 있어야 한다.
+	cells, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "A1:B3"))
+	if err != nil || len(cells) != 6 {
+		t.Fatalf("filter changed cells=%d, %v", len(cells), err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, run.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "filter-agent-rollback", ExpectedRevision: executed.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("filter rollback=%#v, %v", rolledBack, err)
+	}
+	remaining, err := repository.ListFilterViews(ctx, sheet.ID, actor)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("rollback left filter views=%#v, %v", remaining, err)
+	}
+}

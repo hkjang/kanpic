@@ -821,6 +821,61 @@ type pivotValueArg struct {
 
 // validateCreatePivot 은 모델이 적어 보낸 피벗이 말이 되는지 본다. 열 번호는
 // 고른 범위 안의 자리를 가리켜야 하고, 잴 것이 없으면 요약이 아니다.
+type createFilterViewArguments struct {
+	SheetID    string                    `json:"sheet_id,omitempty"`
+	Name       string                    `json:"name,omitempty"`
+	Range      string                    `json:"range,omitempty"`
+	HeaderRows *int                      `json:"header_rows,omitempty"`
+	Criteria   []filterCriterionArgument `json:"criteria"`
+	Active     *bool                     `json:"active,omitempty"`
+}
+
+type filterCriterionArgument struct {
+	Column        int               `json:"column"`
+	Operator      string            `json:"operator"`
+	Value         json.RawMessage   `json:"value,omitempty"`
+	Values        []json.RawMessage `json:"values,omitempty"`
+	Color         string            `json:"color,omitempty"`
+	CaseSensitive bool              `json:"case_sensitive,omitempty"`
+}
+
+// validateCreateFilterView 는 걸러내기가 말이 되는지 본다. 여기의 열 번호는
+// 피벗과 달리 **시트의 열 번호** 다 — 저장소가 그렇게 읽는다. 둘을 섞으면
+// 엉뚱한 열을 걸러 놓고도 계획은 그럴듯해 보인다.
+func validateCreateFilterView(input PlanInput, raw json.RawMessage) (createFilterViewArguments, error) {
+	var arguments createFilterViewArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: create_filter_view arguments are not an object", ErrGateway)
+	}
+	target, err := rangeInsideSelection(input, arguments.Range, "create_filter_view")
+	if err != nil {
+		return arguments, err
+	}
+	arguments.Range = target
+	if len(arguments.Criteria) == 0 {
+		return arguments, fmt.Errorf("%w: create_filter_view needs at least one criterion", ErrGateway)
+	}
+	selected, _ := cellrange.Parse(target)
+	seen := map[int]bool{}
+	for index := range arguments.Criteria {
+		criterion := &arguments.Criteria[index]
+		criterion.Operator = strings.ToLower(strings.TrimSpace(criterion.Operator))
+		if !workbook.SupportedFilterOperator(criterion.Operator) {
+			return arguments, fmt.Errorf("%w: create_filter_view operator %q is not one we can filter by", ErrGateway, criterion.Operator)
+		}
+		if criterion.Column < selected.Start.Column || criterion.Column > selected.End.Column {
+			return arguments, fmt.Errorf("%w: create_filter_view column %d is outside the filtered range", ErrGateway, criterion.Column)
+		}
+		// 한 열에 조건 둘을 걸면 저장소가 거부한다. 계획할 때 걸러야 사람이
+		// 승인한 뒤에 깨지지 않는다.
+		if seen[criterion.Column] {
+			return arguments, fmt.Errorf("%w: create_filter_view has two criteria on column %d", ErrGateway, criterion.Column)
+		}
+		seen[criterion.Column] = true
+	}
+	return arguments, nil
+}
+
 type createDataValidationArguments struct {
 	SheetID      string                     `json:"sheet_id,omitempty"`
 	Range        string                     `json:"range,omitempty"`
@@ -1125,6 +1180,16 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_filter_view":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_filter_view requires agent mode", ErrGateway)
+			}
+			arguments, err := validateCreateFilterView(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskLow, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_data_validation":
 			if input.Mode != ModeAgent {
 				return nil, fmt.Errorf("%w: create_data_validation requires agent mode", ErrGateway)

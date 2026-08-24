@@ -26,6 +26,13 @@ var filterOperators = map[string]struct{}{
 	"background_color": {}, "text_color": {},
 }
 
+// SupportedFilterOperator tells callers outside this package whether a name is
+// one we can filter by. 계획을 세우는 자리에서도 같은 목록을 보아야 한다.
+func SupportedFilterOperator(name string) bool {
+	_, found := filterOperators[strings.ToLower(strings.TrimSpace(name))]
+	return found
+}
+
 // filterViewFromInput builds the filter view a create request describes. Both
 // repositories call it so a new field cannot reach one and not the other.
 func filterViewFromInput(sheetID, actorID string, now time.Time, input CreateFilterViewInput) (FilterView, cellrange.Range, error) {

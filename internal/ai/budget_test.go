@@ -709,3 +709,83 @@ func TestDataValidationNeedsWhatItsKindRequires(t *testing.T) {
 		}
 	}
 }
+
+// "매출 100 이상만 보이게 해줘" 는 줄을 지우는 것이 아니다. 걸러내기는
+// 숨길 뿐이므로 자료가 그대로 남는다.
+func TestGatewayAcceptsFilterViewTool(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "create_filter_view",
+						"arguments": `{"name":"매출 100 이상","range":"A1:B10","criteria":[{"column":2,"operator":"greater_or_equal","value":100}]}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1:B10")
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10", Request: "매출 100 이상만 보이게 해줘"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_filter_view" {
+		t.Fatalf("plan=%#v", plan.ToolCalls)
+	}
+	var arguments createFilterViewArguments
+	if err := json.Unmarshal(plan.ToolCalls[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	// 조건을 잃으면 아무것도 걸러내지 않는 필터가 생긴다.
+	if len(arguments.Criteria) != 1 || arguments.Criteria[0].Column != 2 || string(arguments.Criteria[0].Value) != "100" {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	// 숨기기만 하므로 자료를 지우는 것보다 위험이 낮다.
+	planned, err := validateGatewayTools(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}, selected, plan.ToolCalls, 10)
+	if err != nil || len(planned) != 1 || planned[0].Risk != RiskLow {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	if !supportedGatewayTool("create_filter_view") {
+		t.Error("도구가 허용 목록에 없다")
+	}
+}
+
+// 여기의 열 번호는 피벗과 달리 시트의 열 번호다. 둘을 섞으면 엉뚱한 열을
+// 걸러 놓고도 계획은 그럴듯해 보인다.
+func TestFilterViewCriteriaMatchTheRepositoryRules(t *testing.T) {
+	t.Parallel()
+	selected := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "B1:D10"}
+	one := `"criteria":[{"column":2,"operator":"greater_or_equal","value":100}]`
+	if _, err := validateCreateFilterView(selected, json.RawMessage(`{`+one+`}`)); err != nil {
+		t.Fatalf("첫 열이 막혔다: %v", err)
+	}
+	// 범위가 B 부터인데 1(A) 을 가리키는 것은 범위 밖이다.
+	if _, err := validateCreateFilterView(selected, json.RawMessage(`{"criteria":[{"column":1,"operator":"is_blank"}]}`)); err == nil {
+		t.Error("범위 밖 열이 통과했다")
+	}
+	// 한 열에 조건 둘은 저장소가 거부한다. 계획할 때 걸러야 한다.
+	if _, err := validateCreateFilterView(selected, json.RawMessage(`{"criteria":[{"column":2,"operator":"is_blank"},{"column":2,"operator":"is_not_blank"}]}`)); err == nil {
+		t.Error("한 열에 조건 둘이 통과했다")
+	}
+	if _, err := validateCreateFilterView(selected, json.RawMessage(`{"criteria":[{"column":2,"operator":"비슷함"}]}`)); err == nil {
+		t.Error("모르는 연산자가 통과했다")
+	}
+	if !workbook.SupportedFilterOperator(" NOT_CONTAINS ") || workbook.SupportedFilterOperator("between") {
+		t.Error("연산자 목록이 실제 걸러내기와 어긋난다")
+	}
+	// 조건이 없으면 아무것도 걸러내지 않는 필터가 생긴다.
+	if _, err := validateCreateFilterView(selected, json.RawMessage(`{"name":"보기"}`)); err == nil {
+		t.Error("조건 없이 통과했다")
+	}
+	// 범위를 적지 않으면 고른 범위를 그대로 쓴다.
+	blank, err := validateCreateFilterView(selected, json.RawMessage(`{`+one+`}`))
+	if err != nil || blank.Range != "B1:D10" {
+		t.Fatalf("blank=%#v err=%v", blank, err)
+	}
+}

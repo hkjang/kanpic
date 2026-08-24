@@ -523,6 +523,15 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
 			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
 		}
+	case "create_filter_view":
+		var arguments createFilterViewArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{"range": arguments.Range, "criteria": len(arguments.Criteria)})
+		}
+		var view workbook.FilterView
+		if json.Unmarshal(tool.Result, &view) == nil && view.ID != "" {
+			item.Result = marshalMemory(map[string]any{"id": view.ID, "name": view.Name, "range": view.Range})
+		}
 	case "create_data_validation":
 		var arguments createDataValidationArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -591,6 +600,8 @@ func suggestedFollowUps(action Action) []string {
 			return []string{"이 피벗을 차트로도 보여줘", "합계 대신 평균으로 바꿔서 다시 계획해줘", "피벗 결과에서 눈에 띄는 점을 설명해줘"}
 		case "create_conditional_format":
 			return []string{"같은 규칙을 다른 열에도 적용해줘", "색을 더 눈에 띄게 바꿔줘", "이 규칙이 어떤 셀에 걸리는지 설명해줘"}
+		case "create_filter_view":
+			return []string{"조건을 하나 더 걸어줘", "걸러낸 결과만 요약해줘", "이 조건에 걸린 줄이 몇 개인지 알려줘"}
 		case "create_data_validation":
 			return []string{"고를 수 있는 값을 더 추가해줘", "빈 칸도 허용할지 바꿔줘", "이 규칙에 어긋나는 값이 이미 있는지 찾아줘"}
 		}
@@ -783,6 +794,43 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 				return err
 			}
 			tool.Result, _ = json.Marshal(chart)
+			tool.Status = "completed"
+		case "create_filter_view":
+			var arguments createFilterViewArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored create_filter_view arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			criteria := make([]workbook.FilterCriterion, 0, len(arguments.Criteria))
+			for _, item := range arguments.Criteria {
+				criteria = append(criteria, workbook.FilterCriterion{
+					Column: item.Column, Operator: item.Operator, Value: item.Value,
+					Values: item.Values, Color: item.Color, CaseSensitive: item.CaseSensitive,
+				})
+			}
+			headerRows := 1
+			if arguments.HeaderRows != nil {
+				headerRows = *arguments.HeaderRows
+			}
+			// 만들어 놓고 꺼져 있으면 사람은 아무 변화도 보지 못한다.
+			active := true
+			if arguments.Active != nil {
+				active = *arguments.Active
+			}
+			view, err := s.workbooks.CreateFilterView(ctx, sheetID, actorID, workbook.CreateFilterViewInput{
+				IdempotencyKey: tool.IdempotencyKey, Name: arguments.Name, Range: arguments.Range,
+				HeaderRows: headerRows, Criteria: criteria, Active: active,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(view)
 			tool.Status = "completed"
 		case "create_data_validation":
 			var arguments createDataValidationArguments
@@ -1020,6 +1068,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var rule workbook.DataValidation
 			passed := json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" && rule.Range != ""
 			checks = append(checks, ValidationCheck{Name: "data_validation", Passed: passed, Message: "데이터 검증 규칙 생성을 확인했습니다."})
+		case "create_filter_view":
+			var view workbook.FilterView
+			passed := json.Unmarshal(tool.Result, &view) == nil && view.ID != "" && len(view.Criteria) > 0
+			checks = append(checks, ValidationCheck{Name: "filter_view", Passed: passed, Message: "필터 보기 생성과 조건을 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -1233,6 +1285,14 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
 				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "create_filter_view":
+			// 걸러내기가 남으면 되돌린 줄이 계속 숨어 있다.
+			var view workbook.FilterView
+			if json.Unmarshal(tool.Result, &view) == nil && view.ID != "" {
+				if err := s.workbooks.DeleteFilterView(ctx, view.ID, input.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}
