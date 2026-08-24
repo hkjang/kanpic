@@ -74,13 +74,20 @@ type Chart struct {
 	YAxisTitle        string `json:"y_axis_title,omitempty"`
 	// SecondaryAxis puts a combination chart's line series on its own scale,
 	// which is the only way a ratio and an amount share one picture.
-	SecondaryAxis bool          `json:"secondary_axis"`
-	Position      ChartPosition `json:"position"`
-	Revision      int64         `json:"revision"`
-	CreatedBy     string        `json:"created_by"`
-	UpdatedBy     string        `json:"updated_by"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	SecondaryAxis bool `json:"secondary_axis"`
+	// DataLabels 는 막대나 점 옆에 값을 적는다. 눈금을 짚어 읽는 것보다
+	// 숫자가 적혀 있는 편이 빠른 자리가 있다.
+	DataLabels bool `json:"data_labels"`
+	// YAxisMin·YAxisMax 를 정하지 않으면 자료에 맞춘다. 0 에서 시작하지
+	// 않으면 작은 차이가 크게 보이므로, 정하는 것은 뜻을 가지고 하는 일이다.
+	YAxisMin  *float64      `json:"y_axis_min,omitempty"`
+	YAxisMax  *float64      `json:"y_axis_max,omitempty"`
+	Position  ChartPosition `json:"position"`
+	Revision  int64         `json:"revision"`
+	CreatedBy string        `json:"created_by"`
+	UpdatedBy string        `json:"updated_by"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
 }
 
 type CreateChartInput struct {
@@ -96,6 +103,9 @@ type CreateChartInput struct {
 	XAxisTitle        string         `json:"x_axis_title,omitempty"`
 	YAxisTitle        string         `json:"y_axis_title,omitempty"`
 	SecondaryAxis     *bool          `json:"secondary_axis,omitempty"`
+	DataLabels        *bool          `json:"data_labels,omitempty"`
+	YAxisMin          *float64       `json:"y_axis_min,omitempty"`
+	YAxisMax          *float64       `json:"y_axis_max,omitempty"`
 	Position          *ChartPosition `json:"position,omitempty"`
 }
 
@@ -110,6 +120,9 @@ type UpdateChartInput struct {
 	LegendPosition    *string        `json:"legend_position,omitempty"`
 	XAxisTitle        *string        `json:"x_axis_title,omitempty"`
 	SecondaryAxis     *bool          `json:"secondary_axis,omitempty"`
+	DataLabels        *bool          `json:"data_labels,omitempty"`
+	YAxisMin          *float64       `json:"y_axis_min,omitempty"`
+	YAxisMax          *float64       `json:"y_axis_max,omitempty"`
 	YAxisTitle        *string        `json:"y_axis_title,omitempty"`
 	Position          *ChartPosition `json:"position,omitempty"`
 	ExpectedRevision  *int64         `json:"expected_revision,omitempty"`
@@ -180,7 +193,9 @@ func chartFromInput(workbookID, key, actor string, input CreateChartInput) (Char
 		FirstRowHeaders: headers, FirstColumnLabels: labels, LegendPosition: input.LegendPosition,
 		XAxisTitle: input.XAxisTitle, YAxisTitle: input.YAxisTitle,
 		SecondaryAxis: input.SecondaryAxis != nil && *input.SecondaryAxis,
-		Position:      position, CreatedBy: actor, UpdatedBy: actor,
+		DataLabels:    input.DataLabels != nil && *input.DataLabels,
+		YAxisMin:      input.YAxisMin, YAxisMax: input.YAxisMax,
+		Position: position, CreatedBy: actor, UpdatedBy: actor,
 	}, false)
 }
 
@@ -202,6 +217,11 @@ func normalizeChart(item Chart, allowBrokenReference bool) (Chart, error) {
 	item.YAxisTitle = strings.TrimSpace(item.YAxisTitle)
 	if item.Type != "combo" {
 		item.SecondaryAxis = false
+	}
+	// 아래위를 뒤집어 적으면 그릴 수 없다. 같은 값이면 눈금이 한 줄로
+	// 뭉개져 아무것도 읽을 수 없다.
+	if item.YAxisMin != nil && item.YAxisMax != nil && *item.YAxisMin >= *item.YAxisMax {
+		return Chart{}, fmt.Errorf("%w: the y axis maximum must be above the minimum", ErrInvalid)
 	}
 	if item.SheetID == "" {
 		return Chart{}, fmt.Errorf("%w: sheet_id is required", ErrInvalid)
@@ -397,6 +417,15 @@ func (r *MemoryRepository) UpdateChart(_ context.Context, id, actor string, inpu
 	}
 	if input.SecondaryAxis != nil {
 		updated.SecondaryAxis = *input.SecondaryAxis
+	}
+	if input.DataLabels != nil {
+		updated.DataLabels = *input.DataLabels
+	}
+	if input.YAxisMin != nil {
+		updated.YAxisMin = input.YAxisMin
+	}
+	if input.YAxisMax != nil {
+		updated.YAxisMax = input.YAxisMax
 	}
 	if input.Position != nil {
 		updated.Position = *input.Position

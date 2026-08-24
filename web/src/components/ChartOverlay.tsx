@@ -22,7 +22,7 @@ export function ChartPlot({data}: {data:ChartData}) {
   // combination chart may put its line on a scale of its own.
   const shape=chartShape(chart.type,series,chart.secondary_axis===true)
   const extents=shape.bars.length>0||shape.lines.length>0
-    ?shapeExtent(shape.secondary?shape.bars:[...shape.bars,...shape.lines],shape.stacked)
+    ?shapeExtent(shape.secondary?shape.bars:[...shape.bars,...shape.lines],shape.stacked,{min:chart.y_axis_min,max:chart.y_axis_max})
     :chartExtents(series)
   const lineExtent=shape.secondary?shapeExtent(shape.lines,false):extents
   const categories=series[0]?.points.map(point=>point.category)??[],ticks=[0,.25,.5,.75,1].map(portion=>extents.min+(extents.max-extents.min)*portion)
@@ -42,15 +42,22 @@ export function ChartPlot({data}: {data:ChartData}) {
       const base=stacks?stacks.bases[seriesIndex][index]:0
       const from=pointY(base,extents.min,extents.max,top,plotHeight),to=pointY(base+point.value,extents.min,extents.max,top,plotHeight)
       const x=shape.stacked?left+index*barGroup+(barGroup-barWidth)/2:left+index*barGroup+(barGroup-barWidth*shape.bars.length)/2+seriesIndex*barWidth
-      return <rect key={`${item.name}-${index}`} x={x} y={Math.min(from,to)} width={barWidth-1} height={Math.max(1,Math.abs(from-to))} rx="2" fill={colourOf(item)}><title>{point.category} · {item.name}: {point.value}</title></rect>}))}{shape.lines.map((item,seriesIndex)=>{
+      return <g key={`${item.name}-${index}`}>{chart.data_labels&&<text x={x+(barWidth-1)/2} y={Math.min(from,to)-3} textAnchor="middle" className="chart-label">{labelText(point.value)}</text>}<rect key={`${item.name}-${index}`} x={x} y={Math.min(from,to)} width={barWidth-1} height={Math.max(1,Math.abs(from-to))} rx="2" fill={colourOf(item)}><title>{point.category} · {item.name}: {point.value}</title></rect></g>}))}{shape.lines.map((item,seriesIndex)=>{
       const scale=shape.secondary?lineExtent:extents
       const heightOf=(value:number,index:number)=>pointY((shape.stacked&&stacks?stacks.bases[seriesIndex][index]:0)+value,scale.min,scale.max,top,plotHeight)
       const points=item.points.flatMap((point,index)=>point.value==null?[]:[[pointX(index,item.points.length,left,plotWidth),heightOf(point.value,index)] as [number,number]])
       const line=points.map((point,index)=>`${index?'L':'M'}${point[0]},${point[1]}`).join(' ')
       const zero=pointY(0,scale.min,scale.max,top,plotHeight)
       const area=points.length?`${line} L${points[points.length-1][0]},${zero} L${points[0][0]},${zero} Z`:''
-      return <g key={item.name}>{shape.filled&&<path d={area} fill={`${colourOf(item)}33`}/>}<path d={line} fill="none" stroke={colourOf(item)} strokeWidth="2"/>{points.map((point,index)=><circle key={index} cx={point[0]} cy={point[1]} r="3" fill="white" stroke={colourOf(item)} strokeWidth="2"/>)}</g>})}
+      return <g key={item.name}>{shape.filled&&<path d={area} fill={`${colourOf(item)}33`}/>}<path d={line} fill="none" stroke={colourOf(item)} strokeWidth="2"/>{points.map((point,index)=><circle key={index} cx={point[0]} cy={point[1]} r="3" fill="white" stroke={colourOf(item)} strokeWidth="2"/>)}{chart.data_labels&&points.map((point,index)=><text key={`label-${index}`} x={point[0]} y={point[1]-6} textAnchor="middle" className="chart-label">{labelText(item.points.filter(candidate=>candidate.value!=null)[index]?.value)}</text>)}</g>})}
     {shape.secondary&&[0,.5,1].map(portion=>{const value=lineExtent.min+(lineExtent.max-lineExtent.min)*portion,y=pointY(value,lineExtent.min,lineExtent.max,top,plotHeight);return <text key={portion} x={left+plotWidth+6} y={y+3} fontSize="8" fill={colourOf(shape.lines[0])}>{Number(value.toPrecision(3))}</text>})}{chart.type==='scatter'&&series.map((item,seriesIndex)=>item.points.map((point,index)=>point.value==null||point.x==null?null:<circle key={`${item.name}-${index}`} cx={left+(point.x-xMin)/(xMax-xMin)*plotWidth} cy={pointY(point.value,extents.min,extents.max,top,plotHeight)} r="4" fill={palette[seriesIndex%palette.length]} opacity=".85"><title>{item.name}: ({point.x}, {point.value})</title></circle>))}{categories.slice(0,12).map((category,index)=>{const x=isBar?left+index*barGroup+barGroup/2:pointX(index,categories.length,left,plotWidth);return <text key={`${category}-${index}`} x={x} y={top+plotHeight+15} textAnchor="middle" fill="#74838c" fontSize="8">{category.slice(0,10)}</text>})}{chart.x_axis_title&&<text x={left+plotWidth/2} y={height-5} textAnchor="middle" fontSize="9" fill="#596871">{chart.x_axis_title}</text>}{chart.y_axis_title&&<text transform={`translate(12 ${top+plotHeight/2}) rotate(-90)`} textAnchor="middle" fontSize="9" fill="#596871">{chart.y_axis_title}</text>}{legend}</svg>
+}
+
+// 값 표시는 눈금을 짚어 읽는 수고를 덜자는 것이므로 자릿수가 길면 도리어
+// 읽기 어렵다. 소수는 두 자리까지만 적는다.
+function labelText(value:number|null|undefined){
+  if(value==null||!Number.isFinite(value))return ''
+  return Number.isInteger(value)?String(value):value.toFixed(2)
 }
 
 async function downloadChart(svg:SVGSVGElement|null,title:string,format:'svg'|'png'){

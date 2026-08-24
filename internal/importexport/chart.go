@@ -96,8 +96,10 @@ func exportChart(item workbook.Chart, sourceSheet string) (*excelize.Chart, *exc
 			Series:    members,
 			Dimension: excelize.ChartDimension{Width: uint(item.Position.Width), Height: uint(item.Position.Height)},
 			Legend:    excelize.ChartLegend{Position: legendPosition(item.LegendPosition), ShowLegendKey: false},
-			XAxis:     excelize.ChartAxis{Title: excelize.ChartTitle{Paragraph: axisTitle(item.XAxisTitle)}},
-			YAxis:     excelize.ChartAxis{Title: excelize.ChartTitle{Paragraph: axisTitle(item.YAxisTitle)}},
+			// 값 표시는 계열마다가 아니라 차트 전체의 설정이다.
+			PlotArea: excelize.ChartPlotArea{ShowVal: item.DataLabels},
+			XAxis:    excelize.ChartAxis{Title: excelize.ChartTitle{Paragraph: axisTitle(item.XAxisTitle)}},
+			YAxis:    yAxis(item),
 		}
 		if strings.TrimSpace(item.Title) != "" {
 			chart.Title = excelize.ChartTitle{Paragraph: []excelize.RichTextRun{{Text: item.Title}}}
@@ -110,6 +112,19 @@ func exportChart(item workbook.Chart, sourceSheet string) (*excelize.Chart, *exc
 		return build(excelize.Col, series[:len(series)-1]), build(excelize.Line, series[len(series)-1:])
 	}
 	return build(kind, series), nil
+}
+
+// yAxis 는 세로축의 이름과, 사람이 정해 둔 범위를 함께 싣는다. 범위를
+// 정한 것은 뜻이 있어서이므로 엑셀에서도 그대로 보여야 한다.
+func yAxis(item workbook.Chart) excelize.ChartAxis {
+	axis := excelize.ChartAxis{Title: excelize.ChartTitle{Paragraph: axisTitle(item.YAxisTitle)}}
+	if item.YAxisMin != nil {
+		axis.Minimum = item.YAxisMin
+	}
+	if item.YAxisMax != nil {
+		axis.Maximum = item.YAxisMax
+	}
+	return axis
 }
 
 func axisTitle(text string) []excelize.RichTextRun {

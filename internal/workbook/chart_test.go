@@ -209,3 +209,48 @@ func TestImportedChartsDoNotSitOnTopOfEachOther(t *testing.T) {
 		}
 	}
 }
+
+// 값 표시와 축 범위는 사람이 뜻을 가지고 정하는 것이다. 0 에서 시작하지
+// 않으면 작은 차이가 크게 보이므로 저장한 그대로 지켜야 한다.
+func TestChartDataLabelsAndAxisBounds(t *testing.T) {
+	t.Parallel()
+	labels, low, high := true, 10.0, 90.0
+	item, err := chartFromInput("wb", "key", "tester", CreateChartInput{
+		SheetID: "sheet", SourceSheetID: "sheet", Type: "bar", SourceRange: "A1:B5",
+		DataLabels: &labels, YAxisMin: &low, YAxisMax: &high,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.DataLabels || item.YAxisMin == nil || *item.YAxisMin != 10 || item.YAxisMax == nil || *item.YAxisMax != 90 {
+		t.Fatalf("저장된 차트=%#v", item)
+	}
+	// 정하지 않으면 자료에 맞춘다.
+	plain, err := chartFromInput("wb", "key2", "tester", CreateChartInput{
+		SheetID: "sheet", SourceSheetID: "sheet", Type: "bar", SourceRange: "A1:B5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.DataLabels || plain.YAxisMin != nil || plain.YAxisMax != nil {
+		t.Fatalf("기본 차트=%#v", plain)
+	}
+	// 아래위를 뒤집어 적으면 그릴 수 없다. 같은 값이면 눈금이 한 줄로 뭉갠다.
+	for _, pair := range [][2]float64{{90, 10}, {50, 50}} {
+		min, max := pair[0], pair[1]
+		if _, err := chartFromInput("wb", "key3", "tester", CreateChartInput{
+			SheetID: "sheet", SourceSheetID: "sheet", Type: "bar", SourceRange: "A1:B5",
+			YAxisMin: &min, YAxisMax: &max,
+		}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("최소 %v 최대 %v 가 통과했다: %v", min, max, err)
+		}
+	}
+	// 한쪽만 정해도 된다.
+	onlyLow := 5.0
+	half, err := chartFromInput("wb", "key4", "tester", CreateChartInput{
+		SheetID: "sheet", SourceSheetID: "sheet", Type: "bar", SourceRange: "A1:B5", YAxisMin: &onlyLow,
+	})
+	if err != nil || half.YAxisMin == nil || half.YAxisMax != nil {
+		t.Errorf("한쪽만=%#v %v", half, err)
+	}
+}

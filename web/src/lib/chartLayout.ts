@@ -47,8 +47,14 @@ export function stackedBases(series:ChartSeries[],pointCount:number){
   return {bases,totals:running}
 }
 
-/** The value range a set of series needs, honouring stacking. */
-export function shapeExtent(series:ChartSeries[],stacked:boolean){
+/**
+ * The value range a set of series needs, honouring stacking.
+ *
+ * 사람이 축 범위를 정했으면 그것을 따른다. 0 에서 시작하지 않으면 작은
+ * 차이가 크게 보이는데, 그것은 뜻을 가지고 하는 일이라 자료에 맞춰 다시
+ * 정해 주면 안 된다.
+ */
+export function shapeExtent(series:ChartSeries[],stacked:boolean,bounds?:{min?:number|null;max?:number|null}){
   const values:number[]=[]
   if(stacked&&series.length>0){
     const count=series[0].points.length
@@ -59,8 +65,12 @@ export function shapeExtent(series:ChartSeries[],stacked:boolean){
   }else{
     for(const item of series)for(const point of item.points)if(point.value!=null)values.push(point.value)
   }
-  if(values.length===0)return {min:0,max:1}
-  let min=Math.min(0,...values),max=Math.max(0,...values)
+  let min=values.length===0?0:Math.min(0,...values)
+  let max=values.length===0?1:Math.max(0,...values)
   if(min===max){min-=1;max+=1}
+  if(bounds?.min!=null&&Number.isFinite(bounds.min))min=bounds.min
+  if(bounds?.max!=null&&Number.isFinite(bounds.max))max=bounds.max
+  // 뒤집혀 들어오면 그릴 수 없다. 저장할 때 막지만 예전 자료가 있을 수 있다.
+  if(min>=max)max=min+1
   return {min,max}
 }
