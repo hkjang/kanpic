@@ -151,6 +151,26 @@ describe('AIPanel',()=>{
     expect(screen.getByText('낮은 위험')).toBeInTheDocument()
   })
 
+  // 정렬만 있던 자료를 다시 쓴다. 승인 화면이 그 차이를 말해 주어야 사람이
+  // 필터와 같은 무게로 넘기지 않는다.
+  it('marks a sort as the one tool that rewrites existing data',async()=>{
+    const sortAction:AIAction={...action,id:'run-sort',mode:'agent',request:'매출 많은 순으로 정렬해줘',summary:'매출 많은 순 정렬',changes:[],tool_calls:[{name:'sort_range',arguments:{range:'A1:B10',header_rows:1,keys:[{column:2,direction:'desc'}]},status:'planned',risk:'HIGH'}]}
+    const sortRun:AgentRun={...run,id:'run-sort',action:sortAction,goal:sortAction.summary,plan:{...run.plan,run_id:'run-sort',goal:sortAction.summary}}
+    vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL)=>{
+      const path=String(input)
+      if(path==='/api/v1/ai/config')return response({enabled:true,model:'offline-model',max_input_cells:200,max_changes:100})
+      if(path==='/api/v1/workbooks/book-1/agent/messages')return response(sortRun,201)
+      return response({items:[]})
+    }))
+    renderPanel()
+    await screen.findByLabelText('현재 채팅 범위')
+    fireEvent.change(screen.getByLabelText('AI 요청'),{target:{value:'매출 많은 순으로 정렬해줘'}})
+    fireEvent.click(screen.getByRole('button',{name:'AI 메시지 보내기'}))
+    expect(await screen.findByText('범위 정렬하기')).toBeInTheDocument()
+    expect(screen.getByText('A1:B10 · B열 내림차순 · 머리글 1줄')).toBeInTheDocument()
+    expect(screen.getByText('높은 위험')).toBeInTheDocument()
+  })
+
   it('keeps the composer open and sends follow-up turns in the same conversation',async()=>{
     const followAction:AIAction={...action,id:'run-2',mode:'chart',request:'막대 차트를 선 차트로 바꿔줘',summary:'기존 차트를 선 차트로 변경',changes:[],tool_calls:[{name:'update_chart',arguments:{chart_id:'chart-1',type:'line',expected_revision:1},status:'planned',risk:'MEDIUM'}]}
     const followRun:AgentRun={...run,id:'run-2',action:followAction,goal:followAction.summary,messages:[...run.messages,{id:'m3',conversation_id:'conversation-1',agent_run_id:'run-2',role:'user',content:followAction.request,created_at:action.created_at},{id:'m4',conversation_id:'conversation-1',agent_run_id:'run-2',role:'assistant',content:followAction.summary,created_at:action.created_at}],plan:{...run.plan,run_id:'run-2',goal:followAction.summary}}

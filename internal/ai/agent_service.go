@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"kanpic/internal/workbook"
+	"kanpic/pkg/cellrange"
 	"kanpic/pkg/identity"
 )
 
@@ -523,6 +524,15 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
 			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
 		}
+	case "sort_range":
+		var arguments sortRangeArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{"range": arguments.Range, "keys": len(arguments.Keys)})
+		}
+		var sorted sortRangeResult
+		if json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" {
+			item.Result = marshalMemory(map[string]any{"range": sorted.Range, "cells": sorted.Operation.AppliedCells})
+		}
 	case "create_filter_view":
 		var arguments createFilterViewArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -600,6 +610,8 @@ func suggestedFollowUps(action Action) []string {
 			return []string{"이 피벗을 차트로도 보여줘", "합계 대신 평균으로 바꿔서 다시 계획해줘", "피벗 결과에서 눈에 띄는 점을 설명해줘"}
 		case "create_conditional_format":
 			return []string{"같은 규칙을 다른 열에도 적용해줘", "색을 더 눈에 띄게 바꿔줘", "이 규칙이 어떤 셀에 걸리는지 설명해줘"}
+		case "sort_range":
+			return []string{"두 번째 기준을 더해서 다시 정렬해줘", "정렬한 결과에서 눈에 띄는 점을 설명해줘", "이 순서로 차트를 만들어줘"}
 		case "create_filter_view":
 			return []string{"조건을 하나 더 걸어줘", "걸러낸 결과만 요약해줘", "이 조건에 걸린 줄이 몇 개인지 알려줘"}
 		case "create_data_validation":
@@ -794,6 +806,59 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 				return err
 			}
 			tool.Result, _ = json.Marshal(chart)
+			tool.Status = "completed"
+		case "sort_range":
+			var arguments sortRangeArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored sort_range arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			selected, parseErr := cellrange.Parse(arguments.Range)
+			if parseErr != nil {
+				return fmt.Errorf("%w: stored sort_range range is invalid", ErrInvalid)
+			}
+			existing, err := s.workbooks.ReadRange(ctx, sheetID, selected)
+			if err != nil {
+				return err
+			}
+			keys := make([]workbook.SortKey, 0, len(arguments.Keys))
+			for _, item := range arguments.Keys {
+				keys = append(keys, workbook.SortKey{Column: item.Column, Direction: item.Direction})
+			}
+			headerRows := 1
+			if arguments.HeaderRows != nil {
+				headerRows = *arguments.HeaderRows
+			}
+			// 정렬은 수식과 서식을 줄과 함께 옮긴다. 모델이 셀을 하나씩
+			// 적어 보내게 두면 그 규칙을 다시 구현하게 된다.
+			cells, err := workbook.BuildSortCells(existing, selected, workbook.SortOptions{
+				Keys: keys, HeaderRows: headerRows, CaseSensitive: arguments.CaseSensitive, LiteralOrder: arguments.LiteralOrder,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			book, err := s.workbooks.GetWorkbook(ctx, action.WorkbookID)
+			if err != nil {
+				return err
+			}
+			operation, err := s.workbooks.ApplyCells(ctx, workbook.CellMutation{
+				SheetID: sheetID, ActorID: actorID, ClientID: action.ClientID, BaseVersion: book.Version,
+				IdempotencyKey: executionKey(action.ID, "sort", tool.IdempotencyKey), Cells: cells,
+				OperationType: "ai.agent.sort", RequireExactVersion: true,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(sortRangeResult{Range: arguments.Range, Rows: len(cells), Operation: operation})
 			tool.Status = "completed"
 		case "create_filter_view":
 			var arguments createFilterViewArguments
@@ -1072,6 +1137,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var view workbook.FilterView
 			passed := json.Unmarshal(tool.Result, &view) == nil && view.ID != "" && len(view.Criteria) > 0
 			checks = append(checks, ValidationCheck{Name: "filter_view", Passed: passed, Message: "필터 보기 생성과 조건을 확인했습니다."})
+		case "sort_range":
+			var sorted sortRangeResult
+			passed := json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" && sorted.Operation.AppliedCells > 0
+			checks = append(checks, ValidationCheck{Name: "sort_range", Passed: passed, Message: "정렬 적용과 되돌릴 작업 기록을 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -1285,6 +1354,18 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
 				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "sort_range":
+			// 다른 도구는 만든 물건을 지우면 끝이지만, 정렬은 있던 자료를
+			// 다시 쓴 것이라 그 작업 자체를 되돌려야 한다.
+			var sorted sortRangeResult
+			if json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" {
+				if _, err := s.workbooks.UndoOperation(ctx, workbook.UndoOperationInput{
+					OperationID: sorted.Operation.OperationID, ActorID: input.ActorID, ClientID: input.ClientID,
+					IdempotencyKey: executionKey(action.ID, "sort-undo", tool.IdempotencyKey),
+				}); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}

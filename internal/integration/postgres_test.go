@@ -3845,3 +3845,98 @@ func TestPostgresWorkbookAgentCreatesAndRollsBackFilterView(t *testing.T) {
 		t.Fatalf("rollback left filter views=%#v, %v", remaining, err)
 	}
 }
+
+// 정렬은 앞의 도구들과 성격이 다르다. 피벗·필터·규칙은 물건을 하나 더
+// 얹을 뿐이라 되돌리기가 그것을 지우는 것으로 끝났다. 정렬은 있던 자료를
+// 다시 쓰므로, 되돌리려면 작업 자체를 되돌려야 한다. 순서가 원래대로
+// 돌아오는지, 수식이 줄을 따라 옮겨졌다가 함께 돌아오는지까지 본다.
+func TestPostgresWorkbookAgentSortsAndRestoresTheOriginalOrder(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("workbook-sort-agent-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "Workbook Agent 정렬", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "sort-agent-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: json.RawMessage(`"부서"`)}, {Row: 1, Column: 2, Value: json.RawMessage(`"매출"`)},
+		{Row: 2, Column: 1, Value: json.RawMessage(`"영업"`)}, {Row: 2, Column: 2, Value: json.RawMessage(`70`)},
+		{Row: 3, Column: 1, Value: json.RawMessage(`"개발"`)}, {Row: 3, Column: 2, Value: json.RawMessage(`150`)},
+		{Row: 4, Column: 1, Value: json.RawMessage(`"지원"`)}, {Row: 4, Column: 2, Formula: "=70+30"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"data":[{"id":"agent-sort-test","context_length":16384}]}`))
+			return
+		}
+		plan := `{"summary":"매출 많은 순 정렬","explanation":"머리글을 두고 매출 열 기준으로 줄을 다시 세웁니다.","findings":[],"changes":[],"tool_calls":[{"name":"sort_range","arguments":{"range":"A1:B4","header_rows":1,"keys":[{"column":2,"direction":"desc"}]}}]}`
+		encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": plan}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 260, "completion_tokens": 80}})
+		_, _ = w.Write(encoded)
+	}))
+	defer gateway.Close()
+	service := kanpicai.NewService(pool, staticAISettings{
+		"ai.enabled": true, "ai.gateway_url": gateway.URL + "/v1", "ai.model": "agent-sort-test", "ai.api_key": "",
+		"ai.timeout_seconds": float64(5), "ai.max_input_cells": float64(20), "ai.max_changes": float64(10),
+	}, repository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.SetHTTPClient(gateway.Client())
+	run, err := service.SendMessage(ctx, kanpicai.AgentMessageInput{WorkbookID: book.ID, SheetID: sheet.ID, Selection: "A1:B4", Message: "매출 많은 순으로 정렬해줘", Mode: kanpicai.ModeAgent, BaseVersion: seed.ServerVersion, IdempotencyKey: "sort-agent-message", ClientID: "browser", ActorID: actor})
+	if err != nil || len(run.Action.ToolCalls) != 1 || run.Action.ToolCalls[0].Name != "sort_range" {
+		t.Fatalf("sort agent plan=%#v, %v", run, err)
+	}
+	// 있는 자료를 다시 쓰는 계획이므로 위험도가 높아야 한다.
+	if run.Action.ToolCalls[0].Risk != kanpicai.RiskHigh {
+		t.Errorf("risk=%q", run.Action.ToolCalls[0].Risk)
+	}
+	executed, err := service.ApproveRun(ctx, run.ID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "sort-agent-approve", ExpectedRevision: run.Action.Revision})
+	if err != nil || executed.Run.State != kanpicai.AgentCompleted || !executed.Run.Validation.Passed {
+		t.Fatalf("sort agent execution=%#v, %v", executed, err)
+	}
+	order := func(t *testing.T) []string {
+		t.Helper()
+		cells, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "A2:A4"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(cells))
+		for _, cell := range cells {
+			names = append(names, string(cell.Value))
+		}
+		return names
+	}
+	// 150, 100(=70+30), 70 순서. 수식 셀도 계산된 값으로 줄을 세운다.
+	if sorted := order(t); len(sorted) != 3 || sorted[0] != `"개발"` || sorted[1] != `"지원"` || sorted[2] != `"영업"` {
+		t.Fatalf("sorted order=%#v", sorted)
+	}
+	// 수식은 줄을 따라 옮겨져야 한다. 값만 옮기면 다시 계산할 때 어긋난다.
+	moved, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "B3"))
+	if err != nil || len(moved) != 1 || moved[0].Formula != "=70+30" {
+		t.Fatalf("moved formula=%#v, %v", moved, err)
+	}
+	rolledBack, err := service.RollbackChangeSet(ctx, run.ChangeSetID, kanpicai.ApprovalInput{ActorID: actor, ClientID: "browser", IdempotencyKey: "sort-agent-rollback", ExpectedRevision: executed.Run.Action.Revision})
+	if err != nil || rolledBack.Run.Action.Status != kanpicai.StatusUndone {
+		t.Fatalf("sort rollback=%#v, %v", rolledBack, err)
+	}
+	if restored := order(t); len(restored) != 3 || restored[0] != `"영업"` || restored[1] != `"개발"` || restored[2] != `"지원"` {
+		t.Fatalf("restored order=%#v", restored)
+	}
+	back, err := repository.ReadRange(ctx, sheet.ID, mustRange(t, "B4"))
+	if err != nil || len(back) != 1 || back[0].Formula != "=70+30" {
+		t.Fatalf("restored formula=%#v, %v", back, err)
+	}
+}

@@ -789,3 +789,88 @@ func TestFilterViewCriteriaMatchTheRepositoryRules(t *testing.T) {
 		t.Fatalf("blank=%#v err=%v", blank, err)
 	}
 }
+
+// 정렬은 앞의 도구들과 성격이 다르다. 물건을 하나 더 얹는 것이 아니라 있던
+// 자료를 다시 쓴다. 그래서 위험도가 높고, 되돌리기도 지우는 것이 아니라
+// 작업 자체를 되돌리는 것이다.
+func TestGatewayAcceptsSortToolAtHighRisk(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "sort_range",
+						"arguments": `{"range":"A1:B10","header_rows":1,"keys":[{"column":2,"direction":"desc"}]}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1:B10")
+	input := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10", Request: "매출 많은 순으로 정렬해줘"}
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, input, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned, err := validateGatewayTools(input, selected, plan.ToolCalls, 10)
+	if err != nil || len(planned) != 1 || planned[0].Name != "sort_range" || planned[0].Risk != RiskHigh {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	var arguments sortRangeArguments
+	if err := json.Unmarshal(planned[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	// 기준을 잃으면 무엇으로 줄을 세울지 알 수 없다.
+	if len(arguments.Keys) != 1 || arguments.Keys[0].Column != 2 || arguments.Keys[0].Direction != "desc" {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	if !supportedGatewayTool("sort_range") {
+		t.Error("도구가 허용 목록에 없다")
+	}
+}
+
+// 정렬은 저장소가 거부하는 조합이 많다. 승인한 뒤에 깨지는 대신 계획할 때
+// 걸러내야 한다 — 사람은 이미 "정렬하겠다" 는 말을 믿고 승인한 뒤다.
+func TestSortArgumentsMatchTheRepositoryRules(t *testing.T) {
+	t.Parallel()
+	selected := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "B1:D10"}
+	one := `"keys":[{"column":3,"direction":"asc"}]`
+	sorted, err := validateSortRange(selected, json.RawMessage(`{`+one+`}`))
+	if err != nil {
+		t.Fatalf("정상 정렬이 막혔다: %v", err)
+	}
+	// 범위와 머리글은 적지 않으면 고른 범위와 한 줄로 본다.
+	if sorted.Range != "B1:D10" || sorted.HeaderRows == nil || *sorted.HeaderRows != 1 {
+		t.Fatalf("sorted=%#v", sorted)
+	}
+	// 방향을 적지 않으면 오름차순이다. 모르는 방향은 막는다.
+	blank, err := validateSortRange(selected, json.RawMessage(`{"keys":[{"column":3}]}`))
+	if err != nil || blank.Keys[0].Direction != "asc" {
+		t.Fatalf("blank=%#v err=%v", blank, err)
+	}
+	if _, err := validateSortRange(selected, json.RawMessage(`{"keys":[{"column":3,"direction":"가나다순"}]}`)); err == nil {
+		t.Error("모르는 방향이 통과했다")
+	}
+	// 열 번호는 걸러내기와 같은 시트의 열 번호다. B 부터인데 1(A) 은 밖이다.
+	if _, err := validateSortRange(selected, json.RawMessage(`{"keys":[{"column":1,"direction":"asc"}]}`)); err == nil {
+		t.Error("범위 밖 기준 열이 통과했다")
+	}
+	if _, err := validateSortRange(selected, json.RawMessage(`{"keys":[{"column":3,"direction":"asc"},{"column":3,"direction":"desc"}]}`)); err == nil {
+		t.Error("한 열에 기준 둘이 통과했다")
+	}
+	if _, err := validateSortRange(selected, json.RawMessage(`{"keys":[]}`)); err == nil {
+		t.Error("기준 없이 통과했다")
+	}
+	// 머리글이 범위를 다 먹으면 세울 줄이 없다.
+	if _, err := validateSortRange(selected, json.RawMessage(`{"header_rows":10,`+one+`}`)); err == nil {
+		t.Error("머리글이 범위 전체인데 통과했다")
+	}
+	if _, err := validateSortRange(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "B1:D2"}, json.RawMessage(`{`+one+`}`)); err == nil {
+		t.Error("세울 줄이 하나뿐인데 통과했다")
+	}
+}

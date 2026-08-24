@@ -821,6 +821,70 @@ type pivotValueArg struct {
 
 // validateCreatePivot 은 모델이 적어 보낸 피벗이 말이 되는지 본다. 열 번호는
 // 고른 범위 안의 자리를 가리켜야 하고, 잴 것이 없으면 요약이 아니다.
+type sortRangeArguments struct {
+	SheetID       string            `json:"sheet_id,omitempty"`
+	Range         string            `json:"range,omitempty"`
+	HeaderRows    *int              `json:"header_rows,omitempty"`
+	Keys          []sortKeyArgument `json:"keys"`
+	CaseSensitive bool              `json:"case_sensitive,omitempty"`
+	LiteralOrder  bool              `json:"literal_order,omitempty"`
+}
+
+type sortKeyArgument struct {
+	Column    int    `json:"column"`
+	Direction string `json:"direction"`
+}
+
+// validateSortRange 는 정렬이 말이 되는지 본다. 앞의 도구들과 달리 정렬은
+// 범위 안 모든 셀을 다시 쓴다. 그러니 어디를 다시 쓰는지가 특히 분명해야
+// 한다 — 열 번호는 걸러내기와 같은 시트의 열 번호다.
+func validateSortRange(input PlanInput, raw json.RawMessage) (sortRangeArguments, error) {
+	var arguments sortRangeArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: sort_range arguments are not an object", ErrGateway)
+	}
+	target, err := rangeInsideSelection(input, arguments.Range, "sort_range")
+	if err != nil {
+		return arguments, err
+	}
+	arguments.Range = target
+	selected, _ := cellrange.Parse(target)
+	rows := selected.End.Row - selected.Start.Row + 1
+	headerRows := 1
+	if arguments.HeaderRows != nil {
+		headerRows = *arguments.HeaderRows
+	}
+	if headerRows < 0 || headerRows >= rows {
+		return arguments, fmt.Errorf("%w: sort_range header_rows must leave data rows behind", ErrGateway)
+	}
+	arguments.HeaderRows = &headerRows
+	if rows-headerRows < 2 {
+		return arguments, fmt.Errorf("%w: sort_range needs at least two data rows", ErrGateway)
+	}
+	if len(arguments.Keys) == 0 {
+		return arguments, fmt.Errorf("%w: sort_range needs at least one key", ErrGateway)
+	}
+	seen := map[int]bool{}
+	for index := range arguments.Keys {
+		key := &arguments.Keys[index]
+		key.Direction = strings.ToLower(strings.TrimSpace(key.Direction))
+		if key.Direction == "" {
+			key.Direction = "asc"
+		}
+		if key.Direction != "asc" && key.Direction != "desc" {
+			return arguments, fmt.Errorf("%w: sort_range direction must be asc or desc", ErrGateway)
+		}
+		if key.Column < selected.Start.Column || key.Column > selected.End.Column {
+			return arguments, fmt.Errorf("%w: sort_range key column %d is outside the sorted range", ErrGateway, key.Column)
+		}
+		if seen[key.Column] {
+			return arguments, fmt.Errorf("%w: sort_range has two keys on column %d", ErrGateway, key.Column)
+		}
+		seen[key.Column] = true
+	}
+	return arguments, nil
+}
+
 type createFilterViewArguments struct {
 	SheetID    string                    `json:"sheet_id,omitempty"`
 	Name       string                    `json:"name,omitempty"`
@@ -1063,6 +1127,14 @@ type createReportSheetArguments struct {
 	Chart *reportChartArguments `json:"chart,omitempty"`
 }
 
+// sortRangeResult 는 되돌릴 때 필요한 것을 담는다. 정렬은 만든 물건이
+// 없으므로 지울 대상도 없다 — 되돌리려면 작업 자체를 가리켜야 한다.
+type sortRangeResult struct {
+	Range     string                  `json:"range"`
+	Rows      int                     `json:"cells"`
+	Operation workbook.MutationResult `json:"operation"`
+}
+
 type createReportSheetResult struct {
 	Sheet         workbook.Sheet          `json:"sheet"`
 	CellOperation workbook.MutationResult `json:"cell_operation"`
@@ -1179,6 +1251,18 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 				chartMutationTools++
 			}
 			encoded, _ := json.Marshal(arguments)
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "sort_range":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: sort_range requires agent mode", ErrGateway)
+			}
+			arguments, err := validateSortRange(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			// 있는 자료를 다시 쓰는 유일한 도구다. 나머지는 물건을 하나 더
+			// 얹을 뿐이라 되돌리기가 그것을 지우는 것으로 끝난다.
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		case "create_filter_view":
 			if input.Mode != ModeAgent {
