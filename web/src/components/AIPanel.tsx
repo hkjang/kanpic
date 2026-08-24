@@ -3,7 +3,7 @@ import { AlertTriangle, Bot, Check, ChevronDown, Clipboard, Clock3, Eye, HelpCir
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { api, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
-import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview, AIUsage, AgentContext, AgentConversation, AgentExecutionResult, AgentRun } from '../types'
+import type { AIAction, AIConfig, AIExecutionResult, AICellSnapshot, AIPromptPreview, AIUsage, AgentContext, AgentConversation, AgentExecutionResult, AgentRun, AgentToolCall } from '../types'
 
 type Mode=AIAction['mode']
 type Props={workbookId:string;workbookName?:string;sheetId:string;sheetName?:string;selectionRange:string;baseVersion:number;initialMode?:Mode;initialRequest?:string;onClose:()=>void;onExecuted:(result:AIExecutionResult)=>void}
