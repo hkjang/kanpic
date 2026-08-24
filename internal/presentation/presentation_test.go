@@ -443,3 +443,65 @@ func TestGroupedChartsDrawTheTotalsTheSlideClaims(t *testing.T) {
 		t.Fatalf("first total=%q", series[0])
 	}
 }
+
+// 잴 것이 여럿인 표에서 첫 열 하나만 깊이 파면, 정작 마지막 열이 얼마인지
+// 한 장도 말하지 않는다. 매출·비용·이익이 있는데 "최고 매출, 최저 매출,
+// 합계 매출" 만 적힌 슬라이드는 이익을 묻는 사람에게 아무 답이 없다.
+//
+// 슬라이드에 들어가는 칸은 넷뿐이므로, 잴 것이 여럿이면 최저 자리를 다른
+// 열의 합계에 내준다. 하나뿐이면 그 열을 깊이 파는 것이 맞다.
+func TestKPIsCoverEveryMeasureWhenThereAreSeveral(t *testing.T) {
+	t.Parallel()
+	several := Analyze(SourceRef{}, rangeOf(t, "A1:D5"), sheetOf([][]any{
+		{"분기", "매출", "비용", "이익"},
+		{"1분기", 1200, 800, 400},
+		{"2분기", 1500, 900, 600},
+		{"3분기", 1100, 850, 250},
+		{"4분기", 1800, 1000, 800},
+	}))
+	labels := []string{}
+	for _, row := range kpiRows(several) {
+		labels = append(labels, row.Label)
+	}
+	for _, want := range []string{"합계 매출", "합계 비용", "합계 이익"} {
+		if !containsLabel(labels, want) {
+			t.Errorf("%q 가 없다: %v", want, labels)
+		}
+	}
+
+	// 잴 것이 하나면 그 열을 깊이 판다.
+	single := Analyze(SourceRef{}, rangeOf(t, "A1:B5"), sheetOf([][]any{
+		{"분기", "매출"}, {"1분기", 1200}, {"2분기", 1500}, {"3분기", 1100}, {"4분기", 1800},
+	}))
+	singleLabels := []string{}
+	for _, row := range kpiRows(single) {
+		singleLabels = append(singleLabels, row.Label)
+	}
+	for _, want := range []string{"최고 매출", "최저 매출", "합계 매출"} {
+		if !containsLabel(singleLabels, want) {
+			t.Errorf("%q 가 없다: %v", want, singleLabels)
+		}
+	}
+
+	// 비율은 더하면 뜻이 없다. 달성률 열의 합계를 내놓으면 안 된다.
+	rates := Analyze(SourceRef{}, rangeOf(t, "A1:C4"), sheetOf([][]any{
+		{"팀", "매출", "달성률"},
+		{"영업", 1200, "90%"},
+		{"개발", 1500, "120%"},
+		{"지원", 1100, "80%"},
+	}))
+	for _, row := range kpiRows(rates) {
+		if row.Label == "합계 달성률" {
+			t.Errorf("비율을 더했다: %v", row)
+		}
+	}
+}
+
+func containsLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if label == want {
+			return true
+		}
+	}
+	return false
+}

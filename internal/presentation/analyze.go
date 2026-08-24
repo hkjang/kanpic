@@ -564,13 +564,28 @@ func findInsights(analysis Analysis) []Insight {
 	if top, ok := extreme(primary, true); ok {
 		insights = append(insights, Insight{Kind: InsightTop, Label: primary.Name, Value: primary.Values[top].Text, Detail: label(top), Number: primary.Values[top].Number})
 	}
-	if bottom, ok := extreme(primary, false); ok && len(primary.Values) > 1 {
+	// 잴 것이 여럿이면 첫 열 하나를 깊이 파는 것보다 열마다 합계를 보여
+	// 주는 편이 낫다. 매출·비용·이익이 있는 표에서 "최고 매출, 최저 매출,
+	// 합계 매출" 만 적으면, 정작 이익이 얼마인지는 한 장도 말하지 않는다.
+	//
+	// 슬라이드에 들어가는 칸은 넷뿐이므로 최저 자리를 내준다.
+	if bottom, ok := extreme(primary, false); ok && len(primary.Values) > 1 && len(analysis.Measures) < 2 {
 		insights = append(insights, Insight{Kind: InsightBottom, Label: primary.Name, Value: primary.Values[bottom].Text, Detail: label(bottom), Number: primary.Values[bottom].Number})
 	}
 	if total, counted := sum(primary); counted > 1 && primary.Kind == ColumnNumber {
 		// 합계는 부분이 입고 있던 단위를 그대로 입어야 한다. 120억과 95억을
 		// 더해 놓고 "325" 라고만 쓰면 무엇이 325인지 슬라이드가 말하지 않는다.
 		insights = append(insights, Insight{Kind: InsightTotal, Label: primary.Name, Value: formatNumber(total) + commonUnit(primary), Number: total})
+	}
+	for _, index := range analysis.Measures[min(1, len(analysis.Measures)):] {
+		column := analysis.Columns[index]
+		// 증감률과 달성률은 더하면 뜻이 없다. 그 둘은 아래에서 따로 다룬다.
+		if column.Kind != ColumnNumber || column.Role == RoleChange || column.Role == RoleAttainment {
+			continue
+		}
+		if total, counted := sum(column); counted > 1 {
+			insights = append(insights, Insight{Kind: InsightTotal, Label: column.Name, Value: formatNumber(total) + commonUnit(column), Number: total})
+		}
 	}
 	for _, index := range analysis.Measures {
 		column := analysis.Columns[index]
