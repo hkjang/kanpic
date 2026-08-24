@@ -474,6 +474,14 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		return evaluateConditionalAggregate(name, evaluated)
 	case "VLOOKUP", "HLOOKUP", "INDEX", "MATCH":
 		return evaluateLookup(name, evaluated)
+	case "DSUM", "DAVERAGE", "DCOUNT", "DCOUNTA", "DMAX", "DMIN", "DPRODUCT",
+		"DSTDEV", "DSTDEVP", "DVAR", "DVARP", "DGET":
+		// 표와 조건표의 모양을 그대로 봐야 한다. 아래에서 낱낱이 펴면
+		// 어느 값이 어느 열인지 알 수 없다.
+		result, handled, err := evaluateDatabase(name, evaluated)
+		if handled {
+			return result, err
+		}
 	case "FILTER":
 		return evaluateFilter(evaluated)
 	case "SORT":
