@@ -1110,6 +1110,16 @@ test('selects a range and pastes copied formulas with relative references', asyn
   await edit({x:70,y:42},'2')
   await edit({x:170,y:42},'=A1*2')
 
+  // 복사는 화면에 있는 것을 담는다. 방금 친 수식이 아직 저장 대기줄에 있으면
+  // 빈 칸을 복사해 붙여넣기가 한 칸만 쓴다. CI 에서 이 시험이 드물게
+  // 실패한 까닭이 이것이었다 — 붙여넣은 쪽을 15초 기다려도, 복사한 것이
+  // 비어 있었으면 영영 채워지지 않는다.
+  const source = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B1`).then(response => response.json())
+  await expect.poll(async()=>{
+    const result=await source()
+    return result.items.map((cell:{value:unknown})=>cell.value)
+  },{timeout:15_000}).toEqual([2,4])
+
   await canvas.click({position:{x:70,y:42}})
   await page.keyboard.press('Shift+ArrowRight')
   await expect(page.locator('.name-box')).toHaveValue('A1:B1')
