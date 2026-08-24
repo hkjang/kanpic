@@ -474,6 +474,11 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		return evaluateConditionalAggregate(name, evaluated)
 	case "VLOOKUP", "HLOOKUP", "INDEX", "MATCH":
 		return evaluateLookup(name, evaluated)
+	case "PERCENTRANK", "TRIMMEAN", "ZTEST", "STEYX", "PROB":
+		result, handled, err := evaluateRangeStatistics(name, evaluated)
+		if handled {
+			return result, err
+		}
 	case "SUMX2MY2", "SUMX2PY2", "SUMXMY2", "SERIESSUM":
 		// 두 범위를 짝지어 세거나 계수 목록을 차례로 쓴다. 아래에서 낱낱이
 		// 펴면 어느 값이 어느 쪽인지 알 수 없다.
@@ -638,7 +643,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 	}
 	for _, group := range []func(string, []any) (any, bool, error){
 		evaluateMath, evaluateStatistics, evaluateFinance, evaluateText, evaluateDate, evaluateInformation,
-		evaluateEngineering, evaluateMathExtra,
+		evaluateEngineering, evaluateMathExtra, evaluateDistribution,
 	} {
 		if result, handled, err := group(name, values); handled {
 			return result, err
