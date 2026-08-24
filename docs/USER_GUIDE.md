@@ -558,6 +558,10 @@ kanpic은 문맥 인식 수식 파서를 통해 셀 참조와 계산을 실시�
 
   이항과 포아송은 큰 수에서도 넘치지 않습니다 — `=BINOMDIST(500,1000,0.5,FALSE)` 처럼 계승을 곱해 나가면 무한대가 되는 자리를 감마의 로그로 지납니다. 되돌리는 쪽(`INV`)은 0과 1 **사이** 의 확률만 받고, 양 끝은 `#NUM!` 입니다.
 
+- **채권과 단기 증권도 다룹니다.** `=DISC`, `=INTRATE`, `=RECEIVED`, `=PRICEDISC`, `=YIELDDISC`, `=PRICEMAT`, `=YIELDMAT`, `=TBILLPRICE`, `=TBILLYIELD`, `=TBILLEQ`, `=DOLLARDE`, `=DOLLARFR`, `=FVSCHEDULE`, `=ISPMT` 가 있습니다.
+
+  날짜 사이의 길이를 세는 **기준(basis)** 은 `0`~`4` 이며 `=YEARFRAC` 과 같은 규칙입니다. 결제일이 만기일보다 뒤면 `#NUM!` 이고, 단기 국채는 만기가 결제일에서 한 해를 넘으면 `#NUM!` 입니다. `=DOLLARDE(1.02,16)` 은 "1과 16분의 2" 를 읽어 `1.125` 를 냅니다 — 분모의 자리 수만큼 밀어 읽습니다.
+
 - **검정 분포도 씁니다.** 카이제곱(`=CHIDIST`, `=CHIINV`, `=CHITEST`), t(`=TDIST`, `=TINV`, `=TTEST`), F(`=FDIST`, `=FINV`, `=FTEST`), 베타(`=BETADIST`, `=BETAINV`)입니다.
 
   **어느 꼬리를 재는지가 함수마다 다릅니다.** `=CHIDIST` 와 `=FDIST` 는 오른쪽 꼬리, `=TDIST` 는 세 번째 인수로 한쪽·양쪽을 고르고, **`=TINV` 는 양측** 입니다 — 한쪽으로 알고 쓰면 조용히 다른 값이 나옵니다. `=BETADIST` 는 왼쪽 누적입니다. `=TTEST` 의 종류는 1이 대응표본, 2가 등분산, 3이 웰치이며 셋의 값이 서로 다릅니다.
