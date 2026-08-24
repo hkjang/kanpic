@@ -1121,10 +1121,12 @@ test('selects a range and pastes copied formulas with relative references', asyn
   await page.keyboard.press('Control+V')
 
   const pasted = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/D4:E4`).then(response => response.json())
+  // 붙여넣기는 클립보드에서 저장 대기줄을 거쳐 서버까지 간다. 내 자리에서는
+  // 눈 깜짝할 새지만 CI 는 느려서 기본 5초를 넘기는 때가 있다.
   await expect.poll(async()=>{
     const result=await pasted()
     return result.items.map((cell:{value:unknown})=>cell.value)
-  }).toEqual([2,4])
+  },{timeout:15_000}).toEqual([2,4])
   const result=await pasted()
   expect(result.items[1].formula).toBe('=D4*2')
 })
