@@ -1459,7 +1459,7 @@ print(response.json())
 > **API 키 보안 유의사항**  
 > API 키 원문은 생성 시 단 한 번만 화면에 표시되며, 데이터베이스에는 SHA-256 해시로 저장되므로 분실 시 키를 회전(Rotate)하여 새로 발급받아야 합니다.
 
-키 카드의 **수정**에서 이름, 만료 시점과 scope를 변경하거나 만료를 해제할 수 있습니다. `mcp.use`와 사용할 기능의 최소 scope를 함께 선택합니다. 조건부 서식 에이전트에는 `format.read` 또는 `format.write`, 차트 에이전트에는 `chart.read` 또는 `chart.write`, 피벗 에이전트에는 `pivot.read` 또는 `pivot.write`가 필요합니다. AI 에이전트에는 `ai.use`와 작업에 맞는 `range.read`, `formula.write`, `range.write`가 필요하고, 차트를 생성하거나 수정하는 계획에는 `chart.write`도 필요합니다. 자동화 에이전트에는 `automation.read`, `automation.write`, `automation.run`과 실제 셀 작업에 필요한 `range.read`, `range.write` 또는 `formula.write`를 조합합니다. **회전**하면 기존 키는 즉시 폐기되고 같은 이름·scope·만료 정책을 가진 새 키가 한 번만 표시됩니다. 더 이상 사용하지 않는 키는 **폐기**합니다.
+키 카드의 **수정**에서 이름, 만료 시점과 scope를 변경하거나 만료를 해제할 수 있습니다. `mcp.use`와 사용할 기능의 최소 scope를 함께 선택합니다. 조건부 서식 에이전트에는 `format.read` 또는 `format.write`, 차트 에이전트에는 `chart.read` 또는 `chart.write`, 피벗 에이전트에는 `pivot.read` 또는 `pivot.write`가 필요합니다. AI 에이전트에는 `ai.use`와 작업에 맞는 `range.read`, `formula.write`, `range.write`가 필요합니다. 계획이 만드는 물건에 따라 권한이 더 듭니다 — 차트에는 `chart.write`(보고서 시트 안의 차트도 마찬가지), 조건부 서식에는 `format.write`, 피벗에는 `pivot.write`가 함께 필요합니다. 에이전트라고 해서 REST·MCP 보다 적은 권한으로 같은 것을 만들 수는 없습니다. 자동화 에이전트에는 `automation.read`, `automation.write`, `automation.run`과 실제 셀 작업에 필요한 `range.read`, `range.write` 또는 `formula.write`를 조합합니다. **회전**하면 기존 키는 즉시 폐기되고 같은 이름·scope·만료 정책을 가진 새 키가 한 번만 표시됩니다. 더 이상 사용하지 않는 키는 **폐기**합니다.
 
 ---
 

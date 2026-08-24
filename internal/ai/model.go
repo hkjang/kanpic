@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"kanpic/internal/workbook"
@@ -222,19 +223,47 @@ func RequiredApprovalScopes(action Action) []string {
 	}
 	add(RequiredApprovalScope(action.Mode))
 	for _, tool := range action.ToolCalls {
+		// 도구가 만드는 것은 REST·MCP 에서 각자의 scope 로 지키는 물건들이다.
+		// 에이전트라고 해서 더 적은 권한으로 만들 수 있으면, 에이전트가
+		// 권한을 넘는 지름길이 된다.
 		switch tool.Name {
 		case "create_chart", "update_chart":
 			add("chart.write")
 		case "create_report_sheet":
 			add("range.write")
+			// 보고서 안의 차트도 차트다.
+			var arguments createReportSheetArguments
+			if json.Unmarshal(tool.Arguments, &arguments) == nil && arguments.Chart != nil {
+				add("chart.write")
+			}
+		case "create_conditional_format":
+			add("format.write")
+		case "create_pivot":
+			add("pivot.write")
+		case "create_data_validation":
+			add("range.write")
 		}
 	}
-	ordered := []string{"formula.write", "range.write", "chart.write"}
+	// 여기 없는 scope 는 위에서 넣어도 조용히 사라진다. 도구를 늘릴 때는
+	// 두 곳을 함께 손봐야 한다.
+	ordered := []string{"formula.write", "range.write", "format.write", "chart.write", "pivot.write"}
 	result := make([]string, 0, len(seen))
 	for _, scope := range ordered {
 		if seen[scope] {
 			result = append(result, scope)
 		}
+	}
+	// 목록에 없는 scope 를 요구했다면 조용히 빠뜨리는 대신 뒤에 붙인다.
+	// 검사에서 빠진 scope 는 없는 것과 같고, 그것이 가장 나쁜 실패다.
+	if len(result) != len(seen) {
+		extra := make([]string, 0, len(seen)-len(result))
+		for scope := range seen {
+			if !slices.Contains(result, scope) {
+				extra = append(extra, scope)
+			}
+		}
+		slices.Sort(extra)
+		result = append(result, extra...)
 	}
 	return result
 }
