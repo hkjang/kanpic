@@ -768,6 +768,60 @@ func applyAgentCandidate(after *CellSnapshot, change gatewayChange) error {
 	return nil
 }
 
+// createConditionalFormatArguments 는 "상위 10%에 색 칠해줘" 같은 요청이
+// 만들어 내는 규칙이다. 조건부 서식은 값에 따라 그때그때 칠하므로, 셀을
+// 직접 물들이는 것과 달리 자료가 바뀌면 색도 따라 바뀐다.
+//
+// 규칙 종류마다 필요한 값이 다르다. 색조(color_scale)는 양 끝 색을, 막대
+// (data_bar)는 막대 색을, 나머지는 칠할 서식을 받는다.
+type createConditionalFormatArguments struct {
+	SheetID  string          `json:"sheet_id,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Range    string          `json:"range"`
+	RuleType string          `json:"rule_type"`
+	Operator string          `json:"operator,omitempty"`
+	Formula  string          `json:"formula,omitempty"`
+	Value    json.RawMessage `json:"value,omitempty"`
+	Value2   json.RawMessage `json:"value2,omitempty"`
+	Style    json.RawMessage `json:"style,omitempty"`
+	MinColor string          `json:"min_color,omitempty"`
+	MidColor string          `json:"mid_color,omitempty"`
+	MaxColor string          `json:"max_color,omitempty"`
+	BarColor string          `json:"bar_color,omitempty"`
+}
+
+// validateCreateConditionalFormat 은 모델이 적어 보낸 규칙이 말이 되는지
+// 본다. 범위는 사람이 고른 범위 안에 있어야 한다 — 고르지도 않은 곳을
+// 물들이는 것은 사람이 시킨 일이 아니다.
+func validateCreateConditionalFormat(input PlanInput, raw json.RawMessage) (createConditionalFormatArguments, error) {
+	var arguments createConditionalFormatArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: create_conditional_format arguments are not an object", ErrGateway)
+	}
+	arguments.Range = strings.TrimSpace(arguments.Range)
+	arguments.RuleType = strings.ToLower(strings.TrimSpace(arguments.RuleType))
+	arguments.Operator = strings.ToLower(strings.TrimSpace(arguments.Operator))
+	if arguments.Range == "" {
+		arguments.Range = input.Range
+	}
+	target, err := cellrange.Parse(arguments.Range)
+	if err != nil {
+		return arguments, fmt.Errorf("%w: create_conditional_format range is not a range", ErrGateway)
+	}
+	selected, err := cellrange.Parse(input.Range)
+	if err != nil {
+		return arguments, fmt.Errorf("%w: the selected range is not a range", ErrGateway)
+	}
+	if target.Start.Row < selected.Start.Row || target.Start.Column < selected.Start.Column ||
+		target.End.Row > selected.End.Row || target.End.Column > selected.End.Column {
+		return arguments, fmt.Errorf("%w: create_conditional_format range must stay inside the selected range", ErrGateway)
+	}
+	if arguments.RuleType == "" {
+		return arguments, fmt.Errorf("%w: create_conditional_format needs a rule_type", ErrGateway)
+	}
+	return arguments, nil
+}
+
 type createChartArguments struct {
 	SheetID           string `json:"sheet_id,omitempty"`
 	SourceSheetID     string `json:"source_sheet_id,omitempty"`
@@ -933,6 +987,18 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskHigh, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_conditional_format":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_conditional_format requires agent mode", ErrGateway)
+			}
+			arguments, err := validateCreateConditionalFormat(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			// 규칙은 셀 값을 바꾸지 않고, 되돌리면 규칙만 지우면 된다. 셀을
+			// 직접 물들이는 것보다 위험이 낮다.
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskMedium, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
 		default:
 			return nil, fmt.Errorf("%w: unsupported workbook tool %q", ErrGateway, name)
 		}

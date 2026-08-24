@@ -523,6 +523,17 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &result) == nil && result.After.ID != "" {
 			item.Result = marshalMemory(map[string]any{"before": memoryChart(result.Before), "after": memoryChart(result.After)})
 		}
+	case "create_conditional_format":
+		var arguments createConditionalFormatArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{
+				"range": arguments.Range, "rule_type": arguments.RuleType, "operator": arguments.Operator,
+			})
+		}
+		var rule workbook.ConditionalFormat
+		if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+			item.Result = marshalMemory(map[string]any{"id": rule.ID, "range": rule.Range, "rule_type": rule.RuleType})
+		}
 	case "create_report_sheet":
 		var arguments createReportSheetArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -747,6 +758,30 @@ func (s *Service) executeAgentTools(ctx context.Context, action *Action, actorID
 			}
 			tool.Result, _ = json.Marshal(chart)
 			tool.Status = "completed"
+		case "create_conditional_format":
+			var arguments createConditionalFormatArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored create_conditional_format arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			rule, err := s.workbooks.CreateConditionalFormat(ctx, sheetID, actorID, workbook.CreateConditionalFormatInput{
+				IdempotencyKey: tool.IdempotencyKey, Name: arguments.Name, Range: arguments.Range,
+				RuleType: arguments.RuleType, Operator: arguments.Operator, Formula: arguments.Formula,
+				Value: arguments.Value, Value2: arguments.Value2, Style: arguments.Style,
+				MinColor: arguments.MinColor, MidColor: arguments.MidColor, MaxColor: arguments.MaxColor,
+				BarColor: arguments.BarColor,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(rule)
+			tool.Status = "completed"
 		case "update_chart":
 			var arguments updateChartArguments
 			if json.Unmarshal(tool.Arguments, &arguments) != nil {
@@ -881,6 +916,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var result updateChartResult
 			passed := tool.Status == "completed" && json.Unmarshal(tool.Result, &result) == nil && result.Before.ID != "" && result.After.ID == result.Before.ID && result.After.Revision == result.Before.Revision+1
 			checks = append(checks, ValidationCheck{Name: "chart_update", Passed: passed, Message: "차트 변경과 리비전을 확인했습니다."})
+		case "create_conditional_format":
+			var rule workbook.ConditionalFormat
+			passed := json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" && rule.SheetID != ""
+			checks = append(checks, ValidationCheck{Name: "conditional_format", Passed: passed, Message: "조건부 서식 규칙 생성을 확인했습니다."})
 		case "create_report_sheet":
 			var arguments createReportSheetArguments
 			var result createReportSheetResult
@@ -1094,6 +1133,16 @@ func (s *Service) RollbackChangeSet(ctx context.Context, changeSetID string, inp
 			var result createReportSheetResult
 			if json.Unmarshal(tool.Result, &result) == nil && result.Sheet.ID != "" {
 				if _, err := s.workbooks.DeleteSheet(ctx, result.Sheet.ID, action.ActorID); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return AgentExecutionResult{}, err
+				}
+			}
+		case "create_conditional_format":
+			// 되돌리면 규칙을 지운다. 규칙이 남아 있으면 셀은 그대로인데 색만
+			// 남아, 되돌렸다는 말과 화면이 어긋난다.
+			var rule workbook.ConditionalFormat
+			if json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" {
+				revision := rule.Revision
+				if err := s.workbooks.DeleteConditionalFormat(ctx, rule.ID, input.ActorID, &revision); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return AgentExecutionResult{}, err
 				}
 			}

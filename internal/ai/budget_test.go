@@ -475,3 +475,78 @@ func TestRequestGatewayPlanFallsBackWhenResponseFormatIsUnsupported(t *testing.T
 		t.Fatalf("calls=%d plan=%#v usage=%#v err=%v", calls, plan, usage, err)
 	}
 }
+
+// 에이전트가 쓸 수 있는 것이 차트와 보고서 시트뿐이었다. "상위 10%에 색
+// 칠해줘" 처럼 조건을 말하는 요청은 셀마다 배경색을 박아 넣는 수밖에 없었고,
+// 그러면 자료가 바뀌어도 색은 그대로 남는다. 조건부 서식은 값에 따라 다시
+// 칠하므로 그런 요청에는 이쪽이 맞다.
+func TestGatewayAcceptsConditionalFormatTool(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "create_conditional_format",
+						"arguments": `{"range":"A1:B2","rule_type":"rank","operator":"top_percent","value":10,"style":{"background":"#ffe08a"}}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1:B2")
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B2", Request: "상위 10%에 색 칠해줘"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_conditional_format" {
+		t.Fatalf("plan=%#v", plan.ToolCalls)
+	}
+	var arguments createConditionalFormatArguments
+	if err := json.Unmarshal(plan.ToolCalls[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments.Range != "A1:B2" || arguments.RuleType != "rank" || arguments.Operator != "top_percent" {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	// 서식은 그대로 실어 보내야 한다. 여기서 잃으면 규칙은 생기는데 색이 없다.
+	if len(arguments.Style) == 0 {
+		t.Error("style 이 비었다")
+	}
+
+	// 모르는 도구는 그대로 막는다.
+	if supportedGatewayTool("delete_sheet") {
+		t.Error("허용 목록에 없는 도구가 통과했다")
+	}
+}
+
+// 규칙이 칠하는 곳은 사람이 고른 범위 안이어야 한다. 고르지도 않은 곳을
+// 물들이는 것은 시킨 일이 아니고, 승인 화면에서도 눈에 잘 띄지 않는다.
+func TestConditionalFormatStaysInsideTheSelection(t *testing.T) {
+	t.Parallel()
+	selected := PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}
+	if _, err := validateCreateConditionalFormat(selected, json.RawMessage(`{"range":"A1:D50","rule_type":"greater_than","value":10}`)); err == nil {
+		t.Error("선택 밖 범위가 통과했다")
+	}
+	inside, err := validateCreateConditionalFormat(selected, json.RawMessage(`{"range":"A2:B5","rule_type":"greater_than","value":10}`))
+	if err != nil || inside.Range != "A2:B5" {
+		t.Fatalf("inside=%#v err=%v", inside, err)
+	}
+	// 범위를 적지 않으면 고른 범위를 그대로 쓴다.
+	blank, err := validateCreateConditionalFormat(selected, json.RawMessage(`{"rule_type":"data_bar","bar_color":"#4c9aff"}`))
+	if err != nil || blank.Range != "A1:B10" {
+		t.Fatalf("blank=%#v err=%v", blank, err)
+	}
+	// 종류를 적지 않으면 무엇을 칠할지 알 수 없다.
+	if _, err := validateCreateConditionalFormat(selected, json.RawMessage(`{"range":"A1:B2"}`)); err == nil {
+		t.Error("rule_type 없이 통과했다")
+	}
+	// 에이전트 모드가 아닐 때는 아예 쓸 수 없다.
+	if supportedGatewayTool("create_conditional_format") != true {
+		t.Error("도구가 허용 목록에 없다")
+	}
+}

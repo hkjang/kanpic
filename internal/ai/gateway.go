@@ -263,7 +263,8 @@ Modes:
 - clean: findings and tool_calls are empty; each change contains row, column, and exactly one scalar value or clear=true.
 - format: findings and tool_calls are empty; each change contains row, column, and a complete safe style object. Supported style keys include bold, italic, underline, color, background, font_family, font_size, horizontal_align, vertical_align, text_mode, number_format, text_rotation, and borders.
 - chart: changes and findings are empty; return exactly the tool named by required_chart_tool when it is present, otherwise exactly one create_chart or update_chart tool_call. Use create_chart for a new chart. To change an existing chart, use update_chart with the exact chart_id from workbook_objects.charts and only the fields to change: type, title, source_range, first_row_headers, first_column_labels, legend_position, x_axis_title, or y_axis_title. Never invent a chart ID. A changed source_range must remain inside selected_range.
-- agent: use selected-range changes plus supported workbook tools. A plan that creates or updates a chart may contain only one workbook tool_call; put a new report chart inside create_report_sheet.chart instead of adding a second chart call. create_report_sheet arguments contain name, cells, and an optional chart. Each cell has row, column, and exactly one formula, scalar value, style, or clear=true. Formulas may reference the named active sheet. Its optional chart contains type, title, and source_range on the new sheet. Do not claim to create other workbook objects.
+- agent: use selected-range changes plus supported workbook tools. A plan that creates or updates a chart may contain only one workbook tool_call; put a new report chart inside create_report_sheet.chart instead of adding a second chart call. create_report_sheet arguments contain name, cells, and an optional chart. Each cell has row, column, and exactly one formula, scalar value, style, or clear=true. Formulas may reference the named active sheet. Its optional chart contains type, title, and source_range on the new sheet.
+- create_conditional_format paints by rule rather than by cell, so the colours follow the numbers when they change. Prefer it over style changes when the request describes a condition ("상위 10%", "음수는 빨강", "목표 미달"). Arguments: range (inside selected_range), rule_type, and the fields that rule needs. rule_type is one of greater_than, less_than, greater_or_equal, less_or_equal, equal, not_equal, between, not_between, contains, not_contains, starts_with, ends_with, is_blank, not_blank, formula, color_scale, data_bar, rank. Comparison rules take value (and value2 for between) plus style. rank takes value as the count or percent with operator top_percent, bottom_percent, top_items, or bottom_items. color_scale takes min_color, mid_color and max_color; data_bar takes bar_color; formula takes formula beginning with '='. style is a safe style object, usually background and color. Do not claim to create other workbook objects.
 - explain/summarize: changes and tool_calls are empty. Explain has no findings. Summary findings may use row=0,column=0 for general insights.
 - anomaly: changes and tool_calls are empty; every finding identifies a selected cell with severity info, warning, or critical.
 
@@ -1255,7 +1256,7 @@ func rawJSONArrayHasItems(raw json.RawMessage) bool {
 
 func supportedGatewayTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "create_chart", "update_chart", "create_report_sheet":
+	case "create_chart", "update_chart", "create_report_sheet", "create_conditional_format":
 		return true
 	default:
 		return false
