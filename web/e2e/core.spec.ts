@@ -1110,10 +1110,14 @@ test('selects a range and pastes copied formulas with relative references', asyn
   await edit({x:70,y:42},'2')
   await edit({x:170,y:42},'=A1*2')
 
-  // 복사는 화면에 있는 것을 담는다. 방금 친 수식이 아직 저장 대기줄에 있으면
-  // 빈 칸을 복사해 붙여넣기가 한 칸만 쓴다. CI 에서 이 시험이 드물게
-  // 실패한 까닭이 이것이었다 — 붙여넣은 쪽을 15초 기다려도, 복사한 것이
-  // 비어 있었으면 영영 채워지지 않는다.
+  // 복사는 화면 저장소에 있는 것을 담는다. Enter 를 누른 뒤 그 저장소가
+  // 채워지기까지는 비동기로 몇 단계를 거치는데, Playwright 의 press 는 키를
+  // 보낸 순간 돌아온다. 그 사이에 Ctrl+C 가 끼면 빈 칸을 복사하고,
+  // 붙여넣기는 한 칸만 쓴다. 붙여넣은 쪽을 15초 기다려도 복사한 것이
+  // 비어 있었으면 영영 채워지지 않는다 — CI 에서 드물게 실패한 까닭이다.
+  //
+  // 서버에 닿았는지로 기다린다. 저장소는 서버로 보내기 **전에** 채워지므로,
+  // 서버가 알고 있다면 저장소는 이미 채워져 있다.
   const source = async () => page.request.get(`/api/v1/sheets/${sheetId}/ranges/A1:B1`).then(response => response.json())
   await expect.poll(async()=>{
     const result=await source()
