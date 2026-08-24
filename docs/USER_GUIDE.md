@@ -554,6 +554,10 @@ kanpic은 문맥 인식 수식 파서를 통해 셀 참조와 계산을 실시�
 - `=LARGE`, `=SMALL`, `=RANK`, `=PERCENTILE`, `=QUARTILE`, `=MODE`, `=COUNTUNIQUE`: 순위와 분포를 살핍니다.
 - **엑셀 2010 이후의 점 붙은 이름도 그대로 씁니다.** `=STDEV.S`, `=STDEV.P`, `=VAR.S`, `=VAR.P`, `=MODE.SNGL`, `=RANK.EQ`, `=PERCENTILE.INC`, `=QUARTILE.INC`, `=FORECAST.LINEAR`, `=COVARIANCE.P` 는 각각 위의 예전 이름과 **같은 값** 을 냅니다. 오늘 엑셀에서 만든 파일을 가져오면 이 이름들이 들어 있습니다.
 - **이름이 비슷해도 셈이 다른 것들이 있습니다.** `=PERCENTILE.EXC`, `=QUARTILE.EXC` 는 양 끝을 자료 밖에 두므로 포함형과 값이 다릅니다 — 네 개짜리 자료에서 1사분위가 포함형은 1.75, 배타형은 1.25입니다. 배타형은 답할 수 있는 범위가 좁아 `0`이나 `1`을 넣으면 `#NUM!` 입니다. `=RANK.AVG` 는 동점자에게 그들이 차지한 등수의 **평균** 을 줍니다(`RANK` 는 모두에게 가장 높은 등수를 줍니다).
+- **삼각의 역수와 쌍곡선.** `=SEC`, `=CSC`, `=COT`, `=SECH`, `=CSCH`, `=COTH`, `=ACOT`, `=ACOTH`, `=ACOSH`, `=ASINH`, `=ATANH`, `=GAMMALN`, `=SQRTPI` 를 씁니다. 나누는 쪽이 0이면 무한대 대신 `#DIV/0!` 을 냅니다 — 무한대를 내면 뒤의 셈이 조용히 망가집니다. `=ACOT` 은 엑셀과 같이 **0과 파이 사이** 의 값을 냅니다.
+- **자리 올림에는 갈래가 여럿이고 음수에서 갈립니다.** `=CEILING.MATH(-5.5)` 는 0 쪽으로 올려 **-5**, 방식을 주면(`=CEILING.MATH(-5.5,1,1)`) 0에서 멀어져 **-6** 입니다. `=FLOOR.MATH` 는 반대입니다. `=CEILING.PRECISE`, `=FLOOR.PRECISE`, `=ISO.CEILING` 은 언제나 한 방향이고 기준의 부호를 무시합니다.
+- **조합과 제곱합.** `=COMBINA`(되풀이를 허용한 조합), `=FACTDOUBLE`(이중 계승), `=MULTINOMIAL`, `=SUMX2MY2`, `=SUMX2PY2`, `=SUMXMY2`, `=SERIESSUM` 이 있습니다. `=BASE` 와 `=DECIMAL` 로 2~36진법을 오갑니다. `=MUNIT` 은 단위 행렬을, `=RANDARRAY` 는 지정한 크기의 난수를 펼칩니다.
+
 - **진법과 비트도 다룹니다.** `=BIN2DEC`, `=BIN2OCT`, `=BIN2HEX`, `=OCT2DEC`, `=OCT2BIN`, `=OCT2HEX`, `=HEX2DEC`, `=HEX2BIN`, `=HEX2OCT`, `=DEC2BIN`, `=DEC2OCT`, `=DEC2HEX` 로 진법을 바꾸고, `=BITAND`, `=BITOR`, `=BITXOR`, `=BITLSHIFT`, `=BITRSHIFT` 로 비트를 셉니다. `=DELTA`, `=GESTEP`, `=ERF`, `=ERFC` 도 있습니다.
 
   진법 값은 엑셀과 같이 **10자리 2의 보수** 입니다. 맨 앞자리가 1이면 음수라서 `=BIN2DEC(1111111111)` 은 1023이 아니라 **-1** 입니다. 자릿수를 넘거나 모자라면 잘라 내지 않고 `#NUM!` 을 냅니다. 비트 함수는 음수와 소수를 받지 않고 48비트까지 셉니다.

@@ -257,7 +257,7 @@ func constantIntegers(arguments []node) ([]int, bool) {
 
 // volatileFunctions recalculate on every change because their result does not
 // depend only on the cells they name.
-var volatileFunctions = []string{"INDIRECT(", "OFFSET(", "RAND(", "RANDBETWEEN(", "TODAY(", "NOW(", "IMPORTRANGE("}
+var volatileFunctions = []string{"INDIRECT(", "OFFSET(", "RAND(", "RANDBETWEEN(", "RANDARRAY(", "TODAY(", "NOW(", "IMPORTRANGE("}
 
 // IsVolatile reports whether a formula has to be recalculated whenever
 // anything in the workbook changes.
