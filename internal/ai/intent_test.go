@@ -94,3 +94,68 @@ func TestAgentToolsAskForTheSameScopeAsTheirDirectRoute(t *testing.T) {
 		t.Fatalf("scopes=%#v", mixed)
 	}
 }
+
+// 도구를 다섯 개 붙여 놓고도 사람이 그 일을 말로 시키면 읽기 전용 모드로
+// 갔다. "매출 100 이상만 보이게 해줘" 는 summarize 로, "매출 많은 순으로
+// 정렬해줘" 는 서식으로 샜다. 읽기 전용 모드는 도구를 아예 쓸 수 없으므로,
+// 만들어 놓은 도구에 닿는 길이 없었던 것이다.
+func TestNaturalRequestsReachTheToolThatDoesTheJob(t *testing.T) {
+	t.Parallel()
+	for _, item := range []struct {
+		message string
+		skill   string
+	}{
+		{"부서별 매출 합계를 요약해줘", "pivot_analysis"},
+		{"월별 평균을 내줘", "pivot_analysis"},
+		{"제품별 판매 건수를 집계해줘", "pivot_analysis"},
+		{"성별 인원수를 세줘", "pivot_analysis"},
+		{"매출 100 이상만 보이게 해줘", "filter_view"},
+		{"완료된 항목은 빼고 보여줘", "filter_view"},
+		{"필터를 걸어줘", "filter_view"},
+		{"매출 많은 순으로 정렬해줘", "range_sort"},
+		{"이름 기준으로 오름차순 정렬", "range_sort"},
+		{"최신순으로 줄 세워줘", "range_sort"},
+		{"상태 열은 진행/완료만 고르게 해줘", "data_validation"},
+		{"여기에 체크박스를 넣어줘", "data_validation"},
+		{"음수는 못 넣게 해줘", "data_validation"},
+		{"매출 상위 10%에 색 칠해줘", "conditional_format"},
+		{"목표 미달이면 빨갛게 표시해줘", "conditional_format"},
+		{"조건부 서식으로 중복을 강조해줘", "conditional_format"},
+	} {
+		routed := routeIntent(item.message)
+		if routed.Mode != ModeAgent {
+			t.Errorf("%q 가 %s 로 갔다 — 도구를 쓸 수 없는 모드다", item.message, routed.Mode)
+			continue
+		}
+		if routed.Skill != item.skill {
+			t.Errorf("%q skill=%q, 기대=%q", item.message, routed.Skill, item.skill)
+		}
+	}
+}
+
+// 넓히면서 멀쩡하던 길을 끊으면 안 된다. 특히 "정렬" 은 한국어에서 줄
+// 세우기와 맞춤 두 가지 뜻이라 서식 요청이 에이전트로 새기 쉽다.
+func TestWideningTheRouterKeepsTheOldRoutes(t *testing.T) {
+	t.Parallel()
+	for _, item := range []struct {
+		message string
+		mode    string
+	}{
+		{"제목을 가운데 정렬해줘", ModeFormat},
+		{"머리글을 왼쪽 정렬로 바꿔줘", ModeFormat},
+		{"이 범위를 보기 좋게 정리해줘", ModeFormat},
+		{"이 범위를 분석해줘", ModeSummarize},
+		{"특별 예산을 요약해줘", ModeSummarize},
+		{"B열에 합계 수식을 넣어줘", ModeFormula},
+		{"선택 범위로 막대 차트를 만들어줘", ModeChart},
+		{"막대 차트를 선 차트로 바꿔줘", ModeChart},
+		{"중복된 행을 정리해줘", ModeClean},
+		{"이상치를 찾아줘", ModeAnomaly},
+		{"수식이 왜 이런 값을 내는지 설명해줘", ModeExplain},
+		{"지난번 작업 취소해줘", ModeAgent},
+	} {
+		if routed := routeIntent(item.message); routed.Mode != item.mode {
+			t.Errorf("%q -> %s, 기대=%s", item.message, routed.Mode, item.mode)
+		}
+	}
+}
