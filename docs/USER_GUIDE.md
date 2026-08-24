@@ -554,6 +554,10 @@ kanpic은 문맥 인식 수식 파서를 통해 셀 참조와 계산을 실시�
 - `=LARGE`, `=SMALL`, `=RANK`, `=PERCENTILE`, `=QUARTILE`, `=MODE`, `=COUNTUNIQUE`: 순위와 분포를 살핍니다.
 - **엑셀 2010 이후의 점 붙은 이름도 그대로 씁니다.** `=STDEV.S`, `=STDEV.P`, `=VAR.S`, `=VAR.P`, `=MODE.SNGL`, `=RANK.EQ`, `=PERCENTILE.INC`, `=QUARTILE.INC`, `=FORECAST.LINEAR`, `=COVARIANCE.P` 는 각각 위의 예전 이름과 **같은 값** 을 냅니다. 오늘 엑셀에서 만든 파일을 가져오면 이 이름들이 들어 있습니다.
 - **이름이 비슷해도 셈이 다른 것들이 있습니다.** `=PERCENTILE.EXC`, `=QUARTILE.EXC` 는 양 끝을 자료 밖에 두므로 포함형과 값이 다릅니다 — 네 개짜리 자료에서 1사분위가 포함형은 1.75, 배타형은 1.25입니다. 배타형은 답할 수 있는 범위가 좁아 `0`이나 `1`을 넣으면 `#NUM!` 입니다. `=RANK.AVG` 는 동점자에게 그들이 차지한 등수의 **평균** 을 줍니다(`RANK` 는 모두에게 가장 높은 등수를 줍니다).
+- **진법과 비트도 다룹니다.** `=BIN2DEC`, `=BIN2OCT`, `=BIN2HEX`, `=OCT2DEC`, `=OCT2BIN`, `=OCT2HEX`, `=HEX2DEC`, `=HEX2BIN`, `=HEX2OCT`, `=DEC2BIN`, `=DEC2OCT`, `=DEC2HEX` 로 진법을 바꾸고, `=BITAND`, `=BITOR`, `=BITXOR`, `=BITLSHIFT`, `=BITRSHIFT` 로 비트를 셉니다. `=DELTA`, `=GESTEP`, `=ERF`, `=ERFC` 도 있습니다.
+
+  진법 값은 엑셀과 같이 **10자리 2의 보수** 입니다. 맨 앞자리가 1이면 음수라서 `=BIN2DEC(1111111111)` 은 1023이 아니라 **-1** 입니다. 자릿수를 넘거나 모자라면 잘라 내지 않고 `#NUM!` 을 냅니다. 비트 함수는 음수와 소수를 받지 않고 48비트까지 셉니다.
+
 - **표에서 조건에 맞는 줄만 골라 셈합니다.** `=DSUM`, `=DAVERAGE`, `=DCOUNT`, `=DCOUNTA`, `=DMAX`, `=DMIN`, `=DPRODUCT`, `=DSTDEV`, `=DSTDEVP`, `=DVAR`, `=DVARP`, `=DGET` 은 `DSUM(표, 열, 조건표)` 꼴로 씁니다. 표와 조건표 모두 **첫 줄이 머리글** 입니다. 셈할 열은 머리글 이름(`"매출"`)으로도 몇 번째 열인지(`2`)로도 가리킬 수 있습니다.
 
   조건표의 **한 줄 안에 있는 조건은 모두** 맞아야 하고(그리고), **줄이 여럿이면 그중 하나만** 맞으면 됩니다(또는). 조건을 읽는 규칙은 `COUNTIF` 와 같아서 `">=50"`, `"<>영업"`, `"영*"` 처럼 쓸 수 있습니다. `=DGET` 은 맞는 줄이 딱 하나여야 하며, 없으면 `#VALUE!`, 여럿이면 `#NUM!` 입니다.
