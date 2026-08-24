@@ -6,6 +6,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"kanpic/internal/formula"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
 )
@@ -147,4 +148,26 @@ func legendPosition(position string) string {
 	default:
 		return ""
 	}
+}
+
+// lambdaDefinedName 은 이름 있는 수식을 엑셀이 아는 꼴로 바꾼다. 엑셀은
+// 매개변수를 가진 이름을 LAMBDA 로 적고, 파일 안에서는 _xlfn 이 붙는다.
+//
+//	마진율(매출, 원가) = (매출-원가)/매출
+//	  -> _xlfn.LAMBDA(매출,원가,(매출-원가)/매출)
+//
+// 매개변수가 없으면 LAMBDA 로 감쌀 까닭이 없다. 그냥 그 수식이다.
+func lambdaDefinedName(item workbook.NamedFunction) (string, bool) {
+	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(item.Body), "="))
+	if body == "" {
+		return "", false
+	}
+	body = formula.ForExcel("=" + body)
+	body = strings.TrimPrefix(body, "=")
+	// 정의된 이름의 값에는 = 를 붙이지 않는다. 이름 범위 쪽도 그렇게 적고,
+	// 파일 안의 XML 에도 = 는 들어가지 않는다.
+	if len(item.Parameters) == 0 {
+		return body, true
+	}
+	return "_xlfn.LAMBDA(" + strings.Join(item.Parameters, ",") + "," + body + ")", true
 }

@@ -1239,3 +1239,57 @@ func TestModernFunctionNamesSurviveAnXLSXRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// 이름 있는 수식은 kanpic 안에서만 되고 파일로 꺼내면 깨지고 있었다.
+// =마진율(A1,B1) 이 엑셀에서 #NAME? 이 되는 것이야말로 사람을 놀라게 한다.
+//
+// 엑셀은 매개변수를 가진 이름을 LAMBDA 로 적고, 파일 안에서는 _xlfn 이
+// 붙는다. 그 꼴로 내보낸다.
+func TestNamedFunctionsExportAsExcelLambdaNames(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "이름 있는 수식 내보내기", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateNamedFunction(ctx, book.ID, "tester", workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "fn-1", Name: "마진율", Parameters: []string{"매출", "원가"}, Body: "=(매출-원가)/매출",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 매개변수가 없으면 LAMBDA 로 감쌀 까닭이 없다.
+	if _, err := repository.CreateNamedFunction(ctx, book.ID, "tester", workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "fn-2", Name: "기준연도", Parameters: nil, Body: "2026",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 본문이 최신 함수를 쓰면 그 이름도 파일 안의 꼴이어야 한다.
+	if _, err := repository.CreateNamedFunction(ctx, book.ID, "tester", workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "fn-3", Name: "안전나눗셈", Parameters: []string{"a", "b"}, Body: "IFS(b=0,0,TRUE,a/b)",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: book.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	names := map[string]string{}
+	for _, item := range file.GetDefinedName() {
+		names[item.Name] = item.RefersTo
+	}
+	if actual := names["마진율"]; actual != "_xlfn.LAMBDA(매출,원가,(매출-원가)/매출)" {
+		t.Errorf("마진율=%q", actual)
+	}
+	if actual := names["기준연도"]; actual != "2026" {
+		t.Errorf("기준연도=%q", actual)
+	}
+	if actual := names["안전나눗셈"]; actual != "_xlfn.LAMBDA(a,b,_xlfn.IFS(b=0,0,TRUE,a/b))" {
+		t.Errorf("안전나눗셈=%q", actual)
+	}
+}

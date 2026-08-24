@@ -588,6 +588,8 @@ kanpic은 문맥 인식 수식 파서를 통해 셀 참조와 계산을 실시�
 
 자동완성에도 함께 나오므로 만들어 두면 팀원이 찾을 수 있습니다. 한 워크북에 200개까지, 매개변수는 16개까지입니다.
 
+**XLSX 로 내보내면 엑셀의 `LAMBDA` 정의된 이름으로 나갑니다.** `마진율(매출, 원가)` 은 `_xlfn.LAMBDA(매출,원가,(매출-원가)/매출)` 로 적히므로 엑셀 365에서 `=마진율(A1,B1)` 이 그대로 동작합니다. 매개변수가 없으면 감싸지 않고 그 수식 그대로 나갑니다. kanpic 안에서는 되는데 파일로 꺼내면 깨지는 것이야말로 사람을 놀라게 하기 때문입니다.
+
 - **분포 함수도 씁니다.** 정규(`=NORMDIST`, `=NORMSDIST`, `=NORMINV`, `=NORMSINV`, `=GAUSS`, `=STANDARDIZE`, `=CONFIDENCE`), 로그정규(`=LOGNORMDIST`, `=LOGINV`), 이항(`=BINOMDIST`, `=NEGBINOMDIST`, `=CRITBINOM`), 포아송·지수·와이블·초기하(`=POISSON`, `=EXPONDIST`, `=WEIBULL`, `=HYPGEOMDIST`), 피셔 변환(`=FISHER`, `=FISHERINV`)이 있습니다.
 
   이항과 포아송은 큰 수에서도 넘치지 않습니다 — `=BINOMDIST(500,1000,0.5,FALSE)` 처럼 계승을 곱해 나가면 무한대가 되는 자리를 감마의 로그로 지납니다. 되돌리는 쪽(`INV`)은 0과 1 **사이** 의 확률만 받고, 양 끝은 `#NUM!` 입니다.

@@ -761,6 +761,21 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		// refuses must not cost the whole export.
 		_ = file.SetDefinedName(&excelize.DefinedName{Name: item.Name, RefersTo: refersTo})
 	}
+	// 이름 있는 수식은 엑셀의 LAMBDA 정의된 이름으로 나간다. 그러지 않으면
+	// =마진율(A1,B1) 이 엑셀에서 #NAME? 이 된다 — kanpic 안에서는 되는데
+	// 파일로 꺼내면 깨지는 것이야말로 사람을 놀라게 한다.
+	namedFunctions, err := s.repository.ListNamedFunctions(ctx, wb.ID)
+	if err != nil {
+		return ExportedFile{}, err
+	}
+	for _, item := range namedFunctions {
+		refersTo, ok := lambdaDefinedName(item)
+		if !ok {
+			continue
+		}
+		// 엑셀이 받아 주지 않는 이름 하나가 내보내기 전체를 막으면 안 된다.
+		_ = file.SetDefinedName(&excelize.DefinedName{Name: item.Name, RefersTo: refersTo})
+	}
 	charts, err := s.repository.ListCharts(ctx, wb.ID, "")
 	if err != nil {
 		return ExportedFile{}, err
