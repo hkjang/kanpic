@@ -1590,6 +1590,26 @@ func normalizedSelection(selected cellrange.Range) string {
 	return start + ":" + end
 }
 
+// planStepDescription 은 계획 목록에 적힐 한 줄이다. 예전에는 모르는 도구를
+// 모두 "차트 생성" 이라고 적었다 — 피벗을 만드는 단계에 차트를 만든다고
+// 적히면, 사람은 화면이 말하는 것을 믿고 승인한다. 모르는 도구에는 차라리
+// 아무 말도 지어내지 않는다.
+func planStepDescription(name string) string {
+	if description, known := map[string]string{
+		"create_chart":              "차트 소스 검증 후 워크북에 차트 생성",
+		"update_chart":              "현재 차트 리비전을 확인하고 요청한 속성 변경",
+		"create_report_sheet":       "새 보고서 시트에 수식과 차트를 함께 생성",
+		"create_pivot":              "원본을 그대로 두고 피벗으로 요약 생성",
+		"create_conditional_format": "값에 따라 다시 칠하는 조건부 서식 규칙 생성",
+		"create_data_validation":    "셀에 넣을 수 있는 값을 제한하는 입력 규칙 생성",
+		"create_filter_view":        "줄을 지우지 않고 조건에 맞는 줄만 보이게 설정",
+		"sort_range":                "수식과 서식을 함께 옮기며 범위의 줄 재배열",
+	}[name]; known {
+		return description
+	}
+	return "워크북 도구 " + name + " 실행"
+}
+
 func buildPlanSteps(mode, risk string, changes []ProposedChange, tools []ToolCall) []PlanStep {
 	steps := []PlanStep{
 		{Position: 1, ToolName: "get_workbook", Description: "워크북과 현재 시트 구조 확인", Status: "completed", Risk: RiskRead},
@@ -1602,13 +1622,7 @@ func buildPlanSteps(mode, risk string, changes []ProposedChange, tools []ToolCal
 		position++
 	}
 	for _, tool := range tools {
-		description := "차트 소스 검증 후 워크북에 차트 생성"
-		if tool.Name == "update_chart" {
-			description = "현재 차트 리비전을 확인하고 요청한 속성 변경"
-		} else if tool.Name == "create_report_sheet" {
-			description = "새 보고서 시트에 수식과 차트를 함께 생성"
-		}
-		steps = append(steps, PlanStep{Position: position, ToolName: tool.Name, Description: description, Status: "waiting_approval", Risk: tool.Risk, Arguments: cloneRaw(tool.Arguments)})
+		steps = append(steps, PlanStep{Position: position, ToolName: tool.Name, Description: planStepDescription(tool.Name), Status: "waiting_approval", Risk: tool.Risk, Arguments: cloneRaw(tool.Arguments)})
 		position++
 	}
 	steps = append(steps, PlanStep{Position: position, ToolName: "validate_changeset", Description: "적용 결과와 수식 오류 검증", Status: "pending", Risk: RiskRead})

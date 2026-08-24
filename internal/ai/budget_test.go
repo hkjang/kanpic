@@ -874,3 +874,46 @@ func TestSortArgumentsMatchTheRepositoryRules(t *testing.T) {
 		t.Error("세울 줄이 하나뿐인데 통과했다")
 	}
 }
+
+// 계획 목록은 사람이 승인 전에 읽는 곳이다. 예전에는 모르는 도구를 모두
+// "차트 생성" 이라고 적었다 — 피벗을 만드는 단계에 차트를 만든다고 적히면
+// 사람은 화면이 말하는 것을 믿고 승인한다.
+func TestPlanStepsDescribeTheToolTheyActuallyRun(t *testing.T) {
+	t.Parallel()
+	tools := []ToolCall{
+		{Name: "create_pivot", Risk: RiskMedium}, {Name: "create_conditional_format", Risk: RiskMedium},
+		{Name: "create_data_validation", Risk: RiskMedium}, {Name: "create_filter_view", Risk: RiskLow},
+		{Name: "sort_range", Risk: RiskHigh},
+	}
+	steps := buildPlanSteps(ModeAgent, RiskHigh, nil, tools)
+	described := map[string]string{}
+	for _, step := range steps {
+		described[step.ToolName] = step.Description
+	}
+	for _, tool := range tools {
+		description := described[tool.Name]
+		if description == "" {
+			t.Fatalf("%s 단계가 없다", tool.Name)
+		}
+		if strings.Contains(description, "차트") {
+			t.Errorf("%s 단계가 차트를 만든다고 적혀 있다: %q", tool.Name, description)
+		}
+	}
+	// 도구마다 다른 말을 해야 한다. 같은 말이 반복되면 목록이 쓸모없다.
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		if seen[described[tool.Name]] {
+			t.Errorf("%s 가 다른 도구와 같은 설명을 쓴다", tool.Name)
+		}
+		seen[described[tool.Name]] = true
+	}
+	// 모르는 도구에는 아무 말도 지어내지 않는다.
+	unknown := planStepDescription("delete_everything")
+	if strings.Contains(unknown, "차트") || !strings.Contains(unknown, "delete_everything") {
+		t.Errorf("모르는 도구 설명=%q", unknown)
+	}
+	// 차트는 그대로 차트라고 적는다.
+	if planStepDescription("create_chart") == planStepDescription("update_chart") {
+		t.Error("차트 생성과 변경이 같은 설명을 쓴다")
+	}
+}
