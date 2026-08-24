@@ -54,7 +54,15 @@ func parseCoordinateKey(value string) (CellCoordinate, error) {
 // carries the cross-workbook blocks IMPORTRANGE asked for; it is nil on the
 // paths that have no repository to fetch them with, and those formulas then
 // report that the source could not be reached rather than showing stale data.
-func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, namedRanges map[string]formula.NamedRange, imports map[string]formula.ImportedRange) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
+// nameContext 는 수식을 풀 때 필요한 워크북 차원의 이름들이다. 하나씩
+// 인수로 늘리면 부르는 자리 열한 곳을 매번 함께 고쳐야 한다.
+type nameContext struct {
+	Ranges    map[string]formula.NamedRange
+	Functions map[string]formula.NamedFunction
+	Imports   map[string]formula.ImportedRange
+}
+
+func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, names nameContext) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
 	prospective := cloneAllCells(existing)
 	if prospective[currentSheetID] == nil {
 		return nil, nil, nil, ErrNotFound
@@ -126,7 +134,8 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		sheetNames[sheet.Name] = sheetID
 		sheetIDs[strings.ToUpper(sheetID)] = sheetID
 	}
-	evaluator := formula.NewScopedWithNames("", sheetNames, namedRanges).WithImports(imports)
+	evaluator := formula.NewScopedWithNames("", sheetNames, names.Ranges).WithImports(names.Imports)
+	evaluator.SetNamedFunctions(names.Functions)
 	forcedSpills := make(map[string]*formula.Error)
 	recalculatedSet := make(map[scopedCellKey]struct{})
 	formulaErrors := make(map[scopedCellKey]CellFormulaError)

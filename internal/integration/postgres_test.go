@@ -4029,3 +4029,99 @@ func TestPostgresWorkbookAgentUndoesEarlierToolsWhenALaterOneFails(t *testing.T)
 		}
 	}
 }
+
+// 이름 있는 수식은 워크북에 저장해 두고 부르는 것이다. 저장·수정·삭제가
+// 그것을 쓰는 칸까지 닿는지, 그리고 그 셈이 PostgreSQL 경로에서도 같은지
+// 본다 — 메모리에서만 맞으면 실제로 쓰는 곳에서 깨진다.
+func TestPostgresNamedFunctionsFlowThroughToCells(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	actor := fmt.Sprintf("named-function-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "이름 있는 수식", WorkspaceID: "integration", OwnerID: actor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	seed, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: book.Version, IdempotencyKey: "fn-seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value(100)}, {Row: 1, Column: 2, Value: value(60)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.CreateNamedFunction(ctx, book.ID, actor, workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "fn-1", Name: "마진율", Parameters: []string{"매출", "원가"}, Body: "=(매출-원가)/매출",
+		Description: "매출에서 원가를 뺀 몫",
+	})
+	if err != nil {
+		t.Fatalf("만들기: %v", err)
+	}
+	if created.Body != "(매출-원가)/매출" || len(created.Parameters) != 2 || created.Revision != 1 {
+		t.Fatalf("저장된 정의=%#v", created)
+	}
+	// 같은 열쇠로 다시 부르면 같은 것이 돌아온다.
+	again, err := repository.CreateNamedFunction(ctx, book.ID, actor, workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "fn-1", Name: "딴이름", Parameters: []string{"a"}, Body: "a",
+	})
+	if err != nil || again.ID != created.ID {
+		t.Fatalf("멱등성=%#v, %v", again, err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheet.ID, ActorID: actor, BaseVersion: created.WorkbookVersion, IdempotencyKey: "fn-use", Cells: []workbook.CellInput{
+		{Row: 1, Column: 3, Formula: "=마진율(A1,B1)"},
+	}}); err != nil {
+		t.Fatalf("쓰기: %v (base=%d, seed=%d)", err, created.WorkbookVersion, seed.ServerVersion)
+	}
+	read := func() string {
+		cells, readErr := repository.ReadRange(ctx, sheet.ID, mustRange(t, "C1"))
+		if readErr != nil || len(cells) != 1 {
+			t.Fatalf("C1 읽기=%v %v", cells, readErr)
+		}
+		return string(cells[0].Value)
+	}
+	if actual := read(); actual != "0.4" {
+		t.Fatalf("C1=%s, 기대=0.4", actual)
+	}
+	// 목록으로도 보인다.
+	listed, err := repository.ListNamedFunctions(ctx, book.ID)
+	if err != nil || len(listed) != 1 || listed[0].Description != "매출에서 원가를 뺀 몫" {
+		t.Fatalf("목록=%#v, %v", listed, err)
+	}
+	// 정의를 바꾸면 쓰던 칸이 따라 바뀐다.
+	body := "=(매출-원가)/원가"
+	updated, err := repository.UpdateNamedFunction(ctx, created.ID, actor, workbook.UpdateNamedFunctionInput{Body: &body, ExpectedRevision: &created.Revision})
+	if err != nil {
+		t.Fatalf("고치기: %v", err)
+	}
+	if updated.Revision != 2 {
+		t.Errorf("리비전=%d", updated.Revision)
+	}
+	if actual := read(); actual != "0.666666666666667" {
+		t.Fatalf("고친 뒤 C1=%s", actual)
+	}
+	// 지난 리비전으로 고치려 하면 막는다.
+	if _, err := repository.UpdateNamedFunction(ctx, created.ID, actor, workbook.UpdateNamedFunctionInput{Body: &body, ExpectedRevision: &created.Revision}); !errors.Is(err, workbook.ErrVersionConflict) {
+		t.Errorf("지난 리비전=%v", err)
+	}
+	// 지우면 쓰던 칸이 #NAME? 이 된다. 조용히 예전 값을 남기면 사람은
+	// 아직 살아 있는 줄 안다.
+	if err := repository.DeleteNamedFunction(ctx, created.ID, actor, nil); err != nil {
+		t.Fatalf("지우기: %v", err)
+	}
+	if actual := read(); actual != `"#NAME?"` {
+		t.Fatalf("지운 뒤 C1=%s", actual)
+	}
+	if remaining, err := repository.ListNamedFunctions(ctx, book.ID); err != nil || len(remaining) != 0 {
+		t.Fatalf("지운 뒤 목록=%#v, %v", remaining, err)
+	}
+}

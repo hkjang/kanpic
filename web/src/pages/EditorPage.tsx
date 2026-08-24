@@ -4,7 +4,7 @@ import { AlertTriangle, AlignCenter, Eye, Grid2X2, Lock, MessageCircle, Settings
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
-import { FormulaAutocomplete, formulaHint, useFunctionCatalog } from '../components/FormulaAutocomplete'
+import { FormulaAutocomplete, formulaHint, namedFunctionDocs, useFunctionCatalog } from '../components/FormulaAutocomplete'
 import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { survivesChange, transformSelection } from '../lib/structureTransform'
@@ -44,6 +44,7 @@ import { ProtectedRangeDialog } from '../components/ProtectedRangeDialog'
 import { brushPatch } from '../lib/formatBrush'
 import { ColumnStatsPanel } from '../components/ColumnStatsPanel'
 import { LayoutDialog,type LayoutCommand } from '../components/LayoutDialog'
+import { NamedFunctionDialog } from '../components/NamedFunctionDialog'
 import { NamedRangeDialog } from '../components/NamedRangeDialog'
 import { PivotDialog } from '../components/PivotDialog'
 import { PivotPanel } from '../components/PivotPanel'
@@ -76,7 +77,7 @@ import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedFunction, NamedRange, Pivot, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -116,10 +117,11 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
-  const functionCatalog=useFunctionCatalog()
+  const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
+  const functionCatalog=useFunctionCatalog(namedFunctionDocs(namedFunctions.data?.items??[]))
   const formulaInput=useRef<HTMLTextAreaElement|null>(null)
   // 협업 이벤트 처리기는 소켓 연결과 함께 고정되므로 활성 시트를 참조로 읽는다.
   const activeSheetRef=useRef<string|undefined>(undefined)
@@ -257,6 +259,12 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const createNamedRange=async(input:Record<string,unknown>)=>{const item=await api<NamedRange>(`/api/v1/workbooks/${workbookId}/named-ranges`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});updateVersion(item.workbook_version);await refreshNamedRanges();return item}
   const updateNamedRange=async(id:string,input:Record<string,unknown>)=>{const item=await api<NamedRange>(`/api/v1/named-ranges/${id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(item.workbook_version);await refreshNamedRanges();return item}
   const deleteNamedRange=async(item:NamedRange)=>{await api(`/api/v1/named-ranges/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshNamedRanges();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
+  // 이름 있는 수식이 바뀌면 그것을 쓰는 모든 칸의 값이 바뀐다. 워크북까지
+  // 함께 새로 읽어야 화면이 서버와 같아진다.
+  const refreshNamedFunctions=async()=>{await client.invalidateQueries({queryKey:['named-functions',workbookId]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
+  const createNamedFunction=async(input:Record<string,unknown>)=>{const item=await api<NamedFunction>(`/api/v1/workbooks/${workbookId}/named-functions`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});updateVersion(item.workbook_version);await refreshNamedFunctions();return item}
+  const updateNamedFunction=async(id:string,input:Record<string,unknown>)=>{const item=await api<NamedFunction>(`/api/v1/named-functions/${id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(item.workbook_version);await refreshNamedFunctions();return item}
+  const deleteNamedFunction=async(item:NamedFunction)=>{await api(`/api/v1/named-functions/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshNamedFunctions();const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`);updateVersion(latest.version)}
 	const refreshCharts=async()=>{await client.invalidateQueries({queryKey:['charts',workbookId]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
 	const createChart=async(input:Record<string,unknown>)=>{const idempotencyKey=newIdempotencyKey();const item=await api<Chart>(`/api/v1/workbooks/${workbookId}/charts`,{method:'POST',headers:{'Idempotency-Key':idempotencyKey},body:JSON.stringify({...input,idempotency_key:idempotencyKey})});updateVersion(item.workbook_version);await refreshCharts();return item}
 	const updateChart=async(item:Chart,input:Record<string,unknown>)=>{const updated=await api<Chart>(`/api/v1/charts/${item.id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(updated.workbook_version);await refreshCharts();return updated}
@@ -964,6 +972,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:validation',group:'명령',label:'데이터 검증',icon:<BadgeCheck/>,keywords:'validation 검증',run:()=>setValidationOpen(true)},
     {id:'cmd:conditional',group:'명령',label:'조건부 서식',icon:<Palette/>,keywords:'conditional format 조건부 서식',run:()=>setConditionalFormatOpen(true)},
     {id:'cmd:named',group:'명령',label:'이름 범위 관리',icon:<Link2/>,keywords:'named range 이름 범위',run:()=>setNamedRangeOpen(true)},
+    {id:'cmd:named-function',group:'명령',label:'이름 있는 수식 관리',icon:<Link2/>,keywords:'named function 이름 있는 수식 사용자 정의 함수',run:()=>setNamedFunctionOpen(true)},
     {id:'cmd:layout',group:'명령',label:'시트 레이아웃',icon:<Table2/>,keywords:'layout freeze 고정 레이아웃',run:()=>setLayoutOpen(true)},
     {id:'cmd:structure',group:'명령',label:'행과 열 관리',icon:<Table2/>,keywords:'row column 행 열',run:()=>setStructureOpen(true)},
     {id:'cmd:export',group:'명령',label:'XLSX로 내보내기',icon:<Download/>,keywords:'export xlsx 내보내기',run:()=>void exportWorkbook('xlsx')},
@@ -1089,6 +1098,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'피벗 테이블…',disabled:!canWrite,onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'댓글',shortcut:'Ctrl+Alt+M',disabled:!canComment,onSelect:()=>setRightPanel('comments')},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
+      {kind:'item',label:'이름 있는 수식…',onSelect:()=>setNamedFunctionOpen(true)},
       {kind:'item',label:'자동 합계',shortcut:'Alt+=',onSelect:()=>gridShortcut({command:'auto-sum'})},
       {kind:'submenu',label:'함수',items:[
         ...['SUM','AVERAGE','COUNT','COUNTA','MAX','MIN','MEDIAN','PRODUCT'].map(name=>({kind:'item',label:name,onSelect:()=>gridShortcut({command:'insert-function',name})} as MenuItem)),
@@ -1345,6 +1355,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       }}/>}
     {presentationOpen&&activeSheet&&<PresentationDialog range={workingRegion()} onClose={()=>setPresentationOpen(false)} onPreview={previewPresentation} onCreate={createPresentation} onLoadTemplates={loadPresentationTemplates} onDownload={downloadPresentation}/>}
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
+    {namedFunctionOpen&&<NamedFunctionDialog functions={namedFunctions.data?.items??[]} onClose={()=>setNamedFunctionOpen(false)} onCreate={createNamedFunction} onUpdate={updateNamedFunction} onDelete={deleteNamedFunction}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}
     {sheetManagerOpen&&<SheetManagerDialog workbook={workbook.data} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} readOnly={readOnly} onClose={()=>setSheetManagerOpen(false)} onSelect={setActiveSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onMove={(sheet,position)=>updateSheet(sheet,{position})} onHidden={setSheetHidden} onDelete={deleteSheet} onCopyTo={sheet=>{setSheetManagerOpen(false);setCopySheet(sheet)}}/>}
     {copySheet&&<CopySheetDialog sheet={copySheet} workbookId={workbookId} onClose={()=>setCopySheet(undefined)} onCopied={target=>{

@@ -218,7 +218,7 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 			return Workbook{}, mapPostgresError(err)
 		}
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, formulaNamedRanges(importedNames), nil)
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Imports: nil})
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -1329,7 +1329,11 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID, actorID s
 	if err != nil {
 		return SheetDeletion{}, err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, nil))
+	namedFunctions, err := listNamedFunctionsFrom(ctx, tx, workbookID)
+	if err != nil {
+		return SheetDeletion{}, err
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, existing, nil)})
 	if err != nil {
 		return SheetDeletion{}, err
 	}
@@ -1599,11 +1603,15 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
+		namedFunctions, functionErr := listNamedFunctionsFrom(ctx, tx, workbookID)
+		if functionErr != nil {
+			return MutationResult{}, functionErr
+		}
 		namedRanges, rangeErr := listNamedRangesTx(ctx, tx, workbookID)
 		if rangeErr != nil {
 			return MutationResult{}, rangeErr
 		}
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, formulaNamedRanges(namedRanges), r.importsFor(ctx, workbookID, existing, effective))
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, existing, effective)})
 		if err != nil {
 			return MutationResult{}, err
 		}

@@ -45,6 +45,20 @@ func NewScopedWithNames(currentSheet string, sheets map[string]string, namedRang
 	return &Evaluator{scope: newScope(currentSheet, sheets, namedRanges)}
 }
 
+// SetNamedFunctions 은 워크북에 저장해 둔 이름 있는 수식을 엔진에 알린다.
+// 이름은 대소문자를 가리지 않는다.
+func (e *Evaluator) SetNamedFunctions(functions map[string]NamedFunction) {
+	if len(functions) == 0 {
+		e.scope.NamedFunctions = nil
+		return
+	}
+	normalized := make(map[string]NamedFunction, len(functions))
+	for name, definition := range functions {
+		normalized[normalizeSheetName(name)] = definition
+	}
+	e.scope.NamedFunctions = normalized
+}
+
 // WithImports supplies the cross-workbook blocks IMPORTRANGE calls asked for.
 // They are fetched and permission-checked before evaluation, so the evaluator
 // itself stays a pure function of what it was handed.
@@ -766,6 +780,9 @@ type parser struct {
 	// bindings are the names LET and LAMBDA introduced around the point
 	// being parsed, innermost last so an inner name shadows an outer one.
 	bindings []binding
+	// namedDepth 는 이름 있는 함수를 몇 겹이나 펼쳤는지다. 자기 자신을
+	// 부르는 정의를 막는다.
+	namedDepth int
 }
 
 // measureExtent finds how far each sheet's content reaches so unbounded
@@ -926,6 +943,11 @@ func (p *parser) primary() (node, error) {
 			if bound, found := p.lookupBinding(name); found {
 				p.position--
 				return p.callable(bound, nil)
+			}
+			// 워크북에 저장해 둔 이름이면 그 수식을 펼쳐 부른다. 이미
+			// 있는 함수 이름은 저장할 때 막으므로 여기서 겹치지 않는다.
+			if definition, named := p.scope.NamedFunctions[normalizeSheetName(name)]; named {
+				return p.namedFunctionCall(name, definition)
 			}
 			arguments := make([]node, 0)
 			if p.current().kind != tokenRight {

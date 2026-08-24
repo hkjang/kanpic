@@ -463,7 +463,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	if err != nil {
 		return MutationResult{}, err
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.sheets, nextCells, target.ID, nil, true, formulaNamedRanges(namedRangesFromMap(nextNames, state.workbook.ID)), r.importsForLocked(state.workbook.ID, nextCells, nil))
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.sheets, nextCells, target.ID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRangesFromMap(nextNames, state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Imports: r.importsForLocked(state.workbook.ID, nextCells, nil)})
 	if err != nil {
 		return MutationResult{}, err
 	}

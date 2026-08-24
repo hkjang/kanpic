@@ -131,6 +131,11 @@ type Repository interface {
 	PivotDrilldown(context.Context, string, PivotDrilldownInput) (PivotDrilldownResult, error)
 	UpdatePivot(context.Context, string, string, UpdatePivotInput) (Pivot, error)
 	DeletePivot(context.Context, string, string, *int64) error
+	CreateNamedFunction(context.Context, string, string, CreateNamedFunctionInput) (NamedFunction, error)
+	ListNamedFunctions(context.Context, string) ([]NamedFunction, error)
+	GetNamedFunction(context.Context, string) (NamedFunction, error)
+	UpdateNamedFunction(context.Context, string, string, UpdateNamedFunctionInput) (NamedFunction, error)
+	DeleteNamedFunction(context.Context, string, string, *int64) error
 	CreateNamedRange(context.Context, string, string, CreateNamedRangeInput) (NamedRange, error)
 	ListNamedRanges(context.Context, string) ([]NamedRange, error)
 	GetNamedRange(context.Context, string) (NamedRange, error)

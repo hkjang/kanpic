@@ -19,6 +19,8 @@ type Scope struct {
 	// Imports holds the cross-workbook blocks IMPORTRANGE asked for, fetched
 	// and permission-checked by the workbook layer before evaluation starts.
 	Imports map[string]ImportedRange
+	// NamedFunctions 는 워크북에 저장해 둔, 이름으로 부르는 수식이다.
+	NamedFunctions map[string]NamedFunction
 }
 
 // SheetExtent is the largest row and column a sheet has content in.

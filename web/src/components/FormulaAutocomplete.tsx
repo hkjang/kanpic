@@ -6,9 +6,22 @@ import { formulaContext, suggestFunctions, type FormulaContext, type FunctionDoc
  * The function catalog, cached for the session. It is the same list the
  * function dialog shows, so what is suggested is always what evaluates.
  */
-export function useFunctionCatalog(){
+export function useFunctionCatalog(extra:FunctionDoc[]=[]){
   const query=useQuery({queryKey:['formula-functions'],queryFn:()=>api<{items:FunctionDoc[]}>('/api/v1/formula/functions'),staleTime:60*60*1000})
-  return query.data?.items??[]
+  const builtIn=query.data?.items??[]
+  // 워크북에 저장해 둔 이름 있는 수식도 함께 권한다. 만들어 두고 아무도
+  // 모르면 없는 것과 같다.
+  return extra.length?[...builtIn,...extra]:builtIn
+}
+
+/** 저장해 둔 이름 있는 수식을 자동완성이 읽는 꼴로 바꾼다. */
+export function namedFunctionDocs(items:Array<{name:string;parameters:string[];body:string;description?:string}>):FunctionDoc[]{
+  return items.map(item=>({
+    name:item.name,
+    category:'이름 있는 수식',
+    syntax:`${item.name}(${item.parameters.join(', ')})`,
+    summary:item.description||item.body,
+  }))
 }
 
 export type FormulaHint={context:FormulaContext;matches:FunctionDoc[];signature?:FunctionDoc}

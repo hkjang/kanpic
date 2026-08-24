@@ -291,6 +291,40 @@ type StructuralMutation struct {
 // NamedRange is a workbook-level reusable name whose target belongs to one of
 // the workbook's sheets. Revision protects concurrent definition edits while
 // WorkbookVersion lets realtime clients refresh formula results atomically.
+// NamedFunction 은 워크북에 저장해 두고 이름으로 부르는 수식이다. 팀에서
+// 쓰는 셈을 한 번 정의해 두면 =마진율(매출, 원가) 처럼 쓸 수 있다.
+type NamedFunction struct {
+	ID              string    `json:"id"`
+	WorkbookID      string    `json:"workbook_id"`
+	WorkbookVersion int64     `json:"workbook_version"`
+	CreateKey       string    `json:"-"`
+	Name            string    `json:"name"`
+	Parameters      []string  `json:"parameters"`
+	Body            string    `json:"body"`
+	Description     string    `json:"description,omitempty"`
+	Revision        int64     `json:"revision"`
+	CreatedBy       string    `json:"created_by"`
+	UpdatedBy       string    `json:"updated_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type CreateNamedFunctionInput struct {
+	IdempotencyKey string   `json:"idempotency_key"`
+	Name           string   `json:"name"`
+	Parameters     []string `json:"parameters"`
+	Body           string   `json:"body"`
+	Description    string   `json:"description,omitempty"`
+}
+
+type UpdateNamedFunctionInput struct {
+	Name             *string   `json:"name,omitempty"`
+	Parameters       *[]string `json:"parameters,omitempty"`
+	Body             *string   `json:"body,omitempty"`
+	Description      *string   `json:"description,omitempty"`
+	ExpectedRevision *int64    `json:"expected_revision,omitempty"`
+}
+
 type NamedRange struct {
 	ID              string    `json:"id"`
 	WorkbookID      string    `json:"workbook_id"`
