@@ -3,6 +3,7 @@ package formula
 import (
 	"math"
 	"sort"
+	"strings"
 )
 
 // evaluateConditionalExtra covers the criteria aggregates that sit beside
@@ -230,6 +231,89 @@ func evaluateStatistics(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#NUM!", name+" needs numbers")
 		}
 		return percentileOf(numbers, fraction), true, nil
+	case "PERCENTILE.EXC", "QUARTILE.EXC":
+		// 배타적 백분위는 자료가 모집단의 표본이라고 보고, 양 끝을 자료
+		// 바깥에 둔다. 그래서 k 가 1/(n+1) 보다 작거나 n/(n+1) 보다 크면
+		// 답이 없다 — 0 이나 1 을 넣으면 #NUM! 이다. 포함형과 값이 다르므로
+		// 별명으로 두면 안 된다.
+		if len(values) < 2 {
+			return nil, true, argError(name)
+		}
+		fraction, ok := toNumber(values[len(values)-1])
+		if !ok {
+			return nil, true, formulaError("#VALUE!", name+" requires a number")
+		}
+		if name == "QUARTILE.EXC" {
+			if fraction < 1 || fraction > 3 || fraction != math.Trunc(fraction) {
+				return nil, true, formulaError("#NUM!", "QUARTILE.EXC takes 1, 2 or 3")
+			}
+			fraction /= 4
+		}
+		numbers := sortedNumbers(numericValues(values[:len(values)-1]))
+		if len(numbers) == 0 {
+			return nil, true, formulaError("#NUM!", name+" needs numbers")
+		}
+		position := fraction * float64(len(numbers)+1)
+		if position < 1 || position > float64(len(numbers)) {
+			return nil, true, formulaError("#NUM!", name+" is outside the range this many numbers can express")
+		}
+		lower := int(math.Floor(position))
+		remainder := position - float64(lower)
+		if remainder == 0 {
+			return numbers[lower-1], true, nil
+		}
+		return numbers[lower-1] + remainder*(numbers[lower]-numbers[lower-1]), true, nil
+	case "RANK.AVG":
+		// 같은 값이 여럿이면 그들이 차지한 등수의 평균을 준다. RANK 는
+		// 가장 높은 등수를 모두에게 준다 — 2등이 둘이면 둘 다 2등이고
+		// 3등은 없다. RANK.AVG 는 둘 다 2.5 등이다.
+		if len(values) < 2 {
+			return nil, true, argError(name)
+		}
+		target, ok := toNumber(values[0])
+		if !ok {
+			return nil, true, formulaError("#VALUE!", "RANK.AVG requires a number")
+		}
+		ascending := false
+		rest := values[1:]
+		if last, isNumber := toNumber(values[len(values)-1]); isNumber && len(values) > 2 && looksLikeFlag(values[len(values)-1]) {
+			ascending = last != 0
+			rest = values[1 : len(values)-1]
+		}
+		population := numericValues(rest)
+		if len(population) == 0 {
+			return nil, true, formulaError("#N/A", "RANK.AVG needs numbers to rank against")
+		}
+		ahead, tied := 0, 0
+		for _, number := range population {
+			switch {
+			case number == target:
+				tied++
+			case (!ascending && number > target) || (ascending && number < target):
+				ahead++
+			}
+		}
+		if tied == 0 {
+			return nil, true, formulaError("#N/A", "RANK.AVG did not find the number")
+		}
+		// 앞선 것이 ahead 개면 동점자는 ahead+1 등부터 ahead+tied 등까지
+		// 차지한다. 그 평균이 답이다.
+		first := float64(ahead + 1)
+		return first + float64(tied-1)/2, true, nil
+	case "MAXA", "MINA":
+		// 이름 끝의 A 는 숫자가 아닌 값도 0 으로 센다는 뜻이다. MIN 은
+		// "x" 를 건너뛰지만 MINA 는 0 으로 세므로 답이 달라진다.
+		numbers := numbersCountingTextAsZero(values)
+		if len(numbers) == 0 {
+			return nil, true, formulaError("#NUM!", name+" needs a value")
+		}
+		best := numbers[0]
+		for _, number := range numbers[1:] {
+			if (name == "MAXA" && number > best) || (name == "MINA" && number < best) {
+				best = number
+			}
+		}
+		return best, true, nil
 	case "GEOMEAN", "HARMEAN":
 		numbers := numericValues(values)
 		if len(numbers) == 0 {
@@ -372,6 +456,50 @@ func scalarOrFirst(value any) any {
 // numbersCountingTextAsZero 는 AVERAGEA, STDEVA, VARA 처럼 이름 끝에 A 가
 // 붙은 함수가 값을 세는 방식이다. 빈 칸은 건너뛰고, 숫자로 읽히지 않는 값은
 // 0 으로 센다. 참은 1, 거짓은 0 으로 읽히므로 따로 다루지 않는다.
+// functionAliases 는 같은 셈을 가리키는 두 이름을 하나로 모은다. 엑셀
+// 2010 부터 STDEV.P 처럼 점 붙은 이름을 쓰고 시트는 둘 다 받는다. 오늘
+// 만든 파일을 가져오면 예전 이름만 아는 엔진에서는 #NAME? 이 났다 —
+// 셈은 이미 있는데 이름을 몰라서다.
+//
+// 여기에는 **똑같이 세는 것** 만 적는다. PERCENTILE.EXC 처럼 셈이 다른
+// 것은 별명이 아니라 제 함수로 구현한다.
+var functionAliases = map[string]string{
+	"STDEV.S":         "STDEV",
+	"STDEV.P":         "STDEVP",
+	"VAR.S":           "VAR",
+	"VAR.P":           "VARP",
+	"MODE.SNGL":       "MODE",
+	"RANK.EQ":         "RANK",
+	"PERCENTILE.INC":  "PERCENTILE",
+	"QUARTILE.INC":    "QUARTILE",
+	"FORECAST.LINEAR": "FORECAST",
+	"COVARIANCE.P":    "COVAR",
+}
+
+// xlsxFunctionPrefixes 는 엑셀이 파일 안에서 최신 함수 앞에 붙이는 표시다.
+// 2007 이후에 생긴 함수는 옛 엑셀이 못 알아보므로 `_xlfn.` 을 붙여 저장하고,
+// 동적 배열 함수 중 일부는 `_xlfn._xlws.` 를 쓴다. 사람이 화면에서 보는
+// 이름에는 없다.
+//
+// 가져온 수식에 그대로 남아 있으면 IFS, XLOOKUP, STDEV.P 처럼 우리가 이미
+// 셀 줄 아는 함수까지 #NAME? 이 났다. 이름을 모으는 자리에서 함께 떼는
+// 이유는, 가져오기·붙여넣기·MCP·에이전트가 모두 여기를 지나기 때문이다.
+var xlsxFunctionPrefixes = []string{"_XLFN._XLWS.", "_XLFN.", "_XLWS."}
+
+func canonicalFunctionName(name string) string {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	for _, prefix := range xlsxFunctionPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			upper = upper[len(prefix):]
+			break
+		}
+	}
+	if canonical, aliased := functionAliases[upper]; aliased {
+		return canonical
+	}
+	return upper
+}
+
 func numbersCountingTextAsZero(values []any) []float64 {
 	numbers := make([]float64, 0, len(values))
 	for _, value := range values {

@@ -185,7 +185,9 @@ func TestXLSXExportOmitsDynamicArrayChildValues(t *testing.T) {
 	}
 	defer file.Close()
 	sheet := file.GetSheetName(0)
-	if formula, _ := file.GetCellFormula(sheet, "D1"); formula != "=FILTER(A1:B3,B1:B3>=20)" {
+	// 엑셀은 동적 배열 함수를 파일 안에서 _xlfn._xlws. 가 붙은 이름으로
+	// 기대한다. 붙이지 않고 내보낸 파일은 엑셀에서 열면 #NAME? 이 된다.
+	if formula, _ := file.GetCellFormula(sheet, "D1"); formula != "=_xlfn._xlws.FILTER(A1:B3,B1:B3>=20)" {
 		t.Fatalf("anchor formula = %q", formula)
 	}
 	for _, coordinate := range []string{"E1", "D2", "E2"} {
@@ -1146,6 +1148,94 @@ func TestPrintAreaSurvivesTheRoundTrip(t *testing.T) {
 	for _, name := range parsed.NamedRanges {
 		if strings.HasPrefix(name.Name, "_xlnm") {
 			t.Errorf("이름 목록에 %q 가 들어왔다", name.Name)
+		}
+	}
+}
+
+func mustRange(t *testing.T, label string) cellrange.Range {
+	t.Helper()
+	parsed, err := cellrange.Parse(label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+// 엑셀은 2007 이후에 생긴 함수를 파일 안에 _xlfn. 이 붙은 이름으로 적는다.
+// 내보낼 때 붙이지 않으면 엑셀에서 #NAME? 이 되고, 가져올 때 떼지 않으면
+// 우리 엔진이 같은 꼴이 된다. 두 방향이 서로를 되돌리는지 실제로 돌려 본다.
+func TestModernFunctionNamesSurviveAnXLSXRoundTrip(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "modern", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	formulas := map[string]string{
+		"C1": `=IFS(B1>20,"큼",TRUE,"작음")`,
+		"C2": `=XLOOKUP("b",A1:A3,B1:B3)`,
+		"C3": `=TEXTJOIN(",",TRUE,A1:A3)`,
+		"D1": `=STDEV.P(B1:B3)`,
+		"D2": `=SUM(B1:B3)`,
+		"D3": `="IFS(" & A1`,
+	}
+	cells := []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("a")}, {Row: 1, Column: 2, Value: value(30)},
+		{Row: 2, Column: 1, Value: value("b")}, {Row: 2, Column: 2, Value: value(10)},
+		{Row: 3, Column: 1, Value: value("c")}, {Row: 3, Column: 2, Value: value(20)},
+	}
+	for coordinate, text := range formulas {
+		column := int(coordinate[0]-'A') + 1
+		row := int(coordinate[1] - '0')
+		cells = append(cells, workbook.CellInput{Row: row, Column: column, Formula: text})
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: 1, IdempotencyKey: "modern-export", Cells: cells}); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := excelize.OpenReader(bytes.NewReader(exported.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	sheet := file.GetSheetName(0)
+	for coordinate, expected := range map[string]string{
+		"C1": `=_xlfn.IFS(B1>20,"큼",TRUE,"작음")`,
+		"C2": `=_xlfn.XLOOKUP("b",A1:A3,B1:B3)`,
+		"C3": `=_xlfn.TEXTJOIN(",",TRUE,A1:A3)`,
+		"D1": `=_xlfn.STDEV.P(B1:B3)`,
+		// 2007 이전 함수와 문자열 안의 글자는 그대로 나간다.
+		"D2": `=SUM(B1:B3)`,
+		"D3": `="IFS(" & A1`,
+	} {
+		if actual, _ := file.GetCellFormula(sheet, coordinate); actual != expected {
+			t.Errorf("%s 를 내보낸 모양=%q, 기대=%q", coordinate, actual, expected)
+		}
+	}
+	// 그 파일을 다시 가져오면 원래 이름으로 돌아오고 셈이 된다.
+	imported, err := New(repository).Import(ctx, ImportRequest{
+		ActorID: "tester", IdempotencyKey: "modern-import", FileName: "modern.xlsx", Data: exported.Data,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := repository.ReadRange(ctx, imported.Sheets[0].ID, mustRange(t, "C1:D3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, cell := range back {
+		seen[cellrange.Address(cell.Row, cell.Column)] = cell.Formula
+	}
+	for coordinate, expected := range formulas {
+		if seen[coordinate] != expected {
+			t.Errorf("%s 를 다시 가져온 수식=%q, 기대=%q", coordinate, seen[coordinate], expected)
 		}
 	}
 }

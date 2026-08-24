@@ -17,6 +17,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"kanpic/internal/formula"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
 )
@@ -228,8 +229,11 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 			}
 			for columnIndex, displayValue := range columns {
 				coordinate, _ := excelize.CoordinatesToCellName(columnIndex+1, rowIndex)
-				formula, _ := file.GetCellFormula(sheetName, coordinate)
-				if displayValue == "" && formula == "" {
+				// 엑셀은 최신 함수를 _xlfn. 이 붙은 이름으로 적는다. 떼지
+				// 않고 저장하면 수식 입력줄에 사람이 쓰지 않은 이름이 뜬다.
+				cellFormula, _ := file.GetCellFormula(sheetName, coordinate)
+				cellFormula = formula.FromExcel(cellFormula)
+				if displayValue == "" && cellFormula == "" {
 					continue
 				}
 				cellType, _ := file.GetCellType(sheetName, coordinate)
@@ -247,7 +251,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 					value = displayValue
 				}
 				encoded, _ := json.Marshal(value)
-				input := workbook.CellInput{Row: rowIndex, Column: columnIndex + 1, Value: encoded, Formula: formula}
+				input := workbook.CellInput{Row: rowIndex, Column: columnIndex + 1, Value: encoded, Formula: cellFormula}
 				styleID, _ := file.GetCellStyle(sheetName, coordinate)
 				if styleID > 0 {
 					style, ok := styleCache[styleID]
@@ -684,7 +688,10 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 				return ExportedFile{}, err
 			}
 			if cell.Formula != "" {
-				if err := file.SetCellFormula(name, coordinate, cell.Formula); err != nil {
+				// 엑셀은 2007 이후에 생긴 함수를 파일 안에서 _xlfn. 이 붙은
+				// 이름으로 기대한다. 붙이지 않고 내보내면 IFS·XLOOKUP 같은
+				// 함수가 엑셀에서 모두 #NAME? 이 된다.
+				if err := file.SetCellFormula(name, coordinate, formula.ForExcel(cell.Formula)); err != nil {
 					return ExportedFile{}, err
 				}
 			}

@@ -1481,3 +1481,91 @@ func TestTimeIsAFractionOfADaySoItCanBeAdded(t *testing.T) {
 	// 엑셀에서 가져온 일련번호에도 더할 수 있다.
 	assertClose(t, "serial + TIME", evaluateNumber(t, "=A2+TIME(6,0,0)", cells), 45306.75, 1e-9)
 }
+
+// 엑셀 2010 부터 STDEV.P 처럼 점 붙은 이름을 쓰고 시트도 둘 다 받는다.
+// 오늘 만든 파일을 가져오면 예전 이름만 아는 엔진에서 #NAME? 이 났다 —
+// 셈은 이미 있는데 이름을 몰라서였다.
+func TestModernFunctionNamesComputeTheSameAsTheOldOnes(t *testing.T) {
+	t.Parallel()
+	engine := New()
+	for _, pair := range [][2]string{
+		{"=STDEV.S(2,4,4,4,5,5,7,9)", "=STDEV(2,4,4,4,5,5,7,9)"},
+		{"=STDEV.P(2,4,4,4,5,5,7,9)", "=STDEVP(2,4,4,4,5,5,7,9)"},
+		{"=VAR.S(1,2,3,4)", "=VAR(1,2,3,4)"},
+		{"=VAR.P(1,2,3,4)", "=VARP(1,2,3,4)"},
+		{"=MODE.SNGL(1,2,2,3)", "=MODE(1,2,2,3)"},
+		{"=RANK.EQ(2,{1,2,2,3})", "=RANK(2,{1,2,2,3})"},
+		{"=PERCENTILE.INC({1,2,3,4},0.25)", "=PERCENTILE({1,2,3,4},0.25)"},
+		{"=QUARTILE.INC({1,3,5,7},1)", "=QUARTILE({1,3,5,7},1)"},
+		{"=FORECAST.LINEAR(4,{2,3,5},{1,2,3})", "=FORECAST(4,{2,3,5},{1,2,3})"},
+		{"=COVARIANCE.P({1,2,3},{4,6,9})", "=COVAR({1,2,3},{4,6,9})"},
+	} {
+		modern, old := engine.Evaluate(pair[0], map[string]any{}), engine.Evaluate(pair[1], map[string]any{})
+		if modern.Error != nil {
+			t.Errorf("%s -> %s %s", pair[0], modern.Error.Code, modern.Error.Message)
+			continue
+		}
+		if display(modern.Value) != display(old.Value) {
+			t.Errorf("%s=%v 인데 %s=%v", pair[0], modern.Value, pair[1], old.Value)
+		}
+	}
+	// 이름은 대소문자를 가리지 않는다. 붙여넣은 수식이 소문자일 수 있다.
+	if result := engine.Evaluate("=stdev.p(2,4,4,4,5,5,7,9)", map[string]any{}); result.Error != nil || display(result.Value) != "2" {
+		t.Errorf("소문자 별명=%#v", result)
+	}
+}
+
+// 점 붙은 이름이 모두 별명인 것은 아니다. EXC 는 양 끝을 자료 밖에 두므로
+// 값이 다르다. 별명으로 뭉뚱그리면 조용히 틀린 답을 준다.
+func TestExclusivePercentilesDifferFromInclusiveOnes(t *testing.T) {
+	t.Parallel()
+	engine := New()
+	for _, item := range []struct {
+		expression string
+		expected   string
+	}{
+		// 네 개짜리 자료에서 포함형 1사분위는 1.75, 배타형은 1.25다.
+		{"=PERCENTILE.INC({1,2,3,4},0.25)", "1.75"},
+		{"=PERCENTILE.EXC({1,2,3,4},0.25)", "1.25"},
+		// 가운데는 둘 다 중앙값이다.
+		{"=PERCENTILE.EXC({1,2,3,4},0.5)", "2.5"},
+		{"=QUARTILE.EXC({1,3,5,7},1)", "1.5"},
+		{"=QUARTILE.EXC({1,3,5,7},2)", "4"},
+		{"=QUARTILE.EXC({1,3,5,7},3)", "6.5"},
+		// 동점은 차지한 등수의 평균을 받는다. RANK 는 둘 다 2등을 준다.
+		{"=RANK.AVG(2,{1,2,2,3})", "2.5"},
+		{"=RANK(2,{1,2,2,3})", "2"},
+		{"=RANK.AVG(2,{1,2,2,3},1)", "2.5"},
+		{"=RANK.AVG(3,{1,2,2,3})", "1"},
+		// 이름 끝의 A 는 숫자가 아닌 값을 0 으로 센다.
+		{"=MINA(2,3,\"x\")", "0"},
+		{"=MIN(2,3,\"x\")", "2"},
+		{"=MAXA(-1,-2,\"x\")", "0"},
+		{"=MAX(-1,-2,\"x\")", "-1"},
+		{"=MINA(TRUE,5)", "1"},
+	} {
+		result := engine.Evaluate(item.expression, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s -> %s %s", item.expression, result.Error.Code, result.Error.Message)
+			continue
+		}
+		if actual := display(result.Value); actual != item.expected {
+			t.Errorf("%s=%s, 기대=%s", item.expression, actual, item.expected)
+		}
+	}
+	// 배타형이 답할 수 없는 자리는 그렇다고 말해야 한다. 네 개짜리 자료는
+	// 0.2 에서 0.8 사이만 답할 수 있다.
+	for _, expression := range []string{
+		"=PERCENTILE.EXC({1,2,3,4},0)", "=PERCENTILE.EXC({1,2,3,4},1)", "=PERCENTILE.EXC({1,2,3,4},0.1)",
+		"=QUARTILE.EXC({1,3,5,7},0)", "=QUARTILE.EXC({1,3,5,7},4)", "=QUARTILE.EXC({1,3,5,7},1.5)",
+	} {
+		result := engine.Evaluate(expression, map[string]any{})
+		if result.Error == nil || result.Error.Code != "#NUM!" {
+			t.Errorf("%s 가 답을 냈다: %#v", expression, result)
+		}
+	}
+	// 없는 값의 등수는 답이 없다.
+	if result := engine.Evaluate("=RANK.AVG(9,{1,2,3})", map[string]any{}); result.Error == nil || result.Error.Code != "#N/A" {
+		t.Errorf("없는 값의 등수=%#v", result)
+	}
+}

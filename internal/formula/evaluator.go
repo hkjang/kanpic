@@ -386,7 +386,7 @@ type functionNode struct {
 }
 
 func (n functionNode) eval(cells map[string]any) (any, error) {
-	name := strings.ToUpper(n.name)
+	name := canonicalFunctionName(n.name)
 	if _, helper := lambdaHelpers[name]; helper {
 		return evaluateLambdaHelper(name, n.arguments, cells)
 	}
@@ -882,6 +882,10 @@ func (p *parser) primary() (node, error) {
 		}
 		name := strings.ToUpper(strings.ReplaceAll(current.text, "$", ""))
 		if p.current().kind == tokenLeft {
+			// 여는 괄호가 따라오면 함수 이름이다. 여기서 이름을 하나로
+			// 모아야 _xlfn.LET 처럼 접두사가 붙은 것도 제 갈래를 탄다 —
+			// LET·LAMBDA 는 셈이 아니라 파싱 단계에서 갈라지기 때문이다.
+			name = canonicalFunctionName(name)
 			p.position++
 			switch name {
 			case "LET":
