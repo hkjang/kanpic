@@ -559,3 +559,55 @@ func TestChartTitleNamesWhatIsActuallyPlotted(t *testing.T) {
 		}
 	}
 }
+
+// 핵심 지표에 자리가 모자란 것과, 그런 통찰이 아예 없는 것은 다른 이야기다.
+//
+// 잴 것이 여럿일 때 최저를 아예 셈하지 않게 했더니, 그것을 재료로 쓰는
+// 마무리 슬라이드가 통째로 사라졌다. 지표 넉 장을 얻고 슬라이드 한 장을
+// 잃은 셈이라, 덱은 오히려 얇아졌다.
+//
+// 통찰은 남기고, 칸을 누구에게 내줄지는 kpiRows 가 정한다.
+func TestCrowdedKPIsDoNotSilenceTheClosingSlide(t *testing.T) {
+	t.Parallel()
+	several := Analyze(SourceRef{}, rangeOf(t, "A1:D5"), sheetOf([][]any{
+		{"분기", "매출", "비용", "이익"},
+		{"1분기", 1200, 800, 400},
+		{"2분기", 1500, 900, 600},
+		{"3분기", 1100, 850, 250},
+		{"4분기", 1800, 1000, 800},
+	}))
+	// 최저는 셈해 둔다. 화면에 내보내지 않을 뿐이다.
+	found := false
+	for _, insight := range several.Insights {
+		if insight.Kind == InsightBottom {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("최저 통찰이 사라졌다. 마무리 슬라이드가 이것을 쓴다")
+	}
+	// 지표 칸에는 넣지 않는다. 열마다 합계를 보여 줄 자리가 필요하다.
+	for _, row := range kpiRows(several) {
+		if strings.HasPrefix(row.Label, "최저") {
+			t.Errorf("칸이 모자란데 최저가 자리를 차지했다: %v", row.Label)
+		}
+	}
+	// 마무리 슬라이드는 그대로 나온다.
+	if points := closingPoints(several); len(points) == 0 {
+		t.Error("주요 시사점이 비었다")
+	}
+
+	// 잴 것이 하나면 최저도 지표에 그대로 보인다.
+	single := Analyze(SourceRef{}, rangeOf(t, "A1:B5"), sheetOf([][]any{
+		{"분기", "매출"}, {"1분기", 1200}, {"2분기", 1500}, {"3분기", 1100}, {"4분기", 1800},
+	}))
+	shown := false
+	for _, row := range kpiRows(single) {
+		if strings.HasPrefix(row.Label, "최저") {
+			shown = true
+		}
+	}
+	if !shown {
+		t.Error("잴 것이 하나면 최저도 보여야 한다")
+	}
+}

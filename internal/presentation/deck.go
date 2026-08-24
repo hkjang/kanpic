@@ -119,7 +119,17 @@ func sourceNote(source SourceRef) string {
 // glance and a glance holds four things.
 func kpiRows(analysis Analysis) []Row {
 	rows := []Row{}
+	// 잴 것이 여럿이면 첫 열 하나를 깊이 파는 것보다 열마다 합계를 보여
+	// 주는 편이 낫다. 매출·비용·이익이 있는 표에서 "최고 매출, 최저 매출,
+	// 합계 매출" 만 적으면 정작 이익이 얼마인지 한 장도 말하지 않는다.
+	//
+	// 칸은 넷뿐이므로 최저에게 내줄 자리가 없다. 통찰 자체는 남아 있어
+	// 마무리 슬라이드가 그대로 쓴다.
+	crowded := len(analysis.Measures) > 1
 	for _, insight := range analysis.Insights {
+		if crowded && insight.Kind == InsightBottom {
+			continue
+		}
 		label := insightLabel(insight)
 		if label == "" {
 			continue
