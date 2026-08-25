@@ -158,3 +158,16 @@ func buildImportedNamedFunctions(workbookID, actor string, imported []ImportName
 	}
 	return items
 }
+
+// cloneNamedFunctionsForWorkbook 은 버전을 찍을 때 그 워크북의 이름 있는
+// 수식을 담아 둔다. 표와 같은 까닭이다 — 되돌렸는데 정의가 없으면 그것을
+// 부르던 칸이 #NAME? 이 된다.
+func cloneNamedFunctionsForWorkbook(source map[string]NamedFunction, workbookID string) map[string]NamedFunction {
+	result := make(map[string]NamedFunction)
+	for id, item := range source {
+		if item.WorkbookID == workbookID {
+			result[id] = cloneNamedFunction(item)
+		}
+	}
+	return result
+}

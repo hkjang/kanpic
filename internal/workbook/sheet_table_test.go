@@ -393,3 +393,60 @@ func TestSheetTableDoesNotSwallowACellThatSummarisesIt(t *testing.T) {
 		t.Fatalf("메모를 표를 부르는 것으로 셌다: %s", tableRange())
 	}
 }
+
+// 워크북을 복제하면 이름 있는 수식과 표도 함께 가야 한다.
+//
+// 두고 가면 사본의 =SUM(매출표[금액]) 이 가리킬 곳을 잃는다. 그런데 칸에는
+// 옛 값이 그대로 남아 있어, 사람은 사본이 멀쩡한 줄 알다가 무언가 고치는
+// 순간 #NAME? 을 만난다. 값이 있는데 그 값을 만든 것이 없는 상태다.
+func TestDuplicateWorkbookCarriesNamedFunctionsAndTables(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	if _, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B3", Theme: "green",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateNamedFunction(ctx, book.ID, "alice", CreateNamedFunctionInput{
+		IdempotencyKey: "f-1", Name: "두배", Parameters: []string{"x"}, Body: "x*2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "formulas", Cells: []CellInput{
+		{Row: 5, Column: 1, Formula: "=SUM(매출표[금액])"},
+		{Row: 6, Column: 1, Formula: "=두배(21)"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := repository.DuplicateWorkbook(ctx, book.ID, DuplicateWorkbookInput{Title: "사본", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := repository.ListSheetTables(ctx, copied.ID)
+	if err != nil || len(tables) != 1 || tables[0].Name != "매출표" || tables[0].Theme != "green" {
+		t.Fatalf("사본의 표=%#v, %v", tables, err)
+	}
+	// 표는 사본의 시트를 가리켜야 한다. 원본 시트를 가리키면 사본을 고칠 때
+	// 원본이 함께 움직인다.
+	if tables[0].SheetID != copied.Sheets[0].ID {
+		t.Errorf("사본의 표가 원본 시트를 가리킨다: %s", tables[0].SheetID)
+	}
+	functions, err := repository.ListNamedFunctions(ctx, copied.ID)
+	if err != nil || len(functions) != 1 || functions[0].Name != "두배" {
+		t.Fatalf("사본의 이름 있는 수식=%#v, %v", functions, err)
+	}
+	// 값이 아니라 정의가 살아 있어야 한다. 사본에서 자료를 고치면 합계가
+	// 따라 움직이는지로 확인한다.
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	copiedCurrent, _ := repository.GetWorkbook(ctx, copied.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: copied.Sheets[0].ID, ActorID: "alice", BaseVersion: copiedCurrent.Version, IdempotencyKey: "edit", Cells: []CellInput{
+		{Row: 3, Column: 2, Value: value(500)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if actual := tableCellValue(t, repository, copied.Sheets[0].ID, 5, 1); actual != "600" {
+		t.Fatalf("사본에서 자료를 고친 뒤 합계=%s", actual)
+	}
+}

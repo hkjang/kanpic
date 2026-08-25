@@ -4490,3 +4490,91 @@ func TestPostgresSheetTablesAnswerFormulasAndFollowStructure(t *testing.T) {
 		t.Fatalf("표를 지운 뒤=%#v, %v", cells, err)
 	}
 }
+
+// 워크북을 복제하거나 버전을 되돌릴 때 이름 있는 수식과 표도 함께 가야 한다.
+//
+// 두고 가면 칸에는 옛 값이 그대로 남아 있는데 그 값을 만든 정의가 없다.
+// 사람은 멀쩡한 줄 알다가 무언가 고치는 순간 #NAME? 을 만난다.
+func TestPostgresDuplicateAndRestoreCarryNamedFunctionsAndTables(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("carry-owner-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "옮김", WorkspaceID: "integration", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: book.Version, IdempotencyKey: "carry-seed",
+		Cells: []workbook.CellInput{
+			{Row: 1, Column: 1, Value: value("지역")}, {Row: 1, Column: 2, Value: value("금액")},
+			{Row: 2, Column: 1, Value: value("서울")}, {Row: 2, Column: 2, Value: value(100)},
+			{Row: 3, Column: 1, Value: value("부산")}, {Row: 3, Column: 2, Value: value(200)},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	table, err := repository.CreateSheetTable(ctx, book.ID, owner, workbook.CreateSheetTableInput{
+		IdempotencyKey: "carry-table", SheetID: sheet.ID, Name: "매출표", Range: "A1:B3", Theme: "green",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	namedFunction, err := repository.CreateNamedFunction(ctx, book.ID, owner, workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "carry-fn", Name: "두배", Parameters: []string{"x"}, Body: "x*2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 복제하면 둘 다 사본으로 간다.
+	copied, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{Title: "사본", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copied.ID, "integration-cleanup")
+	copiedTables, err := repository.ListSheetTables(ctx, copied.ID)
+	if err != nil || len(copiedTables) != 1 || copiedTables[0].Name != "매출표" || copiedTables[0].Theme != "green" {
+		t.Fatalf("사본의 표=%#v, %v", copiedTables, err)
+	}
+	if copiedTables[0].SheetID != copied.Sheets[0].ID {
+		t.Errorf("사본의 표가 원본 시트를 가리킨다: %s", copiedTables[0].SheetID)
+	}
+	copiedFunctions, err := repository.ListNamedFunctions(ctx, copied.ID)
+	if err != nil || len(copiedFunctions) != 1 || copiedFunctions[0].Name != "두배" {
+		t.Fatalf("사본의 이름 있는 수식=%#v, %v", copiedFunctions, err)
+	}
+	// 버전을 찍고 둘을 지운 뒤 되돌리면 둘 다 살아나야 한다.
+	version, err := repository.CreateVersion(ctx, book.ID, "둘 다 있는 상태", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteSheetTable(ctx, table.ID, owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteNamedFunction(ctx, namedFunction.ID, owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, owner); err != nil {
+		t.Fatal(err)
+	}
+	restoredTables, err := repository.ListSheetTables(ctx, book.ID)
+	if err != nil || len(restoredTables) != 1 || restoredTables[0].Name != "매출표" {
+		t.Fatalf("되돌린 표=%#v, %v", restoredTables, err)
+	}
+	restoredFunctions, err := repository.ListNamedFunctions(ctx, book.ID)
+	if err != nil || len(restoredFunctions) != 1 || restoredFunctions[0].Name != "두배" {
+		t.Fatalf("되돌린 이름 있는 수식=%#v, %v", restoredFunctions, err)
+	}
+}

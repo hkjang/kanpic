@@ -83,6 +83,11 @@ type snapshotDocument struct {
 	NamedRanges        []NamedRange        `json:"named_ranges,omitempty"`
 	Charts             []Chart             `json:"charts,omitempty"`
 	Pivots             []Pivot             `json:"pivots,omitempty"`
+	// 이름 있는 수식과 표는 스키마 9 부터 담는다. 그 앞에 찍은 버전에는
+	// 이 칸이 없으므로, 되돌릴 때 지금 있는 정의를 지우지 않는다 — 무엇이
+	// 있었는지 알 길이 없는데 지우는 것은 되돌리는 것이 아니라 잃는 것이다.
+	NamedFunctions []NamedFunction `json:"named_functions,omitempty"`
+	SheetTables    []SheetTable    `json:"sheet_tables,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -715,6 +720,44 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 		sourceRange.CreatedAt, sourceRange.UpdatedAt = now, now
 		if err := insertNamedRangeTx(ctx, tx, sourceRange); err != nil {
 			return Workbook{}, err
+		}
+	}
+	// 이름 있는 수식과 표도 함께 옮긴다. 두고 가면 사본의 =마진율(A1,B1) 과
+	// =SUM(매출표[금액]) 이 가리킬 곳을 잃는데, 칸에는 옛 값이 그대로 남아
+	// 있어 사람은 사본이 멀쩡한 줄 알다가 무언가 고치는 순간 #NAME? 을 만난다.
+	copiedFunctions, err := listNamedFunctionsFrom(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, item := range copiedFunctions {
+		item.ID, item.WorkbookID, item.WorkbookVersion = identity.New(), duplicated.ID, 1
+		item.CreateKey, item.Revision = "copy:"+item.ID, 1
+		item.CreatedBy, item.UpdatedBy = ownerID, ownerID
+		item.CreatedAt, item.UpdatedAt = now, now
+		if _, err := tx.Exec(ctx, `INSERT INTO named_functions(id,workbook_id,idempotency_key,name,parameters,body,description,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			item.ID, item.WorkbookID, item.CreateKey, item.Name, item.Parameters, item.Body, item.Description,
+			item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+			return Workbook{}, mapPostgresError(err)
+		}
+	}
+	copiedTables, err := listSheetTablesFrom(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, item := range copiedTables {
+		destinationSheetID, found := sheetIDs[item.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: table references an unknown sheet", ErrInvalid)
+		}
+		item.ID, item.WorkbookID, item.WorkbookVersion = identity.New(), duplicated.ID, 1
+		item.SheetID = destinationSheetID
+		item.CreateKey, item.Revision = "copy:"+item.ID, 1
+		item.CreatedBy, item.UpdatedBy = ownerID, ownerID
+		item.CreatedAt, item.UpdatedAt = now, now
+		if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,totals_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.TotalsRow, item.Theme,
+			item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+			return Workbook{}, mapPostgresError(err)
 		}
 	}
 	copiedCharts, err := listChartsTx(ctx, tx, source.ID)
@@ -1857,7 +1900,7 @@ func (r *PostgresRepository) CreateVersion(ctx context.Context, workbookID, name
 }
 
 func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workbookID string) (snapshotDocument, error) {
-	document := snapshotDocument{SchemaVersion: 8, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), ConditionalFormats: make([]ConditionalFormat, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0), Pivots: make([]Pivot, 0)}
+	document := snapshotDocument{SchemaVersion: 9, Sheets: make([]snapshotSheet, 0), Blocks: make([]snapshotBlock, 0), Filters: make([]FilterView, 0), Validations: make([]DataValidation, 0), ConditionalFormats: make([]ConditionalFormat, 0), NamedRanges: make([]NamedRange, 0), Charts: make([]Chart, 0), Pivots: make([]Pivot, 0)}
 	if err := tx.QueryRow(ctx, `SELECT title,favorite FROM workbooks WHERE id=$1 AND deleted_at IS NULL`, workbookID).Scan(&document.Workbook.Title, &document.Workbook.Favorite); errors.Is(err, pgx.ErrNoRows) {
 		return snapshotDocument{}, ErrNotFound
 	} else if err != nil {
@@ -1935,6 +1978,14 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 		return snapshotDocument{}, err
 	}
 	document.NamedRanges, err = listNamedRangesTx(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	document.NamedFunctions, err = listNamedFunctionsFrom(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
+	document.SheetTables, err = listSheetTablesFrom(ctx, tx, workbookID)
 	if err != nil {
 		return snapshotDocument{}, err
 	}
@@ -2038,6 +2089,17 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM pivots WHERE workbook_id=$1`, workbookID); err != nil {
 		return MutationResult{}, err
+	}
+	// 이름 있는 수식과 표는 스키마 9 부터 담는다. 그 앞에 찍은 버전에는 이
+	// 칸이 없으므로 건드리지 않는다 — 무엇이 있었는지 알 길이 없는데 지우는
+	// 것은 되돌리는 것이 아니라 잃는 것이다.
+	if snapshot.SchemaVersion >= 9 {
+		if _, err := tx.Exec(ctx, `DELETE FROM named_functions WHERE workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sheet_tables WHERE workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
 	}
 	if snapshot.SchemaVersion >= 5 {
 		if _, err := tx.Exec(ctx, `DELETE FROM filter_views USING sheets WHERE filter_views.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
@@ -2218,6 +2280,47 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			normalized.UpdatedAt = now
 			if err := insertNamedRangeTx(ctx, tx, normalized); err != nil {
 				return MutationResult{}, err
+			}
+		}
+	}
+	if snapshot.SchemaVersion >= 9 {
+		for _, item := range snapshot.NamedFunctions {
+			item.CreateKey, item.WorkbookID, item.WorkbookVersion = "restore:"+item.ID, workbookID, base+1
+			if item.Revision < 1 {
+				item.Revision = 1
+			}
+			if item.CreatedBy == "" {
+				item.CreatedBy = actorID
+			}
+			item.UpdatedBy, item.UpdatedAt = actorID, now
+			if item.CreatedAt.IsZero() {
+				item.CreatedAt = now
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO named_functions(id,workbook_id,idempotency_key,name,parameters,body,description,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+				item.ID, item.WorkbookID, item.CreateKey, item.Name, item.Parameters, item.Body, item.Description,
+				item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+				return MutationResult{}, mapPostgresError(err)
+			}
+		}
+		for _, item := range snapshot.SheetTables {
+			if _, found := desiredSheetIDs[item.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a table on an unknown sheet", ErrInvalid)
+			}
+			item.CreateKey, item.WorkbookID, item.WorkbookVersion = "restore:"+item.ID, workbookID, base+1
+			if item.Revision < 1 {
+				item.Revision = 1
+			}
+			if item.CreatedBy == "" {
+				item.CreatedBy = actorID
+			}
+			item.UpdatedBy, item.UpdatedAt = actorID, now
+			if item.CreatedAt.IsZero() {
+				item.CreatedAt = now
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,totals_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+				item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.TotalsRow, item.Theme,
+				item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+				return MutationResult{}, mapPostgresError(err)
 			}
 		}
 	}

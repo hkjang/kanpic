@@ -397,3 +397,16 @@ func rowReferencesTable(item SheetTable, row int, cells []CellInput, existing ma
 	}
 	return false
 }
+
+// cloneSheetTablesForWorkbook 은 버전을 찍을 때 그 워크북의 표를 담아 둔다.
+// 담아 두지 않으면 되돌려도 표가 살아나지 않아, 칸은 옛 모습인데 그 칸을
+// 셈하던 이름은 사라진 채로 남는다.
+func cloneSheetTablesForWorkbook(source map[string]SheetTable, workbookID string) map[string]SheetTable {
+	result := make(map[string]SheetTable)
+	for id, item := range source {
+		if item.WorkbookID == workbookID {
+			result[id] = cloneSheetTable(item)
+		}
+	}
+	return result
+}
