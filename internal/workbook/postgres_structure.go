@@ -117,6 +117,29 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			return MutationResult{}, err
 		}
 	}
+	watchRules, err := listSheetWatchRulesTx(ctx, tx, target.ID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	for _, rule := range watchRules {
+		updated, remains, transformErr := transformWatchRuleForStructure(rule, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if !remains {
+			if _, err := tx.Exec(ctx, `DELETE FROM watch_rules WHERE id=$1`, rule.ID); err != nil {
+				return MutationResult{}, err
+			}
+			continue
+		}
+		if updated.Range == rule.Range {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE watch_rules SET cell_range=$2,revision=$3,updated_by=$4,updated_at=$5 WHERE id=$1`,
+			rule.ID, updated.Range, updated.Revision, updated.UpdatedBy, updated.UpdatedAt); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	conditionalFormats, err := listConditionalFormatsTx(ctx, tx, target.ID)
 	if err != nil {
 		return MutationResult{}, err

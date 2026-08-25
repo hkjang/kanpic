@@ -188,3 +188,23 @@ func (r *PostgresRepository) DeleteWatchRule(ctx context.Context, id, _ string, 
 	}
 	return nil
 }
+
+// listSheetWatchRulesTx 는 열린 트랜잭션 안에서 그 시트의 규칙을 모두 읽는다.
+// 꺼 둔 규칙도 읽는다. 다시 켰을 때 엉뚱한 칸을 보고 있으면 안 되므로
+// 행과 열이 움직일 때는 꺼 둔 것도 같이 옮겨야 한다.
+func listSheetWatchRulesTx(ctx context.Context, tx pgx.Tx, sheetID string) ([]WatchRule, error) {
+	rows, err := tx.Query(ctx, `SELECT `+watchRuleColumns+` FROM watch_rules WHERE sheet_id=$1 ORDER BY id`, sheetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]WatchRule, 0)
+	for rows.Next() {
+		item, scanErr := scanWatchRule(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}

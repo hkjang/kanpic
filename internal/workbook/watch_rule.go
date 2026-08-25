@@ -144,3 +144,30 @@ func appendUnique(items []string, value string) []string {
 	}
 	return append(items, value)
 }
+
+// transformWatchRuleForStructure 는 행이나 열이 끼워지고 지워질 때 지켜보는
+// 범위를 같이 옮긴다. 조건부 서식이나 보호 범위와 같은 자리에 있어야 한다.
+// 5행 위에 한 행을 끼웠는데 규칙이 그대로 B5:B9 를 보고 있으면, 사람은
+// 자기가 정한 칸을 지켜본다고 믿는 채로 엉뚱한 칸의 알림을 받는다.
+//
+// 시트 전체를 보는 규칙은 범위가 비어 있으므로 옮길 것이 없다.
+func transformWatchRuleForStructure(rule WatchRule, input StructuralMutation, actor string, now time.Time) (WatchRule, bool, error) {
+	if strings.TrimSpace(rule.Range) == "" {
+		return rule, true, nil
+	}
+	transformed, exists, err := transformRangeAddress(rule.Range, input)
+	if err != nil {
+		return WatchRule{}, false, fmt.Errorf("%w: watch rule range exceeds spreadsheet bounds", ErrInvalid)
+	}
+	// 지켜보던 칸이 통째로 지워졌으면 볼 것이 없다. 시트 전체를 보는 규칙으로
+	// 바꾸면 사람이 부탁한 적 없는 알림을 받게 되므로 규칙을 지운다.
+	if !exists {
+		return WatchRule{}, false, nil
+	}
+	if transformed == rule.Range {
+		return rule, true, nil
+	}
+	rule.Range, rule.Revision, rule.UpdatedBy, rule.UpdatedAt = transformed, rule.Revision+1, actor, now
+	normalized, err := normalizeWatchRule(rule)
+	return normalized, err == nil, err
+}

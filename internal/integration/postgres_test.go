@@ -4211,4 +4211,53 @@ func TestPostgresWatchRulesAreOwnedByTheWatcher(t *testing.T) {
 	}); !errors.Is(err, workbook.ErrInvalid) {
 		t.Errorf("남의 시트=%v", err)
 	}
+	// 지켜보는 범위도 행과 열을 따라 움직인다. 규칙이 제자리에 남으면 사람은
+	// 자기가 정한 칸을 본다고 믿는 채로 엉뚱한 칸의 알림을 받는다.
+	moving, err := repository.CreateWatchRule(ctx, book.ID, owner, workbook.CreateWatchRuleInput{
+		IdempotencyKey: "watch-structure", SheetID: sheet.ID, Range: "B5:B9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 꺼 둔 규칙도 옮겨야 다시 켰을 때 제 칸을 본다.
+	off, err := repository.CreateWatchRule(ctx, book.ID, owner, workbook.CreateWatchRuleInput{
+		IdempotencyKey: "watch-structure-off", SheetID: sheet.ID, Range: "D5:D6",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnedOff := false
+	if off, err = repository.UpdateWatchRule(ctx, off.ID, owner, workbook.UpdateWatchRuleInput{Enabled: &turnedOff, ExpectedRevision: &off.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	seeded, seededErr := repository.GetWorkbook(ctx, book.ID)
+	if seededErr != nil {
+		t.Fatal(seededErr)
+	}
+	if _, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: seeded.Version,
+		IdempotencyKey: "watch-row-insert", Axis: "row", Action: "insert", Index: 2, Count: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if movedRule, err := repository.GetWatchRule(ctx, moving.ID); err != nil || movedRule.Range != "B6:B10" {
+		t.Fatalf("옮긴 범위=%#v, %v", movedRule, err)
+	}
+	if movedOff, err := repository.GetWatchRule(ctx, off.ID); err != nil || movedOff.Range != "D6:D7" || movedOff.Enabled {
+		t.Fatalf("꺼 둔 규칙=%#v, %v", movedOff, err)
+	}
+	// 지켜보던 칸이 통째로 지워지면 볼 것이 없으므로 규칙도 사라진다.
+	shifted, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: shifted.Version,
+		IdempotencyKey: "watch-row-delete", Axis: "row", Action: "delete", Index: 6, Count: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gone, err := repository.GetWatchRule(ctx, moving.ID); err == nil {
+		t.Fatalf("지워진 칸을 보는 규칙이 남았다: %#v", gone)
+	}
 }

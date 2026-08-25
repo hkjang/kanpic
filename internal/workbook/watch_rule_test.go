@@ -1,6 +1,9 @@
 package workbook
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // 자기가 고친 것을 메일로 다시 받는 것은 알림이 아니라 소음이다. 그리고
 // 한 번의 저장에 칸이 500개 바뀌어도 사람마다 한 통이어야 한다.
@@ -83,5 +86,61 @@ func TestWatchRuleNormalisation(t *testing.T) {
 	}
 	if !WatchRuleCovers(single, 2, 2) || WatchRuleCovers(single, 3, 2) {
 		t.Error("다듬은 범위가 제 칸을 가리키지 않는다")
+	}
+}
+
+// 지켜보는 범위도 행과 열을 따라 움직여야 한다. 조건부 서식이나 보호 범위와
+// 달리 규칙이 제자리에 남으면, 사람은 자기가 정한 칸을 보고 있다고 믿는 채로
+// 엉뚱한 칸의 알림을 받는다.
+func TestMemoryWatchRuleFollowsStructure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, _ := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "watch structure", OwnerID: "alice"})
+	sheet := book.Sheets[0]
+	ranged, err := repository.CreateWatchRule(ctx, book.ID, "alice", CreateWatchRuleInput{IdempotencyKey: "watch-range", SheetID: sheet.ID, Watcher: "보라", Range: "B5:B9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 꺼 둔 규칙도 옮겨야 한다. 다시 켰을 때 엉뚱한 칸을 보면 안 된다.
+	disabled := false
+	off, err := repository.CreateWatchRule(ctx, book.ID, "alice", CreateWatchRuleInput{IdempotencyKey: "watch-off", SheetID: sheet.ID, Watcher: "현우", Range: "D5:D6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off, err = repository.UpdateWatchRule(ctx, off.ID, "alice", UpdateWatchRuleInput{Enabled: &disabled, ExpectedRevision: &off.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	whole, err := repository.CreateWatchRule(ctx, book.ID, "alice", CreateWatchRuleInput{IdempotencyKey: "watch-sheet", SheetID: sheet.ID, Watcher: "지민"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: seeded.Version, IdempotencyKey: "watch-row-insert", Axis: "row", Action: "insert", Index: 2, Count: 1}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetWatchRule(ctx, ranged.ID)
+	if err != nil || moved.Range != "B6:B10" {
+		t.Fatalf("옮긴 범위=%#v %v", moved, err)
+	}
+	movedOff, err := repository.GetWatchRule(ctx, off.ID)
+	if err != nil || movedOff.Range != "D6:D7" || movedOff.Enabled {
+		t.Fatalf("꺼 둔 규칙=%#v %v", movedOff, err)
+	}
+	// 시트 전체를 보는 규칙은 옮길 것이 없으므로 그대로여야 한다.
+	sheetWide, err := repository.GetWatchRule(ctx, whole.ID)
+	if err != nil || sheetWide.Range != "" || sheetWide.Revision != whole.Revision {
+		t.Fatalf("시트 전체 규칙=%#v %v", sheetWide, err)
+	}
+	// 지켜보던 칸이 통째로 지워지면 볼 것이 없으므로 규칙도 사라진다.
+	book, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "watch-row-delete", Axis: "row", Action: "delete", Index: 6, Count: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if gone, err := repository.GetWatchRule(ctx, ranged.ID); err == nil {
+		t.Fatalf("지워진 칸을 보는 규칙이 남았다: %#v", gone)
+	}
+	if kept, err := repository.GetWatchRule(ctx, whole.ID); err != nil || kept.Range != "" {
+		t.Fatalf("시트 전체 규칙이 사라졌다: %#v %v", kept, err)
 	}
 }
