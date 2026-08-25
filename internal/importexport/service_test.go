@@ -1485,3 +1485,51 @@ func TestTableWithTotalsRowSurvivesAnXLSXRoundTrip(t *testing.T) {
 		t.Fatal("합계 칸이 돌아오지 않았다")
 	}
 }
+
+// 엑셀에 같은 그림이 없는 차트는 파일에 담기지 않는다. 조용히 빠뜨리면
+// 사람은 파일을 열어 보고서야 알게 되고, 그때는 이미 그 파일을 남에게 보낸
+// 뒤다. 몇 개가 빠졌는지 세어 알린다.
+func TestExportCountsChartsExcelCannotHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := workbook.NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "일정", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := book.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("일감")}, {Row: 1, Column: 2, Value: value("시작")}, {Row: 1, Column: 3, Value: value("끝")},
+		{Row: 2, Column: 1, Value: value("설계")}, {Row: 2, Column: 2, Value: value("2026-01-05")}, {Row: 2, Column: 3, Value: value("2026-02-10")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range []struct{ key, kind string }{{"tl", "timeline"}, {"bar", "bar"}} {
+		if _, err := repository.CreateChart(ctx, book.ID, "tester", workbook.CreateChartInput{
+			IdempotencyKey: sample.key, SheetID: sheetID, SourceSheetID: sheetID,
+			Type: sample.kind, Title: sample.kind, SourceRange: "A1:C2",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: book.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 일정표 하나는 빠지고 막대 하나는 담긴다.
+	if exported.SkippedCharts != 1 {
+		t.Fatalf("빠진 차트=%d, want 1", exported.SkippedCharts)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, sheet := range parsed.Sheets {
+		total += len(sheet.Charts)
+	}
+	if total != 1 {
+		t.Fatalf("파일 속 차트=%d개, 막대 하나만 있어야 한다", total)
+	}
+}

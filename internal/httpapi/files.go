@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
-	"net/http"
-	"strings"
-
 	"kanpic/internal/importexport"
 	"kanpic/internal/workbook"
+	"mime"
+	"net/http"
+	"strconv"
+	"strings"
 )
 
 func (s *Server) previewImport(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +68,13 @@ func (s *Server) executeExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", exported.ContentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": exported.Name}))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// 엑셀에 같은 그림이 없어 담지 못한 차트가 있으면 몇 개인지 알린다.
+	// 조용히 빠뜨리면 사람은 파일을 열어 보고서야 알게 되고, 그때는 이미
+	// 그 파일을 남에게 보낸 뒤다. 문구는 화면 쪽에 둔다 — 헤더에 한글을
+	// 실으면 인코딩을 따로 다뤄야 한다.
+	if exported.SkippedCharts > 0 {
+		w.Header().Set("X-Kanpic-Skipped-Charts", strconv.Itoa(exported.SkippedCharts))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(exported.Data)
 }

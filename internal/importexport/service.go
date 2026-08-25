@@ -90,6 +90,10 @@ type ExportedFile struct {
 	Name        string
 	ContentType string
 	Data        []byte
+	// SkippedCharts 는 엑셀에 같은 것이 없어 파일에 담지 못한 차트의 수다.
+	// 조용히 빠뜨리면 사람은 파일을 열어 보고서야 알게 되고, 그때는 이미
+	// 그 파일을 남에게 보낸 뒤다.
+	SkippedCharts int
 }
 
 type Service struct{ repository workbook.Repository }
@@ -837,6 +841,7 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 	if err != nil {
 		return ExportedFile{}, err
 	}
+	skippedCharts := 0
 	for _, item := range charts {
 		target, known := sheetNames[item.SheetID]
 		source, sourceKnown := sheetNames[item.SourceSheetID]
@@ -845,6 +850,8 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 		}
 		primary, combo := exportChart(item, source)
 		if primary == nil {
+			// 엑셀에 같은 그림이 없는 종류다. 일정표가 그렇다.
+			skippedCharts++
 			continue
 		}
 		if combo != nil {
@@ -861,7 +868,7 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 	if err := file.Write(&buffer); err != nil {
 		return ExportedFile{}, err
 	}
-	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes()}, nil
+	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes(), SkippedCharts: skippedCharts}, nil
 }
 
 // applyImportedComments carries Excel cell comments over as kanpic notes. A
