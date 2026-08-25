@@ -5,6 +5,10 @@ import { expect, test } from '@playwright/test'
 // 확인한다. 무엇보다 행을 끼웠을 때도 그 수식이 맞아야 한다 — 그것이
 // 범위로 적는 대신 표를 쓰는 까닭이기 때문이다.
 test('a named table is created from the menu and answers formulas by column name', async ({ page }) => {
+  // 흐름 가운데 알림창이 뜨면 무언가 조용히 실패한 것이다. Playwright 는
+  // 알림창을 스스로 닫아 주므로, 붙잡아 두지 않으면 실패가 눈에 띄지 않는다.
+  const alerts:string[] = []
+  page.on('dialog', async d => { alerts.push(d.message()); await d.dismiss() })
   await page.goto('/')
   await page.getByRole('button', { name: '새 워크북' }).click()
   await page.waitForURL(/\/workbooks\//)
@@ -56,4 +60,18 @@ test('a named table is created from the menu and answers formulas by column name
   })
   expect(inserted.status(), await inserted.text()).toBeLessThan(300)
   await expect.poll(()=>values('A6:A7'),{timeout:15_000}).toEqual([300,2])
+
+  // 합계 줄을 켠다. 합계 칸이 제 열을 가리켜도 순환이 아니어야 한다 — 그
+  // 줄은 자료에서 빠지기 때문이다. 이것이 어긋나면 저장할 때마다 값이 불어난다.
+  await page.getByRole('menuitem', { name: '삽입' }).click()
+  await page.getByRole('menuitem', { name: '표…' }).click()
+  await dialog.locator('aside').getByRole('button', { name: /매출표/ }).click()
+  await dialog.getByLabel('표 범위').fill('A2:B5')
+  await dialog.getByLabel('마지막 줄이 합계').check()
+  await dialog.getByRole('button', { name: '저장' }).click()
+  await dialog.getByRole('button', { name: '표 닫기' }).click()
+  await write([{row:5,column:2,formula:'=SUM(매출표[금액])'}])
+  // 자료는 3·4행의 100 과 200 뿐이다. 합계 줄까지 세면 600 이 된다.
+  await expect.poll(()=>values('B5:B5'),{timeout:15_000}).toEqual([300])
+  expect(alerts, '조용히 실패한 것이 있다').toEqual([])
 })

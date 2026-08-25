@@ -33,6 +33,9 @@ type Table struct {
 	SheetID   string
 	Range     string
 	HeaderRow bool
+	// TotalsRow 는 마지막 줄이 합계 줄인지다. 열을 가리킬 때 그 줄을 빼야
+	// 합계 칸의 =SUM(매출표[금액]) 이 제 자신을 더하지 않는다.
+	TotalsRow bool
 	Columns   []string
 }
 
@@ -46,6 +49,8 @@ func tableSpecifier(text string) (string, bool) {
 		return "headers", true
 	case "#자료", "#데이터", "#DATA":
 		return "data", true
+	case "#합계", "#TOTALS":
+		return "totals", true
 	}
 	return "", false
 }

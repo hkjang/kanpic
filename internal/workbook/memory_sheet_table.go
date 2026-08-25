@@ -49,9 +49,10 @@ func (r *MemoryRepository) CreateSheetTable(_ context.Context, workbookID, actor
 	if input.HeaderRow != nil {
 		headerRow = *input.HeaderRow
 	}
+	totalsRow := input.TotalsRow != nil && *input.TotalsRow
 	item, err := normalizeSheetTable(SheetTable{
 		WorkbookID: workbookID, SheetID: input.SheetID, CreateKey: strings.TrimSpace(input.IdempotencyKey),
-		Name: input.Name, Range: input.Range, HeaderRow: headerRow, Theme: input.Theme,
+		Name: input.Name, Range: input.Range, HeaderRow: headerRow, TotalsRow: totalsRow, Theme: input.Theme,
 		CreatedBy: actor, UpdatedBy: actor,
 	})
 	if err != nil {
@@ -118,11 +119,17 @@ func (r *MemoryRepository) UpdateSheetTable(_ context.Context, id, actor string,
 	if input.Name != nil {
 		updated.Name = *input.Name
 	}
+	if input.SheetID != nil {
+		updated.SheetID = *input.SheetID
+	}
 	if input.Range != nil {
 		updated.Range = *input.Range
 	}
 	if input.HeaderRow != nil {
 		updated.HeaderRow = *input.HeaderRow
+	}
+	if input.TotalsRow != nil {
+		updated.TotalsRow = *input.TotalsRow
 	}
 	if input.Theme != nil {
 		updated.Theme = *input.Theme
@@ -130,6 +137,11 @@ func (r *MemoryRepository) UpdateSheetTable(_ context.Context, id, actor string,
 	normalized, err := normalizeSheetTable(updated)
 	if err != nil {
 		return SheetTable{}, err
+	}
+	// 표는 그 워크북의 시트에만 걸 수 있다. 남의 시트를 가리키는 표는
+	// 이름으로 남의 자료를 읽는 길이 된다.
+	if _, known := state.sheets[normalized.SheetID]; !known {
+		return SheetTable{}, fmt.Errorf("%w: unknown sheet", ErrInvalid)
 	}
 	if err := checkTableConflicts(r.sheetTablesForWorkbookLocked(current.WorkbookID), normalized, id); err != nil {
 		return SheetTable{}, err

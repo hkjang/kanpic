@@ -351,6 +351,16 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
         const header=geometry(bounds.startRow,bounds.startColumn,bounds.startRow,bounds.endColumn)
         if(header){context.globalAlpha=.12;context.fillStyle=TABLE_COLOR;context.fillRect(header.x,header.y,header.width,header.height);context.globalAlpha=1}
       }
+      // 합계 줄도 옅게 칠하고 그 위에 줄을 긋는다. 켰는데 눈에 띄는 변화가
+      // 없으면 사람은 켜지지 않은 줄 안다.
+      if(table.totals_row){
+        const totals=geometry(bounds.endRow,bounds.startColumn,bounds.endRow,bounds.endColumn)
+        if(totals){
+          context.globalAlpha=.12;context.fillStyle=TABLE_COLOR;context.fillRect(totals.x,totals.y,totals.width,totals.height);context.globalAlpha=1
+          context.strokeStyle=TABLE_COLOR;context.lineWidth=1
+          context.beginPath();context.moveTo(totals.x,Math.round(totals.y)+.5);context.lineTo(totals.x+totals.width,Math.round(totals.y)+.5);context.stroke()
+        }
+      }
       context.strokeStyle=TABLE_COLOR;context.lineWidth=2
       context.strokeRect(Math.round(box.x)+1,Math.round(box.y)+1,Math.round(box.width)-2,Math.round(box.height)-2)
       // 이름은 표 위쪽 바깥에 붙인다. 자리가 없으면 그리지 않는다 — 첫 줄을

@@ -86,3 +86,51 @@ func TestTableWithoutHeaderRow(t *testing.T) {
 		t.Errorf("없는 머리글=%#v", result.Error)
 	}
 }
+
+// 합계 줄은 자료가 아니다. 빼지 않으면 그 줄의 =SUM(매출표[금액]) 이 제
+// 자신을 더해, 저장할 때마다 값이 불어나는 순환이 된다.
+func TestTableTotalsRowIsNotData(t *testing.T) {
+	t.Parallel()
+	evaluator := New()
+	evaluator.scope.CurrentSheet = "S1"
+	evaluator.SetTables(map[string]Table{
+		"매출표": {SheetID: "S1", Range: "A1:B5", HeaderRow: true, TotalsRow: true, Columns: []string{"지역", "금액"}},
+	})
+	cells := map[string]any{
+		"S1!A1": "지역", "S1!B1": "금액",
+		"S1!A2": "서울", "S1!B2": 100.0,
+		"S1!A3": "부산", "S1!B3": 200.0,
+		"S1!A4": "대구", "S1!B4": 300.0,
+		"S1!A5": "합계", "S1!B5": 600.0,
+	}
+	for formula, expected := range map[string]any{
+		// 합계 줄의 600 을 더하면 1200 이 된다. 그것이 이 시험이 막는 것이다.
+		`=SUM(매출표[금액])`:   600.0,
+		`=SUM(매출표)`:       600.0,
+		`=SUM(매출표[#데이터])`: 600.0,
+		`=SUM(매출표[#합계])`:  600.0,
+		// 머리글 1줄 + 자료 3줄 + 합계 1줄, 두 열이니 열 칸이다.
+		`=COUNTA(매출표[#전체])`:     10.0,
+		`=COUNTA(매출표[#Totals])`: 2.0,
+	} {
+		result := evaluator.Evaluate(formula, cells)
+		if result.Error != nil {
+			t.Errorf("%s: %v", formula, result.Error)
+			continue
+		}
+		if result.Value != expected {
+			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
+		}
+	}
+	// 합계 줄이 없는 표에 합계 줄을 달라고 하면 없다고 말해야 한다.
+	evaluator.SetTables(map[string]Table{
+		"민무늬": {SheetID: "S1", Range: "A1:B5", HeaderRow: true, Columns: []string{"지역", "금액"}},
+	})
+	if result := evaluator.Evaluate(`=SUM(민무늬[#합계])`, cells); result.Error == nil || result.Error.Code != "#REF!" {
+		t.Errorf("없는 합계 줄=%#v", result.Error)
+	}
+	// 합계 줄이 없으면 마지막 줄도 자료다.
+	if result := evaluator.Evaluate(`=SUM(민무늬[금액])`, cells); result.Error != nil || result.Value != 1200.0 {
+		t.Errorf("합계 줄 없는 표=%v (%v)", result.Value, result.Error)
+	}
+}

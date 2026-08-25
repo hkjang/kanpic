@@ -227,8 +227,8 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 	}
 	importedTables := buildImportedSheetTables(wb.ID, input.ActorID, input.Sheets, sheetIDsByName, now)
 	for _, item := range importedTables {
-		if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			item.ID, wb.ID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.Theme,
+		if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,totals_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			item.ID, wb.ID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.TotalsRow, item.Theme,
 			item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
 			return Workbook{}, mapPostgresError(err)
 		}

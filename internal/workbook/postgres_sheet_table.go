@@ -11,14 +11,14 @@ import (
 	"kanpic/pkg/identity"
 )
 
-const sheetTableColumns = `id::text,workbook_id::text,sheet_id::text,idempotency_key,name,cell_range,header_row,theme,revision,created_by,updated_by,created_at,updated_at`
+const sheetTableColumns = `id::text,workbook_id::text,sheet_id::text,idempotency_key,name,cell_range,header_row,totals_row,theme,revision,created_by,updated_by,created_at,updated_at`
 
 type sheetTableScanner interface{ Scan(...any) error }
 
 func scanSheetTable(row sheetTableScanner) (SheetTable, error) {
 	var item SheetTable
 	if err := row.Scan(&item.ID, &item.WorkbookID, &item.SheetID, &item.CreateKey, &item.Name,
-		&item.Range, &item.HeaderRow, &item.Theme, &item.Revision,
+		&item.Range, &item.HeaderRow, &item.TotalsRow, &item.Theme, &item.Revision,
 		&item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return SheetTable{}, err
 	}
@@ -87,9 +87,10 @@ func (r *PostgresRepository) CreateSheetTable(ctx context.Context, workbookID, a
 	if input.HeaderRow != nil {
 		headerRow = *input.HeaderRow
 	}
+	totalsRow := input.TotalsRow != nil && *input.TotalsRow
 	item, err := normalizeSheetTable(SheetTable{
 		WorkbookID: workbookID, SheetID: input.SheetID, CreateKey: createKey,
-		Name: input.Name, Range: input.Range, HeaderRow: headerRow, Theme: input.Theme,
+		Name: input.Name, Range: input.Range, HeaderRow: headerRow, TotalsRow: totalsRow, Theme: input.Theme,
 		CreatedBy: actor, UpdatedBy: actor,
 	})
 	if err != nil {
@@ -100,8 +101,8 @@ func (r *PostgresRepository) CreateSheetTable(ctx context.Context, workbookID, a
 	}
 	now := r.now()
 	item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
-	if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.Theme,
+	if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,totals_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.TotalsRow, item.Theme,
 		item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
 		return SheetTable{}, mapPostgresError(err)
 	}
@@ -169,17 +170,31 @@ func (r *PostgresRepository) UpdateSheetTable(ctx context.Context, id, actor str
 	if input.Name != nil {
 		updated.Name = *input.Name
 	}
+	if input.SheetID != nil {
+		updated.SheetID = *input.SheetID
+	}
 	if input.Range != nil {
 		updated.Range = *input.Range
 	}
 	if input.HeaderRow != nil {
 		updated.HeaderRow = *input.HeaderRow
 	}
+	if input.TotalsRow != nil {
+		updated.TotalsRow = *input.TotalsRow
+	}
 	if input.Theme != nil {
 		updated.Theme = *input.Theme
 	}
 	normalized, err := normalizeSheetTable(updated)
 	if err != nil {
+		return SheetTable{}, err
+	}
+	// 표는 그 워크북의 시트에만 걸 수 있다. 남의 시트를 가리키는 표는
+	// 이름으로 남의 자료를 읽는 길이 된다.
+	var sheetWorkbook string
+	if err := tx.QueryRow(ctx, `SELECT workbook_id::text FROM sheets WHERE id=$1`, normalized.SheetID).Scan(&sheetWorkbook); errors.Is(err, pgx.ErrNoRows) || sheetWorkbook != current.WorkbookID {
+		return SheetTable{}, fmt.Errorf("%w: unknown sheet", ErrInvalid)
+	} else if err != nil {
 		return SheetTable{}, err
 	}
 	existing, err := listSheetTablesFrom(ctx, tx, current.WorkbookID)
@@ -191,8 +206,8 @@ func (r *PostgresRepository) UpdateSheetTable(ctx context.Context, id, actor str
 	}
 	now := r.now()
 	normalized.Revision, normalized.UpdatedBy, normalized.UpdatedAt = current.Revision+1, actor, now
-	if _, err := tx.Exec(ctx, `UPDATE sheet_tables SET name=$2,cell_range=$3,header_row=$4,theme=$5,revision=$6,updated_by=$7,updated_at=$8 WHERE id=$1`,
-		id, normalized.Name, normalized.Range, normalized.HeaderRow, normalized.Theme,
+	if _, err := tx.Exec(ctx, `UPDATE sheet_tables SET name=$2,sheet_id=$3,cell_range=$4,header_row=$5,totals_row=$6,theme=$7,revision=$8,updated_by=$9,updated_at=$10 WHERE id=$1`,
+		id, normalized.Name, normalized.SheetID, normalized.Range, normalized.HeaderRow, normalized.TotalsRow, normalized.Theme,
 		normalized.Revision, normalized.UpdatedBy, normalized.UpdatedAt); err != nil {
 		return SheetTable{}, mapPostgresError(err)
 	}

@@ -274,3 +274,66 @@ func TestSheetTableDoesNotGrowIntoAnotherTable(t *testing.T) {
 		t.Fatalf("남의 표를 밟았다: %s", unchanged.Range)
 	}
 }
+
+// 합계 줄이 있는 표는 아래 줄을 삼키지 않는다. 삼키면 사람이 방금 적은 자료가
+// 합계 줄 자리에 놓여, 표가 그것을 합계로 여긴다.
+func TestMemorySheetTableWithTotalsRowDoesNotSwallowTheRowBelow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-total-label", Cells: []CellInput{
+		{Row: 4, Column: 1, Value: value("합계")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	totals := true
+	table, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B4", TotalsRow: &totals,
+	})
+	if err != nil || !table.TotalsRow {
+		t.Fatalf("만든 표=%#v, %v", table, err)
+	}
+	// 합계 칸에 제 열을 가리키는 수식을 넣는다. 순환이면 안 된다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	result, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-total-formula", Cells: []CellInput{
+		{Row: 4, Column: 2, Formula: "=SUM(매출표[금액])"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.FormulaErrors) != 0 {
+		t.Fatalf("합계 칸이 오류를 냈다: %#v", result.FormulaErrors)
+	}
+	if actual := tableCellValue(t, repository, sheetID, 4, 2); actual != "300" {
+		t.Fatalf("합계 칸=%s", actual)
+	}
+	// 자료를 고치면 합계가 따라 움직인다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-total-edit", Cells: []CellInput{
+		{Row: 3, Column: 2, Value: value(500)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if actual := tableCellValue(t, repository, sheetID, 4, 2); actual != "600" {
+		t.Fatalf("자료를 고친 뒤 합계 칸=%s", actual)
+	}
+	// 아래 줄에 값을 넣어도 삼키지 않는다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-below", Cells: []CellInput{
+		{Row: 5, Column: 2, Value: value(999)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := repository.GetSheetTable(ctx, table.ID)
+	if after.Range != "A1:B4" {
+		t.Fatalf("합계 줄이 있는데 아래 줄을 삼켰다: %s", after.Range)
+	}
+	// 머리글과 합계 줄만 있고 자료가 없는 표는 만들 수 없다.
+	if _, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-2", SheetID: sheetID, Name: "빈표", Range: "H1:H2", TotalsRow: &totals,
+	}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("자료 없는 표=%v", err)
+	}
+}

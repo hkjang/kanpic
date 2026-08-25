@@ -23,20 +23,23 @@ const MaxTables = 200
 // 열을 하나 끼워 넣어도 이 수식은 그대로 맞다. 범위로 적은 =SUM(C2:C50) 은
 // 사람이 옮겨 적어야 하고, 잊으면 조용히 틀린 값을 낸다.
 type SheetTable struct {
-	ID              string    `json:"id"`
-	WorkbookID      string    `json:"workbook_id"`
-	WorkbookVersion int64     `json:"workbook_version"`
-	SheetID         string    `json:"sheet_id"`
-	CreateKey       string    `json:"-"`
-	Name            string    `json:"name"`
-	Range           string    `json:"range"`
-	HeaderRow       bool      `json:"header_row"`
-	Theme           string    `json:"theme,omitempty"`
-	Revision        int64     `json:"revision"`
-	CreatedBy       string    `json:"created_by"`
-	UpdatedBy       string    `json:"updated_by"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string `json:"id"`
+	WorkbookID      string `json:"workbook_id"`
+	WorkbookVersion int64  `json:"workbook_version"`
+	SheetID         string `json:"sheet_id"`
+	CreateKey       string `json:"-"`
+	Name            string `json:"name"`
+	Range           string `json:"range"`
+	HeaderRow       bool   `json:"header_row"`
+	// TotalsRow 는 범위의 마지막 줄이 합계 줄인지다. 열을 가리킬 때 그 줄을
+	// 빼야 합계 칸이 제 자신을 더하지 않는다.
+	TotalsRow bool      `json:"totals_row"`
+	Theme     string    `json:"theme,omitempty"`
+	Revision  int64     `json:"revision"`
+	CreatedBy string    `json:"created_by"`
+	UpdatedBy string    `json:"updated_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type CreateSheetTableInput struct {
@@ -45,13 +48,16 @@ type CreateSheetTableInput struct {
 	Name           string `json:"name"`
 	Range          string `json:"range"`
 	HeaderRow      *bool  `json:"header_row,omitempty"`
+	TotalsRow      *bool  `json:"totals_row,omitempty"`
 	Theme          string `json:"theme,omitempty"`
 }
 
 type UpdateSheetTableInput struct {
 	Name             *string `json:"name,omitempty"`
+	SheetID          *string `json:"sheet_id,omitempty"`
 	Range            *string `json:"range,omitempty"`
 	HeaderRow        *bool   `json:"header_row,omitempty"`
+	TotalsRow        *bool   `json:"totals_row,omitempty"`
 	Theme            *string `json:"theme,omitempty"`
 	ExpectedRevision *int64  `json:"expected_revision,omitempty"`
 }
@@ -70,11 +76,18 @@ func normalizeSheetTable(item SheetTable) (SheetTable, error) {
 	if err != nil {
 		return SheetTable{}, fmt.Errorf("%w: %s is not a range", ErrInvalid, item.Range)
 	}
-	// 머리글만 있고 자료가 없는 표는 열 이름은 있는데 가리킬 것이 없다.
-	// 매출표[금액] 이 빈 것을 내는 것과, 표를 만들 수 없다고 말해 주는 것
-	// 가운데 뒤가 낫다 — 사람은 자료를 아직 안 넣었을 뿐이기 때문이다.
-	if item.HeaderRow && parsed.End.Row <= parsed.Start.Row {
-		return SheetTable{}, fmt.Errorf("%w: a table with a header row needs at least one row of data", ErrInvalid)
+	// 머리글과 합계 줄을 뺀 자료 줄이 한 줄은 있어야 한다. 열 이름은 있는데
+	// 가리킬 것이 없는 표를 만들 수 있게 하는 것보다, 자료 줄을 넣어 달라고
+	// 말해 주는 편이 낫다 — 사람은 자료를 아직 안 넣었을 뿐이기 때문이다.
+	overhead := 0
+	if item.HeaderRow {
+		overhead++
+	}
+	if item.TotalsRow {
+		overhead++
+	}
+	if parsed.End.Row-parsed.Start.Row+1 <= overhead {
+		return SheetTable{}, fmt.Errorf("%w: a table needs at least one row of data below its header and above its totals row", ErrInvalid)
 	}
 	item.Range = cellrange.Address(parsed.Start.Row, parsed.Start.Column) + ":" + cellrange.Address(parsed.End.Row, parsed.End.Column)
 	item.Theme = strings.TrimSpace(item.Theme)
@@ -167,7 +180,7 @@ func formulaTables(items []SheetTable) map[string]formula.Table {
 	}
 	result := make(map[string]formula.Table, len(items))
 	for _, item := range items {
-		result[item.Name] = formula.Table{SheetID: item.SheetID, Range: item.Range, HeaderRow: item.HeaderRow}
+		result[item.Name] = formula.Table{SheetID: item.SheetID, Range: item.Range, HeaderRow: item.HeaderRow, TotalsRow: item.TotalsRow}
 	}
 	return result
 }
@@ -272,6 +285,12 @@ func expandTablesForCells(tables []SheetTable, sheetID string, cells []CellInput
 		}
 		selected, err := cellrange.Parse(item.Range)
 		if err != nil {
+			continue
+		}
+		// 합계 줄이 있으면 아래 줄을 삼키지 않는다. 삼키면 사람이 방금 적은
+		// 자료가 합계 줄 자리에 놓여, 표가 그것을 합계로 여긴다. 자료를
+		// 더하려면 합계 줄 위에 행을 끼운다 — 그것은 이미 따라 움직인다.
+		if item.TotalsRow {
 			continue
 		}
 		lastRow := selected.End.Row

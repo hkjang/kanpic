@@ -35,24 +35,35 @@ func (p *parser) tableReference(text string) (node, bool, error) {
 	if table.HeaderRow {
 		dataFirstRow = firstRow + 1
 	}
+	// 합계 줄은 자료가 아니다. 빼지 않으면 그 줄의 =SUM(매출표[금액]) 이
+	// 제 자신을 더해 순환이 된다.
+	dataLastRow := lastRow
+	if table.TotalsRow {
+		dataLastRow = lastRow - 1
+	}
 	switch kind, known := tableSpecifier(specifier); {
 	case specifier == "":
-		firstRow = dataFirstRow
+		firstRow, lastRow = dataFirstRow, dataLastRow
 	case known && kind == "all":
 	case known && kind == "headers":
 		if !table.HeaderRow {
 			return nil, true, formulaError("#REF!", "table "+name+" has no header row")
 		}
 		lastRow = firstRow
+	case known && kind == "totals":
+		if !table.TotalsRow {
+			return nil, true, formulaError("#REF!", "table "+name+" has no totals row")
+		}
+		firstRow = lastRow
 	case known && kind == "data":
-		firstRow = dataFirstRow
+		firstRow, lastRow = dataFirstRow, dataLastRow
 	default:
 		// 지정자가 아니면 열 이름이다.
 		index := tableColumnIndex(table.Columns, specifier)
 		if index < 0 {
 			return nil, true, formulaError("#REF!", "table "+name+" has no column called "+specifier)
 		}
-		firstRow = dataFirstRow
+		firstRow, lastRow = dataFirstRow, dataLastRow
 		firstColumn, lastColumn = selected.Start.Column+index, selected.Start.Column+index
 	}
 	if firstRow > lastRow {
