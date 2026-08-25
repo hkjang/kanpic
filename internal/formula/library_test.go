@@ -1,6 +1,10 @@
 package formula
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +94,52 @@ func TestCatalogCoversDocumentedFunctions(t *testing.T) {
 		if result.Error != nil && result.Error.Code == "#NAME?" {
 			t.Errorf("%s is catalogued but unknown to the evaluator", doc.Name)
 		}
+	}
+}
+
+// 반대 방향도 본다. 만들어 놓고 목록에 적지 않으면 자동완성에도 함수 목록에도
+// 나오지 않아, 이름을 이미 아는 사람만 쓸 수 있는 함수가 된다. 만든 사람은
+// 됐다고 여기고 쓰는 사람은 없는 줄 아는 것이 가장 조용한 실패다.
+func TestEveryImplementedFunctionIsCatalogued(t *testing.T) {
+	t.Parallel()
+	// ISFORMULA 는 일부러 뺀 것이다. 칸의 값이 아니라 그 뒤의 수식을 물으므로
+	// 값만 받는 미리보기에서는 답할 수 없다. 미리보기와 저장이 다른 답을 내면
+	// 그것이 더 나쁘므로 #N/A 를 내고 목록에도 올리지 않는다. 파일에서 오간
+	// 이름은 지켜야 하므로 excel_names.go 에는 남아 있다.
+	excluded := map[string]bool{"ISFORMULA": true}
+	catalogued := make(map[string]bool, len(Catalog()))
+	for _, doc := range Catalog() {
+		catalogued[strings.ToUpper(doc.Name)] = true
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := regexp.MustCompile(`case ("[A-Z0-9_.]+"(?:, ?"[A-Z0-9_.]+")*):`)
+	names := make(map[string]bool)
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		body, readErr := os.ReadFile(file)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(body), -1) {
+			for _, piece := range strings.Split(match[1], ",") {
+				names[strings.Trim(strings.TrimSpace(piece), `"`)] = true
+			}
+		}
+	}
+	// 훑기가 깨지면 아무것도 못 찾고 조용히 통과한다. 지키는 것이 없어진 채로
+	// 초록인 시험이 없는 시험보다 나쁘므로, 찾은 수가 터무니없으면 실패한다.
+	if len(names) < 300 {
+		t.Fatalf("훑어서 찾은 이름이 %d개뿐이다. case 문의 모양이 바뀌었는지 본다", len(names))
+	}
+	for name := range names {
+		if catalogued[name] || excluded[name] || !IsBuiltInFunction(name) {
+			continue
+		}
+		t.Errorf("%s 는 만들어져 있는데 함수 목록에 없다. library.go 에 적거나, 일부러 뺀 것이면 까닭과 함께 excluded 에 적는다", name)
 	}
 }

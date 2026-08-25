@@ -1811,6 +1811,67 @@ func TestPostgresAtomicImportExport(t *testing.T) {
 	if parsed.Preview.TotalCells != 6 {
 		t.Fatalf("round trip cells = %d", parsed.Preview.TotalCells)
 	}
+	// 이름 있는 수식은 가져오기 트랜잭션 안에서 직접 INSERT 한다. 메모리 쪽만
+	// 시험하면 열 이름이나 자리표시자가 어긋나도 알 수 없고, LAMBDA 이름이
+	// 든 파일을 처음 여는 사람에게서 터진다.
+	withName, err := repository.CreateNamedFunction(ctx, created.ID, "integration-importer", workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "import-fn", Name: "마진율", Parameters: []string{"매출", "원가"}, Body: "(매출-원가)/매출",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repository.GetWorkbook(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: created.Sheets[0].ID, ActorID: "integration-importer", BaseVersion: current.Version,
+		IdempotencyKey: "import-fn-cell", Cells: []workbook.CellInput{{Row: 5, Column: 1, Formula: "=마진율(1000,600)"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shipped, err := service.Export(ctx, importexport.ExportRequest{WorkbookID: created.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed, err := importexport.Parse(shipped.Name, shipped.Data, importexport.DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reparsed.NamedFunctions) != 1 || reparsed.NamedFunctions[0].Name != withName.Name {
+		t.Fatalf("돌아온 이름=%#v", reparsed.NamedFunctions)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "integration", Title: "이름 있는 수식 복원", OwnerID: "integration-importer", ActorID: "integration-importer",
+		IdempotencyKey: key + "-fn", FileName: shipped.Name, Format: "xlsx",
+		Sheets: reparsed.Sheets, NamedRanges: reparsed.NamedRanges, NamedFunctions: reparsed.NamedFunctions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), restored.ID, "integration-cleanup")
+	stored, err := repository.ListNamedFunctions(ctx, restored.ID)
+	if err != nil || len(stored) != 1 || stored[0].Name != "마진율" || len(stored[0].Parameters) != 2 || stored[0].Body != "(매출-원가)/매출" {
+		t.Fatalf("저장된 이름=%#v, %v", stored, err)
+	}
+	// 첫 계산 전에 들어가야 그 이름을 부르는 칸이 #NAME? 으로 굳지 않는다.
+	restoredCells, err := repository.ReadAllCells(ctx, restored.Sheets[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calculated := false
+	for _, cell := range restoredCells {
+		if cell.Row != 5 || cell.Column != 1 {
+			continue
+		}
+		calculated = true
+		if string(cell.Value) != "0.4" {
+			t.Errorf("이름을 부르는 칸=%s (수식 %q)", cell.Value, cell.Formula)
+		}
+	}
+	if !calculated {
+		t.Error("이름을 부르는 칸이 돌아오지 않았다")
+	}
 }
 
 func TestSettingsAndAPIKeyLifecycle(t *testing.T) {
