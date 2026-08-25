@@ -53,3 +53,25 @@ export function clampDimensionSize(axis:'row'|'column',size:number){
   const minimum=axis==='column'?32:16,maximum=axis==='column'?600:400
   return Math.round(Math.max(minimum,Math.min(maximum,size)))
 }
+
+/**
+ * A1:B10 을 좌표로 바꾼다. 표의 범위는 저장할 때 이 꼴로 다듬어 두므로 두
+ * 칸을 이은 것만 읽는다. 읽지 못하면 그리지 않는다 — 어림잡아 그린 테두리는
+ * 표가 아닌 곳을 표라고 말하는 것이라 없느니만 못하다.
+ */
+export function parseTableRange(value:string){
+  const parts=value.split(':')
+  if(parts.length!==2)return
+  const position=(text:string)=>{
+    const match=/^\$?([A-Za-z]+)\$?([1-9]\d*)$/.exec(text.trim())
+    if(!match)return
+    let column=0
+    for(const letter of match[1].toUpperCase())column=column*26+letter.charCodeAt(0)-64
+    const row=Number(match[2])
+    if(column>16384||row>1048576)return
+    return {row,column}
+  }
+  const start=position(parts[0]),end=position(parts[1])
+  if(!start||!end||start.row>end.row||start.column>end.column)return
+  return {startRow:start.row,startColumn:start.column,endRow:end.row,endColumn:end.column}
+}

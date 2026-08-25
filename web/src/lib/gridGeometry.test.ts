@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createDimensionAxis } from './dimensionAxis'
-import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry } from './gridGeometry'
+import { clampDimensionSize, parseTableRange, pointerRegion, resizeHandleAt, type GridGeometry } from './gridGeometry'
 
 function geometry(overrides:Partial<GridGeometry>={}):GridGeometry{
   return{
@@ -54,5 +54,20 @@ describe('clampDimensionSize',()=>{
     expect(clampDimensionSize('row',10)).toBe(16)
     expect(clampDimensionSize('row',412.6)).toBe(400)
     expect(clampDimensionSize('row',42.4)).toBe(42)
+  })
+})
+
+describe('parseTableRange',()=>{
+  it('두 칸을 이은 범위를 좌표로 읽는다',()=>{
+    expect(parseTableRange('B3:C5')).toEqual({startRow:3,startColumn:2,endRow:5,endColumn:3})
+    expect(parseTableRange('$A$1:$B$2')).toEqual({startRow:1,startColumn:1,endRow:2,endColumn:2})
+    expect(parseTableRange('AA10:AB12')).toEqual({startRow:10,startColumn:27,endRow:12,endColumn:28})
+  })
+  // 읽지 못하면 그리지 않는다. 어림잡아 그린 테두리는 표가 아닌 곳을 표라고
+  // 말하는 것이라 없느니만 못하다.
+  it('읽을 수 없는 것은 undefined 다',()=>{
+    for(const value of ['B3','B3:C5:D7','','거기:저기','C5:B3','B5:B3','A1:XFE1']){
+      expect(parseTableRange(value)).toBeUndefined()
+    }
   })
 })

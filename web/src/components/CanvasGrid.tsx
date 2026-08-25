@@ -9,7 +9,7 @@ import { suggestColumnValues } from '../lib/valueSuggest'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
 import { dataRegion, populatedCell } from '../lib/dataRegion'
-import { clampDimensionSize, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
+import { clampDimensionSize, parseTableRange, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
 import { drawConditionalIcon,iconGlyph,iconGutter } from '../lib/conditionalIcon'
@@ -29,7 +29,7 @@ import { cellLink, workbookRangeTarget } from '../lib/hyperlink'
 import { checkboxState,optionForValue,optionLabel,ruleOptions,validateClientInputs,validateClientValue,validationForCell } from '../lib/validation'
 import { presenceColor, useCollaborationStore } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, FilterView, MutationResult, SheetLayout } from '../types'
+import type { Cell, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, DimensionGroup, FilterView, MutationResult, SheetLayout, SheetTable } from '../types'
 import { columnFiltered } from '../lib/columnFilter'
 import { parseFilterRange } from '../lib/filter'
 
@@ -78,6 +78,10 @@ function parsedValue(raw:string):{value:unknown;numberFormat?:string}{
 }
 function parsedAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
 function formulaPreview(value:unknown){if(!Array.isArray(value))return value;const first=value[0];return Array.isArray(first)?first[0]:first}
+// 표를 그리는 색. 선택 색이나 협업자 색과 겹치지 않아야 무엇이 무엇인지
+// 알아볼 수 있다.
+const TABLE_COLOR='#4c6ef5'
+
 const DEFAULT_LAYOUT:SheetLayout={revision:1,frozen_rows:0,frozen_columns:0}
 function indexesIn(axis:DimensionAxis,start:number,end:number){const result:number[]=[];if(end<start)return result;let index=axis.firstVisibleAtOrAfter(start);while(index<=end&&result.length<10000){result.push(index);const next=axis.nextVisible(index,1);if(next<=index)break;index=next}return result}
 function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x:number,y:number,width:number,height:number,zoom:number){
@@ -85,7 +89,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange,onResolveNumericRun}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean;onResolveNumericRun?:(row:number,column:number)=>Promise<number|undefined>}) {
+export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],tables=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange,onResolveNumericRun}:{sheetId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];tables?:SheetTable[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean;onResolveNumericRun?:(row:number,column:number)=>Promise<number|undefined>}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
@@ -335,6 +339,32 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       drawCell(cell,x,y,columnAxis.sizeOf(cell.column),rowAxis.sizeOf(cell.row))
     })
     mergedRanges.forEach(({range,representative})=>{const box=geometry(range.startRow,range.startColumn,range.endRow,range.endColumn);if(!box)return;const anchor=cells.get(cellKey(range.startRow,range.startColumn)),display=anchor??{...representative,value:undefined,formula:undefined};drawCell(display,box.x,box.y,box.width,box.height);context.strokeStyle='#e4e8ec';context.lineWidth=1;context.strokeRect(Math.round(box.x)+.5,Math.round(box.y)+.5,Math.round(box.width),Math.round(box.height))})
+    // 표는 격자 위에 테두리와 이름으로 그린다. 칸에 색을 칠해 두면 표가
+    // 행을 따라 움직였을 때 칠이 제자리에 남아, 표가 아닌 곳이 표처럼
+    // 보인다. 그려 주는 편은 언제나 지금의 자리를 따른다.
+    tables.forEach(table=>{
+      if(table.sheet_id!==sheetId)return
+      const bounds=parseTableRange(table.range);if(!bounds)return
+      const box=geometry(bounds.startRow,bounds.startColumn,bounds.endRow,bounds.endColumn);if(!box)return
+      context.save()
+      if(table.header_row){
+        const header=geometry(bounds.startRow,bounds.startColumn,bounds.startRow,bounds.endColumn)
+        if(header){context.globalAlpha=.12;context.fillStyle=TABLE_COLOR;context.fillRect(header.x,header.y,header.width,header.height);context.globalAlpha=1}
+      }
+      context.strokeStyle=TABLE_COLOR;context.lineWidth=2
+      context.strokeRect(Math.round(box.x)+1,Math.round(box.y)+1,Math.round(box.width)-2,Math.round(box.height)-2)
+      // 이름은 표 위쪽 바깥에 붙인다. 자리가 없으면 그리지 않는다 — 첫 줄을
+      // 가리면 머리글을 못 읽는다.
+      const labelHeight=14*zoom
+      if(box.y-labelHeight>=headerHeight){
+        context.font=`${Math.round(11*zoom)}px system-ui`
+        const width=context.measureText(table.name).width+10*zoom
+        context.fillStyle=TABLE_COLOR;context.fillRect(box.x,box.y-labelHeight,width,labelHeight)
+        context.fillStyle='#ffffff';context.textAlign='left';context.textBaseline='middle'
+        context.fillText(table.name,box.x+5*zoom,box.y-labelHeight/2)
+      }
+      context.restore()
+    })
     Object.values(collaborators).forEach(user=>{
       if(user.client_id===collaborationClientId()||user.selection?.sheet_id!==sheetId)return
       const remote=user.selection
