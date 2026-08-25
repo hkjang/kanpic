@@ -779,10 +779,23 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 			continue
 		}
 		headerRow := item.HeaderRow
+		// 합계 줄은 표 범위에서 빼고 내보낸다.
+		//
+		// 파일 안의 표에도 합계 줄이라는 것이 있지만 지금 쓰는 라이브러리는
+		// 그것을 적어 주지 못한다. 합계 줄을 범위에 넣은 채 내보내면, 도로
+		// 열었을 때 그 줄이 자료가 되어 =SUM(매출표[금액]) 이 제 자신을
+		// 더한다 — #CIRC! 다.
+		//
+		// 빼서 내보내면 합계 칸은 표 바로 아래의 보통 칸이 된다. 엑셀에서도
+		// 그대로 셈하고, 도로 가져와도 표가 그 줄을 삼키지 않는다.
+		exportRange := tableExportRange(item)
+		if exportRange == "" {
+			continue
+		}
 		// 엑셀의 표는 머리글이 있든 없든 이름으로 가리킬 수 있다. 하나가
 		// 받아들여지지 않는다고 내보내기 전체를 막지는 않는다.
 		_ = file.AddTable(sheetName, &excelize.Table{
-			Range: item.Range, Name: item.Name, StyleName: excelTableStyle(item.Theme),
+			Range: exportRange, Name: item.Name, StyleName: excelTableStyle(item.Theme),
 			ShowHeaderRow: &headerRow, ShowRowStripes: &headerRow,
 		})
 	}

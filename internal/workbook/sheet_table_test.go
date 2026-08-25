@@ -337,3 +337,59 @@ func TestMemorySheetTableWithTotalsRowDoesNotSwallowTheRowBelow(t *testing.T) {
 		t.Errorf("자료 없는 표=%v", err)
 	}
 }
+
+// 표 바로 아래에 =SUM(매출표[금액]) 을 적는 것은 사람이 가장 자연스럽게 하는
+// 일이다. 그 줄을 표가 삼키면 그 칸이 제 자신을 더해 #CIRC! 가 되고, 적은
+// 사람은 무엇을 잘못했는지 알 길이 없다.
+func TestSheetTableDoesNotSwallowACellThatSummarisesIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	table, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	apply := func(key string, cells []CellInput) {
+		t.Helper()
+		current, _ := repository.GetWorkbook(ctx, book.ID)
+		if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: key, Cells: cells}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tableRange := func() string {
+		t.Helper()
+		item, _ := repository.GetSheetTable(ctx, table.ID)
+		return item.Range
+	}
+	apply("t-summary", []CellInput{{Row: 4, Column: 2, Formula: "=SUM(매출표[금액])"}})
+	if tableRange() != "A1:B3" {
+		t.Fatalf("요약하는 칸을 삼켰다: %s", tableRange())
+	}
+	if actual := tableCellValue(t, repository, sheetID, 4, 2); actual != "300" {
+		t.Fatalf("바로 아래 합계=%s", actual)
+	}
+	// 합계를 먼저 적어 두고 나중에 그 줄 다른 칸에 자료를 적어도 삼키면 안
+	// 된다. 그 저장에서 삼켜 버리면 같은 순환이 된다.
+	apply("t-same-row", []CellInput{{Row: 4, Column: 1, Value: value("대구")}})
+	if tableRange() != "A1:B3" {
+		t.Fatalf("나중에 삼켰다: %s", tableRange())
+	}
+	if actual := tableCellValue(t, repository, sheetID, 4, 2); actual != "300" {
+		t.Fatalf("자료를 적은 뒤 합계=%s", actual)
+	}
+	// 합계 수식을 지우고 보통 값을 적었으면 그 줄은 이제 자료다. 이번에 쓰는
+	// 칸이 이미 있던 칸을 이겨야 한다.
+	apply("t-plain", []CellInput{{Row: 4, Column: 2, Value: value(300)}})
+	if tableRange() != "A1:B4" {
+		t.Fatalf("값으로 덮었는데 삼키지 않았다: %s", tableRange())
+	}
+	// 글자 안에 적힌 이름은 이름이 아니다. 사람이 적은 메모 때문에 표가
+	// 자라지 않게 되면 안 된다.
+	apply("t-note", []CellInput{{Row: 5, Column: 1, Formula: `="매출표는 늘었다"`}})
+	if tableRange() != "A1:B5" {
+		t.Fatalf("메모를 표를 부르는 것으로 셌다: %s", tableRange())
+	}
+}

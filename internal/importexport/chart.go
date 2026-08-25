@@ -285,3 +285,20 @@ func excelTableStyle(theme string) string {
 	}
 	return "TableStyleMedium9"
 }
+
+// tableExportRange 는 파일에 적을 표의 범위다. 합계 줄은 뺀다 — 넣은 채로
+// 내보내면 도로 열었을 때 그 줄이 자료가 되어, 합계 칸이 제 자신을 더한다.
+func tableExportRange(item workbook.SheetTable) string {
+	selected, err := cellrange.Parse(item.Range)
+	if err != nil {
+		return ""
+	}
+	lastRow := selected.End.Row
+	if item.TotalsRow {
+		lastRow--
+	}
+	if lastRow < selected.Start.Row {
+		return ""
+	}
+	return cellrange.Address(selected.Start.Row, selected.Start.Column) + ":" + cellrange.Address(lastRow, selected.End.Column)
+}

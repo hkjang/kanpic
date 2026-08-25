@@ -203,3 +203,25 @@ func excelFunctionName(word string) string {
 func isNameRune(value rune) bool {
 	return value == '.' || value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value)
 }
+
+// ReferencesName 은 수식이 그 이름을 부르는지 본다. 매출표 와 매출표[금액]
+// 둘 다 부르는 것으로 센다.
+//
+// 함수 이름을 바꾸는 것과 같은 훑기를 쓴다. 문자열 안에 적힌 글자는 이름이
+// 아니다 — "매출표는 늘었다" 라고 적은 메모까지 표를 부르는 것으로 세면,
+// 사람이 적은 글 때문에 표가 자라지 않게 된다.
+func ReferencesName(text, name string) bool {
+	if text == "" || name == "" {
+		return false
+	}
+	target := strings.ToUpper(strings.TrimSpace(name))
+	found := false
+	rewriteNames(text, func(word string, _ bool) string {
+		upper := strings.ToUpper(word)
+		if upper == target || strings.HasPrefix(upper, target+"[") {
+			found = true
+		}
+		return word
+	})
+	return found
+}

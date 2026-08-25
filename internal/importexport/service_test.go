@@ -1412,3 +1412,76 @@ func TestXLSXImportResolvesFormulasThatUseAnImportedNamedFunction(t *testing.T) 
 		t.Fatalf("이름을 부르는 칸이 없다: %#v", cells)
 	}
 }
+
+// 합계 줄이 있는 표를 내보냈다 도로 열면, 합계 칸이 제 자신을 더해 #CIRC! 가
+// 되고 있었다. 파일 안의 표에도 합계 줄이라는 것이 있지만 지금 쓰는
+// 라이브러리가 그것을 적어 주지 못하기 때문이다.
+//
+// 합계 줄을 범위에서 빼고 내보내면 합계 칸은 표 바로 아래의 보통 칸이 된다.
+// 엑셀에서도 그대로 셈하고, 도로 가져와도 표가 그 줄을 삼키지 않는다.
+func TestTableWithTotalsRowSurvivesAnXLSXRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := workbook.NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "표", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := book.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("지역")}, {Row: 1, Column: 2, Value: value("금액")},
+		{Row: 2, Column: 1, Value: value("서울")}, {Row: 2, Column: 2, Value: value(100)},
+		{Row: 3, Column: 1, Value: value("부산")}, {Row: 3, Column: 2, Value: value(200)},
+		{Row: 4, Column: 1, Value: value("합계")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	totals := true
+	if _, err := repository.CreateSheetTable(ctx, book.ID, "tester", workbook.CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B4", TotalsRow: &totals,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: current.Version, IdempotencyKey: "total", Cells: []workbook.CellInput{
+		{Row: 4, Column: 2, Formula: "=SUM(매출표[금액])"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: book.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sheets) == 0 || len(parsed.Sheets[0].Tables) != 1 || parsed.Sheets[0].Tables[0].Range != "A1:B3" {
+		t.Fatalf("파일 속 표=%#v", parsed.Sheets)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "복원", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "totals-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells, err := repository.ReadAllCells(ctx, restored.Sheets[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, cell := range cells {
+		if cell.Row != 4 || cell.Column != 2 {
+			continue
+		}
+		found = true
+		if string(cell.Value) != "300" {
+			t.Errorf("돌아온 합계=%s (수식 %q)", cell.Value, cell.Formula)
+		}
+	}
+	if !found {
+		t.Fatal("합계 칸이 돌아오지 않았다")
+	}
+}

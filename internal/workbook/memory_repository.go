@@ -1096,7 +1096,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 		// 표 바로 아래 줄에 값을 넣었으면 표가 그 줄을 삼킨다. 다시 셈하기
 		// 전에 해야 =SUM(매출표[금액]) 이 그 저장에서 곧바로 새 줄까지
 		// 더한다. 나중에 늘리면 한 박자 늦은 답이 한 번 저장된다.
-		grownTables = expandTablesForCells(r.sheetTablesForWorkbookLocked(state.workbook.ID), mutation.SheetID, effective, mutation.ActorID, r.now())
+		grownTables = expandTablesForCells(r.sheetTablesForWorkbookLocked(state.workbook.ID), mutation.SheetID, effective, state.cells[mutation.SheetID], mutation.ActorID, r.now())
 		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(mergeSheetTables(r.sheetTablesForWorkbookLocked(state.workbook.ID), grownTables)), Imports: r.importsForLocked(state.workbook.ID, state.cells, effective)})
 		if err != nil {
 			return MutationResult{}, err

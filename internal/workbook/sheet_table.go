@@ -274,7 +274,7 @@ func buildImportedSheetTables(workbookID, actor string, sheets []ImportSheet, sh
 // 옆으로는 늘리지 않는다. 열을 하나 더 쓰는 것은 표의 생김새를 바꾸는 일이라
 // 사람이 뜻을 가지고 하는 편이 낫고, 옆 칸에 적은 메모까지 표로 삼키면
 // 열 이름이 제멋대로 늘어난다.
-func expandTablesForCells(tables []SheetTable, sheetID string, cells []CellInput, actor string, now time.Time) []SheetTable {
+func expandTablesForCells(tables []SheetTable, sheetID string, cells []CellInput, existing map[cellKey]Cell, actor string, now time.Time) []SheetTable {
 	if len(tables) == 0 || len(cells) == 0 {
 		return nil
 	}
@@ -307,6 +307,19 @@ func expandTablesForCells(tables []SheetTable, sheetID string, cells []CellInput
 				// 아무것도 적지 않은 줄까지 표가 된다.
 				if len(cell.Value) == 0 && strings.TrimSpace(cell.Formula) == "" {
 					continue
+				}
+				// 표를 부르는 칸이 그 줄에 있으면 삼키지 않는다. 그런 칸은
+				// 표의 자료가 아니라 표를 요약하는 것이다.
+				//
+				// 표 바로 아래에 =SUM(매출표[금액]) 을 적는 것은 사람이 가장
+				// 자연스럽게 하는 일인데, 그 줄을 삼키면 그 칸이 제 자신을
+				// 더하게 되어 #CIRC! 가 된다. 적은 사람은 무엇을 잘못했는지
+				// 알 길이 없다.
+				//
+				// 지금 쓰는 칸만 볼 수는 없다. 합계를 먼저 적어 두고 나중에
+				// 그 줄 다른 칸에 자료를 적으면, 그 저장에서 삼켜 버린다.
+				if rowReferencesTable(item, lastRow+1, cells, existing, sheetID) {
+					break
 				}
 				lastRow++
 				grown = true
@@ -350,4 +363,37 @@ func mergeSheetTables(base, changed []SheetTable) []SheetTable {
 		merged = append(merged, item)
 	}
 	return merged
+}
+
+// rowReferencesTable 은 그 줄의 칸 가운데 표를 부르는 것이 있는지 본다.
+// 이번에 쓰는 칸과 이미 있던 칸을 함께 본다 — 합계를 먼저 적어 두고 나중에
+// 그 줄 다른 칸에 자료를 적는 일이 있기 때문이다.
+func rowReferencesTable(item SheetTable, row int, cells []CellInput, existing map[cellKey]Cell, sheetID string) bool {
+	selected, err := cellrange.Parse(item.Range)
+	if err != nil {
+		return false
+	}
+	// 이번에 쓰는 칸이 이미 있던 칸을 이긴다. 합계 수식을 지우고 그 자리에
+	// 보통 값을 적었으면 그 줄은 이제 자료다.
+	written := make(map[int]CellInput)
+	for _, cell := range cells {
+		if cell.SheetID != "" && cell.SheetID != sheetID {
+			continue
+		}
+		if cell.Row == row {
+			written[cell.Column] = cell
+		}
+	}
+	for column := selected.Start.Column; column <= selected.End.Column; column++ {
+		if cell, found := written[column]; found {
+			if formula.ReferencesName(cell.Formula, item.Name) {
+				return true
+			}
+			continue
+		}
+		if cell, found := existing[cellKey{row, column}]; found && formula.ReferencesName(cell.Formula, item.Name) {
+			return true
+		}
+	}
+	return false
 }
