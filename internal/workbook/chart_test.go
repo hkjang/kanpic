@@ -254,3 +254,65 @@ func TestChartDataLabelsAndAxisBounds(t *testing.T) {
 		t.Errorf("한쪽만=%#v %v", half, err)
 	}
 }
+
+// 일정표는 열을 앞에서부터 이름·시작·끝으로 읽는다. 날짜는 대개 글자다 —
+// DATE() 가 글자를 내기 때문이다. 숫자로 적힌 날 수도 함께 받아야 파일에서
+// 들어온 표도 그려진다.
+func TestTimelineChartReadsNameStartAndEnd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, CreateWorkbookInput{Title: "일정", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := book.Sheets[0]
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheet.ID, ActorID: "alice", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []CellInput{
+		{Row: 1, Column: 1, Value: value("일감")}, {Row: 1, Column: 2, Value: value("시작")}, {Row: 1, Column: 3, Value: value("끝")},
+		{Row: 2, Column: 1, Value: value("설계")}, {Row: 2, Column: 2, Value: value("2026-01-05")}, {Row: 2, Column: 3, Value: value("2026-02-10")},
+		// 끝을 적지 않으면 그 날 하루짜리 이정표다.
+		{Row: 3, Column: 1, Value: value("출시")}, {Row: 3, Column: 2, Value: value("2026-06-01")},
+		// 거꾸로 적어도 그릴 수 있게 바로잡는다.
+		{Row: 4, Column: 1, Value: value("정리")}, {Row: 4, Column: 2, Value: value("2026-07-10")}, {Row: 4, Column: 3, Value: value("2026-07-01")},
+		// 날 수로 적힌 것도 읽는다. 46027 은 2026-01-05 다.
+		{Row: 5, Column: 1, Value: value("검토")}, {Row: 5, Column: 2, Value: value(46027)},
+		// 시작을 읽을 수 없는 줄은 건너뛴다.
+		{Row: 6, Column: 1, Value: value("미정")}, {Row: 6, Column: 2, Value: value("아직")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	chart, err := repository.CreateChart(ctx, book.ID, "alice", CreateChartInput{
+		IdempotencyKey: "tl", SheetID: sheet.ID, SourceSheetID: sheet.ID, Type: "timeline",
+		Title: "출시 일정", SourceRange: "A1:C6",
+	})
+	if err != nil {
+		t.Fatalf("일정표 차트=%v (버전 %d)", err, current.Version)
+	}
+	data, err := repository.GetChartData(ctx, chart.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Warning != "" || len(data.Series) != 1 {
+		t.Fatalf("일정표 자료=%#v", data)
+	}
+	points := data.Series[0].Points
+	if len(points) != 4 {
+		t.Fatalf("읽은 일감=%d개 %#v", len(points), points)
+	}
+	if points[0].Category != "설계" || points[0].X == nil || *points[0].X != 46027 || points[0].Value == nil || *points[0].Value != 46063 {
+		t.Errorf("설계=%#v", points[0])
+	}
+	// 끝이 없으면 시작과 같다. 기간이 없는 일이 이정표다.
+	if points[1].Category != "출시" || points[1].X == nil || points[1].Value == nil || *points[1].X != *points[1].Value {
+		t.Errorf("출시=%#v", points[1])
+	}
+	// 거꾸로 적은 것은 바로잡아 그린다. 그대로 두면 막대가 뒤로 자란다.
+	if points[2].X == nil || points[2].Value == nil || *points[2].X >= *points[2].Value {
+		t.Errorf("정리=%#v", points[2])
+	}
+	if points[3].Category != "검토" || points[3].X == nil || *points[3].X != 46027 {
+		t.Errorf("검토=%#v", points[3])
+	}
+}

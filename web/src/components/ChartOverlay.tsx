@@ -3,6 +3,7 @@ import { Download,ImageDown,Maximize2,Settings2,Table2,Trash2 } from 'lucide-rea
 import { useEffect,useRef,useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api'
+import { spreadsheetDate } from '../lib/cellFormat'
 import type { Chart,ChartData,ChartPosition,ChartSeries } from '../types'
 import './ChartOverlay.css'
 import { ContextMenu,type MenuItem } from './ContextMenu'
@@ -32,6 +33,42 @@ export function ChartPlot({data}: {data:ChartData}) {
     const points=series[0].points.filter(point=>point.value!=null&&point.value>=0),total=points.reduce((sum,point)=>sum+(point.value??0),0),vertical=chart.legend_position==='left'||chart.legend_position==='right',cx=chart.legend_position==='left'?355:chart.legend_position==='right'?165:260,cy=chart.legend_position==='top'?165:chart.legend_position==='bottom'?115:140,r=90;let angle=-Math.PI/2
     const pieLegend=chart.legend_position==='none'?null:points.map((point,index)=>{const x=chart.legend_position==='left'?18:chart.legend_position==='right'?330:65+(index%5)*90,y=vertical?55+index*18:chart.legend_position==='top'?18+Math.floor(index/5)*16:245+Math.floor(index/5)*16;return <g key={`legend-${point.category}-${index}`} transform={`translate(${x},${y})`}><rect width="9" height="9" rx="2" fill={palette[index%palette.length]}/><text x="13" y="8" fontSize="8" fill="#53636d">{point.category.slice(0,12)} · {point.value}</text></g>})
     return <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title||'원형 차트'}><title>{chart.title||'원형 차트'}</title><rect width={width} height={height} fill="white"/>{total>0?points.map((point,index)=>{const start=angle,end=angle+(point.value??0)/total*Math.PI*2;angle=end;return <path key={`${point.category}-${index}`} d={pieArc(cx,cy,r,start,end)} fill={palette[index%palette.length]} stroke="white" strokeWidth="2"><title>{point.category}: {point.value}</title></path>}):null}{pieLegend}</svg>
+  }
+  if(chart.type==='timeline'){
+    // 일정표는 한 줄에 하나씩 가로 막대로 그린다. 시작과 끝이 곧 막대의
+    // 양 끝이므로 세로축은 눈금이 아니라 일감의 이름이다.
+    const tasks=series[0].points.filter(point=>point.x!=null&&point.value!=null)
+    const starts=tasks.map(point=>point.x as number),ends=tasks.map(point=>point.value as number)
+    const from=Math.min(...starts),toRaw=Math.max(...ends)
+    // 하루짜리 일감만 있으면 폭이 0 이 되어 아무것도 안 보인다.
+    const to=toRaw>from?toRaw:from+1
+    // 일감이 많으면 한 줄에 줄 수 있는 높이가 줄어든다. 6픽셀보다 얇아지면
+    // 막대도 이름도 읽을 수 없으므로, 그릴 수 있는 만큼만 그리고 몇 개가
+    // 남았는지 적는다. 넘쳐 흘러 그림 밖으로 나가는 것보다 낫다.
+    const rowHeight=Math.min(26,plotHeight/Math.max(1,tasks.length))
+    const shown=rowHeight>=6?tasks.length:Math.max(1,Math.floor(plotHeight/6))
+    const drawHeight=rowHeight>=6?rowHeight:6
+    const hidden=tasks.length-shown
+    const timelineLeft=Math.max(left,96)
+    const timelineWidth=width-right-timelineLeft
+    const atDate=(value:number)=>timelineLeft+((value-from)/(to-from))*timelineWidth
+    const ticks=[0,.5,1].map(portion=>from+(to-from)*portion)
+    return <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title||'일정표'}><title>{chart.title||'일정표'}</title>
+      {chart.title&&<text x={width/2} y={16} textAnchor="middle" className="chart-title">{chart.title}</text>}
+      {ticks.map((value,index)=><g key={`tick-${index}`}>
+        <line x1={atDate(value)} y1={top} x2={atDate(value)} y2={top+plotHeight} stroke="#e4e8ec"/>
+        <text x={atDate(value)} y={top+plotHeight+14} textAnchor={index===0?'start':index===ticks.length-1?'end':'middle'} className="chart-axis">{dateText(value)}</text>
+      </g>)}
+      {hidden>0&&<text x={width-right} y={top-6} textAnchor="end" className="chart-axis">외 {hidden}개 더</text>}
+      {tasks.slice(0,shown).map((point,index)=>{
+        const y=top+index*drawHeight+2,barHeight=Math.max(3,drawHeight-6)
+        const x=atDate(point.x as number),end=atDate(point.value as number)
+        return <g key={`${point.category}-${index}`}>
+          <text x={timelineLeft-6} y={y+barHeight/2+3} textAnchor="end" className="chart-axis">{point.category.length>10?`${point.category.slice(0,9)}…`:point.category}</text>
+          <rect x={x} y={y} width={Math.max(2,end-x)} height={barHeight} rx={2} fill={palette[index%palette.length]}/>
+        </g>
+      })}
+    </svg>
   }
   const isBar=shape.bars.length>0,barGroup=plotWidth/Math.max(1,categories.length)
   const barWidth=shape.stacked?Math.max(2,Math.min(48,barGroup-8)):Math.max(2,Math.min(40,(barGroup-6)/Math.max(1,shape.bars.length)))
@@ -95,4 +132,13 @@ export function ChartOverlay({charts,version,onEdit,onUpdate,onDelete,onNavigate
   const [target,setTarget]=useState<Element|null>(null)
   useEffect(()=>setTarget(document.querySelector('.sheet-area')),[charts.length])
   return target?createPortal(<div className="chart-overlay-layer" aria-label="시트 차트 레이어">{charts.map(chart=><ChartCard key={chart.id} chart={chart} version={version} onEdit={onEdit} onUpdate={onUpdate} onDelete={onDelete} onNavigate={onNavigate}/>)}</div>,target):null
+}
+
+// 일련번호를 날짜로 적는다. 날 수를 날짜로 바꾸는 셈은 lib/cellFormat.ts
+// 한 곳에만 두므로 여기서도 그것을 쓴다 — 따로 세면 격자에 보이는 날짜와
+// 일정표의 눈금이 어긋난다.
+function dateText(value:number){
+  const date=spreadsheetDate(value)
+  if(!date)return String(Math.round(value))
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}`
 }

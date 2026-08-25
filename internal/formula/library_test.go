@@ -143,3 +143,41 @@ func TestEveryImplementedFunctionIsCatalogued(t *testing.T) {
 		t.Errorf("%s 는 만들어져 있는데 함수 목록에 없다. library.go 에 적거나, 일부러 뺀 것이면 까닭과 함께 excluded 에 적는다", name)
 	}
 }
+
+// 날짜를 날 수로 바꾸는 셈은 되돌릴 수 있어야 한다. 짝이 어긋나면 일정표의
+// 막대가 격자에 보이는 날짜와 다른 자리에 그려진다.
+func TestDateSerialRoundTripsWithSerialDate(t *testing.T) {
+	t.Parallel()
+	for _, sample := range []struct {
+		value  any
+		serial float64
+	}{
+		{"2026-01-05", 46027},
+		// 1900 년을 윤년으로 잘못 센 자리. 60 보다 작은 번호는 하루 뒤에서
+		// 세기 시작해야 1900-01-01 이 1 번이 된다.
+		{"1900-01-01", 1},
+		{"1900-03-01", 61},
+		{"2026/02/10", 46063},
+		{45000.0, 45000},
+	} {
+		serial, ok := DateSerial(sample.value)
+		if !ok || serial != sample.serial {
+			t.Errorf("DateSerial(%v) = %v (%v), want %v", sample.value, serial, ok, sample.serial)
+			continue
+		}
+		back, valid := SerialDate(serial)
+		if !valid {
+			t.Errorf("SerialDate(%v) 를 되돌리지 못했다", serial)
+			continue
+		}
+		if again, _ := DateSerial(back.Format("2006-01-02")); again != sample.serial {
+			t.Errorf("%v 를 오갔더니 %v 가 되었다", sample.value, again)
+		}
+	}
+	// 날짜가 아닌 것은 날 수가 아니다. 글로 적힌 2024 를 날 수로 보면 안 된다.
+	for _, sample := range []any{"아직", "", nil, "2024년"} {
+		if serial, ok := DateSerial(sample); ok {
+			t.Errorf("DateSerial(%v) = %v, 날짜가 아니어야 한다", sample, serial)
+		}
+	}
+}

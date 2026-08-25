@@ -21,7 +21,7 @@ const (
 )
 
 var chartTypes = map[string]struct{}{"bar": {}, "line": {}, "area": {}, "pie": {}, "scatter": {}, "histogram": {},
-	"stacked_bar": {}, "stacked_area": {}, "combo": {}}
+	"stacked_bar": {}, "stacked_area": {}, "combo": {}, "timeline": {}}
 var chartLegendPositions = map[string]struct{}{"none": {}, "top": {}, "right": {}, "bottom": {}, "left": {}}
 
 type ChartPosition struct {
@@ -230,7 +230,7 @@ func normalizeChart(item Chart, allowBrokenReference bool) (Chart, error) {
 		return Chart{}, fmt.Errorf("%w: source_sheet_id is required", ErrInvalid)
 	}
 	if _, found := chartTypes[item.Type]; !found {
-		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, histogram, stacked_bar, stacked_area, or combo", ErrInvalid)
+		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, histogram, timeline, stacked_bar, stacked_area, or combo", ErrInvalid)
 	}
 	if len([]rune(item.Title)) > 200 || len([]rune(item.XAxisTitle)) > 100 || len([]rune(item.YAxisTitle)) > 100 {
 		return Chart{}, fmt.Errorf("%w: chart title or axis title is too long", ErrInvalid)
@@ -516,6 +516,9 @@ func buildChartData(chart Chart, version int64, cells []Cell) (ChartData, error)
 	if chart.Type == "scatter" {
 		return buildScatterData(chart, version, matrix), nil
 	}
+	if chart.Type == "timeline" {
+		return buildTimelineData(chart, version, matrix), nil
+	}
 	rowStart, columnStart := 0, 0
 	if chart.FirstRowHeaders && rows > 1 {
 		rowStart = 1
@@ -667,4 +670,59 @@ func numericChartValue(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// buildTimelineData 는 일정표를 만든다. 열은 앞에서부터 이름, 시작, 끝이다.
+//
+//	설계   2026-01-05  2026-02-10
+//	개발   2026-02-11  2026-04-30
+//
+// 끝을 적지 않으면 그 날 하루짜리로 본다 — 이정표는 기간이 없는 일이다.
+//
+// 날짜는 셈할 때 이미 일련번호다. 그래서 그리는 쪽은 그저 두 수 사이를
+// 막대로 그으면 되고, 여기서는 날짜인지 아닌지를 다시 따지지 않는다.
+func buildTimelineData(chart Chart, version int64, matrix [][]any) ChartData {
+	rowStart := 0
+	if chart.FirstRowHeaders && len(matrix) > 1 {
+		rowStart = 1
+	}
+	if len(matrix) <= rowStart || len(matrix[0]) < 2 {
+		return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{}, Warning: "일정표에는 이름 열과 시작 날짜 열이 있어야 합니다."}
+	}
+	name := "일정"
+	if chart.FirstRowHeaders {
+		if header := displayChartValue(matrix[0][1]); header != "" {
+			name = header
+		}
+	}
+	points := make([]ChartPoint, 0, len(matrix)-rowStart)
+	for row := rowStart; row < len(matrix); row++ {
+		// 날짜는 대개 "2026-01-05" 같은 글자다. DATE() 가 글자를 내기
+		// 때문이다. 숫자로 적힌 날 수도 함께 받는다.
+		start, hasStart := formula.DateSerial(matrix[row][1])
+		if !hasStart {
+			continue
+		}
+		end := start
+		if len(matrix[row]) > 2 {
+			if finish, hasEnd := formula.DateSerial(matrix[row][2]); hasEnd {
+				end = finish
+			}
+		}
+		// 끝이 시작보다 앞이면 사람이 거꾸로 적은 것이다. 그대로 그리면
+		// 막대가 뒤로 자라 읽을 수 없으므로 바로잡아 그린다.
+		if end < start {
+			start, end = end, start
+		}
+		label := displayChartValue(matrix[row][0])
+		if label == "" {
+			label = strconv.Itoa(row - rowStart + 1)
+		}
+		startValue, endValue := start, end
+		points = append(points, ChartPoint{Category: label, X: &startValue, Value: &endValue})
+	}
+	if len(points) == 0 {
+		return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{}, Warning: "시작 날짜로 읽을 수 있는 값이 없습니다."}
+	}
+	return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{{Name: name, Points: points}}}
 }

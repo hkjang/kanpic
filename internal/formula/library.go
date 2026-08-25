@@ -825,3 +825,28 @@ func serialDate(serial float64) (time.Time, bool) {
 	seconds := math.Round((serial - days) * 24 * 60 * 60)
 	return epoch.AddDate(0, 0, int(days)).Add(time.Duration(seconds) * time.Second), true
 }
+
+// DateSerial 은 칸의 값을 표 프로그램이 쓰는 날 수로 바꾼다. 숫자면 그대로
+// 날 수로 보고, "2026-01-05" 같은 글자면 읽어서 셈한다.
+//
+// DATE() 는 글자를 내므로 날짜를 담은 칸은 대개 글자다. 그림을 그리는 쪽은
+// 두 수 사이에 막대를 그어야 하니 수가 필요하다. 셈하는 자리를 여기 한 곳에
+// 두는 까닭은 serialDate 와 짝이 어긋나면 안 되기 때문이다.
+func DateSerial(value any) (float64, bool) {
+	moment, ok := parseDate(value)
+	if !ok {
+		return 0, false
+	}
+	day := time.Date(moment.Year(), moment.Month(), moment.Day(), 0, 0, 0, 0, time.UTC)
+	seconds := float64(moment.Hour()*3600 + moment.Minute()*60 + moment.Second())
+	serial := day.Sub(time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)).Hours() / 24
+	// 1900 년을 윤년으로 잘못 센 자리. serialDate 가 60 보다 작은 번호를
+	// 하루 뒤에서 세므로 되돌릴 때도 그렇게 해야 짝이 맞는다.
+	if serial < 60 {
+		serial = day.Sub(time.Date(1899, 12, 31, 0, 0, 0, 0, time.UTC)).Hours() / 24
+	}
+	if serial < 0 {
+		return 0, false
+	}
+	return serial + seconds/86400, true
+}
