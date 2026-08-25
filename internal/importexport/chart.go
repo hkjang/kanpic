@@ -268,3 +268,20 @@ func isNameToken(text string) bool {
 	}
 	return true
 }
+
+// excelTableStyle 은 kanpic 의 표 모양새를 엑셀이 아는 이름으로 바꾼다.
+// 모르는 이름을 적으면 엑셀이 파일을 열지 못하므로, 아는 것만 적고 나머지는
+// 기본값으로 둔다.
+func excelTableStyle(theme string) string {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "blue", "파랑":
+		return "TableStyleMedium2"
+	case "green", "초록":
+		return "TableStyleMedium4"
+	case "orange", "주황":
+		return "TableStyleMedium3"
+	case "red", "빨강":
+		return "TableStyleMedium10"
+	}
+	return "TableStyleMedium9"
+}

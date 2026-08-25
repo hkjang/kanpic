@@ -21,6 +21,47 @@ type Scope struct {
 	Imports map[string]ImportedRange
 	// NamedFunctions 는 워크북에 저장해 둔, 이름으로 부르는 수식이다.
 	NamedFunctions map[string]NamedFunction
+	// Tables 는 이름을 가진 표다. 매출표[금액] 처럼 열 이름으로 가리키면
+	// 열이 끼워지고 지워져도 수식이 그대로 맞다.
+	Tables map[string]Table
+}
+
+// Table 은 수식이 가리킬 수 있는 표다. 열 이름은 만들 때 머리글에서 읽어
+// 둔다 — 수식을 풀 때마다 머리글 칸을 다시 읽으면 그 칸이 바뀔 때마다
+// 표 전체가 다시 계산되어야 한다.
+type Table struct {
+	SheetID   string
+	Range     string
+	HeaderRow bool
+	Columns   []string
+}
+
+// tableSpecifier 는 대괄호 안에 올 수 있는 몫이다. 파일에서 들어온 수식은
+// 영문으로 적혀 있으므로 둘 다 받는다.
+func tableSpecifier(text string) (string, bool) {
+	switch strings.ToUpper(strings.TrimSpace(text)) {
+	case "#전체", "#ALL":
+		return "all", true
+	case "#머리글", "#HEADERS":
+		return "headers", true
+	case "#자료", "#데이터", "#DATA":
+		return "data", true
+	}
+	return "", false
+}
+
+// splitTableReference 는 매출표[금액] 을 표 이름과 지정자로 가른다.
+func splitTableReference(text string) (string, string, bool) {
+	open := strings.Index(text, "[")
+	if open <= 0 || !strings.HasSuffix(text, "]") {
+		return "", "", false
+	}
+	inner := strings.TrimSpace(text[open+1 : len(text)-1])
+	// 엑셀은 지정자를 한 번 더 감싸기도 한다. 매출표[[금액]] 도 같은 뜻이다.
+	for strings.HasPrefix(inner, "[") && strings.HasSuffix(inner, "]") {
+		inner = strings.TrimSpace(inner[1 : len(inner)-1])
+	}
+	return strings.TrimSpace(text[:open]), inner, true
 }
 
 // SheetExtent is the largest row and column a sheet has content in.

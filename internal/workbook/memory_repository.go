@@ -42,6 +42,7 @@ type snapshot struct {
 	namedRanges        map[string]NamedRange
 	namedFunctions     map[string]NamedFunction
 	watchRules         map[string]WatchRule
+	sheetTables        map[string]SheetTable
 	charts             map[string]Chart
 	pivots             map[string]Pivot
 }
@@ -72,6 +73,7 @@ type MemoryRepository struct {
 	namedRanges        map[string]NamedRange
 	namedFunctions     map[string]NamedFunction
 	watchRules         map[string]WatchRule
+	sheetTables        map[string]SheetTable
 	charts             map[string]Chart
 	pivots             map[string]Pivot
 	pivotCache         map[string]PivotData
@@ -101,6 +103,7 @@ func NewMemoryRepository() *MemoryRepository {
 		namedRanges:        make(map[string]NamedRange),
 		namedFunctions:     make(map[string]NamedFunction),
 		watchRules:         make(map[string]WatchRule),
+		sheetTables:        make(map[string]SheetTable),
 		charts:             make(map[string]Chart),
 		pivots:             make(map[string]Pivot),
 		pivotCache:         make(map[string]PivotData),
@@ -235,7 +238,11 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	for _, item := range importedFunctions {
 		r.namedFunctions[item.ID] = item
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Imports: nil})
+	importedTables := buildImportedSheetTables(wb.ID, input.ActorID, input.Sheets, sheetIDsByName, now)
+	for _, item := range importedTables {
+		r.sheetTables[item.ID] = item
+	}
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Tables: formulaTables(importedTables), Imports: nil})
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -869,7 +876,7 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID, actorID strin
 		currentSheetID = id
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(nextSheets, nextCells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Imports: r.importsForLocked(state.workbook.ID, nextCells, nil)})
+	expanded, _, _, err := recalculateCellInputs(nextSheets, nextCells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(r.sheetTablesForWorkbookLocked(state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, nextCells, nil)})
 	if err != nil {
 		for id, item := range removedRanges {
 			r.namedRanges[id] = item
@@ -1085,7 +1092,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Imports: r.importsForLocked(state.workbook.ID, state.cells, effective)})
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(r.sheetTablesForWorkbookLocked(state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, state.cells, effective)})
 		if err != nil {
 			return MutationResult{}, err
 		}

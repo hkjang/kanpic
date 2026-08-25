@@ -20,6 +20,7 @@ var resourceWorkbookQueries = map[string]string{
 	"pivotId":             `SELECT workbook_id::text FROM pivots WHERE id=$1`,
 	"watchRuleId":         `SELECT workbook_id::text FROM watch_rules WHERE id=$1`,
 	"namedFunctionId":     `SELECT workbook_id::text FROM named_functions WHERE id=$1`,
+	"sheetTableId":        `SELECT workbook_id::text FROM sheet_tables WHERE id=$1`,
 	"namedRangeId":        `SELECT workbook_id::text FROM named_ranges WHERE id=$1`,
 	"commentId":           `SELECT workbook_id::text FROM comment_threads WHERE id=$1`,
 	"messageId":           `SELECT t.workbook_id::text FROM comment_messages m JOIN comment_threads t ON t.id=m.thread_id WHERE m.id=$1`,

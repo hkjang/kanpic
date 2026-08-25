@@ -137,6 +137,13 @@ type Repository interface {
 	GetWatchRule(context.Context, string) (WatchRule, error)
 	UpdateWatchRule(context.Context, string, string, UpdateWatchRuleInput) (WatchRule, error)
 	DeleteWatchRule(context.Context, string, string, *int64) error
+
+	// 이름을 가진 표. =SUM(매출표[금액]) 이 가리키는 것이다.
+	CreateSheetTable(context.Context, string, string, CreateSheetTableInput) (SheetTable, error)
+	ListSheetTables(context.Context, string) ([]SheetTable, error)
+	GetSheetTable(context.Context, string) (SheetTable, error)
+	UpdateSheetTable(context.Context, string, string, UpdateSheetTableInput) (SheetTable, error)
+	DeleteSheetTable(context.Context, string, string, *int64) error
 	CreateNamedFunction(context.Context, string, string, CreateNamedFunctionInput) (NamedFunction, error)
 	ListNamedFunctions(context.Context, string) ([]NamedFunction, error)
 	GetNamedFunction(context.Context, string) (NamedFunction, error)

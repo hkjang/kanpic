@@ -23,6 +23,7 @@ var resourceCollections = map[string]string{
 	"pivots":              "pivotId",
 	"watch-rules":         "watchRuleId",
 	"named-functions":     "namedFunctionId",
+	"tables":              "sheetTableId",
 	"named-ranges":        "namedRangeId",
 	"comments":            "commentId",
 	"comment-messages":    "messageId",

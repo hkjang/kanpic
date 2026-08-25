@@ -286,7 +286,11 @@ func (r *PostgresRepository) recalculateWorkbookFormulasTx(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, existing, nil)})
+	tables, err := listSheetTablesFrom(ctx, tx, workbookID)
+	if err != nil {
+		return err
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(tables), Imports: r.importsFor(ctx, workbookID, existing, nil)})
 	if err != nil {
 		return err
 	}

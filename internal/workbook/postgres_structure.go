@@ -117,6 +117,32 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			return MutationResult{}, err
 		}
 	}
+	tables, err := listSheetTablesFrom(ctx, tx, target.WorkbookID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	for _, item := range tables {
+		if item.SheetID != target.ID {
+			continue
+		}
+		updated, remains, transformErr := transformSheetTableForStructure(item, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if !remains {
+			if _, err := tx.Exec(ctx, `DELETE FROM sheet_tables WHERE id=$1`, item.ID); err != nil {
+				return MutationResult{}, err
+			}
+			continue
+		}
+		if updated.Range == item.Range {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE sheet_tables SET cell_range=$2,revision=$3,updated_by=$4,updated_at=$5 WHERE id=$1`,
+			item.ID, updated.Range, updated.Revision, updated.UpdatedBy, updated.UpdatedAt); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	watchRules, err := listSheetWatchRulesTx(ctx, tx, target.ID)
 	if err != nil {
 		return MutationResult{}, err
@@ -244,7 +270,11 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 	if err != nil {
 		return MutationResult{}, err
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(sheets, nextCells, target.ID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, nextCells, nil)})
+	sheetTables, err := listSheetTablesFrom(ctx, tx, workbookID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(sheets, nextCells, target.ID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, nextCells, nil)})
 	if err != nil {
 		return MutationResult{}, err
 	}

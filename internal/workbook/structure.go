@@ -412,6 +412,20 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			nextWatchRules[id] = updated
 		}
 	}
+	nextTables := make(map[string]SheetTable, len(r.sheetTables))
+	for id, item := range r.sheetTables {
+		if item.SheetID != target.ID {
+			nextTables[id] = item
+			continue
+		}
+		updated, remains, transformErr := transformSheetTableForStructure(item, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if remains {
+			nextTables[id] = updated
+		}
+	}
 	nextConditionalFormats := cloneConditionalMap(r.conditionalFormats)
 	for id, rule := range nextConditionalFormats {
 		if rule.SheetID != target.ID {
@@ -477,7 +491,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 	if err != nil {
 		return MutationResult{}, err
 	}
-	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.sheets, nextCells, target.ID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRangesFromMap(nextNames, state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Imports: r.importsForLocked(state.workbook.ID, nextCells, nil)})
+	expanded, recalculated, formulaErrors, err := recalculateCellInputs(state.sheets, nextCells, target.ID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRangesFromMap(nextNames, state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(sheetTablesFromMap(nextTables, state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, nextCells, nil)})
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -496,7 +510,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		nextNotifications[id] = copy
 	}
 	state.cells, r.namedRanges, r.validations, r.conditionalFormats, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextConditionalFormats, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
-	r.protections, r.watchRules = nextProtections, nextWatchRules
+	r.protections, r.watchRules, r.sheetTables = nextProtections, nextWatchRules, nextTables
 	for pivotID, pivot := range nextPivots {
 		if pivot.WorkbookID == state.workbook.ID {
 			delete(r.pivotCache, pivotID)

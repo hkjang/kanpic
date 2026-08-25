@@ -59,6 +59,12 @@ func (e *Evaluator) SetNamedFunctions(functions map[string]NamedFunction) {
 	e.scope.NamedFunctions = normalized
 }
 
+// SetTables 는 워크북이 들고 있는 표를 엔진에 알린다. 이름을 모르면
+// 매출표[금액] 은 그저 모르는 이름이다.
+func (e *Evaluator) SetTables(tables map[string]Table) {
+	e.scope.Tables = TableDefinitions(tables)
+}
+
 // WithImports supplies the cross-workbook blocks IMPORTRANGE calls asked for.
 // They are fetched and permission-checked before evaluation, so the evaluator
 // itself stays a pure function of what it was handed.
@@ -267,6 +273,30 @@ func lex(input string) ([]token, error) {
 					break
 				}
 				index += size
+			}
+			// 이름 바로 뒤에 대괄호가 오면 표의 열을 가리키는 것이다.
+			// 대괄호 안은 이름 하나가 아니라 지정자라서 띄어쓰기도 # 도
+			// 들어간다. 통째로 한 토큰으로 읽어 문법을 건드리지 않는다.
+			//
+			//	매출표[금액]  매출표[#머리글]
+			if index < len(input) && input[index] == '[' {
+				depth, scan := 0, index
+				for scan < len(input) {
+					if input[scan] == '[' {
+						depth++
+					} else if input[scan] == ']' {
+						depth--
+						if depth == 0 {
+							scan++
+							break
+						}
+					}
+					scan++
+				}
+				if depth != 0 {
+					return nil, fmt.Errorf("unterminated table reference")
+				}
+				index = scan
 			}
 			tokens = append(tokens, token{tokenIdentifier, input[start:index]})
 			continue
@@ -1001,6 +1031,10 @@ func (p *parser) primary() (node, error) {
 			return bound, nil
 		}
 		if !isReference(name) {
+			// 표를 먼저 본다. 매출표[금액] 은 이름 범위가 아니다.
+			if result, isTable, tableErr := p.tableReference(current.text); isTable {
+				return result, tableErr
+			}
 			return p.namedRange(current.text)
 		}
 		return p.cellReference("", current.text)

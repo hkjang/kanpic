@@ -578,6 +578,16 @@ type ImportSheet struct {
 	// columns, sizes, frozen panes and outline groups. An import that drops it
 	// flattens a workbook that was exported from here minutes earlier.
 	Layout *SheetLayout `json:"layout,omitempty"`
+	// Tables 는 파일이 들고 온 이름 있는 표다. 표를 버리면 =SUM(매출표[금액])
+	// 이 든 칸이 모두 #NAME? 이 된다.
+	Tables []ImportSheetTable `json:"tables,omitempty"`
+}
+
+// ImportSheetTable 은 파일에서 읽은 표 하나다.
+type ImportSheetTable struct {
+	Name      string `json:"name"`
+	Range     string `json:"range"`
+	HeaderRow bool   `json:"header_row"`
 }
 
 // ImportChart is one chart read out of an imported file, reduced to what

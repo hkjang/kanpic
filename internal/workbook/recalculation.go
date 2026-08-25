@@ -60,6 +60,8 @@ type nameContext struct {
 	Ranges    map[string]formula.NamedRange
 	Functions map[string]formula.NamedFunction
 	Imports   map[string]formula.ImportedRange
+	// Tables 는 이름을 가진 표다. 매출표[금액] 이 가리킬 곳이다.
+	Tables map[string]formula.Table
 }
 
 func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cellKey]Cell, currentSheetID string, submitted []CellInput, forceAll bool, names nameContext) ([]CellInput, []CellCoordinate, []CellFormulaError, error) {
@@ -108,6 +110,18 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		}
 		changed[scoped] = struct{}{}
 	}
+	// 표의 머리글을 건드렸으면 표를 가리키는 수식을 모두 다시 센다.
+	//
+	// 열 이름은 머리글에서 온다. 금액 을 매출액 으로 고치면 매출표[금액] 은
+	// 그 자리에서 #REF! 가 되어야 하는데, 풀리지 않는 수식은 의존성 그래프에
+	// 아예 오르지 못한다 — 무엇에 기대는지 알아내려면 먼저 풀려야 하기
+	// 때문이다. 그래서 다시 셈할 계기를 영영 얻지 못하고, 없어진 열의 옛 답이
+	// 맞는 답인 양 남는다. 틀린 값이 조용히 남는 것이 가장 나쁘다.
+	//
+	// 머리글을 고치는 일은 드무므로 이때만 전부 다시 세도 비싸지 않다.
+	if tableHeaderTouched(names.Tables, changed) {
+		forceAll = true
+	}
 	// A #SPILL! formula is also affected when a user clears a cell that used to
 	// block its result. The blocker is not a formula dependency, so retry these
 	// anchors on every ordinary mutation until expansion succeeds.
@@ -136,6 +150,7 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 	}
 	evaluator := formula.NewScopedWithNames("", sheetNames, names.Ranges).WithImports(names.Imports)
 	evaluator.SetNamedFunctions(names.Functions)
+	evaluator.SetTables(tablesWithColumns(names.Tables, prospective))
 	forcedSpills := make(map[string]*formula.Error)
 	recalculatedSet := make(map[scopedCellKey]struct{})
 	formulaErrors := make(map[scopedCellKey]CellFormulaError)
@@ -510,4 +525,69 @@ func coordinatesFromKeys(currentSheetID string, keys map[scopedCellKey]struct{})
 		return result[i].Row < result[j].Row
 	})
 	return result
+}
+
+// tablesWithColumns 는 표의 열 이름을 머리글 줄에서 읽어 채운다.
+//
+// 호출하는 자리마다 따로 읽지 않고 여기서 한 번에 하는 까닭은 두 가지다.
+// 재계산은 이미 칸을 다 들고 있고, 무엇보다 여기 있는 것은 고친 뒤의 칸이다 —
+// 머리글을 금액 에서 매출액 으로 바꾸는 그 저장에서, 매출표[매출액] 이 곧바로
+// 맞아야 한다. 저장 전 칸으로 읽으면 한 박자 늦게 맞는다.
+func tablesWithColumns(tables map[string]formula.Table, cells map[string]map[cellKey]Cell) map[string]formula.Table {
+	if len(tables) == 0 {
+		return nil
+	}
+	resolved := make(map[string]formula.Table, len(tables))
+	for name, table := range tables {
+		selected, err := cellrange.Parse(table.Range)
+		if err != nil {
+			continue
+		}
+		header := make([]string, 0, selected.End.Column-selected.Start.Column+1)
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			header = append(header, headerText(cells[table.SheetID][cellKey{selected.Start.Row, column}]))
+		}
+		table.Columns = TableColumns(SheetTable{Range: table.Range, HeaderRow: table.HeaderRow}, header)
+		resolved[name] = table
+	}
+	return resolved
+}
+
+// headerText 는 머리글 칸의 값을 열 이름으로 쓸 글자로 바꾼다. 숫자를 머리글로
+// 쓰는 표도 있으므로 글자가 아닌 것도 적힌 대로 읽는다.
+func headerText(cell Cell) string {
+	if len(cell.Value) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(cell.Value, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(strings.Trim(string(cell.Value), `"`))
+}
+
+// tableHeaderTouched 는 이번에 고친 칸 가운데 표의 머리글 줄에 든 것이
+// 있는지 본다.
+func tableHeaderTouched(tables map[string]formula.Table, changed map[scopedCellKey]struct{}) bool {
+	if len(tables) == 0 || len(changed) == 0 {
+		return false
+	}
+	for _, table := range tables {
+		if !table.HeaderRow {
+			continue
+		}
+		selected, err := cellrange.Parse(table.Range)
+		if err != nil {
+			continue
+		}
+		for key := range changed {
+			if key.sheetID != table.SheetID || key.row != selected.Start.Row {
+				continue
+			}
+			if key.column >= selected.Start.Column && key.column <= selected.End.Column {
+				return true
+			}
+		}
+	}
+	return false
 }

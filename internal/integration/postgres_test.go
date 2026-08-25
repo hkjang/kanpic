@@ -4339,3 +4339,125 @@ func runDueForWorkbook(ctx context.Context, service *automation.Service, now tim
 	}
 	return mine, err
 }
+
+// 표는 이름으로 범위를 가리키는 것이다. =SUM(매출표[금액]) 은 열이 끼워지고
+// 지워져도 그대로 맞아야 하고, 파일로 나갔다 들어와도 살아 있어야 한다.
+func TestPostgresSheetTablesAnswerFormulasAndFollowStructure(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("table-owner-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "표", WorkspaceID: "integration", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: book.Version, IdempotencyKey: "table-seed",
+		Cells: []workbook.CellInput{
+			{Row: 1, Column: 1, Value: value("지역")}, {Row: 1, Column: 2, Value: value("금액")},
+			{Row: 2, Column: 1, Value: value("서울")}, {Row: 2, Column: 2, Value: value(100)},
+			{Row: 3, Column: 1, Value: value("부산")}, {Row: 3, Column: 2, Value: value(200)},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	table, err := repository.CreateSheetTable(ctx, book.ID, owner, workbook.CreateSheetTableInput{
+		IdempotencyKey: "table-1", SheetID: sheet.ID, Name: "매출표", Range: "a1:b3",
+	})
+	if err != nil || table.Range != "A1:B3" {
+		t.Fatalf("만든 표=%#v, %v", table, err)
+	}
+	// 같은 열쇠로 다시 부르면 같은 것이 돌아온다.
+	again, err := repository.CreateSheetTable(ctx, book.ID, owner, workbook.CreateSheetTableInput{
+		IdempotencyKey: "table-1", SheetID: sheet.ID, Name: "다른이름", Range: "Z1:Z9",
+	})
+	if err != nil || again.ID != table.ID {
+		t.Fatalf("멱등성=%#v, %v", again, err)
+	}
+	// 이름이 겹치면 어느 것을 가리키는지 알 수 없다.
+	if _, err := repository.CreateSheetTable(ctx, book.ID, owner, workbook.CreateSheetTableInput{
+		IdempotencyKey: "table-dup", SheetID: sheet.ID, Name: "매출표", Range: "D1:E3",
+	}); !errors.Is(err, workbook.ErrDuplicateName) {
+		t.Errorf("겹친 이름=%v", err)
+	}
+	current, err := repository.GetWorkbook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: current.Version, IdempotencyKey: "table-formula",
+		Cells: []workbook.CellInput{{Row: 5, Column: 1, Formula: "=SUM(매출표[금액])"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	selected, _ := cellrange.Parse("A5")
+	cells, err := repository.ReadRange(ctx, sheet.ID, selected)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "300" {
+		t.Fatalf("합계 칸=%#v, %v", cells, err)
+	}
+	// 위에 행을 끼우면 표가 따라 내려가고 수식은 그대로 맞다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: current.Version,
+		IdempotencyKey: "table-insert", Axis: "row", Action: "insert", Index: 1, Count: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetSheetTable(ctx, table.ID)
+	if err != nil || moved.Range != "A2:B4" {
+		t.Fatalf("옮긴 표=%#v, %v", moved, err)
+	}
+	movedCell, _ := cellrange.Parse("A6")
+	cells, err = repository.ReadRange(ctx, sheet.ID, movedCell)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "300" {
+		t.Fatalf("행을 끼운 뒤 합계=%#v, %v", cells, err)
+	}
+	// 파일로 나갔다 들어와도 표와 그 이름을 쓰는 수식이 살아 있어야 한다.
+	service := importexport.New(repository)
+	exported, err := service.Export(ctx, importexport.ExportRequest{WorkbookID: book.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := importexport.Parse(exported.Name, exported.Data, importexport.DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "integration", Title: "표 복원", OwnerID: owner, ActorID: owner,
+		IdempotencyKey: "table-import", FileName: exported.Name, Format: "xlsx",
+		Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges, NamedFunctions: parsed.NamedFunctions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), restored.ID, "integration-cleanup")
+	restoredTables, err := repository.ListSheetTables(ctx, restored.ID)
+	if err != nil || len(restoredTables) != 1 || restoredTables[0].Name != "매출표" {
+		t.Fatalf("돌아온 표=%#v, %v", restoredTables, err)
+	}
+	restoredCells, err := repository.ReadRange(ctx, restored.Sheets[0].ID, movedCell)
+	if err != nil || len(restoredCells) != 1 || string(restoredCells[0].Value) != "300" {
+		t.Fatalf("돌아온 합계=%#v, %v", restoredCells, err)
+	}
+	// 표를 지우면 그 이름을 쓰던 칸이 #NAME? 이 된다. 조용히 옛 값이 남으면
+	// 사람은 없어진 표를 아직 있는 줄 안다.
+	if err := repository.DeleteSheetTable(ctx, table.ID, owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	cells, err = repository.ReadRange(ctx, sheet.ID, movedCell)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != `"#NAME?"` {
+		t.Fatalf("표를 지운 뒤=%#v, %v", cells, err)
+	}
+}

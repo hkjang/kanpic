@@ -193,6 +193,11 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/named-functions/{namedFunctionId}", s.getNamedFunction)
 	mux.HandleFunc("PATCH /api/v1/named-functions/{namedFunctionId}", s.updateNamedFunction)
 	mux.HandleFunc("DELETE /api/v1/named-functions/{namedFunctionId}", s.deleteNamedFunction)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/tables", s.listSheetTables)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/tables", s.createSheetTable)
+	mux.HandleFunc("GET /api/v1/tables/{sheetTableId}", s.getSheetTable)
+	mux.HandleFunc("PATCH /api/v1/tables/{sheetTableId}", s.updateSheetTable)
+	mux.HandleFunc("DELETE /api/v1/tables/{sheetTableId}", s.deleteSheetTable)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/named-ranges", s.listNamedRanges)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/named-ranges", s.createNamedRange)
 	mux.HandleFunc("GET /api/v1/named-ranges/{namedRangeId}", s.getNamedRange)
@@ -1304,6 +1309,14 @@ func requiredScope(r *http.Request) string {
 	// 걸 수 있고, 남의 것은 건드릴 수 없다.
 	if strings.Contains(path, "/watch-rules") {
 		return "workbook.read"
+	}
+	// 표는 이름으로 범위를 가리키는 것이다. 이름을 바꾸거나 지우면 그것을
+	// 쓰는 모든 칸의 셈이 바뀌므로, 이름 범위와 같은 권한으로 지킨다.
+	if strings.Contains(path, "/tables") {
+		if r.Method == http.MethodGet {
+			return "range.read"
+		}
+		return "range.write"
 	}
 	// 이름 있는 수식은 그것을 쓰는 모든 칸의 셈을 바꾼다. 셀 하나를
 	// 고치는 것보다 넓게 미치므로 수식 권한으로 지킨다.

@@ -563,6 +563,10 @@ func (r *MemoryRepository) WorkbookIDForResource(_ context.Context, kind, id str
 		if rule, ok := r.watchRules[id]; ok {
 			return rule.WorkbookID, nil
 		}
+	case "sheetTableId":
+		if table, ok := r.sheetTables[id]; ok {
+			return table.WorkbookID, nil
+		}
 	case "commentId":
 		if thread, ok := r.comments[id]; ok {
 			return thread.WorkbookID, nil

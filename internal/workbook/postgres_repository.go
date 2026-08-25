@@ -225,7 +225,15 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 			return Workbook{}, mapPostgresError(err)
 		}
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Imports: nil})
+	importedTables := buildImportedSheetTables(wb.ID, input.ActorID, input.Sheets, sheetIDsByName, now)
+	for _, item := range importedTables {
+		if _, err := tx.Exec(ctx, `INSERT INTO sheet_tables(id,workbook_id,sheet_id,idempotency_key,name,cell_range,header_row,theme,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			item.ID, wb.ID, item.SheetID, item.CreateKey, item.Name, item.Range, item.HeaderRow, item.Theme,
+			item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+			return Workbook{}, mapPostgresError(err)
+		}
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Tables: formulaTables(importedTables), Imports: nil})
 	if err != nil {
 		return Workbook{}, err
 	}
@@ -1340,7 +1348,11 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID, actorID s
 	if err != nil {
 		return SheetDeletion{}, err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, existing, nil)})
+	sheetTables, err := listSheetTablesFrom(ctx, tx, workbookID)
+	if err != nil {
+		return SheetDeletion{}, err
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, nil)})
 	if err != nil {
 		return SheetDeletion{}, err
 	}
@@ -1618,7 +1630,11 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		if rangeErr != nil {
 			return MutationResult{}, rangeErr
 		}
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Imports: r.importsFor(ctx, workbookID, existing, effective)})
+		sheetTables, tableErr := listSheetTablesFrom(ctx, tx, workbookID)
+		if tableErr != nil {
+			return MutationResult{}, tableErr
+		}
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, effective)})
 		if err != nil {
 			return MutationResult{}, err
 		}

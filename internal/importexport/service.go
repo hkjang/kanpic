@@ -279,6 +279,16 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 		}
 		rows.Close()
 		storedBeforeMerges := len(imported.Cells)
+		// 이름 있는 표. 열 이름으로 가리키는 수식이 파일 안에 있으므로,
+		// 표를 버리면 그 칸이 모두 #NAME? 이 된다.
+		if fileTables, tableErr := file.GetTables(sheetName); tableErr == nil {
+			for _, fileTable := range fileTables {
+				headerRow := fileTable.ShowHeaderRow == nil || *fileTable.ShowHeaderRow
+				imported.Tables = append(imported.Tables, workbook.ImportSheetTable{
+					Name: fileTable.Name, Range: fileTable.Range, HeaderRow: headerRow,
+				})
+			}
+		}
 		merges, mergeErr := file.GetMergeCells(sheetName)
 		if mergeErr != nil {
 			return ParsedWorkbook{}, fmt.Errorf("read merged cells from sheet %s: %w", sheetName, mergeErr)
@@ -756,6 +766,25 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 	sheetNames := make(map[string]string, len(wb.Sheets))
 	for index, sheet := range wb.Sheets {
 		sheetNames[sheet.ID] = sanitizeSheetName(sheet.Name, index)
+	}
+	// 이름을 가진 표도 함께 내보낸다. =SUM(매출표[금액]) 이 든 파일을 표
+	// 없이 내보내면 엑셀에서 그 칸이 모두 #NAME? 이 된다.
+	sheetTables, err := s.repository.ListSheetTables(ctx, wb.ID)
+	if err != nil {
+		return ExportedFile{}, err
+	}
+	for _, item := range sheetTables {
+		sheetName, known := sheetNames[item.SheetID]
+		if !known {
+			continue
+		}
+		headerRow := item.HeaderRow
+		// 엑셀의 표는 머리글이 있든 없든 이름으로 가리킬 수 있다. 하나가
+		// 받아들여지지 않는다고 내보내기 전체를 막지는 않는다.
+		_ = file.AddTable(sheetName, &excelize.Table{
+			Range: item.Range, Name: item.Name, StyleName: excelTableStyle(item.Theme),
+			ShowHeaderRow: &headerRow, ShowRowStripes: &headerRow,
+		})
 	}
 	// A named range is how a sheet explains itself: =SUM(단가) reads and a file
 	// that arrives without the name turns every formula using it into #NAME?.
