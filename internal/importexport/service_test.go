@@ -1283,7 +1283,9 @@ func TestNamedFunctionsExportAsExcelLambdaNames(t *testing.T) {
 	for _, item := range file.GetDefinedName() {
 		names[item.Name] = item.RefersTo
 	}
-	if actual := names["마진율"]; actual != "_xlfn.LAMBDA(매출,원가,(매출-원가)/매출)" {
+	// 엑셀은 매개변수 이름에도 접두사를 붙인다. 선언하는 자리와 본문에서
+	// 부르는 자리가 함께 바뀌어야 짝이 맞는다.
+	if actual := names["마진율"]; actual != "_xlfn.LAMBDA(_xlpm.매출,_xlpm.원가,(_xlpm.매출-_xlpm.원가)/_xlpm.매출)" {
 		t.Errorf("마진율=%q", actual)
 	}
 	// 매개변수가 없어도 LAMBDA 로 감싼다. kanpic 에서 기준연도() 로 부르는
@@ -1291,7 +1293,7 @@ func TestNamedFunctionsExportAsExcelLambdaNames(t *testing.T) {
 	if actual := names["기준연도"]; actual != "_xlfn.LAMBDA(2026)" {
 		t.Errorf("기준연도=%q", actual)
 	}
-	if actual := names["안전나눗셈"]; actual != "_xlfn.LAMBDA(a,b,_xlfn.IFS(b=0,0,TRUE,a/b))" {
+	if actual := names["안전나눗셈"]; actual != "_xlfn.LAMBDA(_xlpm.a,_xlpm.b,_xlfn.IFS(_xlpm.b=0,0,TRUE,_xlpm.a/_xlpm.b))" {
 		t.Errorf("안전나눗셈=%q", actual)
 	}
 	// 내보낸 파일을 도로 열면 이름 있는 수식이 그대로 돌아와야 한다. 나갔다
@@ -1316,6 +1318,20 @@ func TestNamedFunctionsExportAsExcelLambdaNames(t *testing.T) {
 	// 파일 안의 _xlfn 은 벗겨져야 한다. 붙은 채로 두면 부를 수 없는 이름이 된다.
 	if item := back["안전나눗셈"]; item.Body != "IFS(b=0,0,TRUE,a/b)" {
 		t.Errorf("안전나눗셈=%#v", item)
+	}
+	// 진짜 엑셀이 쓴 이름도 읽어야 한다. 엑셀은 매개변수에 _xlpm 을 붙여
+	// 적으므로, 떼지 않으면 사람이 지은 적 없는 _xlpm.매출 이 매개변수
+	// 이름으로 화면에 보인다. 선언만 떼고 본문을 두면 매출 을 받아
+	// _xlpm.매출 을 부르는 수식이 되어 #NAME? 이 된다.
+	fromExcel, isFunction := namedFunctionFromDefinedName("마진율", "_xlfn.LAMBDA(_xlpm.매출,_xlpm.원가,(_xlpm.매출-_xlpm.원가)/_xlpm.매출)")
+	if !isFunction || len(fromExcel.Parameters) != 2 || fromExcel.Parameters[0] != "매출" || fromExcel.Body != "(매출-원가)/매출" {
+		t.Errorf("엑셀이 쓴 이름=%#v (%v)", fromExcel, isFunction)
+	}
+	// 같은 이름의 시트를 가리키는 자리는 건드리면 안 된다. 매개변수와 이름이
+	// 같다고 바꾸면 가리키는 곳이 달라진다.
+	sheetRef, _ := lambdaDefinedName(workbook.NamedFunction{Name: "시트참조", Parameters: []string{"매출"}, Body: "매출+'매출'!A1"})
+	if sheetRef != "_xlfn.LAMBDA(_xlpm.매출,_xlpm.매출+'매출'!A1)" {
+		t.Errorf("시트 이름을 바꿨다: %s", sheetRef)
 	}
 	// 범위를 가리키는 이름이 이름 있는 수식으로 새어 들어가면 안 된다.
 	for _, item := range reopened.NamedRanges {

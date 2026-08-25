@@ -121,3 +121,37 @@ func TestForExcelAndFromExcelUndoEachOther(t *testing.T) {
 		t.Errorf("두 번 내보낸 결과=%q", twice)
 	}
 }
+
+// 이름을 이루는 글자에 한글이 빠져 있었다. 함수 이름은 모두 영문이라 여태
+// 드러나지 않았지만, LAMBDA 의 매개변수는 사람이 짓는 이름이라 이 나라에서는
+// 대개 한글이다. 매출 을 이름으로 못 읽으면 본문에서 그 자리를 찾지 못해
+// 선언만 바뀌고 부르는 자리는 그대로 남는다 — 짝이 어긋난 수식이 된다.
+func TestBareNameRewriteHandlesHangulAndSheetNames(t *testing.T) {
+	t.Parallel()
+	upper := func(word string) string {
+		if word == "매출" {
+			return "_xlpm.매출"
+		}
+		return word
+	}
+	for input, expected := range map[string]string{
+		"매출-원가":              "_xlpm.매출-원가",
+		"SUM(매출)":            "SUM(_xlpm.매출)",
+		`IF(매출>0,"매출","없음")`: `IF(_xlpm.매출>0,"매출","없음")`,
+		"매출+'매출'!A1":         "_xlpm.매출+'매출'!A1",
+		"매출(1)":              "매출(1)",
+		"매출액+매출":             "매출액+_xlpm.매출",
+	} {
+		if actual := RewriteBareNames(input, upper); actual != expected {
+			t.Errorf("%s -> %s, want %s", input, actual, expected)
+		}
+	}
+	// 함수 이름 쪽 훑기가 같은 자리를 쓰므로, 한글이 이름이 되어도 예전과
+	// 같아야 한다. 등록되지 않은 이름은 그대로 나간다.
+	if actual := ForExcel("=마진율(A1,B1)+IFS(A1>0,1,TRUE,0)"); actual != "=마진율(A1,B1)+_xlfn.IFS(A1>0,1,TRUE,0)" {
+		t.Errorf("ForExcel = %s", actual)
+	}
+	if actual := FromExcel("=마진율(A1,B1)+_xlfn.IFS(A1>0,1,TRUE,0)"); actual != "=마진율(A1,B1)+IFS(A1>0,1,TRUE,0)" {
+		t.Errorf("FromExcel = %s", actual)
+	}
+}

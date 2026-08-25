@@ -170,7 +170,23 @@ func lambdaDefinedName(item workbook.NamedFunction) (string, bool) {
 	// 부르게 되는데 kanpic 에서는 기준연도() 다. 부르는 법이 파일을 건너며
 	// 달라지면 수식을 손봐야 하고, 그러면 도로 가져올 때도 이름 있는 수식이
 	// 아니라 상수가 된다.
-	arguments := append(append([]string{}, item.Parameters...), body)
+	// 엑셀은 매개변수 이름에도 접두사를 붙인다. 파일 안에서 그 이름이 정의된
+	// 이름과 부딪히지 않게 하는 표시로, 함수 이름의 _xlfn 과 같은 까닭이다.
+	// 선언하는 자리와 본문에서 부르는 자리가 함께 바뀌어야 짝이 맞는다.
+	parameters := make([]string, 0, len(item.Parameters))
+	prefixed := make(map[string]string, len(item.Parameters))
+	for _, parameter := range item.Parameters {
+		renamed := formula.ForExcelParameter(parameter)
+		parameters = append(parameters, renamed)
+		prefixed[strings.ToUpper(parameter)] = renamed
+	}
+	body = formula.RewriteBareNames(body, func(word string) string {
+		if renamed, isParameter := prefixed[strings.ToUpper(word)]; isParameter {
+			return renamed
+		}
+		return word
+	})
+	arguments := append(parameters, body)
 	return "_xlfn.LAMBDA(" + strings.Join(arguments, ",") + ")", true
 }
 
@@ -201,9 +217,13 @@ func namedFunctionFromDefinedName(name, refersTo string) (workbook.ImportNamedFu
 				if !isNameToken(parameter) {
 					return workbook.ImportNamedFunction{}, false
 				}
-				parameters = append(parameters, parameter)
+				parameters = append(parameters, formula.FromExcelParameter(parameter))
 			}
-			return workbook.ImportNamedFunction{Name: name, Parameters: parameters, Body: strings.TrimPrefix(formula.FromExcel("="+body), "=")}, true
+			// 본문에서 부르는 자리도 함께 떼야 짝이 맞는다. 선언만 떼면
+			// 매출 을 받아 _xlpm.매출 을 부르는 수식이 되어 #NAME? 이 된다.
+			body = strings.TrimPrefix(formula.FromExcel("="+body), "=")
+			body = formula.RewriteBareNames(body, formula.FromExcelParameter)
+			return workbook.ImportNamedFunction{Name: name, Parameters: parameters, Body: body}, true
 		}
 	}
 	return workbook.ImportNamedFunction{}, false
