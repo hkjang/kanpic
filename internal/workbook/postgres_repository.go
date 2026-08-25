@@ -1634,6 +1634,17 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		if tableErr != nil {
 			return MutationResult{}, tableErr
 		}
+		// 표 바로 아래 줄에 값을 넣었으면 표가 그 줄을 삼킨다. 다시 셈하기
+		// 전에 해야 =SUM(매출표[금액]) 이 그 저장에서 곧바로 새 줄까지
+		// 더한다. 나중에 늘리면 한 박자 늦은 답이 한 번 저장된다.
+		grown := expandTablesForCells(sheetTables, mutation.SheetID, effective, mutation.ActorID, r.now())
+		for _, item := range grown {
+			if _, err := tx.Exec(ctx, `UPDATE sheet_tables SET cell_range=$2,revision=$3,updated_by=$4,updated_at=$5 WHERE id=$1`,
+				item.ID, item.Range, item.Revision, item.UpdatedBy, item.UpdatedAt); err != nil {
+				return MutationResult{}, err
+			}
+		}
+		sheetTables = mergeSheetTables(sheetTables, grown)
 		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, effective)})
 		if err != nil {
 			return MutationResult{}, err

@@ -174,3 +174,103 @@ func TestTableColumnsNumberDuplicateHeaders(t *testing.T) {
 		}
 	}
 }
+
+// 표 바로 아래 줄에 값을 넣으면 표가 그 줄을 삼켜야 한다.
+//
+// 표를 만든 뒤 자료를 한 줄 더 붙이는 것은 가장 흔한 일이다. 그때마다 사람이
+// 범위를 손으로 늘려야 한다면 =SUM(매출표[금액]) 은 새 줄을 빼고 셈한다 —
+// 답이 나오기는 하는데 틀린 답이다.
+func TestMemorySheetTableGrowsWhenARowIsAddedBelow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	table, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-formula", Cells: []CellInput{
+		{Row: 8, Column: 1, Formula: "=SUM(매출표[금액])"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	// 바로 아랫줄에 넣으면 그 저장에서 곧바로 합계가 늘어야 한다. 한 박자
+	// 늦게 맞으면 그 사이에 틀린 답이 한 번 저장된다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-grow", Cells: []CellInput{
+		{Row: 4, Column: 1, Value: value("대구")}, {Row: 4, Column: 2, Value: value(300)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	grown, err := repository.GetSheetTable(ctx, table.ID)
+	if err != nil || grown.Range != "A1:B4" {
+		t.Fatalf("늘어난 표=%#v, %v", grown, err)
+	}
+	if actual := tableCellValue(t, repository, sheetID, 8, 1); actual != "600" {
+		t.Fatalf("늘어난 뒤 합계=%s", actual)
+	}
+	// 한 줄 건너뛴 자리는 삼키지 않는다. 표 아래 따로 적은 메모까지 표가
+	// 되면 열 이름이 제멋대로 늘어난다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-far", Cells: []CellInput{
+		{Row: 6, Column: 2, Value: value(999)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	far, _ := repository.GetSheetTable(ctx, table.ID)
+	if far.Range != "A1:B4" {
+		t.Fatalf("건너뛴 자리를 삼켰다: %s", far.Range)
+	}
+	// 지우는 것은 늘리는 까닭이 되지 않는다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-clear", Cells: []CellInput{
+		{Row: 5, Column: 1}, {Row: 5, Column: 2},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, _ := repository.GetSheetTable(ctx, table.ID)
+	if cleared.Range != "A1:B4" {
+		t.Fatalf("빈 줄을 삼켰다: %s", cleared.Range)
+	}
+}
+
+// 늘리다 남의 표를 밟으면 늘리지 않는다. 걸친 표는 한쪽에서 행을 지우면
+// 다른 쪽이 조용히 어그러진다.
+func TestSheetTableDoesNotGrowIntoAnotherTable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-second", Cells: []CellInput{
+		{Row: 4, Column: 1, Value: value("품목")}, {Row: 4, Column: 2, Value: value("수량")},
+		{Row: 5, Column: 1, Value: value("연필")}, {Row: 5, Column: 2, Value: value(10)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateSheetTable(ctx, book.ID, "alice", CreateSheetTableInput{
+		IdempotencyKey: "t-2", SheetID: sheetID, Name: "재고표", Range: "A4:B5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 매출표의 아랫줄은 이미 재고표의 머리글이다. 삼키면 두 표가 걸친다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, CellMutation{SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version, IdempotencyKey: "t-touch", Cells: []CellInput{
+		{Row: 4, Column: 2, Value: value("개수")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, _ := repository.GetSheetTable(ctx, first.ID)
+	if unchanged.Range != "A1:B3" {
+		t.Fatalf("남의 표를 밟았다: %s", unchanged.Range)
+	}
+}

@@ -4451,6 +4451,35 @@ func TestPostgresSheetTablesAnswerFormulasAndFollowStructure(t *testing.T) {
 	if err != nil || len(restoredCells) != 1 || string(restoredCells[0].Value) != "300" {
 		t.Fatalf("돌아온 합계=%#v, %v", restoredCells, err)
 	}
+	// 표 바로 아래 줄에 값을 넣으면 표가 그 줄을 삼킨다. 그때마다 사람이
+	// 범위를 손으로 늘려야 한다면 합계는 새 줄을 빼고 셈한다 — 답이 나오기는
+	// 하는데 틀린 답이다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: current.Version, IdempotencyKey: "table-grow",
+		Cells: []workbook.CellInput{{Row: 5, Column: 1, Value: value("대구")}, {Row: 5, Column: 2, Value: value(300)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grown, err := repository.GetSheetTable(ctx, table.ID)
+	if err != nil || grown.Range != "A2:B5" {
+		t.Fatalf("늘어난 표=%#v, %v", grown, err)
+	}
+	cells, err = repository.ReadRange(ctx, sheet.ID, movedCell)
+	if err != nil || len(cells) != 1 || string(cells[0].Value) != "600" {
+		t.Fatalf("늘어난 뒤 합계=%#v, %v", cells, err)
+	}
+	// 한 줄 건너뛴 자리는 삼키지 않는다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: current.Version, IdempotencyKey: "table-far",
+		Cells: []workbook.CellInput{{Row: 8, Column: 2, Value: value(999)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if far, err := repository.GetSheetTable(ctx, table.ID); err != nil || far.Range != "A2:B5" {
+		t.Fatalf("건너뛴 자리를 삼켰다: %#v, %v", far, err)
+	}
 	// 표를 지우면 그 이름을 쓰던 칸이 #NAME? 이 된다. 조용히 옛 값이 남으면
 	// 사람은 없어진 표를 아직 있는 줄 안다.
 	if err := repository.DeleteSheetTable(ctx, table.ID, owner, nil); err != nil {

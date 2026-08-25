@@ -250,3 +250,85 @@ func buildImportedSheetTables(workbookID, actor string, sheets []ImportSheet, sh
 	}
 	return items
 }
+
+// expandTablesForCells 는 표 바로 아래 줄에 값을 넣으면 표가 그 줄을 삼키게
+// 한다. 구글 시트와 엑셀이 그렇게 하고, 그래야 표가 살아 있는 것이 된다.
+//
+// 표를 만든 뒤 자료를 한 줄 더 붙이는 것은 가장 흔한 일이다. 그때마다 사람이
+// 표 범위를 손으로 늘려야 한다면, =SUM(매출표[금액]) 은 새로 넣은 줄을 빼고
+// 셈한다 — 답이 나오기는 하는데 틀린 답이다.
+//
+// 옆으로는 늘리지 않는다. 열을 하나 더 쓰는 것은 표의 생김새를 바꾸는 일이라
+// 사람이 뜻을 가지고 하는 편이 낫고, 옆 칸에 적은 메모까지 표로 삼키면
+// 열 이름이 제멋대로 늘어난다.
+func expandTablesForCells(tables []SheetTable, sheetID string, cells []CellInput, actor string, now time.Time) []SheetTable {
+	if len(tables) == 0 || len(cells) == 0 {
+		return nil
+	}
+	changed := make([]SheetTable, 0)
+	for _, item := range tables {
+		if item.SheetID != sheetID {
+			continue
+		}
+		selected, err := cellrange.Parse(item.Range)
+		if err != nil {
+			continue
+		}
+		lastRow := selected.End.Row
+		for {
+			grown := false
+			for _, cell := range cells {
+				if cell.SheetID != "" && cell.SheetID != sheetID {
+					continue
+				}
+				if cell.Row != lastRow+1 || cell.Column < selected.Start.Column || cell.Column > selected.End.Column {
+					continue
+				}
+				// 지우는 것은 늘리는 까닭이 되지 않는다. 빈 칸을 삼키면
+				// 아무것도 적지 않은 줄까지 표가 된다.
+				if len(cell.Value) == 0 && strings.TrimSpace(cell.Formula) == "" {
+					continue
+				}
+				lastRow++
+				grown = true
+				break
+			}
+			if !grown {
+				break
+			}
+		}
+		if lastRow == selected.End.Row || lastRow > maxSpreadsheetRows {
+			continue
+		}
+		widened := item
+		widened.Range = cellrange.Address(selected.Start.Row, selected.Start.Column) + ":" + cellrange.Address(lastRow, selected.End.Column)
+		// 늘리다 남의 표를 밟으면 늘리지 않는다. 걸친 표는 한쪽에서 행을
+		// 지우면 다른 쪽이 조용히 어그러진다.
+		if err := checkTableConflicts(tables, widened, item.ID); err != nil {
+			continue
+		}
+		widened.Revision, widened.UpdatedBy, widened.UpdatedAt = item.Revision+1, actor, now
+		changed = append(changed, widened)
+	}
+	return changed
+}
+
+// mergeSheetTables 는 늘어난 표를 원래 목록 위에 덮어쓴다.
+func mergeSheetTables(base, changed []SheetTable) []SheetTable {
+	if len(changed) == 0 {
+		return base
+	}
+	byID := make(map[string]SheetTable, len(changed))
+	for _, item := range changed {
+		byID[item.ID] = item
+	}
+	merged := make([]SheetTable, 0, len(base))
+	for _, item := range base {
+		if replacement, found := byID[item.ID]; found {
+			merged = append(merged, replacement)
+			continue
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}

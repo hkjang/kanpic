@@ -1084,6 +1084,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	var recalculated []CellCoordinate
 	var formulaErrors []CellFormulaError
 	var validationWarnings []ValidationViolation
+	var grownTables []SheetTable
 	// Protection is checked before anything is applied: a paste that touches a
 	// protected block is refused whole rather than applied in part.
 	if blocked, _ := CheckProtectedRanges(r.protectionsForSheetLocked(mutation.SheetID), mutation.ActorID, state.workbook.OwnerID, effective); len(blocked) > 0 {
@@ -1092,7 +1093,11 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	if formatMutation {
 		expanded = append([]CellInput(nil), effective...)
 	} else {
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(r.sheetTablesForWorkbookLocked(state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, state.cells, effective)})
+		// 표 바로 아래 줄에 값을 넣었으면 표가 그 줄을 삼킨다. 다시 셈하기
+		// 전에 해야 =SUM(매출표[금액]) 이 그 저장에서 곧바로 새 줄까지
+		// 더한다. 나중에 늘리면 한 박자 늦은 답이 한 번 저장된다.
+		grownTables = expandTablesForCells(r.sheetTablesForWorkbookLocked(state.workbook.ID), mutation.SheetID, effective, mutation.ActorID, r.now())
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(state.sheets, state.cells, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(mergeSheetTables(r.sheetTablesForWorkbookLocked(state.workbook.ID), grownTables)), Imports: r.importsForLocked(state.workbook.ID, state.cells, effective)})
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -1120,6 +1125,10 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 			state.cells[sheetID][coord] = cell
 		}
 		after[scoped] = cloneCell(cell)
+	}
+	// 다시 셈하는 데까지 탈이 없었으므로 늘어난 표를 담는다.
+	for _, item := range grownTables {
+		r.sheetTables[item.ID] = item
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
