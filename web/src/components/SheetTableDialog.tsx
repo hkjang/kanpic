@@ -6,7 +6,10 @@ import type { Sheet,SheetTable } from '../types'
 import './SheetTableDialog.css'
 import { useDialog } from '../lib/useDialog'
 
-type Draft={name:string;sheetId:string;range:string;headerRow:boolean;totalsRow:boolean}
+type Draft={name:string;sheetId:string;range:string;headerRow:boolean;totalsRow:boolean;theme:string}
+// 고를 수 있는 색. 내보낼 때 엑셀의 표 서식 이름으로 바뀌므로, 서버가 아는
+// 이름만 늘어놓는다. 모르는 이름을 보내면 기본값으로 나가 화면과 달라진다.
+const TABLE_THEMES:Array<[string,string]>=[['blue','파랑'],['green','초록'],['orange','주황'],['red','빨강']]
 const rangeText=(range:MergeRange)=>`${address(range.startRow,range.startColumn)}:${address(range.endRow,range.endColumn)}`
 const cellPosition=(value:string):[number,number]|undefined=>{const match=/^\$?([A-Za-z]+)\$?([1-9]\d*)$/.exec(value.trim());if(!match)return;let column=0;for(const letter of match[1].toUpperCase())column=column*26+letter.charCodeAt(0)-64;const row=Number(match[2]);if(column>16384||row>1048576)return;return[row,column]}
 const validTarget=(value:string)=>{const parts=value.split(':');if(parts.length!==2)return false;const start=cellPosition(parts[0]),end=cellPosition(parts[1]);return !!start&&!!end&&start[0]<=end[0]&&start[1]<=end[1]}
@@ -18,17 +21,17 @@ export function SheetTableDialog({selection,activeSheetId,sheets,tables,onClose,
   selection:MergeRange;activeSheetId:string;sheets:Sheet[];tables:SheetTable[];onClose:()=>void
   onCreate:(input:Record<string,unknown>)=>Promise<SheetTable>;onUpdate:(id:string,input:Record<string,unknown>)=>Promise<SheetTable>;onDelete:(item:SheetTable)=>Promise<void>;onRefresh?:()=>Promise<void>;onNavigate:(item:Pick<SheetTable,'sheet_id'|'range'>)=>void
 }){
-  const initial=():Draft=>({name:'',sheetId:activeSheetId,range:rangeText(selection),headerRow:true,totalsRow:false})
+  const initial=():Draft=>({name:'',sheetId:activeSheetId,range:rangeText(selection),headerRow:true,totalsRow:false,theme:'blue'})
   const [selectedId,setSelectedId]=useState<string>(),[draft,setDraft]=useState<Draft>(initial),[saving,setSaving]=useState(false)
   const selected=tables.find(item=>item.id===selectedId)
-  const choose=(item?:SheetTable)=>{setSelectedId(item?.id);setDraft(item?{name:item.name,sheetId:item.sheet_id,range:item.range,headerRow:item.header_row,totalsRow:item.totals_row}:initial())}
+  const choose=(item?:SheetTable)=>{setSelectedId(item?.id);setDraft(item?{name:item.name,sheetId:item.sheet_id,range:item.range,headerRow:item.header_row,totalsRow:item.totals_row,theme:item.theme||'blue'}:initial())}
   const save=async()=>{
     if(!validName(draft.name))return alert('표 이름은 문자 또는 밑줄로 시작하고 문자, 숫자, 밑줄, 마침표만 사용할 수 있습니다.')
     if(!validTarget(draft.range))return alert('A1:B10 처럼 두 칸을 이은 범위를 입력하세요.')
     if(!hasDataRows(draft.range,draft.headerRow,draft.totalsRow))return alert('머리글과 합계 줄을 뺀 자료 줄이 한 줄 이상 있어야 합니다.')
     setSaving(true)
     try{
-      const input={name:draft.name.trim(),sheet_id:draft.sheetId,range:draft.range.toUpperCase(),header_row:draft.headerRow,totals_row:draft.totalsRow}
+      const input={name:draft.name.trim(),sheet_id:draft.sheetId,range:draft.range.toUpperCase(),header_row:draft.headerRow,totals_row:draft.totalsRow,theme:draft.theme}
       const saved=selected?await onUpdate(selected.id,{...input,expected_revision:selected.revision}):await onCreate(input)
       choose(saved)
     }catch(error){
@@ -48,7 +51,7 @@ export function SheetTableDialog({selection,activeSheetId,sheets,tables,onClose,
         <label>표 이름<input aria-label="표 이름" value={draft.name} maxLength={255} onChange={event=>setDraft(current=>({...current,name:event.target.value}))} placeholder="매출표"/></label>
         <div className="sheet-table-target">
           <label>시트<select aria-label="표 시트" value={draft.sheetId} onChange={event=>setDraft(current=>({...current,sheetId:event.target.value}))}>{sheets.map(sheet=><option key={sheet.id} value={sheet.id}>{sheet.name}</option>)}</select></label>
-          <label>범위<input aria-label="표 범위" value={draft.range} onChange={event=>setDraft(current=>({...current,range:event.target.value}))} placeholder="A1:B20"/></label>
+          <label>색<select aria-label="표 색" value={draft.theme} onChange={event=>setDraft(current=>({...current,theme:event.target.value}))}>{TABLE_THEMES.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>범위<input aria-label="표 범위" value={draft.range} onChange={event=>setDraft(current=>({...current,range:event.target.value}))} placeholder="A1:B20"/></label>
         </div>
         <label className="sheet-table-header"><input type="checkbox" aria-label="첫 줄이 머리글" checked={draft.headerRow} onChange={event=>setDraft(current=>({...current,headerRow:event.target.checked}))}/> 첫 줄이 머리글 (그 글자가 열 이름이 됩니다)</label>
         <label className="sheet-table-header"><input type="checkbox" aria-label="마지막 줄이 합계" checked={draft.totalsRow} onChange={event=>setDraft(current=>({...current,totalsRow:event.target.checked}))}/> 마지막 줄이 합계 (열을 가리킬 때 그 줄을 뺍니다)</label>

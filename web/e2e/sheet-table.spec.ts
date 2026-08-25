@@ -43,6 +43,7 @@ test('a named table is created from the menu and answers formulas by column name
   const dialog = page.getByRole('dialog', { name: '표' })
   await dialog.getByLabel('표 이름').fill('매출표')
   await dialog.getByLabel('표 범위').fill('A1:B3')
+  await dialog.getByLabel('표 색').selectOption('green')
   await dialog.getByRole('button', { name: '저장' }).click()
   // 저장하면 왼쪽 목록에 나타난다.
   await expect(dialog.locator('aside').getByRole('button', { name: /매출표/ })).toBeVisible()
@@ -75,6 +76,10 @@ test('a named table is created from the menu and answers formulas by column name
   await expect.poll(()=>values('B5:B5'),{timeout:15_000}).toEqual([300])
   // 이름 상자에 표 이름을 적으면 그 표로 간다. 이름 범위는 되는데 표는
   // 안 되면 사람은 왜 되고 안 되는지 알 수 없다.
+  // 고른 색이 저장되어야 한다. 화면에 그려지는 색이자, 내보낼 때 엑셀의 표
+  // 서식이 되는 색이다.
+  const saved = await page.request.get(`/api/v1/workbooks/${workbookId}/tables`).then(r=>r.json())
+  expect(saved.items[0].theme).toBe('green')
   const nameBox = page.locator('input.name-box')
   await nameBox.fill('매출표')
   await nameBox.press('Enter')

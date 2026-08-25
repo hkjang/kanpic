@@ -81,6 +81,10 @@ function formulaPreview(value:unknown){if(!Array.isArray(value))return value;con
 // 표를 그리는 색. 선택 색이나 협업자 색과 겹치지 않아야 무엇이 무엇인지
 // 알아볼 수 있다.
 const TABLE_COLOR='#4c6ef5'
+// 표마다 고른 색으로 그린다. 내보낼 때 엑셀의 표 서식으로 바뀌는 그 색이다 —
+// 화면과 파일이 다른 색이면 어느 쪽이 맞는지 사람이 알 수 없다.
+const TABLE_COLORS:Record<string,string>={blue:TABLE_COLOR,green:'#2f9e44',orange:'#e8590c',red:'#e03131'}
+const tableColor=(theme?:string)=>TABLE_COLORS[(theme??'').toLowerCase()]??TABLE_COLOR
 
 const DEFAULT_LAYOUT:SheetLayout={revision:1,frozen_rows:0,frozen_columns:0}
 function indexesIn(axis:DimensionAxis,start:number,end:number){const result:number[]=[];if(end<start)return result;let index=axis.firstVisibleAtOrAfter(start);while(index<=end&&result.length<10000){result.push(index);const next=axis.nextVisible(index,1);if(next<=index)break;index=next}return result}
@@ -346,22 +350,23 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(table.sheet_id!==sheetId)return
       const bounds=parseTableRange(table.range);if(!bounds)return
       const box=geometry(bounds.startRow,bounds.startColumn,bounds.endRow,bounds.endColumn);if(!box)return
+      const colour=tableColor(table.theme)
       context.save()
       if(table.header_row){
         const header=geometry(bounds.startRow,bounds.startColumn,bounds.startRow,bounds.endColumn)
-        if(header){context.globalAlpha=.12;context.fillStyle=TABLE_COLOR;context.fillRect(header.x,header.y,header.width,header.height);context.globalAlpha=1}
+        if(header){context.globalAlpha=.12;context.fillStyle=colour;context.fillRect(header.x,header.y,header.width,header.height);context.globalAlpha=1}
       }
       // 합계 줄도 옅게 칠하고 그 위에 줄을 긋는다. 켰는데 눈에 띄는 변화가
       // 없으면 사람은 켜지지 않은 줄 안다.
       if(table.totals_row){
         const totals=geometry(bounds.endRow,bounds.startColumn,bounds.endRow,bounds.endColumn)
         if(totals){
-          context.globalAlpha=.12;context.fillStyle=TABLE_COLOR;context.fillRect(totals.x,totals.y,totals.width,totals.height);context.globalAlpha=1
-          context.strokeStyle=TABLE_COLOR;context.lineWidth=1
+          context.globalAlpha=.12;context.fillStyle=colour;context.fillRect(totals.x,totals.y,totals.width,totals.height);context.globalAlpha=1
+          context.strokeStyle=colour;context.lineWidth=1
           context.beginPath();context.moveTo(totals.x,Math.round(totals.y)+.5);context.lineTo(totals.x+totals.width,Math.round(totals.y)+.5);context.stroke()
         }
       }
-      context.strokeStyle=TABLE_COLOR;context.lineWidth=2
+      context.strokeStyle=colour;context.lineWidth=2
       context.strokeRect(Math.round(box.x)+1,Math.round(box.y)+1,Math.round(box.width)-2,Math.round(box.height)-2)
       // 이름은 표 위쪽 바깥에 붙인다. 자리가 없으면 그리지 않는다 — 첫 줄을
       // 가리면 머리글을 못 읽는다.
@@ -369,7 +374,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
       if(box.y-labelHeight>=headerHeight){
         context.font=`${Math.round(11*zoom)}px system-ui`
         const width=context.measureText(table.name).width+10*zoom
-        context.fillStyle=TABLE_COLOR;context.fillRect(box.x,box.y-labelHeight,width,labelHeight)
+        context.fillStyle=colour;context.fillRect(box.x,box.y-labelHeight,width,labelHeight)
         context.fillStyle='#ffffff';context.textAlign='left';context.textBaseline='middle'
         context.fillText(table.name,box.x+5*zoom,box.y-labelHeight/2)
       }
