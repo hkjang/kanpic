@@ -450,3 +450,64 @@ func TestDuplicateWorkbookCarriesNamedFunctionsAndTables(t *testing.T) {
 		t.Fatalf("사본에서 자료를 고친 뒤 합계=%s", actual)
 	}
 }
+
+// 보호 범위와 필터 보기도 복제와 되돌리기를 따라가야 한다.
+//
+// 되돌렸는데 보호가 사라지는 것이 가장 나쁘다. 막으라고 걸어 둔 규칙이
+// 조용히 없어지므로, 사람은 지켜지고 있다고 믿는 칸을 아무나 고치게 된다.
+// 잃는 쪽으로 기우는 실수는 다른 것들보다 오래 들키지 않는다.
+func TestDuplicateAndRestoreCarryProtectionsAndFilterViews(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	protected, err := repository.CreateProtectedRange(ctx, sheetID, "alice", CreateProtectedRangeInput{
+		IdempotencyKey: "p-1", SheetID: sheetID, Range: "A1:B1", Description: "머리글 보호", Editors: []string{"alice"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := repository.CreateFilterView(ctx, sheetID, "alice", CreateFilterViewInput{
+		IdempotencyKey: "fv-1", Name: "보기", Range: "A1:B3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := repository.DuplicateWorkbook(ctx, book.ID, DuplicateWorkbookInput{Title: "사본", OwnerID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copiedProtections, err := repository.ListProtectedRanges(ctx, copied.Sheets[0].ID)
+	if err != nil || len(copiedProtections) != 1 || copiedProtections[0].Description != "머리글 보호" {
+		t.Fatalf("사본의 보호 범위=%#v, %v", copiedProtections, err)
+	}
+	// 사본의 보호는 사본의 시트에 걸려야 한다. 원본 시트를 가리키면 사본을
+	// 고칠 때 원본이 함께 잠긴다.
+	if copiedProtections[0].SheetID != copied.Sheets[0].ID {
+		t.Errorf("사본의 보호가 원본 시트를 가리킨다: %s", copiedProtections[0].SheetID)
+	}
+	copiedViews, err := repository.ListFilterViews(ctx, copied.Sheets[0].ID, "alice")
+	if err != nil || len(copiedViews) != 1 || copiedViews[0].Name != "보기" {
+		t.Fatalf("사본의 필터 보기=%#v, %v", copiedViews, err)
+	}
+	version, err := repository.CreateVersion(ctx, book.ID, "지키던 상태", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteProtectedRange(ctx, protected.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteFilterView(ctx, view.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	restoredProtections, err := repository.ListProtectedRanges(ctx, sheetID)
+	if err != nil || len(restoredProtections) != 1 || restoredProtections[0].Range != "A1:B1" {
+		t.Fatalf("되돌린 보호 범위=%#v, %v", restoredProtections, err)
+	}
+	restoredViews, err := repository.ListFilterViews(ctx, sheetID, "alice")
+	if err != nil || len(restoredViews) != 1 {
+		t.Fatalf("되돌린 필터 보기=%#v, %v", restoredViews, err)
+	}
+}

@@ -134,3 +134,17 @@ func (r *MemoryRepository) countProtectionsLocked(sheetID string) int {
 	}
 	return count
 }
+
+// cloneProtectionsForSheets 는 버전을 찍을 때 그 시트들의 보호 범위를 담아
+// 둔다. 담아 두지 않으면 되돌렸을 때 보호가 사라진다 — 막으라고 걸어 둔
+// 규칙이 조용히 없어지는 것이라, 사람은 지켜지고 있다고 믿는 칸을 아무나
+// 고치게 된다.
+func cloneProtectionsForSheets(source map[string]ProtectedRange, sheets map[string]Sheet) map[string]ProtectedRange {
+	result := make(map[string]ProtectedRange)
+	for id, rule := range source {
+		if _, found := sheets[rule.SheetID]; found {
+			result[id] = cloneProtectedRange(rule)
+		}
+	}
+	return result
+}

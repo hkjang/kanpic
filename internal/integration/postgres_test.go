@@ -4578,3 +4578,75 @@ func TestPostgresDuplicateAndRestoreCarryNamedFunctionsAndTables(t *testing.T) {
 		t.Fatalf("되돌린 이름 있는 수식=%#v, %v", restoredFunctions, err)
 	}
 }
+
+// 보호 범위와 필터 보기도 복제와 되돌리기를 따라가야 한다.
+//
+// 되돌렸는데 보호가 사라지는 것이 가장 나쁘다. 막으라고 걸어 둔 규칙이 조용히
+// 없어지므로, 사람은 지켜지고 있다고 믿는 칸을 아무나 고치게 된다.
+func TestPostgresDuplicateAndRestoreCarryProtectionsAndFilterViews(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("guard-owner-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "지킴", WorkspaceID: "integration", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	protected, err := repository.CreateProtectedRange(ctx, sheet.ID, owner, workbook.CreateProtectedRangeInput{
+		IdempotencyKey: "guard-protect", SheetID: sheet.ID, Range: "A1:B1", Description: "머리글 보호", Editors: []string{owner},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := repository.CreateFilterView(ctx, sheet.ID, owner, workbook.CreateFilterViewInput{
+		IdempotencyKey: "guard-filter", Name: "보기", Range: "A1:B5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{Title: "사본", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copied.ID, "integration-cleanup")
+	copiedProtections, err := repository.ListProtectedRanges(ctx, copied.Sheets[0].ID)
+	if err != nil || len(copiedProtections) != 1 || copiedProtections[0].Description != "머리글 보호" {
+		t.Fatalf("사본의 보호 범위=%#v, %v", copiedProtections, err)
+	}
+	copiedViews, err := repository.ListFilterViews(ctx, copied.Sheets[0].ID, owner)
+	if err != nil || len(copiedViews) != 1 || copiedViews[0].Name != "보기" {
+		t.Fatalf("사본의 필터 보기=%#v, %v", copiedViews, err)
+	}
+	version, err := repository.CreateVersion(ctx, book.ID, "지키던 상태", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteProtectedRange(ctx, protected.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteFilterView(ctx, view.ID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, owner); err != nil {
+		t.Fatal(err)
+	}
+	restoredProtections, err := repository.ListProtectedRanges(ctx, sheet.ID)
+	if err != nil || len(restoredProtections) != 1 || restoredProtections[0].Range != "A1:B1" {
+		t.Fatalf("되돌린 보호 범위=%#v, %v", restoredProtections, err)
+	}
+	restoredViews, err := repository.ListFilterViews(ctx, sheet.ID, owner)
+	if err != nil || len(restoredViews) != 1 {
+		t.Fatalf("되돌린 필터 보기=%#v, %v", restoredViews, err)
+	}
+}

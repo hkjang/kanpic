@@ -206,3 +206,18 @@ func listProtectedRangesTx(ctx context.Context, tx pgx.Tx, sheetID string) ([]Pr
 	}
 	return result, rows.Err()
 }
+
+// insertProtectedRangeForCopy 는 이미 다듬어진 보호 범위를 그대로 담는다.
+// 복제와 되돌리기가 쓴다 — 만들 때와 달리 새로 검사할 것이 없고, 오히려
+// 그때의 모습 그대로여야 한다.
+func insertProtectedRangeForCopy(ctx context.Context, tx pgx.Tx, rule ProtectedRange) error {
+	editors := rule.Editors
+	if editors == nil {
+		editors = []string{}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO protected_ranges(id,sheet_id,idempotency_key,cell_range,scope,exceptions,description,editors,warning_only,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		rule.ID, rule.SheetID, rule.CreateKey, rule.Range, rule.Scope, protectionExceptionsJSON(rule.Exceptions),
+		rule.Description, editors, rule.WarningOnly, rule.Revision,
+		rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt)
+	return mapPostgresError(err)
+}

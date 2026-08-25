@@ -548,6 +548,34 @@ func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input
 		copyChart.CreatedAt, copyChart.UpdatedAt = now, now
 		r.charts[copyChart.ID] = copyChart
 	}
+	// 보호 범위와 필터 보기도 함께 옮긴다. 사본은 원본과 같아 보여야 한다.
+	// 보호가 빠지면 원본에서 막아 둔 칸이 사본에서는 아무나 고칠 수 있게
+	// 되는데, 사본을 만든 사람은 그 사실을 알 길이 없다.
+	for _, sourceRule := range r.protections {
+		if _, mine := source.sheets[sourceRule.SheetID]; !mine {
+			continue
+		}
+		copyRule := cloneProtectedRange(sourceRule)
+		copyRule.ID = identity.New()
+		copyRule.SheetID = sheetIDs[sourceRule.SheetID]
+		copyRule.CreateKey = "copy:" + copyRule.ID
+		copyRule.Revision = 1
+		copyRule.CreatedBy, copyRule.UpdatedBy = ownerID, ownerID
+		copyRule.CreatedAt, copyRule.UpdatedAt = now, now
+		r.protections[copyRule.ID] = copyRule
+	}
+	for _, sourceView := range r.filters {
+		if _, mine := source.sheets[sourceView.SheetID]; !mine {
+			continue
+		}
+		copyView := cloneFilterView(sourceView)
+		copyView.ID = identity.New()
+		copyView.SheetID = sheetIDs[sourceView.SheetID]
+		copyView.CreateKey = "copy:" + copyView.ID
+		copyView.ActorID = ownerID
+		copyView.CreatedAt, copyView.UpdatedAt = now, now
+		r.filters[copyView.ID] = copyView
+	}
 	// 이름 있는 수식과 표도 함께 옮긴다. 두고 가면 사본의 =마진율(A1,B1) 과
 	// =SUM(매출표[금액]) 이 가리킬 곳을 잃는다. 그런데 칸에는 옛 값이 그대로
 	// 남아 있어, 사람은 사본이 멀쩡한 줄 알다가 무언가 고치는 순간 #NAME? 을
@@ -887,7 +915,7 @@ func (r *MemoryRepository) DeleteSheet(_ context.Context, sheetID, actorID strin
 	// Deleting a sheet throws away every cell in it and there is no cell-level
 	// undo for it, so the snapshot taken here is the only way back.
 	backup := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: state.workbook.Version, Name: sheetDeletionBackupName(deleted.Name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: backup, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), protections: cloneProtectionsForSheets(r.protections, cloneSheets(state.sheets)), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	nextSheets, nextCells := cloneSheets(state.sheets), cloneAllCells(state.cells)
 	delete(nextSheets, sheetID)
 	delete(nextCells, sheetID)
@@ -1381,7 +1409,7 @@ func (r *MemoryRepository) CreateVersion(_ context.Context, workbookID, name, ac
 		return Version{}, ErrNotFound
 	}
 	version := Version{ID: identity.New(), WorkbookID: workbookID, WorkbookVersion: state.workbook.Version, Name: strings.TrimSpace(name), ActorID: actorID, CreatedAt: r.now()}
-	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+	state.versions = append(state.versions, snapshot{version: version, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), protections: cloneProtectionsForSheets(r.protections, cloneSheets(state.sheets)), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 	return version, nil
 }
 
@@ -1409,7 +1437,7 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			}
 			base := state.workbook.Version
 			backupVersion := Version{ID: identity.New(), WorkbookID: state.workbook.ID, WorkbookVersion: base, Name: "복원 전 자동 백업", ActorID: actorID, CreatedAt: r.now()}
-			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
+			state.versions = append(state.versions, snapshot{version: backupVersion, workbook: state.workbook, sheets: cloneSheets(state.sheets), cells: cloneAllCells(state.cells), protections: cloneProtectionsForSheets(r.protections, cloneSheets(state.sheets)), filters: cloneFiltersForSheets(r.filters, state.sheets), validations: cloneValidationsForSheets(r.validations, state.sheets), conditionalFormats: cloneConditionalFormatsForSheets(r.conditionalFormats, state.sheets), namedRanges: cloneNamedRangesForWorkbook(r.namedRanges, state.workbook.ID), namedFunctions: cloneNamedFunctionsForWorkbook(r.namedFunctions, state.workbook.ID), sheetTables: cloneSheetTablesForWorkbook(r.sheetTables, state.workbook.ID), charts: cloneChartsForWorkbook(r.charts, state.workbook.ID), pivots: clonePivotsForWorkbook(r.pivots, state.workbook.ID)})
 			for sheetID := range state.sheets {
 				delete(r.sheetToWB, sheetID)
 			}
@@ -1424,6 +1452,17 @@ func (r *MemoryRepository) RestoreVersion(_ context.Context, versionID, actorID 
 			state.cells = cloneAllCells(snap.cells)
 			for filterID, view := range snap.filters {
 				r.filters[filterID] = cloneFilterView(view)
+			}
+			// 보호 범위도 되살린다. 되돌렸는데 보호가 사라지면, 사람은
+			// 지켜지고 있다고 믿는 칸을 아무나 고치게 된다. 잃는 쪽으로
+			// 기우는 실수는 다른 것들보다 오래 들키지 않는다.
+			for protectionID, rule := range r.protections {
+				if _, mine := state.sheets[rule.SheetID]; mine {
+					delete(r.protections, protectionID)
+				}
+			}
+			for protectionID, rule := range snap.protections {
+				r.protections[protectionID] = cloneProtectedRange(rule)
 			}
 			for validationID, rule := range r.validations {
 				if rule.WorkbookID == state.workbook.ID {

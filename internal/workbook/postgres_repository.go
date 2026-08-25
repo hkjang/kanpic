@@ -88,6 +88,9 @@ type snapshotDocument struct {
 	// 있었는지 알 길이 없는데 지우는 것은 되돌리는 것이 아니라 잃는 것이다.
 	NamedFunctions []NamedFunction `json:"named_functions,omitempty"`
 	SheetTables    []SheetTable    `json:"sheet_tables,omitempty"`
+	// 보호 범위도 스키마 9 부터 담는다. 되돌렸는데 보호가 사라지면 사람은
+	// 지켜지고 있다고 믿는 칸을 아무나 고치게 된다.
+	Protections []ProtectedRange `json:"protections,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -720,6 +723,36 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 		sourceRange.CreatedAt, sourceRange.UpdatedAt = now, now
 		if err := insertNamedRangeTx(ctx, tx, sourceRange); err != nil {
 			return Workbook{}, err
+		}
+	}
+	// 보호 범위와 필터 보기도 함께 옮긴다. 사본은 원본과 같아 보여야 한다.
+	// 보호가 빠지면 원본에서 막아 둔 칸이 사본에서는 아무나 고칠 수 있게
+	// 되는데, 사본을 만든 사람은 그 사실을 알 길이 없다.
+	for sourceSheetID, destinationSheetID := range sheetIDs {
+		protections, err := listProtectedRangesTx(ctx, tx, sourceSheetID)
+		if err != nil {
+			return Workbook{}, err
+		}
+		for _, rule := range protections {
+			rule.ID, rule.SheetID = identity.New(), destinationSheetID
+			rule.CreateKey, rule.Revision = "copy:"+rule.ID, 1
+			rule.CreatedBy, rule.UpdatedBy = ownerID, ownerID
+			rule.CreatedAt, rule.UpdatedAt = now, now
+			if err := insertProtectedRangeForCopy(ctx, tx, rule); err != nil {
+				return Workbook{}, err
+			}
+		}
+		views, err := listAllFilterViewsForStructure(ctx, tx, sourceSheetID)
+		if err != nil {
+			return Workbook{}, err
+		}
+		for _, view := range views {
+			view.ID, view.SheetID = identity.New(), destinationSheetID
+			view.CreateKey, view.ActorID = "copy:"+view.ID, ownerID
+			view.CreatedAt, view.UpdatedAt = now, now
+			if err := insertFilterViewForStructure(ctx, tx, view); err != nil {
+				return Workbook{}, err
+			}
 		}
 	}
 	// 이름 있는 수식과 표도 함께 옮긴다. 두고 가면 사본의 =마진율(A1,B1) 과
@@ -1981,6 +2014,13 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 	if err != nil {
 		return snapshotDocument{}, err
 	}
+	for _, sheet := range document.Sheets {
+		protections, protectionErr := listProtectedRangesTx(ctx, tx, sheet.ID)
+		if protectionErr != nil {
+			return snapshotDocument{}, protectionErr
+		}
+		document.Protections = append(document.Protections, protections...)
+	}
 	document.NamedFunctions, err = listNamedFunctionsFrom(ctx, tx, workbookID)
 	if err != nil {
 		return snapshotDocument{}, err
@@ -2098,6 +2138,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			return MutationResult{}, err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM sheet_tables WHERE workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM protected_ranges USING sheets WHERE protected_ranges.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
 			return MutationResult{}, err
 		}
 	}
@@ -2300,6 +2343,25 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 				item.ID, item.WorkbookID, item.CreateKey, item.Name, item.Parameters, item.Body, item.Description,
 				item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
 				return MutationResult{}, mapPostgresError(err)
+			}
+		}
+		for _, rule := range snapshot.Protections {
+			if _, found := desiredSheetIDs[rule.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a protected range on an unknown sheet", ErrInvalid)
+			}
+			rule.CreateKey = "restore:" + rule.ID
+			if rule.Revision < 1 {
+				rule.Revision = 1
+			}
+			if rule.CreatedBy == "" {
+				rule.CreatedBy = actorID
+			}
+			rule.UpdatedBy, rule.UpdatedAt = actorID, now
+			if rule.CreatedAt.IsZero() {
+				rule.CreatedAt = now
+			}
+			if err := insertProtectedRangeForCopy(ctx, tx, rule); err != nil {
+				return MutationResult{}, err
 			}
 		}
 		for _, item := range snapshot.SheetTables {
