@@ -2703,3 +2703,36 @@ func TestEachRoleIsAllowedExactlyWhatItsRoleSays(t *testing.T) {
 		map[string]any{"principal_id": "guest2", "principal_type": "user", "role": "viewer"}, http.StatusForbidden)
 	requestAs[map[string]any](t, server, "writer", http.MethodDelete, "/api/v1/workbooks/"+book.ID, nil, http.StatusForbidden)
 }
+
+// 브라우저는 목록에 없는 응답 헤더를 아예 감춘다. 서버가 보내도 자바스크립트
+// 에서는 없는 것으로 보이므로, 다른 오리진에서 띄운 화면에서만 조용히
+// 동작하지 않는 일이 생긴다. 내려받는 파일의 이름과, 파일에 담지 못한 차트의
+// 수가 그렇게 사라지고 있었다.
+func TestCrossOriginResponsesExposeTheHeadersTheEditorReads(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	for _, sample := range []struct {
+		name   string
+		method string
+	}{{"미리 묻기", http.MethodOptions}, {"실제 요청", http.MethodGet}} {
+		request, err := http.NewRequest(sample.method, server.URL+"/api/v1/workbooks", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Origin", "http://localhost:5173")
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		exposed := response.Header.Get("Access-Control-Expose-Headers")
+		for _, header := range []string{"Content-Disposition", "X-Kanpic-Skipped-Charts"} {
+			if !strings.Contains(exposed, header) {
+				t.Errorf("%s: %s 를 열어 두지 않았다 (%q)", sample.name, header, exposed)
+			}
+		}
+	}
+}

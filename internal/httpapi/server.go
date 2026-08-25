@@ -951,6 +951,14 @@ func (s *Server) workbookIDForSheet(ctx context.Context, sheetID string) string 
 
 // pagePolicy keeps the strict page policy and adds only what the configured
 // tracking snippet needs, including a nonce for its inline code.
+// exposedHeaders 는 다른 오리진에서 읽을 수 있게 열어 두는 응답 헤더다.
+//
+// 브라우저는 목록에 없는 응답 헤더를 아예 감춘다. 서버가 보내도 자바스크립트
+// 에서는 없는 것으로 보이므로, 개발 서버(:5173)로 띄운 화면에서만 조용히
+// 동작하지 않는 일이 생긴다. 내려받는 파일의 이름과, 파일에 담지 못한 차트의
+// 수가 그렇게 사라지고 있었다.
+const exposedHeaders = "Content-Disposition, X-Kanpic-Skipped-Charts, X-Trace-ID"
+
 func (s *Server) pagePolicy(ctx context.Context, path, nonce string) string {
 	return s.policyFor(s.analyticsConfig(ctx), path, nonce)
 }
@@ -1005,11 +1013,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Kanpic-Actor, X-Trace-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Expose-Headers", exposedHeaders)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if r.Header.Get("Origin") == "http://localhost:5173" {
 			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+			w.Header().Set("Access-Control-Expose-Headers", exposedHeaders)
 		}
 		authenticated := false
 		if s.keys != nil {
