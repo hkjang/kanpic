@@ -463,6 +463,13 @@ func TestStackingAndSlicingArrays(t *testing.T) {
 		`=CHOOSEROWS(A1:B4,1,-1)`: {{"지역", "매출"}, {"대구", 95.0}},
 		`=CHOOSECOLS(A1:B4,2)`:    {{"매출"}, {80.0}, {120.0}, {95.0}},
 		`=SORTBY(A2:B4,B2:B4,-1)`: {{"서울", 120.0}, {"대구", 95.0}, {"부산", 80.0}},
+		// 한 줄을 접는다. 마지막 줄의 빈 자리는 채울 값이 있으면 그것으로,
+		// 없으면 빈 칸으로 둔다.
+		`=WRAPROWS(A2:A4,2,"-")`: {{"부산", "서울"}, {"대구", "-"}},
+		`=WRAPCOLS(A2:A4,2,"-")`: {{"부산", "대구"}, {"서울", "-"}},
+		`=WRAPROWS(A2:A4,3)`:     {{"부산", "서울", "대구"}},
+		`=EXPAND(A2:B2,2,3,0)`:   {{"부산", 80.0, 0.0}, {0.0, 0.0, 0.0}},
+		`=EXPAND(A2:B2,1,3)`:     {{"부산", 80.0, nil}},
 	} {
 		result := New().Evaluate(formula, cells)
 		if result.Error != nil {
@@ -472,6 +479,24 @@ func TestStackingAndSlicingArrays(t *testing.T) {
 		if !reflect.DeepEqual(result.Value, expected) {
 			t.Errorf("%s = %v, want %v", formula, result.Value, expected)
 		}
+	}
+	// 접을 것이 이미 두 줄이면 무엇을 어떤 차례로 읽었는지 사람이 알 수 없다.
+	if result := New().Evaluate(`=WRAPROWS(A1:B4,2)`, cells); result.Error == nil || result.Error.Code != "#VALUE!" {
+		t.Errorf("두 줄을 접었다: %v (%v)", result.Value, result.Error)
+	}
+	if result := New().Evaluate(`=WRAPROWS(A2:A4,0)`, cells); result.Error == nil || result.Error.Code != "#NUM!" {
+		t.Errorf("한 줄 길이 0: %v (%v)", result.Value, result.Error)
+	}
+	// EXPAND 는 넓히는 함수다. 줄이는 것은 자르는 것이고 TAKE 가 한다. 여기서
+	// 조용히 잘라 내면 사라진 자료를 아무도 알아채지 못한다.
+	if result := New().Evaluate(`=EXPAND(A1:B4,2,2)`, cells); result.Error == nil || result.Error.Code != "#VALUE!" {
+		t.Errorf("EXPAND 가 잘라 냈다: %v (%v)", result.Value, result.Error)
+	}
+	// 채울 값을 정하지 않으면 빈 칸이다. 구글 시트와 엑셀은 #N/A 를 채우지만
+	// kanpic 의 오류는 칸 하나가 통째로 가지는 것이라 배열 안에 담을 자리가
+	// 없다. 오류처럼 보이는 글자를 넣으면 ISNA 가 거짓이 되어 더 나쁘다.
+	if result := New().Evaluate(`=ISBLANK(INDEX(WRAPROWS(A2:A4,2),2,2))`, cells); result.Error != nil || result.Value != true {
+		t.Errorf("채우지 않은 자리=%v (%v)", result.Value, result.Error)
 	}
 	// Stacking uneven parts keeps the union of the shapes and leaves the
 	// corner blank rather than failing the whole call.

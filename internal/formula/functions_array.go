@@ -162,6 +162,88 @@ func evaluateArray(name string, arguments []any) (any, bool, error) {
 			return nil, true, err
 		}
 		return pickCells(name, selected, keptRows, keptColumns)
+	case "WRAPROWS", "WRAPCOLS":
+		if len(arguments) < 2 || len(arguments) > 3 {
+			return nil, true, argError(name)
+		}
+		selected, err := toArray(arguments[0])
+		if err != nil {
+			return nil, true, err
+		}
+		// 줄 하나를 접는 함수다. 이미 두 줄 이상인 것을 접으면 무엇을 어떤
+		// 차례로 읽었는지 사람이 알 수 없다.
+		if selected.rows != 1 && selected.columns != 1 {
+			return nil, true, formulaError("#VALUE!", name+" needs a single row or column")
+		}
+		count, err := integerValue(scalarOrFirst(arguments[1]), name)
+		if err != nil {
+			return nil, true, err
+		}
+		if count < 1 {
+			return nil, true, formulaError("#NUM!", name+" needs a wrap count of at least 1")
+		}
+		var padding any
+		if len(arguments) == 3 && !omitted(arguments[2]) {
+			padding = scalarOrFirst(arguments[2])
+		}
+		values := append([]any{}, selected.values...)
+		if len(values) == 0 {
+			return nil, true, formulaError("#N/A", name+" found no values")
+		}
+		lines := (len(values) + count - 1) / count
+		result := arrayValue{rows: lines, columns: count, values: make([]any, lines*count)}
+		if name == "WRAPCOLS" {
+			result.rows, result.columns = count, lines
+		}
+		for index := range result.values {
+			result.values[index] = padding
+		}
+		for index, value := range values {
+			row, column := index/count, index%count
+			if name == "WRAPCOLS" {
+				row, column = index%count, index/count
+			}
+			result.values[row*result.columns+column] = value
+		}
+		return result, true, nil
+	case "EXPAND":
+		if len(arguments) < 2 || len(arguments) > 4 {
+			return nil, true, argError(name)
+		}
+		selected, err := toArray(arguments[0])
+		if err != nil {
+			return nil, true, err
+		}
+		rows, columns := selected.rows, selected.columns
+		if !omitted(arguments[1]) {
+			if rows, err = integerValue(scalarOrFirst(arguments[1]), name); err != nil {
+				return nil, true, err
+			}
+		}
+		if len(arguments) >= 3 && !omitted(arguments[2]) {
+			if columns, err = integerValue(scalarOrFirst(arguments[2]), name); err != nil {
+				return nil, true, err
+			}
+		}
+		// 늘리는 함수다. 줄이는 것은 자르는 것이고, 그것은 TAKE 가 한다.
+		// 여기서 조용히 잘라 내면 사라진 자료를 아무도 알아채지 못한다.
+		if rows < selected.rows || columns < selected.columns {
+			return nil, true, formulaError("#VALUE!", name+" cannot make an array smaller")
+		}
+		var padding any
+		if len(arguments) == 4 && !omitted(arguments[3]) {
+			padding = scalarOrFirst(arguments[3])
+		}
+		result := arrayValue{rows: rows, columns: columns, values: make([]any, rows*columns)}
+		for index := range result.values {
+			result.values[index] = padding
+		}
+		for row := 0; row < selected.rows; row++ {
+			for column := 0; column < selected.columns; column++ {
+				result.values[row*columns+column] = selected.at(row, column)
+			}
+		}
+		return result, true, nil
 	case "CHOOSEROWS", "CHOOSECOLS":
 		if len(arguments) < 2 {
 			return nil, true, argError(name)

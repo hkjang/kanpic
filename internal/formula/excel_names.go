@@ -37,6 +37,7 @@ var excelPrefixedFunctions = map[string]string{
 	"VSTACK": excelModernPrefix, "HSTACK": excelModernPrefix,
 	"TOROW": excelModernPrefix, "TOCOL": excelModernPrefix,
 	"CHOOSEROWS": excelModernPrefix, "CHOOSECOLS": excelModernPrefix,
+	"WRAPROWS": excelModernPrefix, "WRAPCOLS": excelModernPrefix, "EXPAND": excelModernPrefix,
 	"ISFORMULA": excelModernPrefix, "DAYS": excelModernPrefix, "ISOWEEKNUM": excelModernPrefix,
 	"UNICHAR": excelModernPrefix, "UNICODE": excelModernPrefix,
 	"PDURATION": excelModernPrefix, "RRI": excelModernPrefix,
