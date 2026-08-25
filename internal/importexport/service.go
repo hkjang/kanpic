@@ -290,6 +290,7 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 				headerRow := fileTable.ShowHeaderRow == nil || *fileTable.ShowHeaderRow
 				imported.Tables = append(imported.Tables, workbook.ImportSheetTable{
 					Name: fileTable.Name, Range: fileTable.Range, HeaderRow: headerRow,
+					Theme: tableThemeFromExcel(fileTable.StyleName),
 				})
 			}
 		}

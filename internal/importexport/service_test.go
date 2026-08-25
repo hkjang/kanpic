@@ -1533,3 +1533,64 @@ func TestExportCountsChartsExcelCannotHold(t *testing.T) {
 		t.Fatalf("파일 속 차트=%d개, 막대 하나만 있어야 한다", total)
 	}
 }
+
+// 표의 색은 파일로 나갔다 들어와도 그대로여야 한다. 초록으로 내보낸 표가
+// 파랑으로 돌아오면, 사람은 자기가 고른 것이 사라진 줄 안다.
+//
+// 나가는 쪽과 들어오는 쪽이 한 표에서 나오는지도 함께 본다 — 따로 적으면
+// 한쪽만 고쳤을 때 조용히 어긋난다.
+func TestTableThemeSurvivesAnXLSXRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := workbook.NewMemoryRepository()
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "색", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := book.Sheets[0].ID
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: book.Version, IdempotencyKey: "seed", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value("지역")}, {Row: 1, Column: 2, Value: value("금액")},
+		{Row: 2, Column: 1, Value: value("서울")}, {Row: 2, Column: 2, Value: value(100)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateSheetTable(ctx, book.ID, "tester", workbook.CreateSheetTableInput{
+		IdempotencyKey: "t-1", SheetID: sheetID, Name: "매출표", Range: "A1:B2", Theme: "green",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: book.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sheets) == 0 || len(parsed.Sheets[0].Tables) != 1 || parsed.Sheets[0].Tables[0].Theme != "green" {
+		t.Fatalf("돌아온 표=%#v", parsed.Sheets)
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "복원", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "theme-import", Sheets: parsed.Sheets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := repository.ListSheetTables(ctx, restored.ID)
+	if err != nil || len(tables) != 1 || tables[0].Theme != "green" {
+		t.Fatalf("담긴 색=%#v, %v", tables, err)
+	}
+	// 엑셀에서 만든 표는 kanpic 이 모르는 서식을 쓴다. 아무 색이나 골라 주는
+	// 것보다 기본색으로 그리는 편이 덜 놀랍다.
+	if theme := tableThemeFromExcel("TableStyleDark7"); theme != "" {
+		t.Errorf("모르는 서식=%q, 비워 둬야 한다", theme)
+	}
+	// 두 방향이 한 표에서 나오는지 본다.
+	for _, pair := range tableThemes {
+		if back := tableThemeFromExcel(excelTableStyle(pair.theme)); back != pair.theme {
+			t.Errorf("%s -> %s -> %s", pair.theme, excelTableStyle(pair.theme), back)
+		}
+	}
+}

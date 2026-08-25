@@ -588,6 +588,7 @@ type ImportSheetTable struct {
 	Name      string `json:"name"`
 	Range     string `json:"range"`
 	HeaderRow bool   `json:"header_row"`
+	Theme     string `json:"theme,omitempty"`
 }
 
 // ImportChart is one chart read out of an imported file, reduced to what

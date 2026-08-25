@@ -269,21 +269,40 @@ func isNameToken(text string) bool {
 	return true
 }
 
-// excelTableStyle 은 kanpic 의 표 모양새를 엑셀이 아는 이름으로 바꾼다.
-// 모르는 이름을 적으면 엑셀이 파일을 열지 못하므로, 아는 것만 적고 나머지는
+// tableThemes 는 kanpic 의 표 색과 엑셀의 표 서식 이름을 짝지어 둔 것이다.
+// 나가는 쪽과 들어오는 쪽이 이 한 표에서 나온다 — 따로 적으면 초록으로
+// 내보낸 표가 파랑으로 돌아오는 일이 생긴다.
+var tableThemes = []struct{ theme, style string }{
+	{"blue", "TableStyleMedium2"},
+	{"green", "TableStyleMedium4"},
+	{"orange", "TableStyleMedium3"},
+	{"red", "TableStyleMedium10"},
+}
+
+// excelTableStyle 은 kanpic 의 표 색을 엑셀이 아는 이름으로 바꾼다. 모르는
+// 이름을 적으면 엑셀이 파일을 열지 못하므로, 아는 것만 적고 나머지는
 // 기본값으로 둔다.
 func excelTableStyle(theme string) string {
-	switch strings.ToLower(strings.TrimSpace(theme)) {
-	case "blue", "파랑":
-		return "TableStyleMedium2"
-	case "green", "초록":
-		return "TableStyleMedium4"
-	case "orange", "주황":
-		return "TableStyleMedium3"
-	case "red", "빨강":
-		return "TableStyleMedium10"
+	wanted := strings.ToLower(strings.TrimSpace(theme))
+	for _, pair := range tableThemes {
+		if pair.theme == wanted {
+			return pair.style
+		}
 	}
 	return "TableStyleMedium9"
+}
+
+// tableThemeFromExcel 은 그 반대다. 엑셀에서 만든 표는 kanpic 이 모르는
+// 서식을 쓸 수 있으므로, 아는 것만 되읽고 나머지는 비워 둔다 — 아무 색이나
+// 골라 주는 것보다 기본색으로 그리는 편이 덜 놀랍다.
+func tableThemeFromExcel(style string) string {
+	wanted := strings.ToLower(strings.TrimSpace(style))
+	for _, pair := range tableThemes {
+		if strings.ToLower(pair.style) == wanted {
+			return pair.theme
+		}
+	}
+	return ""
 }
 
 // tableExportRange 는 파일에 적을 표의 범위다. 합계 줄은 뺀다 — 넣은 채로

@@ -246,7 +246,7 @@ func buildImportedSheetTables(workbookID, actor string, sheets []ImportSheet, sh
 			item, err := normalizeSheetTable(SheetTable{
 				WorkbookID: workbookID, SheetID: sheetID,
 				CreateKey: fmt.Sprintf("import:%s:%d", sheet.Name, index),
-				Name:      source.Name, Range: source.Range, HeaderRow: source.HeaderRow,
+				Name:      source.Name, Range: source.Range, HeaderRow: source.HeaderRow, Theme: source.Theme,
 				CreatedBy: actor, UpdatedBy: actor,
 			})
 			if err != nil {
