@@ -448,6 +448,16 @@ func (r *MemoryRepository) GetWorkbook(_ context.Context, id string) (Workbook, 
 	return r.workbookWithSheets(state), nil
 }
 
+// 워크북에 딸린 새 종류를 더한다면 세 자리를 함께 봐야 한다.
+//
+//	구조 변경  행과 열이 움직일 때 범위를 따라 옮기는가
+//	복제       사본으로 데려가는가
+//	되돌리기   그때 모습으로 살아나는가
+//
+// 구조 변경은 대개 챙기면서 나머지 둘을 빠뜨린다. 실제로 이름 있는 수식,
+// 표, 보호 범위, 필터 보기가 그렇게 빠져 있었다. 무엇이 따라가고 무엇이
+// 따라가지 않는지는 travel_test.go 에 표로 있다 — 따라가지 않는 쪽을
+// 고른다면 거기에 까닭을 적으라.
 func (r *MemoryRepository) DuplicateWorkbook(_ context.Context, id string, input DuplicateWorkbookInput) (Workbook, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
