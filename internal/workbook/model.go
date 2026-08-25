@@ -636,6 +636,17 @@ type ImportWorkbookInput struct {
 	// than inside one. They have to exist before the first recalculation or
 	// every formula that uses a name lands as #NAME?.
 	NamedRanges []ImportNamedRange `json:"named_ranges,omitempty"`
+	// NamedFunctions arrive the same way and for the same reason: a formula
+	// that calls one has to find it before the first recalculation.
+	NamedFunctions []ImportNamedFunction `json:"named_functions,omitempty"`
+}
+
+// ImportNamedFunction is a named formula a file carried. Excel writes these as
+// LAMBDA defined names, which have no sheet to belong to.
+type ImportNamedFunction struct {
+	Name       string   `json:"name"`
+	Parameters []string `json:"parameters"`
+	Body       string   `json:"body"`
 }
 
 // ImportNamedRange is a name a file carried. The file addresses its sheet by

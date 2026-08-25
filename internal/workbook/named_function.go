@@ -3,9 +3,11 @@ package workbook
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"kanpic/internal/formula"
+	"kanpic/pkg/identity"
 )
 
 // MaxNamedFunctions 는 한 워크북에 저장할 수 있는 이름 있는 수식의 수다.
@@ -120,4 +122,39 @@ func NamedFunctionDefinitions(items []NamedFunction) map[string]formula.NamedFun
 		definitions[item.Name] = formula.NamedFunction{Parameters: item.Parameters, Body: item.Body}
 	}
 	return definitions
+}
+
+// buildImportedNamedFunctions 는 파일이 들고 온 이름 있는 수식을 워크북에
+// 담을 꼴로 바꾼다. 이름 범위와 같이, 첫 계산 전에 있어야 그 이름을 부르는
+// 수식이 #NAME? 으로 굳지 않는다.
+//
+// 하나가 잘못되었다고 파일 전체를 못 여는 것은 사람에게 도움이 되지 않으므로
+// 그것만 건너뛴다. 본문을 평가해 보는 검사도 여기서 함께 지난다.
+func buildImportedNamedFunctions(workbookID, actor string, imported []ImportNamedFunction, now time.Time) []NamedFunction {
+	if len(imported) == 0 {
+		return nil
+	}
+	items := make([]NamedFunction, 0, len(imported))
+	taken := make(map[string]struct{}, len(imported))
+	for index, source := range imported {
+		if len(items) >= MaxNamedFunctions {
+			break
+		}
+		item, err := normalizeNamedFunction(NamedFunction{
+			WorkbookID: workbookID, CreateKey: fmt.Sprintf("import:%d", index),
+			Name: source.Name, Parameters: source.Parameters, Body: source.Body,
+			CreatedBy: actor, UpdatedBy: actor,
+		}, items)
+		if err != nil {
+			continue
+		}
+		key := strings.ToUpper(item.Name)
+		if _, duplicate := taken[key]; duplicate {
+			continue
+		}
+		taken[key] = struct{}{}
+		item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
+		items = append(items, item)
+	}
+	return items
 }

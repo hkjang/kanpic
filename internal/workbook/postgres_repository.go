@@ -218,7 +218,14 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 			return Workbook{}, mapPostgresError(err)
 		}
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Imports: nil})
+	importedFunctions := buildImportedNamedFunctions(wb.ID, input.ActorID, input.NamedFunctions, now)
+	for _, item := range importedFunctions {
+		if _, err := tx.Exec(ctx, `INSERT INTO named_functions(id,workbook_id,idempotency_key,name,parameters,body,description,revision,created_by,updated_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			item.ID, wb.ID, item.CreateKey, item.Name, item.Parameters, item.Body, item.Description, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+			return Workbook{}, mapPostgresError(err)
+		}
+	}
+	expanded, _, _, err := recalculateCellInputs(sheets, importedCells, wb.Sheets[0].ID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Imports: nil})
 	if err != nil {
 		return Workbook{}, err
 	}

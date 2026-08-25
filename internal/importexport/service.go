@@ -63,11 +63,12 @@ type Preview struct {
 }
 
 type ParsedWorkbook struct {
-	Title       string
-	Format      string
-	Sheets      []workbook.ImportSheet
-	NamedRanges []workbook.ImportNamedRange
-	Preview     Preview
+	Title          string
+	Format         string
+	Sheets         []workbook.ImportSheet
+	NamedRanges    []workbook.ImportNamedRange
+	NamedFunctions []workbook.ImportNamedFunction
+	Preview        Preview
 }
 
 type ImportRequest struct {
@@ -108,7 +109,7 @@ func (s *Service) Import(ctx context.Context, request ImportRequest) (workbook.W
 	if err != nil {
 		return workbook.Workbook{}, err
 	}
-	return s.repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{WorkspaceID: request.WorkspaceID, Title: parsed.Title, OwnerID: request.ActorID, ActorID: request.ActorID, IdempotencyKey: request.IdempotencyKey, FileName: request.FileName, Format: parsed.Format, Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges})
+	return s.repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{WorkspaceID: request.WorkspaceID, Title: parsed.Title, OwnerID: request.ActorID, ActorID: request.ActorID, IdempotencyKey: request.IdempotencyKey, FileName: request.FileName, Format: parsed.Format, Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges, NamedFunctions: parsed.NamedFunctions})
 }
 
 func Parse(fileName string, data []byte, maxExpanded int64) (ParsedWorkbook, error) {
@@ -323,8 +324,9 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 			}
 		}
 	}
-	named, printAreas, skippedNames := importDefinedNames(file, known)
+	named, namedFunctions, printAreas, skippedNames := importDefinedNames(file, known)
 	parsed.NamedRanges = named
+	parsed.NamedFunctions = namedFunctions
 	// 인쇄 영역은 이름의 모습으로 담겨 있지만 이름이 아니라 시트의 성질이다.
 	// 시트마다 제 자리에 옮겨 둔다.
 	for index := range parsed.Sheets {
@@ -347,12 +349,13 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 // target is not a plain range on a sheet in this file - a print area, a
 // constant, a formula, a reference into another workbook - has no kanpic
 // equivalent, so it is counted and reported rather than approximated.
-func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, map[string]string, SkippedNames) {
+func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]workbook.ImportNamedRange, []workbook.ImportNamedFunction, map[string]string, SkippedNames) {
 	definitions := file.GetDefinedName()
 	if len(definitions) == 0 {
-		return nil, nil, SkippedNames{}
+		return nil, nil, nil, SkippedNames{}
 	}
 	named := make([]workbook.ImportNamedRange, 0, len(definitions))
+	functions := make([]workbook.ImportNamedFunction, 0)
 	printAreas := make(map[string]string)
 	skipped := SkippedNames{}
 	seen := make(map[string]struct{}, len(definitions))
@@ -384,6 +387,18 @@ func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]
 		}
 		sheetName, area, ok := splitDefinedNameTarget(definition.RefersTo)
 		if !ok {
+			// LAMBDA 를 가리키는 이름은 kanpic 의 이름 있는 수식이다. 범위가
+			// 아니라고 버리면 내보낸 파일을 도로 열 때 이름이 사라진다.
+			if item, isFunction := namedFunctionFromDefinedName(definition.Name, definition.RefersTo); isFunction {
+				key := strings.ToUpper(definition.Name)
+				if _, duplicate := seen[key]; duplicate {
+					skipped.Duplicate++
+					continue
+				}
+				seen[key] = struct{}{}
+				functions = append(functions, item)
+				continue
+			}
 			// 상수나 수식을 가리키는 이름. kanpic 의 이름은 범위만 가리킨다.
 			skipped.NotARange++
 			continue
@@ -400,7 +415,7 @@ func importDefinedNames(file *excelize.File, sheetNames map[string]struct{}) ([]
 		seen[key] = struct{}{}
 		named = append(named, workbook.ImportNamedRange{Name: definition.Name, SheetName: sheetName, Range: area})
 	}
-	return named, printAreas, skipped
+	return named, functions, printAreas, skipped
 }
 
 // SkippedNames counts, by reason, the defined names an import left behind.

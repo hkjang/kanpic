@@ -2305,7 +2305,7 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, firstDue); err != nil {
 		t.Fatal(err)
 	}
-	results, err := service.RunDueSchedules(ctx, now, 10)
+	results, err := runDueForWorkbook(ctx, service, now, book.ID)
 	if err != nil || len(results) != 1 || results[0].Run.Status != automation.StatusSucceeded || results[0].Run.ScheduledFor == nil || !results[0].Run.ScheduledFor.Equal(firstDue) || results[0].Operation.ServerVersion != 2 {
 		t.Fatalf("first scheduled results=%#v, %v", results, err)
 	}
@@ -2318,7 +2318,7 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	if err != nil || stored.NextRunAt == nil || !stored.NextRunAt.After(now) {
 		t.Fatalf("advanced schedule=%#v, %v", stored, err)
 	}
-	duplicateTick, err := service.RunDueSchedules(ctx, now, 10)
+	duplicateTick, err := runDueForWorkbook(ctx, service, now, book.ID)
 	if err != nil || len(duplicateTick) != 0 {
 		t.Fatalf("duplicate due tick=%#v, %v", duplicateTick, err)
 	}
@@ -2326,7 +2326,7 @@ func TestPostgresScheduledAutomationRunsOnceAndSkipsNoChange(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, item.ID, secondDue); err != nil {
 		t.Fatal(err)
 	}
-	skipped, err := service.RunDueSchedules(ctx, now, 10)
+	skipped, err := runDueForWorkbook(ctx, service, now, book.ID)
 	if err != nil || len(skipped) != 1 || skipped[0].Run.Status != automation.StatusSkipped || skipped[0].Operation.OperationID != "" {
 		t.Fatalf("no-change schedule=%#v, %v", skipped, err)
 	}
@@ -2833,7 +2833,7 @@ func TestPostgresAutomationRateLimitIsAtomicAndSnapshotIsBounded(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, scheduled.ID, firstDue); err != nil {
 		t.Fatal(err)
 	}
-	limitedResults, limitedErr := service.RunDueSchedules(ctx, now, 10)
+	limitedResults, limitedErr := runDueForWorkbook(ctx, service, now, book.ID)
 	if !errors.Is(limitedErr, automation.ErrRate) || len(limitedResults) != 1 || limitedResults[0].Run.Status != automation.StatusFailed {
 		t.Fatalf("rate-limited schedule results=%#v error=%v", limitedResults, limitedErr)
 	}
@@ -2848,7 +2848,7 @@ func TestPostgresAutomationRateLimitIsAtomicAndSnapshotIsBounded(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE automations SET next_run_at=$2 WHERE id=$1`, scheduled.ID, secondDue); err != nil {
 		t.Fatal(err)
 	}
-	retried, retryErr := service.RunDueSchedules(ctx, now, 10)
+	retried, retryErr := runDueForWorkbook(ctx, service, now, book.ID)
 	if retryErr != nil || len(retried) != 1 || retried[0].Run.Status != automation.StatusSucceeded {
 		t.Fatalf("schedule after expired admitted run=%#v, %v", retried, retryErr)
 	}
@@ -4260,4 +4260,21 @@ func TestPostgresWatchRulesAreOwnedByTheWatcher(t *testing.T) {
 	if gone, err := repository.GetWatchRule(ctx, moving.ID); err == nil {
 		t.Fatalf("지워진 칸을 보는 규칙이 남았다: %#v", gone)
 	}
+}
+
+// runDueForWorkbook 은 예정된 자동화를 돌리고 그 워크북의 결과만 골라 낸다.
+//
+// 예정 실행을 쓸어 담는 일은 데이터베이스 전체를 훑는 것이 맞다 — 스케줄러는
+// 워크북 하나를 위해 도는 것이 아니다. 그래서 같은 데이터베이스를 나눠 쓰는
+// 시험이 나란히 돌면 남의 워크북 자동화가 같은 순간에 걸려 섞여 들어온다.
+// 시험이 결과의 수를 세면 그때만 빨갛게 되는데, 원인은 만든 코드에 없다.
+func runDueForWorkbook(ctx context.Context, service *automation.Service, now time.Time, workbookID string) ([]automation.ExecutionResult, error) {
+	results, err := service.RunDueSchedules(ctx, now, 10)
+	mine := make([]automation.ExecutionResult, 0, len(results))
+	for _, result := range results {
+		if result.Run.WorkbookID == workbookID {
+			mine = append(mine, result)
+		}
+	}
+	return mine, err
 }

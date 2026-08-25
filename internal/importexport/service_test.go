@@ -1286,10 +1286,113 @@ func TestNamedFunctionsExportAsExcelLambdaNames(t *testing.T) {
 	if actual := names["마진율"]; actual != "_xlfn.LAMBDA(매출,원가,(매출-원가)/매출)" {
 		t.Errorf("마진율=%q", actual)
 	}
-	if actual := names["기준연도"]; actual != "2026" {
+	// 매개변수가 없어도 LAMBDA 로 감싼다. kanpic 에서 기준연도() 로 부르는
+	// 것을 엑셀에서 기준연도 로 부르게 되면 부르는 법이 파일을 건너며 달라진다.
+	if actual := names["기준연도"]; actual != "_xlfn.LAMBDA(2026)" {
 		t.Errorf("기준연도=%q", actual)
 	}
 	if actual := names["안전나눗셈"]; actual != "_xlfn.LAMBDA(a,b,_xlfn.IFS(b=0,0,TRUE,a/b))" {
 		t.Errorf("안전나눗셈=%q", actual)
+	}
+	// 내보낸 파일을 도로 열면 이름 있는 수식이 그대로 돌아와야 한다. 나갔다
+	// 들어오며 사라지면 내보낸 것이 원본 구실을 하지 못한다.
+	reopened, err := Parse("round-trip.xlsx", exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := map[string]workbook.ImportNamedFunction{}
+	for _, item := range reopened.NamedFunctions {
+		back[item.Name] = item
+	}
+	if len(back) != 3 {
+		t.Fatalf("돌아온 이름=%#v", reopened.NamedFunctions)
+	}
+	if item := back["마진율"]; len(item.Parameters) != 2 || item.Parameters[0] != "매출" || item.Body != "(매출-원가)/매출" {
+		t.Errorf("마진율=%#v", item)
+	}
+	if item := back["기준연도"]; len(item.Parameters) != 0 || item.Body != "2026" {
+		t.Errorf("기준연도=%#v", item)
+	}
+	// 파일 안의 _xlfn 은 벗겨져야 한다. 붙은 채로 두면 부를 수 없는 이름이 된다.
+	if item := back["안전나눗셈"]; item.Body != "IFS(b=0,0,TRUE,a/b)" {
+		t.Errorf("안전나눗셈=%#v", item)
+	}
+	// 범위를 가리키는 이름이 이름 있는 수식으로 새어 들어가면 안 된다.
+	for _, item := range reopened.NamedRanges {
+		if _, clash := back[item.Name]; clash {
+			t.Errorf("이름 범위가 수식으로도 들어왔다: %q", item.Name)
+		}
+	}
+}
+
+// 이름 있는 수식도 첫 계산 전에 있어야 한다. 없으면 그 이름을 부르는 칸이
+// #NAME? 으로 계산되고, 저장되는 것은 그 답이다. 나중에 이름을 다시 만들어도
+// 이미 굳은 값은 돌아오지 않는다.
+func TestXLSXImportResolvesFormulasThatUseAnImportedNamedFunction(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	ctx := context.Background()
+	wb, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "named function", OwnerID: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := wb.Sheets[0].ID
+	if _, err := repository.CreateNamedFunction(ctx, wb.ID, "tester", workbook.CreateNamedFunctionInput{
+		IdempotencyKey: "rt-1", Name: "마진율", Parameters: []string{"매출", "원가"}, Body: "(매출-원가)/매출",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := repository.GetWorkbook(ctx, wb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := func(input any) json.RawMessage { encoded, _ := json.Marshal(input); return encoded }
+	if _, err := repository.ApplyCells(ctx, workbook.CellMutation{SheetID: sheetID, ActorID: "tester", BaseVersion: current.Version, IdempotencyKey: "rt-cells", Cells: []workbook.CellInput{
+		{Row: 1, Column: 1, Value: value(1000)}, {Row: 1, Column: 2, Value: value(600)},
+		{Row: 1, Column: 3, Formula: "=마진율(A1,B1)"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: "xlsx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(exported.Name, exported.Data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 되살릴 수 있는 이름을 버렸다고 알리면 안 된다.
+	for _, warning := range parsed.Preview.Warnings {
+		if strings.Contains(warning, "이름") {
+			t.Errorf("돌려받은 이름을 버렸다고 알린다: %q", warning)
+		}
+	}
+	restored, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{
+		WorkspaceID: "default", Title: "restored", OwnerID: "tester", ActorID: "tester",
+		IdempotencyKey: "rt-import", Sheets: parsed.Sheets, NamedRanges: parsed.NamedRanges, NamedFunctions: parsed.NamedFunctions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.ListNamedFunctions(ctx, restored.ID)
+	if err != nil || len(stored) != 1 || stored[0].Name != "마진율" || stored[0].Body != "(매출-원가)/매출" {
+		t.Fatalf("저장된 이름=%#v, %v", stored, err)
+	}
+	cells, err := repository.ReadAllCells(ctx, restored.Sheets[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, cell := range cells {
+		if cell.Row != 1 || cell.Column != 3 {
+			continue
+		}
+		found = true
+		if string(cell.Value) != "0.4" {
+			t.Errorf("이름을 부르는 칸=%s (수식 %q)", cell.Value, cell.Formula)
+		}
+	}
+	if !found {
+		t.Fatalf("이름을 부르는 칸이 없다: %#v", cells)
 	}
 }

@@ -231,7 +231,11 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 	for _, item := range importedNames {
 		r.namedRanges[item.ID] = item
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Imports: nil})
+	importedFunctions := buildImportedNamedFunctions(wb.ID, input.ActorID, input.NamedFunctions, now)
+	for _, item := range importedFunctions {
+		r.namedFunctions[item.ID] = item
+	}
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(importedNames), Functions: NamedFunctionDefinitions(importedFunctions), Imports: nil})
 	if err != nil {
 		return Workbook{}, err
 	}

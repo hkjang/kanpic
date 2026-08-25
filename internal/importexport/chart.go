@@ -3,6 +3,7 @@ package importexport
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/xuri/excelize/v2"
 
@@ -155,8 +156,6 @@ func legendPosition(position string) string {
 //
 //	마진율(매출, 원가) = (매출-원가)/매출
 //	  -> _xlfn.LAMBDA(매출,원가,(매출-원가)/매출)
-//
-// 매개변수가 없으면 LAMBDA 로 감쌀 까닭이 없다. 그냥 그 수식이다.
 func lambdaDefinedName(item workbook.NamedFunction) (string, bool) {
 	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(item.Body), "="))
 	if body == "" {
@@ -166,8 +165,86 @@ func lambdaDefinedName(item workbook.NamedFunction) (string, bool) {
 	body = strings.TrimPrefix(body, "=")
 	// 정의된 이름의 값에는 = 를 붙이지 않는다. 이름 범위 쪽도 그렇게 적고,
 	// 파일 안의 XML 에도 = 는 들어가지 않는다.
-	if len(item.Parameters) == 0 {
-		return body, true
+	//
+	// 매개변수가 없어도 LAMBDA 로 감싼다. 값만 적으면 엑셀에서 기준연도 로
+	// 부르게 되는데 kanpic 에서는 기준연도() 다. 부르는 법이 파일을 건너며
+	// 달라지면 수식을 손봐야 하고, 그러면 도로 가져올 때도 이름 있는 수식이
+	// 아니라 상수가 된다.
+	arguments := append(append([]string{}, item.Parameters...), body)
+	return "_xlfn.LAMBDA(" + strings.Join(arguments, ",") + ")", true
+}
+
+// namedFunctionFromDefinedName 은 엑셀의 LAMBDA 정의된 이름을 다시 이름 있는
+// 수식으로 읽는다. 내보낸 파일을 도로 열었을 때 이름이 사라지면 안 된다.
+//
+//	_xlfn.LAMBDA(매출,원가,(매출-원가)/매출)
+//	  -> 마진율(매출, 원가) = (매출-원가)/매출
+//
+// 마지막 인자가 본문이고 그 앞이 매개변수다. 본문 안에도 쉼표가 있으므로
+// 괄호와 따옴표 밖의 쉼표만 센다.
+func namedFunctionFromDefinedName(name, refersTo string) (workbook.ImportNamedFunction, bool) {
+	text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(refersTo), "="))
+	for _, prefix := range []string{"_xlfn.LAMBDA(", "_xlfn._xlws.LAMBDA(", "LAMBDA("} {
+		if len(text) > len(prefix) && strings.EqualFold(text[:len(prefix)], prefix) && strings.HasSuffix(text, ")") {
+			text = text[len(prefix) : len(text)-1]
+			parts := splitTopLevel(text)
+			if len(parts) == 0 {
+				return workbook.ImportNamedFunction{}, false
+			}
+			body := strings.TrimSpace(parts[len(parts)-1])
+			if body == "" {
+				return workbook.ImportNamedFunction{}, false
+			}
+			parameters := make([]string, 0, len(parts)-1)
+			for _, parameter := range parts[:len(parts)-1] {
+				parameter = strings.TrimSpace(parameter)
+				if !isNameToken(parameter) {
+					return workbook.ImportNamedFunction{}, false
+				}
+				parameters = append(parameters, parameter)
+			}
+			return workbook.ImportNamedFunction{Name: name, Parameters: parameters, Body: strings.TrimPrefix(formula.FromExcel("="+body), "=")}, true
+		}
 	}
-	return "_xlfn.LAMBDA(" + strings.Join(item.Parameters, ",") + "," + body + ")", true
+	return workbook.ImportNamedFunction{}, false
+}
+
+// splitTopLevel 은 괄호와 따옴표 밖의 쉼표에서만 자른다. LAMBDA 의 본문이
+// IF(a,b,c) 처럼 제 쉼표를 가지고 있기 때문이다.
+func splitTopLevel(text string) []string {
+	parts := make([]string, 0, 4)
+	depth, quoted, start := 0, false, 0
+	for index, character := range text {
+		switch {
+		case character == '"':
+			quoted = !quoted
+		case quoted:
+		case character == '(' || character == '{' || character == '[':
+			depth++
+		case character == ')' || character == '}' || character == ']':
+			depth--
+		case character == ',' && depth == 0:
+			parts = append(parts, text[start:index])
+			start = index + 1
+		}
+	}
+	return append(parts, text[start:])
+}
+
+// isNameToken 은 매개변수로 쓸 수 있는 이름인지 본다. 아니라면 LAMBDA 의
+// 모습을 하고 있어도 kanpic 이 담을 수 있는 것이 아니다.
+func isNameToken(text string) bool {
+	if text == "" {
+		return false
+	}
+	for index, character := range text {
+		if character == '_' || unicode.IsLetter(character) {
+			continue
+		}
+		if index > 0 && (character == '.' || unicode.IsDigit(character)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
