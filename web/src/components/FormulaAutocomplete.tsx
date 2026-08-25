@@ -77,3 +77,17 @@ function highlightArgument(syntax:string,argument:number){
     {')'}
   </>
 }
+
+/**
+ * 표 이름을 자동완성이 읽는 꼴로 바꾼다. 표를 만들어 두고 이름을 아무도
+ * 모르면 없는 것과 같다. 열 이름은 머리글에서 오므로 여기서는 알 수 없어,
+ * 대괄호까지만 권하고 그 안은 사람이 적는다.
+ */
+export function sheetTableDocs(items:Array<{name:string;range:string;header_row:boolean;totals_row:boolean}>):FunctionDoc[]{
+  return items.map(item=>({
+    name:item.name,
+    category:'표',
+    syntax:`${item.name}[열 이름]`,
+    summary:`${item.range} 의 자료 줄입니다. ${item.name} 은 표 전체, ${item.name}[#전체] 는 머리글까지${item.totals_row?`, ${item.name}[#합계] 는 합계 줄입니다`:'입니다'}.`,
+  }))
+}

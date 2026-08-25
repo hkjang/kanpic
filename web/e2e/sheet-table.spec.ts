@@ -73,5 +73,11 @@ test('a named table is created from the menu and answers formulas by column name
   await write([{row:5,column:2,formula:'=SUM(매출표[금액])'}])
   // 자료는 3·4행의 100 과 200 뿐이다. 합계 줄까지 세면 600 이 된다.
   await expect.poll(()=>values('B5:B5'),{timeout:15_000}).toEqual([300])
+  // 이름 상자에 표 이름을 적으면 그 표로 간다. 이름 범위는 되는데 표는
+  // 안 되면 사람은 왜 되고 안 되는지 알 수 없다.
+  const nameBox = page.locator('input.name-box')
+  await nameBox.fill('매출표')
+  await nameBox.press('Enter')
+  await expect(nameBox).toHaveValue('A2:B5')
   expect(alerts, '조용히 실패한 것이 있다').toEqual([])
 })

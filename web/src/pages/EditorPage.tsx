@@ -4,7 +4,7 @@ import { AlertTriangle, AlignCenter, Eye, Grid2X2, Lock, MessageCircle, Settings
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
 import { AutomationPanel } from '../components/AutomationPanel'
-import { FormulaAutocomplete, formulaHint, namedFunctionDocs, useFunctionCatalog } from '../components/FormulaAutocomplete'
+import { FormulaAutocomplete, formulaHint, namedFunctionDocs, sheetTableDocs, useFunctionCatalog } from '../components/FormulaAutocomplete'
 import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { survivesChange, transformSelection } from '../lib/structureTransform'
@@ -124,7 +124,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
-  const functionCatalog=useFunctionCatalog(namedFunctionDocs(namedFunctions.data?.items??[]))
+  const sheetTables=useQuery({queryKey:['tables',workbookId],queryFn:()=>api<{items:SheetTable[]}>(`/api/v1/workbooks/${workbookId}/tables`)})
+  const functionCatalog=useFunctionCatalog([...namedFunctionDocs(namedFunctions.data?.items??[]),...sheetTableDocs(sheetTables.data?.items??[])])
   const formulaInput=useRef<HTMLTextAreaElement|null>(null)
   // 협업 이벤트 처리기는 소켓 연결과 함께 고정되므로 활성 시트를 참조로 읽는다.
   const activeSheetRef=useRef<string|undefined>(undefined)
@@ -258,7 +259,6 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const namedRanges=useQuery({queryKey:['named-ranges',workbookId],queryFn:()=>api<{items:NamedRange[]}>(`/api/v1/workbooks/${workbookId}/named-ranges`)})
 	const charts=useQuery({queryKey:['charts',workbookId,activeSheet?.id],queryFn:()=>api<{items:Chart[]}>(`/api/v1/workbooks/${workbookId}/charts?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
 	const pivots=useQuery({queryKey:['pivots',workbookId,activeSheet?.id],queryFn:()=>api<{items:Pivot[]}>(`/api/v1/workbooks/${workbookId}/pivots?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
-  const sheetTables=useQuery({queryKey:['tables',workbookId],queryFn:()=>api<{items:SheetTable[]}>(`/api/v1/workbooks/${workbookId}/tables`)})
   // 표가 바뀌면 그 이름을 쓰는 모든 칸의 값이 바뀐다. 워크북까지 함께 새로
   // 읽어야 화면이 서버와 같아진다.
   const refreshSheetTables=async()=>{await client.invalidateQueries({queryKey:['tables',workbookId]});await client.invalidateQueries({queryKey:['workbook',workbookId]})}
@@ -303,7 +303,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // focus back to the grid, so the typed name is never left stale.
   const submitNameBox=()=>{
     const value=nameBoxValue.trim(),named=(namedRanges.data?.items??[]).find(item=>item.name.toLowerCase()===value.toLowerCase())
-    const target=named?{sheetId:named.sheet_id,reference:named.range}:activeSheet?{sheetId:activeSheet.id,reference:value}:undefined
+    // 표 이름도 받는다. 이름 범위처럼 이름으로 가리키는 것이므로, 한쪽만
+    // 되면 사람은 왜 되고 안 되는지 알 수 없다.
+    const table=named?undefined:(sheetTables.data?.items??[]).find(item=>item.name.toLowerCase()===value.toLowerCase())
+    const jump=named??table
+    const target=jump?{sheetId:jump.sheet_id,reference:jump.range}:activeSheet?{sheetId:activeSheet.id,reference:value}:undefined
     const parsed=target?parseNavigationRange(target.reference):undefined
     if(!target||!parsed||!navigateToRange(target.sheetId,target.reference)){setNameBoxValue(selectionAddress);return}
     setNameBoxValue(parsed.startRow===parsed.endRow&&parsed.startColumn===parsed.endColumn?address(parsed.startRow,parsed.startColumn):`${address(parsed.startRow,parsed.startColumn)}:${address(parsed.endRow,parsed.endColumn)}`)
@@ -970,6 +974,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     ...(namedRanges.data?.items??[]).map(item=>({
       id:`named:${item.id}`,group:'이름 범위',label:item.name,hint:item.range,icon:<Link2/>,
       keywords:'named range 이름 범위',run:()=>navigateToRange(item.sheet_id,item.range),
+    })),
+    ...(sheetTables.data?.items??[]).map(item=>({
+      id:`table:${item.id}`,group:'표',label:item.name,hint:item.range,icon:<Table2/>,
+      keywords:'table 표',run:()=>navigateToRange(item.sheet_id,item.range),
     })),
     {id:'cmd:share',group:'명령',label:'공유 설정 열기',icon:<Share2/>,keywords:'share 공유 권한',run:()=>setShareOpen(true)},
     {id:'cmd:sheets',group:'명령',label:'모든 시트 관리',icon:<Table2/>,keywords:'sheet manager 시트 관리 숨김',run:()=>setSheetManagerOpen(true)},
