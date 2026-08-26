@@ -410,3 +410,32 @@ func cloneSheetTablesForWorkbook(source map[string]SheetTable, workbookID string
 	}
 	return result
 }
+
+// TablesForFormula 는 표를 엔진이 아는 꼴로 바꾼다. 열 이름은 머리글 칸을
+// 읽어야 알 수 있으므로, 그 값을 어디서 가져올지는 부르는 쪽이 정한다.
+//
+// 저장소 밖에서도 이것이 필요하다. 목표값 찾기처럼 워크북을 통째로 읽어
+// 다시 셈하는 자리가 표를 모르면, =SUM(매출표[금액]) 이 든 수식이 아예
+// 풀리지 않아 그 칸이 의존성 그래프에서 빠진다. 그러면 "바꿀 셀의 영향을
+// 받지 않는다" 는 엉뚱한 답이 돌아온다.
+func TablesForFormula(items []SheetTable, header func(sheetID string, row, column int) string) map[string]formula.Table {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make(map[string]formula.Table, len(items))
+	for _, item := range items {
+		selected, err := cellrange.Parse(item.Range)
+		if err != nil {
+			continue
+		}
+		names := make([]string, 0, selected.End.Column-selected.Start.Column+1)
+		for column := selected.Start.Column; column <= selected.End.Column; column++ {
+			names = append(names, header(item.SheetID, selected.Start.Row, column))
+		}
+		result[item.Name] = formula.Table{
+			SheetID: item.SheetID, Range: item.Range, HeaderRow: item.HeaderRow, TotalsRow: item.TotalsRow,
+			Columns: TableColumns(item, names),
+		}
+	}
+	return result
+}

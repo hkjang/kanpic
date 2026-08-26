@@ -2736,3 +2736,51 @@ func TestCrossOriginResponsesExposeTheHeadersTheEditorReads(t *testing.T) {
 		}
 	}
 }
+
+// 워크북을 통째로 읽어 다시 셈하는 자리가 표와 이름 있는 수식을 알아야 한다.
+//
+// 모르면 그것을 쓰는 수식이 아예 풀리지 않아 그 칸이 의존성 그래프에서 빠진다.
+// 목표값 찾기는 "바꿀 셀의 영향을 받지 않는다" 는 엉뚱한 답을 내고, 수식 설명은
+// 풀 수 없는 수식이라고 답한다 — 격자에서는 멀쩡히 셈되는데도 그렇다.
+func TestGoalSeekKnowsTablesAndNamedFunctions(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "가정", "workspace_id": "default"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": created.Version, "idempotency_key": "seed", "cells": []map[string]any{
+			{"row": 1, "column": 1, "value": "금액"},
+			{"row": 2, "column": 1, "value": 100},
+			{"row": 3, "column": 1, "value": 200},
+			{"row": 5, "column": 1, "value": 2},
+			{"row": 6, "column": 1, "formula": "=SUM(매출표[금액])*A5"},
+		},
+	}, http.StatusOK)
+	request[workbook.SheetTable](t, server, http.MethodPost, "/api/v1/workbooks/"+created.ID+"/tables", map[string]any{
+		"idempotency_key": "table", "sheet_id": sheetID, "name": "매출표", "range": "A1:A3",
+	}, http.StatusCreated)
+	// 300 * 4 = 1200 이므로 A5 는 4 여야 한다.
+	answer := request[map[string]any](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/goal-seek", map[string]any{
+		"target": "A6", "changing": "A5", "goal": 1200,
+	}, http.StatusOK)
+	result, ok := answer["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("목표값 찾기=%#v", answer)
+	}
+	if converged, _ := result["converged"].(bool); !converged {
+		t.Fatalf("표를 쓰는 수식에서 답을 찾지 못했다: %#v", result)
+	}
+	value, _ := result["value"].(float64)
+	if value < 3.99 || value > 4.01 {
+		t.Fatalf("바꿀 값=%v, want 4", value)
+	}
+	// 수식 설명도 같은 자리를 지난다.
+	explained := request[map[string]any](t, server, http.MethodGet, "/api/v1/sheets/"+sheetID+"/formulas/A6", nil, http.StatusOK)
+	dependencies, _ := explained["dependencies"].([]any)
+	if len(dependencies) == 0 {
+		t.Fatalf("수식 설명이 기대는 칸을 찾지 못했다: %#v", explained)
+	}
+}

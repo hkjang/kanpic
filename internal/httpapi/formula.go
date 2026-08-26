@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -94,8 +95,15 @@ func (s *Server) getFormulaInfo(ctx context.Context, sheetID, address string) (f
 		return formulaInfoResult{}, err
 	}
 	functionDefinitions := workbook.NamedFunctionDefinitions(namedFunctions)
+	// 표도 함께 넘긴다. 모르면 =SUM(매출표[금액]) 이 든 칸을 설명해 달라고
+	// 했을 때 풀리지 않는 수식이라고 답한다 — 격자에서는 멀쩡히 셈되는데도.
+	tableDefinitions, err := s.tablesForFormula(ctx, book.ID)
+	if err != nil {
+		return formulaInfoResult{}, err
+	}
 	evaluator := formula.NewScopedWithNames(sheetID, sheetNames, formulaNames)
 	evaluator.SetNamedFunctions(functionDefinitions)
+	evaluator.SetTables(tableDefinitions)
 	dependencies, formulaErr := evaluator.Dependencies(selectedCells[0].Formula)
 	if formulaErr != nil {
 		return formulaInfoResult{}, fmt.Errorf("%w: %s", workbook.ErrInvalid, formulaErr.Message)
@@ -113,6 +121,7 @@ func (s *Server) getFormulaInfo(ctx context.Context, sheetID, address string) (f
 		}
 		candidateEvaluator := formula.NewScopedWithNames(sheet.ID, sheetNames, formulaNames)
 		candidateEvaluator.SetNamedFunctions(functionDefinitions)
+		candidateEvaluator.SetTables(tableDefinitions)
 		for _, candidate := range allCells {
 			if candidate.Formula == "" {
 				continue
@@ -148,4 +157,48 @@ func displayFormulaCell(key, currentSheetID string, idNames map[string]string) s
 		name = "'" + strings.ReplaceAll(name, "'", "''") + "'"
 	}
 	return name + "!" + address
+}
+
+// tablesForFormula 는 워크북의 표를 엔진이 아는 꼴로 읽어 온다.
+//
+// 워크북을 통째로 읽어 다시 셈하는 자리가 여럿이다 — 목표값 찾기, 수식 설명.
+// 그 가운데 하나라도 표를 모르면 =SUM(매출표[금액]) 이 든 수식이 풀리지
+// 않는다. 격자에서는 멀쩡히 셈되는데 그 자리에서만 아니라고 답하게 되므로,
+// 읽어 오는 자리를 하나로 둔다.
+func (s *Server) tablesForFormula(ctx context.Context, workbookID string) (map[string]formula.Table, error) {
+	tables, err := s.repository.ListSheetTables(ctx, workbookID)
+	if err != nil {
+		return nil, err
+	}
+	if len(tables) == 0 {
+		return nil, nil
+	}
+	// 표마다 머리글 줄을 한 번만 읽는다. 열 이름은 거기서 온다.
+	headers := make(map[string]string)
+	for _, item := range tables {
+		selected, parseErr := cellrange.Parse(item.Range)
+		if parseErr != nil {
+			continue
+		}
+		row := cellrange.Range{
+			Start: cellrange.Position{Row: selected.Start.Row, Column: selected.Start.Column},
+			End:   cellrange.Position{Row: selected.Start.Row, Column: selected.End.Column},
+		}
+		cells, readErr := s.repository.ReadRange(ctx, item.SheetID, row)
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, cell := range cells {
+			var value any
+			if len(cell.Value) > 0 {
+				_ = json.Unmarshal(cell.Value, &value)
+			}
+			if text, ok := value.(string); ok {
+				headers[formula.CellKey(item.SheetID, cellrange.Address(cell.Row, cell.Column))] = text
+			}
+		}
+	}
+	return workbook.TablesForFormula(tables, func(sheetID string, row, column int) string {
+		return headers[formula.CellKey(sheetID, cellrange.Address(row, column))]
+	}), nil
 }

@@ -77,7 +77,23 @@ func (s *Server) goalSeek(w http.ResponseWriter, r *http.Request) {
 	for _, item := range namedRanges {
 		formulaNames[item.Name] = formula.NamedRange{SheetID: item.SheetID, Range: item.Range}
 	}
-	result, err := formula.NewScopedWithNames(sheetID, sheetNames, formulaNames).GoalSeek(state, formula.GoalSeekInput{
+	// 이름 있는 수식과 표도 함께 넘긴다. 모르면 그것을 쓰는 수식이 아예
+	// 풀리지 않아 그 칸이 의존성 그래프에서 빠지고, "바꿀 셀의 영향을 받지
+	// 않는다" 는 엉뚱한 답이 돌아온다. 사람의 수식은 멀쩡한데도 그렇다.
+	namedFunctions, err := s.repository.ListNamedFunctions(ctx, workbookID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	tableDefinitions, err := s.tablesForFormula(ctx, workbookID)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	evaluator := formula.NewScopedWithNames(sheetID, sheetNames, formulaNames)
+	evaluator.SetNamedFunctions(workbook.NamedFunctionDefinitions(namedFunctions))
+	evaluator.SetTables(tableDefinitions)
+	result, err := evaluator.GoalSeek(state, formula.GoalSeekInput{
 		Target:   formula.CellKey(sheetID, strings.TrimSpace(request.Target)),
 		Changing: formula.CellKey(sheetID, strings.TrimSpace(request.Changing)),
 		Goal:     request.Goal,
