@@ -1,0 +1,3 @@
+.log-actions{display:flex;gap:.5rem;align-items:center}
+.log-actions a.secondary{display:inline-flex;align-items:center;text-decoration:none}
+.log-hint{margin:.4rem 0 0;font-size:.82rem;opacity:.8}

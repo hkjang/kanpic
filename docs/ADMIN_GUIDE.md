@@ -346,6 +346,24 @@ docker exec -i kanpic-postgres pg_restore -U kanpic_user -d kanpic_db -v /backup
 
 ---
 
+## 7.3 서버 로그 내보내기 (감사 대응)
+
+`/admin` → **서버 로그** 에서 레벨·검색어와 함께 **기간** 으로 거를 수 있습니다. 시작·끝 날짜만 적으면 그 날이 통째로 들어갑니다 — 끝 날짜의 기록이 빠지면 아무도 알아채지 못하기 때문입니다.
+
+**CSV 내보내기** 는 화면에 건 조건 **그대로** 내려받습니다. 화면과 내보내기가 같은 물음을 쓰므로, 감사에 넘긴 파일과 화면에서 본 것이 어긋나지 않습니다.
+
+- 화면은 최근 200건까지 보여 주지만 **내보내기는 개수를 자르지 않습니다.** 감사에 넘길 파일이 조용히 잘려 있으면 없느니만 못합니다 — 받은 사람은 그것이 전부라고 믿습니다.
+- 한 줄씩 흘려 보내므로 기록이 많아도 서버 메모리를 채우지 않습니다.
+- 파일 앞에 BOM을 붙입니다. 받은 사람이 엑셀로 여는 것이 보통이고, BOM이 없으면 한글이 깨집니다.
+- 끝이 시작보다 앞이면 **거절합니다.** 그대로 두면 늘 빈 파일이 나오고, 사람은 기록이 없다고 믿습니다.
+- 열은 `logged_at`(UTC, RFC3339) · `level` · `message` · `trace_id` · `attributes`(JSON)입니다.
+
+```bash
+curl -H "X-Kanpic-Actor: admin" \
+  "https://kanpic.example/api/v1/admin/logs.csv?from=2026-01-01&to=2026-01-31&level=ERROR" \
+  -o kanpic-logs-1월.csv
+```
+
 ## 8. 보안 및 컴플라이언스 (Security Checklists)
 
 > [!IMPORTANT]

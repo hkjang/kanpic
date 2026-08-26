@@ -278,6 +278,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	}
 	if logs != nil {
 		mux.HandleFunc("GET /api/v1/admin/logs", s.listLogs)
+		mux.HandleFunc("GET /api/v1/admin/logs.csv", s.exportLogs)
 		mux.HandleFunc("POST /api/v1/admin/logs:purge", s.purgeLogs)
 	}
 	if keys != nil {

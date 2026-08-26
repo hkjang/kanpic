@@ -3,9 +3,9 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,11 +25,44 @@ type Store struct{ pool *pgxpool.Pool }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
+// logFilter 는 화면과 내보내기가 함께 쓰는 거르개다. 둘이 따로 거르면
+// 감사에 넘긴 파일과 화면에서 본 것이 달라진다.
+type logFilter struct {
+	level string
+	query string
+	from  time.Time
+	to    time.Time
+}
+
+func (f logFilter) where() (string, []any) {
+	condition := `($1='' OR level=$1) AND ($2='' OR message ILIKE '%' || $2 || '%')`
+	arguments := []any{f.level, f.query}
+	if !f.from.IsZero() {
+		arguments = append(arguments, f.from)
+		condition += fmt.Sprintf(" AND logged_at>=$%d", len(arguments))
+	}
+	if !f.to.IsZero() {
+		arguments = append(arguments, f.to)
+		condition += fmt.Sprintf(" AND logged_at<=$%d", len(arguments))
+	}
+	return condition, arguments
+}
+
 func (s *Store) List(ctx context.Context, level, query string, limit int) ([]LogEntry, error) {
+	return s.ListRange(ctx, level, query, time.Time{}, time.Time{}, limit)
+}
+
+// ListRange 는 기간까지 좁혀 낸다. 감사에서는 "그 기간 기록" 을 달라고 하지
+// "최근 100건" 을 달라고 하지 않는다.
+func (s *Store) ListRange(ctx context.Context, level, query string, from, to time.Time, limit int) ([]LogEntry, error) {
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id,logged_at,level,message,attributes,trace_id FROM system_logs WHERE ($1='' OR level=$1) AND ($2='' OR message ILIKE '%' || $2 || '%' OR attributes::text ILIKE '%' || $2 || '%') ORDER BY logged_at DESC LIMIT $3`, strings.ToUpper(level), query, limit)
+	condition, arguments := logFilter{level: level, query: query, from: from, to: to}.where()
+	arguments = append(arguments, limit)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(
+		`SELECT id,logged_at,level,message,attributes,trace_id FROM system_logs WHERE %s ORDER BY logged_at DESC, id DESC LIMIT $%d`,
+		condition, len(arguments)), arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +78,32 @@ func (s *Store) List(ctx context.Context, level, query string, limit int) ([]Log
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+// Stream 은 거른 기록을 하나씩 넘긴다. 내보내기는 개수를 자르지 않는다 —
+// 감사에 넘길 파일이 조용히 잘려 있으면 없느니만 못하다. 한 번에 모두
+// 메모리에 담지 않으려고 한 줄씩 흘린다.
+func (s *Store) Stream(ctx context.Context, level, query string, from, to time.Time, visit func(LogEntry) error) error {
+	condition, arguments := logFilter{level: level, query: query, from: from, to: to}.where()
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(
+		`SELECT id,logged_at,level,message,attributes,trace_id FROM system_logs WHERE %s ORDER BY logged_at DESC, id DESC`,
+		condition), arguments...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item LogEntry
+		var data []byte
+		if err := rows.Scan(&item.ID, &item.LoggedAt, &item.Level, &item.Message, &data, &item.TraceID); err != nil {
+			return err
+		}
+		_ = json.Unmarshal(data, &item.Attributes)
+		if err := visit(item); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Store) PurgeBefore(ctx context.Context, before time.Time) (int64, error) {
