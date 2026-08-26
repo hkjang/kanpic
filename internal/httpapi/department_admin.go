@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"strings"
+
+	"kanpic/internal/auth"
 )
 
 // 부서 관리자는 자기 부서와 그 아래 부서의 구성원 계정만 다룬다.
@@ -57,6 +59,35 @@ func (s *Server) requireMemberAdmin(w http.ResponseWriter, r *http.Request, targ
 		return false
 	}
 	return true
+}
+
+// refuseAdminRoleDelegation 은 부서 관리자가 관리자 역할을 건드리는 것을
+// 막는다.
+//
+// 막지 않으면 부서 관리자가 구성원에게 kanpic-admin 을 얹어 전역 관리자를
+// 하나 만들어 낼 수 있다. 그것은 위임이 아니라 승격이고, 자기 자신을 막아
+// 둔 것도 이 한 걸음으로 우회된다.
+//
+// 회수도 함께 막는다. 남의 관리자 권한을 떼는 것 역시 맡은 범위 밖이다.
+func (s *Server) refuseAdminRoleDelegation(w http.ResponseWriter, r *http.Request, role string) bool {
+	if s.isGlobalAdmin(r) {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(role))
+	adminRoles := []string{auth.DefaultAdminRole}
+	if s.auth != nil {
+		adminRoles = s.auth.AdminRoles(r.Context())
+	}
+	for _, candidate := range adminRoles {
+		if strings.ToLower(strings.TrimSpace(candidate)) != name {
+			continue
+		}
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{
+			"code": "forbidden", "message": "부서 관리자는 관리자 역할을 부여하거나 회수할 수 없습니다.",
+		}})
+		return true
+	}
+	return false
 }
 
 // isGlobalAdmin 은 문을 열지 않고 전역 관리자인지만 본다. requireAdmin 은

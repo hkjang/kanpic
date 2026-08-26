@@ -125,3 +125,26 @@ func TestOnlyAGlobalAdminAppointsDepartmentManagers(t *testing.T) {
 	requestAs[map[string]any](t, server, manager, http.MethodPost, "/api/v1/departments/"+row["id"].(string)+"/managers",
 		map[string]any{"user_ids": []string{outsider}}, http.StatusForbidden)
 }
+
+// 부서 관리자가 구성원에게 관리자 역할을 얹으면 전역 관리자를 하나 만들어
+// 내는 셈이다. 그것은 위임이 아니라 승격이고, 자기 자신을 막아 둔 것도
+// 이 한 걸음으로 우회된다. 회수도 맡은 범위 밖이다.
+func TestDepartmentAdminCannotMintAGlobalAdministrator(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	manager, member, _ := seedDepartmentAdmin(t, server)
+
+	requestAs[map[string]any](t, server, manager, http.MethodPost, "/api/v1/admin/users/"+member+"/roles",
+		map[string]any{"role": "kanpic-admin"}, http.StatusForbidden)
+	// 평범한 역할은 그대로 줄 수 있어야 한다.
+	requestAs[workbook.DirectoryUser](t, server, manager, http.MethodPost, "/api/v1/admin/users/"+member+"/roles",
+		map[string]any{"role": "kanpic-analyst"}, http.StatusOK)
+
+	// 전역 관리자가 얹은 관리자 역할을 부서 관리자가 뗄 수도 없다.
+	request[workbook.DirectoryUser](t, server, http.MethodPost, "/api/v1/admin/users/"+member+"/roles",
+		map[string]any{"role": "kanpic-admin"}, http.StatusOK)
+	requestAs[map[string]any](t, server, manager, http.MethodDelete,
+		"/api/v1/admin/users/"+member+"/roles/kanpic-admin", nil, http.StatusForbidden)
+}

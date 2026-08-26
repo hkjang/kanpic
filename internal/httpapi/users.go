@@ -240,6 +240,9 @@ func (s *Server) grantUserRole(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if s.refuseAdminRoleDelegation(w, r, input.Role) {
+		return
+	}
 	user, err := s.repository.GrantUserRole(r.Context(), r.PathValue("userId"), input.Role, actorID(r))
 	if err != nil {
 		s.writeError(w, r, err)
@@ -253,6 +256,9 @@ func (s *Server) revokeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, role := r.PathValue("userId"), r.PathValue("role")
+	if s.refuseAdminRoleDelegation(w, r, role) {
+		return
+	}
 	// Dropping your own administrator role would lock you out of the console.
 	if strings.EqualFold(userID, actorID(r)) && s.auth != nil && s.auth.HasAdminRole(r.Context(), []string{role}) {
 		s.writeError(w, r, fmt.Errorf("%w: 자신의 관리자 역할은 회수할 수 없습니다", workbook.ErrInvalid))
