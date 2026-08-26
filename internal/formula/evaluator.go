@@ -1036,6 +1036,13 @@ func (p *parser) primary() (node, error) {
 			if result, isTable, tableErr := p.tableReference(current.text); isTable {
 				return result, tableErr
 			}
+			// 괄호 없이 적힌 함수 이름은 그 함수 자체를 가리키는 값이다.
+			// =MAP(A1:A3,ABS) 나 =GROUPBY(A,B,SUM) 이 이 꼴이다. 이름 범위가
+			// 먼저가 아니라 나중인 이유는, 사람이 SUM 이라는 이름 범위를
+			// 만들어 두었다면 그쪽을 뜻했을 것이기 때문이다.
+			if _, named := p.scope.NamedRanges[normalizeSheetName(name)]; !named && isCallableName(name, p.scope) {
+				return literalNode{functionValue{name: canonicalFunctionName(name)}}, nil
+			}
 			return p.namedRange(current.text)
 		}
 		return p.cellReference("", current.text)
@@ -1446,6 +1453,11 @@ func storableResult(value any, evalErr error) (any, error) {
 	// something in the cell that nothing can display or calculate with.
 	if _, isFunction := value.(lambdaValue); isFunction {
 		return value, formulaError("#VALUE!", "a LAMBDA has to be called or passed to MAP, BYROW, BYCOL, REDUCE or SCAN")
+	}
+	// 괄호 없이 적은 함수 이름도 마찬가지다. MAP 이나 GROUPBY 에 넘길 때만
+	// 뜻이 있고, 칸에 =SUM 이라고 적은 것은 예전처럼 이름을 잘못 적은 것이다.
+	if named, isFunction := value.(functionValue); isFunction {
+		return value, formulaError("#NAME?", "unknown name "+named.name)
 	}
 	// 오류가 값으로 돌아오는 자리가 있다. 배열 안의 오류 칸을 INDEX 로
 	// 꺼내면 오류 자체가 값이 된다. 그대로 두면 칸에 {code, message} 라는

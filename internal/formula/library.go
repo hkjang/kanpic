@@ -456,6 +456,28 @@ var catalog = []FunctionDoc{
 // Catalog lists every function the evaluator understands, in menu order.
 func Catalog() []FunctionDoc { return append([]FunctionDoc(nil), catalog...) }
 
+// callableNames 는 카탈로그에 적힌 함수 이름들이다. 괄호 없이 적힌 이름이
+// 함수를 가리키는지 가리는 데 쓴다. 카탈로그는 구현된 함수를 모두 담도록
+// 시험이 붙잡고 있으므로 따로 목록을 만들지 않는다.
+var callableNames = func() map[string]struct{} {
+	names := make(map[string]struct{}, len(catalog))
+	for _, entry := range catalog {
+		names[strings.ToUpper(entry.Name)] = struct{}{}
+	}
+	return names
+}()
+
+// isCallableName 은 이 이름이 부를 수 있는 것인지 본다. 워크북에 저장해 둔
+// 이름 있는 수식도 함께 본다 — 사람이 만든 함수라고 다를 이유가 없다.
+func isCallableName(name string, scope Scope) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	if _, found := callableNames[upper]; found {
+		return true
+	}
+	_, named := scope.NamedFunctions[upper]
+	return named
+}
+
 var now = time.Now
 
 // evaluateLibrary handles the functions whose arguments are ordinary flattened

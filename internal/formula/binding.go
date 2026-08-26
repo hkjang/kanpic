@@ -55,6 +55,29 @@ func (n letNode) eval(cells map[string]any) (any, error) {
 	return n.calculation.eval(cells)
 }
 
+// callableValue 는 부를 수 있는 값이다. 수식으로 적은 LAMBDA 와, 이름만
+// 적어 넘긴 함수가 둘 다 여기에 든다. MAP 이나 GROUPBY 는 어느 쪽인지
+// 가리지 않는다.
+type callableValue interface {
+	call(cells map[string]any, arguments []any) (any, error)
+}
+
+// functionValue 는 이름만 적어 넘긴 함수다. 엑셀은 =MAP(A1:A3,ABS) 처럼
+// LAMBDA(v,ABS(v)) 를 줄여 적는 것을 받아 준다. GROUPBY 의 셋째 인수도
+// 이 꼴이므로, 이것이 없으면 사람이 쓰는 모양 그대로는 쓸 수 없다.
+//
+// 값으로 만들어 두기만 하고, 자료로 쓰이면 예전처럼 #NAME? 이 된다.
+// =SUM 을 칸에 적는 것은 여전히 이름을 잘못 적은 것이다.
+type functionValue struct{ name string }
+
+func (f functionValue) call(cells map[string]any, arguments []any) (any, error) {
+	nodes := make([]node, len(arguments))
+	for index, argument := range arguments {
+		nodes[index] = literalNode{argument}
+	}
+	return functionNode{name: f.name, arguments: nodes}.eval(cells)
+}
+
 // lambdaValue is a function written in a formula. It is a value like any
 // other, which is what lets MAP and REDUCE take one as an argument.
 type lambdaValue struct {
@@ -288,7 +311,7 @@ func evaluateLambdaHelper(name string, arguments []node, cells map[string]any) (
 		}
 		values = append(values, value)
 	}
-	function, ok := values[len(values)-1].(lambdaValue)
+	function, ok := values[len(values)-1].(callableValue)
 	if !ok {
 		return nil, formulaError("#VALUE!", name+" needs a LAMBDA as its last argument")
 	}
