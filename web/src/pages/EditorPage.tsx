@@ -65,7 +65,7 @@ import { FunctionListDialog } from '../components/FunctionListDialog'
 import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type PastedCell } from '../lib/clipboard'
-import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
+import { cellMerge,mergeInRegion,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
@@ -637,6 +637,20 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // Both cleanups preview before they write. Deduplication also needs to know
   // the table around the selection: shifting rows up in some columns and not
   // the others is how a tidy-up turns into scrambled data.
+  /**
+   * 자료를 옮기는 정리는 병합된 칸을 만나면 멈춘다.
+   *
+   * 그냥 두면 병합 서식이 다른 행으로 딸려 가고, 서버는 그 묶음을 통째로
+   * 물리친다 — "stored merge metadata is invalid" 는 사람이 무엇을 해야
+   * 하는지 알려 주지 않는다. 정렬이 오래 전부터 그렇게 하듯, 어느 칸이
+   * 걸렸는지 짚어서 먼저 말한다.
+   */
+  const mergeBlocks=(cells:Map<string,Cell>,region:GridRegion,what:string)=>{
+    const found=mergeInRegion(cells,region)
+    if(!found)return false
+    alert(`${address(found.row,found.column)}은(는) 병합된 셀이므로 ${what} 수 없습니다. 병합을 해제한 뒤 다시 시도하세요.`)
+    return true
+  }
   const openCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers')=>{
     if(!writable())return
     const {region,cells}=await resolveWorkingBlock()
@@ -646,6 +660,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(mode==='subtotals'){
       const resolved=await resolveSheetBlock(region.startRow,region.startColumn)
       if(resolved){target.region=resolved.region;target.cells=resolved.cells;target.headerRows=looksLikeHeaderRow(resolved.cells,resolved.region)?1:0}
+      if(mergeBlocks(target.cells,target.region,'부분합을 지울'))return
       setCleanup({mode,target})
       return
     }
@@ -664,9 +679,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         }
       }
     }
+    if(mode==='duplicates'&&mergeBlocks(target.blockCells??target.cells,target.block??target.region,'중복 행을 지울'))return
     setCleanup({mode,target})
   }
   const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+    // 미리보기를 띄운 자리와 실제로 고쳐 쓰는 자리가 다를 수 있으므로,
+    // 쓰기 직전에 쓰는 자리를 놓고 한 번 더 본다.
+    if((mode==='duplicates'||mode==='subtotals')&&mergeBlocks(cells,region,mode==='duplicates'?'중복 행을 지울':'부분합을 지울'))return
     if(mode==='subtotals'){
       await writeCells(planRemoveSubtotals(cells,region).writes)
       // The folds the run created have nothing left to fold, so they go with
@@ -705,6 +724,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const {region,cells}=block??await resolveWorkingBlock()
     const preview=splitTextToColumns(cells,region,delimiter)
     if(preview.columns<2){alert('선택한 열에서 구분할 수 있는 값을 찾지 못했습니다.');return}
+    // 나눈 값은 오른쪽 열로 퍼진다. 그 자리에 병합이 있으면 덮인 칸 일부만
+    // 서식을 잃어 반쪽짜리 병합이 남는다 — 아무 곳에도 적히지 않는 채로.
+    if(mergeBlocks(cells,{...region,endColumn:region.startColumn+preview.columns-1},'열로 나눌'))return
     await writeCells(preview.writes)
   }
   // A single cell selection means the whole surrounding block, so formatting a

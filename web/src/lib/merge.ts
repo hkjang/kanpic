@@ -33,3 +33,22 @@ export function stripMergeStyle(style:Record<string,unknown>|undefined){
   delete next.merge
   return Object.keys(next).length?next:undefined
 }
+
+/**
+ * 이 범위에 걸쳐 있는 병합 칸의 첫 자리를 찾는다. 없으면 undefined 다.
+ *
+ * 병합 정보는 덮인 칸마다 적혀 있으므로, 범위 밖에서 시작한 병합도 안쪽
+ * 칸 하나만 보면 찾을 수 있다.
+ *
+ * 자료를 옮기는 정리는 병합을 만나면 그냥 두면 안 된다. 병합된 칸의 서식을
+ * 다른 행으로 옮겨 적으면 서버가 통째로 물리친다 — "stored merge metadata is
+ * invalid" 라는, 사람이 무엇을 해야 하는지 알 수 없는 말과 함께.
+ */
+export function mergeInRegion(cells:Map<string,Cell>,region:MergeRange){
+  for(let row=region.startRow;row<=region.endRow;row+=1)
+    for(let column=region.startColumn;column<=region.endColumn;column+=1){
+      const range=cellMerge(cells.get(cellKey(row,column)))
+      if(range)return {row,column,range}
+    }
+  return undefined
+}
