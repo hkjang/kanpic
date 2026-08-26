@@ -297,6 +297,45 @@ func (r *PostgresRepository) AdminOverview(ctx context.Context) (AdminOverview, 
 
 // GovernedWorkbooks lists workbooks for administrators, including the ones they
 // do not own, so over-sharing and orphaned data can be found and fixed.
+// WorkbooksOwnedBy 는 한 사람이 가진 워크북을 모두 낸다. 퇴사자를 정리할 때
+// "이 사람이 무엇을 가지고 있는가" 를 먼저 알아야 하기 때문이다.
+//
+// 목록을 자르지 않는다. 200개까지만 보여 주면 201번째 워크북은 넘겨지지
+// 않은 채로 남고, 아무도 그것을 모른다. 휴지통에 있는 것도 함께 낸다 —
+// 지운 것도 그 사람의 것이고 소유자만 되살릴 수 있다.
+func (r *PostgresRepository) WorkbooksOwnedBy(ctx context.Context, ownerID string) ([]GovernedWorkbook, error) {
+	owner := strings.TrimSpace(ownerID)
+	if owner == "" {
+		return nil, fmt.Errorf("%w: owner is required", ErrInvalid)
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT w.id::text,w.title,w.owner_id,coalesce(u.display_name,''),coalesce(u.status,''),w.link_access,w.link_role,w.version,w.updated_at,w.deleted_at,
+		       (SELECT count(*) FROM workbook_shares s WHERE s.workbook_id=w.id),
+		       (SELECT count(*) FROM sheets sh WHERE sh.workbook_id=w.id),
+		       (SELECT count(*) FROM workbook_access_requests q WHERE q.workbook_id=w.id AND q.status='pending')
+		FROM workbooks w
+		LEFT JOIN directory_users u ON lower(u.user_id)=lower(w.owner_id)
+		WHERE lower(btrim(w.owner_id))=lower(btrim($1))
+		ORDER BY w.updated_at DESC`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]GovernedWorkbook, 0)
+	for rows.Next() {
+		var item GovernedWorkbook
+		if err := rows.Scan(&item.ID, &item.Title, &item.OwnerID, &item.OwnerName, &item.OwnerStatus, &item.LinkAccess, &item.LinkRole,
+			&item.Version, &item.UpdatedAt, &item.DeletedAt, &item.ShareCount, &item.SheetCount, &item.PendingAccess); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(string(item.LinkAccess)) == "" {
+			item.LinkAccess = LinkAccessRestricted
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *PostgresRepository) GovernedWorkbooks(ctx context.Context, filter string, limit int) ([]GovernedWorkbook, error) {
 	if !ValidGovernanceFilter(filter) {
 		return nil, fmt.Errorf("%w: unknown workbook filter", ErrInvalid)

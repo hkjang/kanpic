@@ -299,6 +299,47 @@ func (r *MemoryRepository) AdminOverview(_ context.Context) (AdminOverview, erro
 	return overview, nil
 }
 
+// WorkbooksOwnedBy 는 한 사람이 가진 워크북을 모두 낸다. 퇴사자를 정리할 때
+// "이 사람이 무엇을 가지고 있는가" 를 먼저 알아야 하기 때문이다.
+//
+// 목록을 자르지 않는다. 소유권 관리 화면이 200개까지만 보여 주면 201번째
+// 워크북은 넘겨지지 않은 채로 남고, 아무도 그것을 모른다.
+//
+// 휴지통에 있는 것도 함께 낸다. 지운 것도 그 사람의 것이고, 소유자만
+// 되살릴 수 있다.
+func (r *MemoryRepository) WorkbooksOwnedBy(_ context.Context, ownerID string) ([]GovernedWorkbook, error) {
+	owner := strings.ToLower(strings.TrimSpace(ownerID))
+	if owner == "" {
+		return nil, fmt.Errorf("%w: owner is required", ErrInvalid)
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]GovernedWorkbook, 0)
+	collect := func(states map[string]*workbookState) {
+		for id, state := range states {
+			if strings.ToLower(strings.TrimSpace(state.workbook.OwnerID)) != owner {
+				continue
+			}
+			person := r.directory[owner]
+			item := GovernedWorkbook{
+				ID: id, Title: state.workbook.Title, OwnerID: state.workbook.OwnerID,
+				OwnerName: person.DisplayName, OwnerStatus: person.Status,
+				LinkAccess: state.workbook.LinkAccess, LinkRole: state.workbook.LinkRole,
+				ShareCount: len(r.shares[id]), SheetCount: len(state.sheets),
+				Version: state.workbook.Version, UpdatedAt: state.workbook.UpdatedAt, DeletedAt: state.deletedAt,
+			}
+			if item.LinkAccess == "" {
+				item.LinkAccess = LinkAccessRestricted
+			}
+			items = append(items, item)
+		}
+	}
+	collect(r.workbooks)
+	collect(r.trash)
+	sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+	return items, nil
+}
+
 func (r *MemoryRepository) GovernedWorkbooks(_ context.Context, filter string, limit int) ([]GovernedWorkbook, error) {
 	if !ValidGovernanceFilter(filter) {
 		return nil, fmt.Errorf("%w: unknown workbook filter", ErrInvalid)

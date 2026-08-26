@@ -65,6 +65,87 @@ func (s *Server) governedWorkbooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// ownedWorkbooks 는 한 사람이 가진 워크북을 모두 낸다. 퇴사자를 정리하려면
+// "이 사람이 무엇을 가지고 있는가" 를 먼저 알아야 한다.
+func (s *Server) ownedWorkbooks(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	items, err := s.repository.WorkbooksOwnedBy(r.Context(), r.PathValue("userId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	trashed := 0
+	for _, item := range items {
+		if item.DeletedAt != nil {
+			trashed++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "trashed": trashed})
+}
+
+// transferOwnedWorkbooks 는 한 사람이 가진 것을 한꺼번에 넘긴다.
+//
+// 워크북마다 하나씩 넘길 수는 이미 있었다. 그런데 퇴사자가 마흔 개를
+// 가지고 있으면 마흔 번을 눌러야 하고, 몇 개를 빠뜨렸는지는 아무도 모른다.
+//
+// 넘긴 것과 못 넘긴 것을 하나하나 돌려준다. "다 됐습니다" 하고 절반만
+// 넘어간 것이 가장 나쁘다 — 남은 절반은 정지된 계정에 묶인 채로 잊힌다.
+func (s *Server) transferOwnedWorkbooks(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var input struct {
+		NewOwnerID   string `json:"new_owner_id"`
+		KeepAsEditor bool   `json:"keep_as_editor"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	previous := strings.TrimSpace(r.PathValue("userId"))
+	next := strings.TrimSpace(input.NewOwnerID)
+	if next == "" {
+		s.writeError(w, r, fmt.Errorf("%w: new owner is required", workbook.ErrInvalid))
+		return
+	}
+	if strings.EqualFold(previous, next) {
+		s.writeError(w, r, fmt.Errorf("%w: the new owner is the current owner", workbook.ErrInvalid))
+		return
+	}
+	// 정지된 사람에게 넘기면 받은 사람도 손댈 수 없다. 옮긴 것이 아니라
+	// 옮긴 척한 것이 되므로 미리 막는다.
+	if receiver, err := s.repository.GetUser(r.Context(), next); err == nil && receiver.Status == workbook.UserStatusSuspended {
+		s.writeError(w, r, fmt.Errorf("%w: the new owner is suspended", workbook.ErrInvalid))
+		return
+	}
+	items, err := s.repository.WorkbooksOwnedBy(r.Context(), previous)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	transferred := make([]map[string]any, 0)
+	failed := make([]map[string]any, 0)
+	skipped := 0
+	for _, item := range items {
+		// 휴지통에 있는 것은 넘기지 않는다. 되살리기 전에는 손댈 수 없고,
+		// 넘기려 들면 오류만 쌓인다. 몇 개인지는 세어서 알린다.
+		if item.DeletedAt != nil {
+			skipped++
+			continue
+		}
+		transfer := workbook.TransferOwnershipInput{NewOwnerID: next, KeepAsEditor: input.KeepAsEditor, ActorID: actorID(r)}
+		if _, transferErr := s.repository.TransferWorkbookOwnership(r.Context(), item.ID, transfer); transferErr != nil {
+			failed = append(failed, map[string]any{"id": item.ID, "title": item.Title, "reason": transferErr.Error()})
+			continue
+		}
+		transferred = append(transferred, map[string]any{"id": item.ID, "title": item.Title})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"transferred": transferred, "failed": failed, "skipped_trashed": skipped,
+	})
+}
+
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return

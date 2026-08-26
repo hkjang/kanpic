@@ -5,6 +5,7 @@ import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
 import { PromptDialog, type PromptRequest } from '../components/PromptDialog'
+import { HandoverDialog } from '../components/HandoverDialog'
 import { useDialog } from '../lib/useDialog'
 import type { AdminOverview, AIAction, MailDeliveryPage, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
@@ -138,6 +139,7 @@ function UsersPanel(){
   const client=useQueryClient()
   const [search,setSearch]=useState(''),[selected,setSelected]=useState<string>(),[role,setRole]=useState('')
   const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
+  const [handover,setHandover]=useState<DirectoryUser>()
   const [showAdd,setShowAdd]=useState(false)
   const [message,setMessage]=useState(''),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[];admin_roles:string[];default_admin_role:string}>('/api/v1/admin/users')})
@@ -189,6 +191,7 @@ function UsersPanel(){
   }
   return <main className="console-content">
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
+    {handover&&<HandoverDialog user={handover} onClose={()=>setHandover(undefined)} onDone={text=>{setHandover(undefined);setMessage(text)}}/>}
     <div className="content-title"><div><span className="eyebrow">ACCESS CONTROL</span><h1>사용자 및 역할</h1><p>로그인한 사용자는 자동으로 등록됩니다. 계정 정지, 관리자 지정, kanpic 역할 부여와 세션 종료를 관리합니다.</p></div><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 사용자 등록</button></div>
     {message&&<div className="result-banner" role="status"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}
@@ -222,7 +225,7 @@ function UsersPanel(){
             ?<button className="secondary" onClick={()=>demote(current)}><ShieldCheck/> 관리자 해제</button>
             :<button className="secondary" onClick={()=>promote(current)}><ShieldCheck/> 관리자로 지정</button>}
           <button className="secondary" onClick={()=>note(current)}>메모 편집</button>
-          <button className="secondary" onClick={()=>signOut(current)}>모든 세션 종료</button>
+          <button className="secondary" onClick={()=>signOut(current)}>모든 세션 종료</button><button className="secondary" onClick={()=>setHandover(current)}>가진 워크북 인수인계…</button>
           {current.status==='suspended'
             ?<button className="primary" onClick={()=>setStatus(current,'active')}><CheckCircle2/> 정지 해제</button>
             :<button className="danger" onClick={()=>{if(window.confirm(`'${current.user_id}' 계정을 정지하면 즉시 로그아웃되고 모든 요청이 차단됩니다. 계속할까요?`))setStatus(current,'suspended')}}><XCircle/> 계정 정지</button>}
