@@ -144,6 +144,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/admin/workbooks", s.governedWorkbooks)
 	mux.HandleFunc("GET /api/v1/admin/users", s.listUsers)
 	mux.HandleFunc("POST /api/v1/admin/users", s.createUser)
+	mux.HandleFunc("POST /api/v1/admin/users:import", s.importUsers)
 	mux.HandleFunc("GET /api/v1/admin/users/{userId}", s.getUser)
 	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}", s.updateUser)
 	mux.HandleFunc("POST /api/v1/admin/users/{userId}/roles", s.grantUserRole)

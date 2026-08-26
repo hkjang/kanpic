@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Activity, ArrowLeft, Building2, Bot, LineChart, Mail, Send, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle } from 'lucide-react'
+import { Activity, ArrowLeft, Building2, Bot, LineChart, Mail, Send, CheckCircle2, ChevronRight, Database, FileClock, KeyRound, ListFilter, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Users, Workflow, XCircle ,UploadCloud} from 'lucide-react'
 import { Brand } from '../components/Brand'
 import { ProfileMenu } from '../components/ProfileMenu'
 import { api } from '../lib/api'
 import { PromptDialog, type PromptRequest } from '../components/PromptDialog'
 import { HandoverDialog } from '../components/HandoverDialog'
+import { UserImportDialog } from '../components/UserImportDialog'
 import { useDialog } from '../lib/useDialog'
 import type { AdminOverview, AIAction, MailDeliveryPage, AIHistoryItem, AIHistoryPage, BuildInfo, Department, DirectoryUser, GovernedWorkbook, LogEntry, Session, SettingVersion, SystemSetting } from '../types'
 
@@ -146,6 +147,7 @@ function UsersPanel(){
   const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
   const [handover,setHandover]=useState<DirectoryUser>()
   const [dormantOnly,setDormantOnly]=useState(false)
+  const [bulkOpen,setBulkOpen]=useState(false)
   const [showAdd,setShowAdd]=useState(false)
   const [message,setMessage]=useState(''),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[];admin_roles:string[];default_admin_role:string}>('/api/v1/admin/users')})
@@ -203,8 +205,9 @@ function UsersPanel(){
   }
   return <main className="console-content">
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
+    {bulkOpen&&<UserImportDialog onClose={()=>setBulkOpen(false)} onDone={text=>{setBulkOpen(false);setMessage(text);void users.refetch()}}/>}
     {handover&&<HandoverDialog user={handover} onClose={()=>setHandover(undefined)} onDone={text=>{setHandover(undefined);setMessage(text)}}/>}
-    <div className="content-title"><div><span className="eyebrow">ACCESS CONTROL</span><h1>사용자 및 역할</h1><p>로그인한 사용자는 자동으로 등록됩니다. 계정 정지, 관리자 지정, kanpic 역할 부여와 세션 종료를 관리합니다.</p></div><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 사용자 등록</button></div>
+    <div className="content-title"><div><span className="eyebrow">ACCESS CONTROL</span><h1>사용자 및 역할</h1><p>로그인한 사용자는 자동으로 등록됩니다. 계정 정지, 관리자 지정, kanpic 역할 부여와 세션 종료를 관리합니다.</p></div><div className="log-actions"><button className="secondary" onClick={()=>setBulkOpen(true)}><UploadCloud/> 일괄 등록…</button><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 사용자 등록</button></div></div>
     {message&&<div className="result-banner" role="status"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}
     <div className="metric-row"><div><small>전체 사용자</small><strong>{(users.data?.items??[]).length.toLocaleString()}</strong><span className="metric-note">디렉터리 등록 기준</span></div><div><small>관리자</small><strong>{(users.data?.items??[]).filter(isAdmin).length}</strong><span className="metric-note">{adminRoles.join(', ')}</span></div><div><small>정지된 계정</small><strong className={(users.data?.items??[]).some(user=>user.status==='suspended')?'error-text':''}>{(users.data?.items??[]).filter(user=>user.status==='suspended').length}</strong><span className="metric-note">모든 요청이 차단됩니다</span></div></div>
