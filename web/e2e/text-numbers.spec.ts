@@ -43,5 +43,11 @@ test('numbers stored as text are found and fixed, and the total changes', async 
     const result = await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A5:A5`).then(r => r.json())
     return result.items[0]?.value
   },{timeout:15_000}).toBe(7234)
+
+  // 값만 맞고 화면이 달라지면 사람은 자기 자료가 망가졌다고 읽는다. ₩ 는
+  // 서식으로 옮겨 두었으므로 칸은 그대로 ₩5,000 으로 보여야 한다.
+  const after = await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A3:A3`).then(r => r.json())
+  expect(after.items[0]?.value).toBe(5000)
+  expect(after.items[0]?.style?.number_format).toBe('₩#,##0')
   expect(alerts, '조용히 실패한 것이 있다').toEqual([])
 })

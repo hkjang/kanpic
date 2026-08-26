@@ -109,7 +109,7 @@ export function CleanupDialog({mode,target,onClose,onApply}:{
             </li>)}</ul>}
       </div>
       {count>0&&<p className="cleanup-summary">
-        {mode==='numbers'?`글자로 담긴 숫자 ${count.toLocaleString()}칸을 숫자로 바꿉니다. 지금은 =SUM 이 이 칸들을 빼고 셈합니다.`:mode==='duplicates'?`중복된 ${count.toLocaleString()}개 행을 삭제합니다.`:mode==='subtotals'?`부분합 ${count.toLocaleString()}개 행을 지우고 그룹을 풉니다.`:`${count.toLocaleString()}개 셀의 공백을 정리합니다.`}
+        {mode==='numbers'?`글자로 담긴 숫자 ${count.toLocaleString()}칸을 숫자로 바꿉니다. 지금은 =SUM 이 이 칸들을 빼고 셈합니다. 칸에 담기는 값은 아래와 같고, 보이는 모양은 ₩ 와 % 를 서식으로 옮겨 그대로 둡니다.`:mode==='duplicates'?`중복된 ${count.toLocaleString()}개 행을 삭제합니다.`:mode==='subtotals'?`부분합 ${count.toLocaleString()}개 행을 지우고 그룹을 풉니다.`:`${count.toLocaleString()}개 셀의 공백을 정리합니다.`}
         {count>PREVIEW_ROWS?` 위에는 앞의 ${PREVIEW_ROWS}건만 표시했습니다.`:''}
       </p>}
       <div className="modal-actions">

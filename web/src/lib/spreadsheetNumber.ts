@@ -75,3 +75,36 @@ export function textToNumber(value:string):number|undefined{
   if(!Number.isFinite(parsed))return undefined
   return sign*(percent?parsed/100:parsed)
 }
+
+/**
+ * 글자로 담겼던 숫자를 숫자로 바꾼 뒤에도 보이던 대로 보이게 할 표시 형식을
+ * 고른다. 고를 것이 없으면 undefined 다.
+ *
+ * 이것이 없으면 바꾸는 순간 화면이 달라진다. "50%" 가 "0.5" 가 되고
+ * "₩5,000" 이 "5000" 이 된다. 값은 맞지만 사람은 자기 자료가 망가졌다고
+ * 읽는다 — 특히 백분율은 수가 100분의 1로 줄어든 것처럼 보인다.
+ *
+ * 쓸 수 있는 것은 formatCellValue 가 그릴 줄 아는 것뿐이다. "1,234원" 의
+ * "원" 같은 뒤에 붙는 단위는 서식 말에 없으므로 자릿점만 남기고 놓아준다.
+ * 그리지 못할 서식을 적어 두면 칸이 빈 것처럼 보인다.
+ */
+export function numberFormatForText(value:string):string|undefined{
+  if(textToNumber(value)===undefined)return undefined
+  let text=value.trim()
+  const parenthesized=/^\(.*\)$/.test(text)
+  if(parenthesized)text=text.slice(1,-1).trim()
+  const percent=text.endsWith('%')
+  if(percent)text=text.slice(0,-1).trim()
+  // formatCellValue 가 앞에 붙여 그리는 기호만 서식에 적는다. £ 는 그리지
+  // 못하므로 적지 않는다 — 적으면 기호가 사라진 채로 보인다.
+  const currency=text.match(/^([₩$€¥])/)?.[1]??''
+  text=text.replace(/^[₩$€¥£]\s*/,'').replace(/\s*(원|달러|USD|KRW|won)$/i,'').trim()
+  if(text.startsWith('-')||text.startsWith('+'))text=text.slice(1).trim()
+  const grouped=text.includes(',')
+  const decimals=text.split('.')[1]?.length??0
+  if(!currency&&!percent&&!grouped&&!parenthesized)return undefined
+  // 소수 자리를 서식으로 굳히면 그 자리에서 반올림해 그린다. 사람이 적은
+  // 자리보다 길게 굳힐 이유는 없다.
+  const body=currency+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')
+  return parenthesized?`${body};(${body})`:body
+}

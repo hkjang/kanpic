@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { looksLikeNumberStoredAsText, spreadsheetNumber, textToNumber } from './spreadsheetNumber'
+import { looksLikeNumberStoredAsText, numberFormatForText, spreadsheetNumber, textToNumber } from './spreadsheetNumber'
+import { formatCellValue } from './cellFormat'
 
 // 셈하는 규칙이 세 곳에 따로 적혀 있었다. 선택 요약과 열 통계와 수식 엔진이
 // 셋 다 달라, 같은 열에서 세 가지 합계가 나올 수 있었다. 이제 한 곳에서
@@ -59,5 +60,32 @@ describe('looksLikeNumberStoredAsText',()=>{
     for(const value of ['아무개','','1,2,3']){
       expect(looksLikeNumberStoredAsText(value)).toBe(false)
     }
+  })
+})
+
+describe('numberFormatForText',()=>{
+  // 서식만 따로 보는 것으로는 부족하다. 고른 서식이 실제로 그리는 글자가
+  // 원래 보이던 것과 같은지가 지켜야 할 것이다.
+  const shown=(text:string)=>formatCellValue(textToNumber(text),{number_format:numberFormatForText(text)})
+  it('keeps what the person saw',()=>{
+    expect(shown('₩5,000')).toBe('₩5,000')
+    expect(shown('50%')).toBe('50%')
+    expect(shown('12.5%')).toBe('12.5%')
+    expect(shown('1,234')).toBe('1,234')
+    expect(shown('(500)')).toBe('(500)')
+    expect(shown('$1,234.50')).toBe('$1,234.50')
+  })
+  it('leaves plain digits without a format',()=>{
+    // 꾸밈이 없으면 굳힐 것도 없다. General 이 사람이 적은 자리를 그대로 낸다.
+    expect(numberFormatForText('1234')).toBeUndefined()
+  })
+  it('drops a currency symbol it cannot draw rather than losing it silently',()=>{
+    // £ 는 formatCellValue 가 앞에 붙이지 못한다. 서식에 적으면 기호가
+    // 사라진 채로 보이므로, 적지 않고 자릿점만 남긴다.
+    expect(numberFormatForText('£5,000')).toBe('#,##0')
+  })
+  it('has no format for text that is not a number',()=>{
+    expect(numberFormatForText('1,2,3')).toBeUndefined()
+    expect(numberFormatForText('사과')).toBeUndefined()
   })
 })
