@@ -21,6 +21,7 @@ import (
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
 	"kanpic/internal/automation"
+	"kanpic/internal/formula"
 	"kanpic/internal/workbook"
 )
 
@@ -2783,4 +2784,36 @@ func TestGoalSeekKnowsTablesAndNamedFunctions(t *testing.T) {
 	if len(dependencies) == 0 {
 		t.Fatalf("수식 설명이 기대는 칸을 찾지 못했다: %#v", explained)
 	}
+}
+
+// 데이터 표는 칸마다 워크북을 통째로 다시 셈한다. 워크북 크기와 표 크기를
+// 따로 묶으면 그 곱이 얼마가 될지는 아무도 보지 않는다. 서버의 쓰기 제한에
+// 걸려 끊기면 사람은 무엇이 잘못됐는지 알 길이 없다.
+func TestDataTableRefusesWorkItCannotFinishInTime(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+
+	created := request[workbook.Workbook](t, server, http.MethodPost, "/api/v1/workbooks", map[string]any{"title": "부하", "workspace_id": "default"}, http.StatusCreated)
+	sheetID := created.Sheets[0].ID
+	request[map[string]any](t, server, http.MethodPatch, "/api/v1/sheets/"+sheetID+"/cells:batch", map[string]any{
+		"base_version": created.Version, "idempotency_key": "seed", "cells": []map[string]any{
+			{"row": 1, "column": 2, "value": 1000},
+			{"row": 2, "column": 2, "value": 0.05},
+			{"row": 3, "column": 2, "formula": "=B1*B2"},
+		},
+	}, http.StatusOK)
+	// 작은 표는 그대로 셈한다.
+	answer := request[map[string]any](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/data-table", map[string]any{
+		"target": "B3", "column_input": "B2", "column_values": []float64{0.03, 0.04},
+	}, http.StatusOK)
+	if _, ok := answer["result"].(map[string]any); !ok {
+		t.Fatalf("작은 표=%#v", answer)
+	}
+	// 칸 수를 넘기면 엔진이 막는다. 사람 말로 알려 줘야 한다.
+	many := make([]float64, formula.DataTableMaxCells+1)
+	request[map[string]any](t, server, http.MethodPost, "/api/v1/sheets/"+sheetID+"/data-table", map[string]any{
+		"target": "B3", "column_input": "B2", "column_values": many,
+	}, http.StatusBadRequest)
 }
