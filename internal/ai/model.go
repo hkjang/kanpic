@@ -240,7 +240,7 @@ func RequiredApprovalScopes(action Action) []string {
 			add("format.write")
 		case "create_pivot":
 			add("pivot.write")
-		case "create_data_validation", "create_filter_view", "sort_range":
+		case "create_data_validation", "create_filter_view", "sort_range", "create_table":
 			add("range.write")
 		}
 	}

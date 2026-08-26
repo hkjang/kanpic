@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -915,5 +916,68 @@ func TestPlanStepsDescribeTheToolTheyActuallyRun(t *testing.T) {
 	// 차트는 그대로 차트라고 적는다.
 	if planStepDescription("create_chart") == planStepDescription("update_chart") {
 		t.Error("차트 생성과 변경이 같은 설명을 쓴다")
+	}
+}
+
+// 표 도구는 오늘 넣은 표를 에이전트가 쓸 수 있게 하는 것이다. 도구가 있어도
+// 허용 목록·계획·승인 scope 가운데 하나만 빠지면 닿지 않는다 — 이 세션에서
+// 이미 다섯 도구가 그렇게 닿지 않고 있었다.
+func TestGatewayAcceptsTableTool(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{
+						"name":      "create_table",
+						"arguments": `{"name":"매출표","range":"A1:B10","theme":"green"}`,
+					}}},
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer server.Close()
+	selected, _ := cellrange.Parse("A1:B10")
+	plan, _, err := requestGatewayPlan(context.Background(), server.Client(), Config{GatewayURL: server.URL, Model: "m", MaxChanges: 10}, PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10", Request: "이 범위를 매출표라는 표로 만들어줘"}, selected, nil, ModelLimits{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ToolCalls) != 1 || plan.ToolCalls[0].Name != "create_table" {
+		t.Fatalf("plan=%#v", plan.ToolCalls)
+	}
+	var arguments createTableArguments
+	if err := json.Unmarshal(plan.ToolCalls[0].Arguments, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments.Name != "매출표" || arguments.Range != "A1:B10" || arguments.Theme != "green" {
+		t.Fatalf("arguments=%#v", arguments)
+	}
+	// 표는 칸을 건드리지 않는다. 이름을 붙일 뿐이라 위험이 낮다.
+	planned, err := validateGatewayTools(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}, selected, plan.ToolCalls, 10)
+	if err != nil || len(planned) != 1 || planned[0].Risk != RiskLow {
+		t.Fatalf("planned=%#v err=%v", planned, err)
+	}
+	if !supportedGatewayTool("create_table") {
+		t.Error("도구가 허용 목록에 없다")
+	}
+	// 승인 scope 가 빠지면 사람이 승인해도 실행에서 막힌다.
+	scopes := RequiredApprovalScopes(Action{Mode: ModeAgent, ToolCalls: []ToolCall{{Name: "create_table"}}})
+	if !slices.Contains(scopes, "range.write") {
+		t.Fatalf("scopes=%#v, range.write 가 있어야 한다", scopes)
+	}
+	// 한 칸짜리는 표가 될 수 없다. 열 이름을 붙일 자리가 없다.
+	if _, err := validateCreateTable(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}, json.RawMessage(`{"name":"한칸","range":"A1"}`)); err == nil {
+		t.Error("한 칸짜리가 통과했다")
+	}
+	// 머리글만 있고 자료가 없으면 가리킬 것이 없다.
+	if _, err := validateCreateTable(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}, json.RawMessage(`{"name":"머리글만","range":"A1:B1"}`)); err == nil {
+		t.Error("자료 없는 표가 통과했다")
+	}
+	// 이름 없는 표는 가리킬 수 없다.
+	if _, err := validateCreateTable(PlanInput{SheetID: "sheet-1", Mode: ModeAgent, Range: "A1:B10"}, json.RawMessage(`{"range":"A1:B10"}`)); err == nil {
+		t.Error("이름 없는 표가 통과했다")
 	}
 }

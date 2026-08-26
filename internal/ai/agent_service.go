@@ -533,6 +533,15 @@ func projectMemoryTool(tool ToolCall) AgentMemoryTool {
 		if json.Unmarshal(tool.Result, &sorted) == nil && sorted.Operation.OperationID != "" {
 			item.Result = marshalMemory(map[string]any{"range": sorted.Range, "cells": sorted.Operation.AppliedCells})
 		}
+	case "create_table":
+		var arguments createTableArguments
+		if json.Unmarshal(tool.Arguments, &arguments) == nil {
+			item.Arguments = marshalMemory(map[string]any{"name": arguments.Name, "range": arguments.Range})
+		}
+		var table workbook.SheetTable
+		if json.Unmarshal(tool.Result, &table) == nil && table.ID != "" {
+			item.Result = marshalMemory(map[string]any{"id": table.ID, "name": table.Name, "range": table.Range})
+		}
 	case "create_filter_view":
 		var arguments createFilterViewArguments
 		if json.Unmarshal(tool.Arguments, &arguments) == nil {
@@ -612,6 +621,8 @@ func suggestedFollowUps(action Action) []string {
 			return []string{"같은 규칙을 다른 열에도 적용해줘", "색을 더 눈에 띄게 바꿔줘", "이 규칙이 어떤 셀에 걸리는지 설명해줘"}
 		case "sort_range":
 			return []string{"두 번째 기준을 더해서 다시 정렬해줘", "정렬한 결과에서 눈에 띄는 점을 설명해줘", "이 순서로 차트를 만들어줘"}
+		case "create_table":
+			return []string{"이 표의 금액 열 합계를 구해줘", "표 아래에 합계 줄을 만들어줘", "이 표로 차트를 그려줘"}
 		case "create_filter_view":
 			return []string{"조건을 하나 더 걸어줘", "걸러낸 결과만 요약해줘", "이 조건에 걸린 줄이 몇 개인지 알려줘"}
 		case "create_data_validation":
@@ -920,6 +931,27 @@ func (s *Service) runAgentTools(ctx context.Context, action *Action, actorID str
 			}
 			tool.Result, _ = json.Marshal(view)
 			tool.Status = "completed"
+		case "create_table":
+			var arguments createTableArguments
+			if json.Unmarshal(tool.Arguments, &arguments) != nil {
+				return fmt.Errorf("%w: stored create_table arguments are invalid", ErrInvalid)
+			}
+			sheetID := strings.TrimSpace(arguments.SheetID)
+			if sheetID == "" {
+				sheetID = action.SheetID
+			}
+			table, err := s.workbooks.CreateSheetTable(ctx, action.WorkbookID, actorID, workbook.CreateSheetTableInput{
+				IdempotencyKey: tool.IdempotencyKey, SheetID: sheetID, Name: arguments.Name, Range: arguments.Range,
+				HeaderRow: arguments.HeaderRow, TotalsRow: arguments.TotalsRow, Theme: arguments.Theme,
+			})
+			if err != nil {
+				tool.Status = "failed"
+				tool.Result, _ = json.Marshal(map[string]string{"error": err.Error()})
+				_ = s.saveToolCall(ctx, action.ID, *tool)
+				return err
+			}
+			tool.Result, _ = json.Marshal(table)
+			tool.Status = "completed"
 		case "create_data_validation":
 			var arguments createDataValidationArguments
 			if json.Unmarshal(tool.Arguments, &arguments) != nil {
@@ -1156,6 +1188,10 @@ func validateAgentExecution(action Action, operation *workbook.MutationResult) V
 			var rule workbook.DataValidation
 			passed := json.Unmarshal(tool.Result, &rule) == nil && rule.ID != "" && rule.Range != ""
 			checks = append(checks, ValidationCheck{Name: "data_validation", Passed: passed, Message: "데이터 검증 규칙 생성을 확인했습니다."})
+		case "create_table":
+			var table workbook.SheetTable
+			passed := json.Unmarshal(tool.Result, &table) == nil && table.ID != "" && table.Name != "" && table.Range != ""
+			checks = append(checks, ValidationCheck{Name: "table", Passed: passed, Message: "표 생성과 이름 확인"})
 		case "create_filter_view":
 			var view workbook.FilterView
 			passed := json.Unmarshal(tool.Result, &view) == nil && view.ID != "" && len(view.Criteria) > 0
@@ -1361,6 +1397,15 @@ func (s *Service) undoCompletedTools(ctx context.Context, action Action, actorID
 					OperationID: sorted.Operation.OperationID, ActorID: actorID, ClientID: clientID,
 					IdempotencyKey: executionKey(action.ID, "sort-undo", tool.IdempotencyKey),
 				}); err != nil && !errors.Is(err, workbook.ErrNotFound) {
+					return err
+				}
+			}
+		case "create_table":
+			// 표가 남으면 그 이름이 워크북에 계속 있어, 되돌린 뒤에 같은
+			// 이름으로 다시 만들려 할 때 겹친다고 막힌다.
+			var table workbook.SheetTable
+			if json.Unmarshal(tool.Result, &table) == nil && table.ID != "" {
+				if err := s.workbooks.DeleteSheetTable(ctx, table.ID, actorID, nil); err != nil && !errors.Is(err, workbook.ErrNotFound) {
 					return err
 				}
 			}

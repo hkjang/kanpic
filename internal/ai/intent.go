@@ -82,6 +82,8 @@ func routeIntent(message string) routedIntent {
 // 문자열이면 아니다.
 func agentToolSkill(value string) string {
 	switch {
+	case tableIntent(value):
+		return "sheet_table"
 	case conditionalFormatIntent(value):
 		return "conditional_format"
 	case validationIntent(value):
@@ -94,6 +96,21 @@ func agentToolSkill(value string) string {
 		return "range_sort"
 	}
 	return ""
+}
+
+// tableIntent 는 범위를 이름 있는 표로 만들라는 요청이다.
+//
+// "표" 는 표 프로그램에서 가장 흔한 낱말이라 넓게 잡으면 안 된다. "표 서식을
+// 입혀줘" 는 색을 칠하는 일이고 "피벗 테이블" 은 다른 도구다. 그래서 범위를
+// 표로 **바꾸는** 말만 본다 — 만들다, 바꾸다, 변환하다가 뒤에 와야 한다.
+func tableIntent(value string) bool {
+	if containsAny(value, "피벗", "pivot", "서식", "스타일", "색") {
+		return false
+	}
+	return containsAny(value,
+		"표로 만들", "표로 바꿔", "표로 변환", "표로 지정",
+		"테이블로 만들", "테이블로 바꿔", "테이블로 변환",
+		"이름 있는 표", "구조화된 표", "표 이름을 붙", "표로 등록")
 }
 
 // sortIntent 는 "정렬" 이 줄 세우기인지 맞춤인지 가른다. 한국어에서 두 뜻이

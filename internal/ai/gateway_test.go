@@ -423,6 +423,7 @@ func TestEverySupportedToolIsWiredEverywhereItMustBe(t *testing.T) {
 		"create_data_validation":    json.RawMessage(`{"range":"A1:A2","rule_type":"list","options":[{"value":"비밀"}]}`),
 		"create_filter_view":        json.RawMessage(`{"range":"A1:B2","criteria":[{"column":2,"operator":"is_blank"}]}`),
 		"sort_range":                json.RawMessage(`{"range":"A1:B2","keys":[{"column":2,"direction":"asc"}]}`),
+		"create_table":              json.RawMessage(`{"name":"매출표","range":"A1:B2"}`),
 	}
 	descriptions := map[string]bool{}
 	for _, name := range workbookTools {

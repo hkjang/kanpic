@@ -159,3 +159,33 @@ func TestWideningTheRouterKeepsTheOldRoutes(t *testing.T) {
 		}
 	}
 }
+
+// "표" 는 표 프로그램에서 가장 흔한 낱말이다. 넓게 잡으면 서식 요청과 피벗
+// 요청이 표 도구로 새고, 좁게 잡으면 도구가 있어도 닿지 않는다.
+func TestTableRequestsReachTheAgentWithoutStealingOthers(t *testing.T) {
+	t.Parallel()
+	for _, sample := range []struct {
+		request string
+		skill   string
+	}{
+		{"이 범위를 표로 만들어줘", "sheet_table"},
+		{"A1:C20을 매출표라는 이름의 표로 바꿔줘", "sheet_table"},
+		{"선택한 곳을 테이블로 변환해줘", "sheet_table"},
+		{"구조화된 표로 등록해줘", "sheet_table"},
+		// 아래는 표 도구가 가져가면 안 되는 것들이다.
+		{"표 서식을 예쁘게 입혀줘", "sheet_formatting"},
+		{"피벗 테이블 만들어줘", "workbook_orchestration"},
+		{"매출 많은 순으로 정렬해줘", "range_sort"},
+		{"매출 100 이상만 보이게 해줘", "filter_view"},
+	} {
+		routed := routeIntent(sample.request)
+		if routed.Skill != sample.skill {
+			t.Errorf("%q -> %q, want %q", sample.request, routed.Skill, sample.skill)
+		}
+	}
+	// 표를 만들려면 에이전트 모드여야 한다. 읽기 전용 모드로 가면 도구가
+	// 있어도 닿지 않는다.
+	if routed := routeIntent("이 범위를 표로 만들어줘"); routed.Mode != ModeAgent {
+		t.Errorf("mode=%v", routed.Mode)
+	}
+}

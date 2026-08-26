@@ -903,6 +903,57 @@ type filterCriterionArgument struct {
 	CaseSensitive bool              `json:"case_sensitive,omitempty"`
 }
 
+// createTableArguments 는 범위에 이름을 붙여 표로 만드는 도구의 인자다.
+type createTableArguments struct {
+	SheetID   string `json:"sheet_id,omitempty"`
+	Name      string `json:"name"`
+	Range     string `json:"range"`
+	HeaderRow *bool  `json:"header_row,omitempty"`
+	TotalsRow *bool  `json:"totals_row,omitempty"`
+	Theme     string `json:"theme,omitempty"`
+}
+
+// validateCreateTable 은 표가 말이 되는지 본다.
+//
+// 이름은 저장할 때도 다시 검사하지만 여기서 한 번 더 본다. 계획에 그럴듯한
+// 이름이 적혀 사람이 승인한 뒤 저장에서 막히면, 무엇을 승인한 것인지 알 수
+// 없어진다.
+func validateCreateTable(input PlanInput, raw json.RawMessage) (createTableArguments, error) {
+	var arguments createTableArguments
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return arguments, fmt.Errorf("%w: create_table arguments are not an object", ErrGateway)
+	}
+	target, err := rangeInsideSelection(input, arguments.Range, "create_table")
+	if err != nil {
+		return arguments, err
+	}
+	arguments.Range = target
+	selected, err := cellrange.Parse(target)
+	if err != nil {
+		return arguments, fmt.Errorf("%w: create_table range is not a range", ErrGateway)
+	}
+	// 표는 두 칸을 이은 범위다. 한 칸짜리는 열 이름을 붙일 자리가 없다.
+	if selected.Start == selected.End {
+		return arguments, fmt.Errorf("%w: create_table needs a range, not a single cell", ErrGateway)
+	}
+	headerRow := arguments.HeaderRow == nil || *arguments.HeaderRow
+	totalsRow := arguments.TotalsRow != nil && *arguments.TotalsRow
+	overhead := 0
+	if headerRow {
+		overhead++
+	}
+	if totalsRow {
+		overhead++
+	}
+	if selected.End.Row-selected.Start.Row+1 <= overhead {
+		return arguments, fmt.Errorf("%w: create_table needs at least one row of data below its header", ErrGateway)
+	}
+	if strings.TrimSpace(arguments.Name) == "" {
+		return arguments, fmt.Errorf("%w: create_table needs a name", ErrGateway)
+	}
+	return arguments, nil
+}
+
 // validateCreateFilterView 는 걸러내기가 말이 되는지 본다. 여기의 열 번호는
 // 피벗과 달리 **시트의 열 번호** 다 — 저장소가 그렇게 읽는다. 둘을 섞으면
 // 엉뚱한 열을 걸러 놓고도 계획은 그럴듯해 보인다.
@@ -1274,6 +1325,18 @@ func validateGatewayTools(input PlanInput, selected cellrange.Range, candidates 
 			}
 			encoded, _ := json.Marshal(arguments)
 			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskLow, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, index+1)})
+		case "create_table":
+			if input.Mode != ModeAgent {
+				return nil, fmt.Errorf("%w: create_table requires agent mode", ErrGateway)
+			}
+			arguments, err := validateCreateTable(input, candidate.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			encoded, _ := json.Marshal(arguments)
+			// 표는 칸을 건드리지 않는다. 범위에 이름을 붙일 뿐이라 되돌리기가
+			// 그것을 지우는 것으로 끝난다.
+			items = append(items, ToolCall{Name: name, Arguments: encoded, Status: "planned", Risk: RiskLow, IdempotencyKey: fmt.Sprintf("%s:tool:%d", input.IdempotencyKey, len(items))})
 		case "create_data_validation":
 			if input.Mode != ModeAgent {
 				return nil, fmt.Errorf("%w: create_data_validation requires agent mode", ErrGateway)
@@ -1603,6 +1666,7 @@ func planStepDescription(name string) string {
 		"create_conditional_format": "값에 따라 다시 칠하는 조건부 서식 규칙 생성",
 		"create_data_validation":    "셀에 넣을 수 있는 값을 제한하는 입력 규칙 생성",
 		"create_filter_view":        "줄을 지우지 않고 조건에 맞는 줄만 보이게 설정",
+		"create_table":              "범위에 이름을 붙여 열 이름으로 가리킬 수 있는 표 생성",
 		"sort_range":                "수식과 서식을 함께 옮기며 범위의 줄 재배열",
 	}[name]; known {
 		return description
