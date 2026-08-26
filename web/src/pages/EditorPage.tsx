@@ -80,6 +80,8 @@ import { printAreaRegion, printableDocument, usedRegion } from '../lib/printShee
 import { PrintOptionsDialog, loadPrintChoice, type PrintChoice } from '../components/PrintOptionsDialog'
 import { CompareDialog, type CompareSource } from '../components/CompareDialog'
 import { ConsolidateDialog } from '../components/ConsolidateDialog'
+import { InspectDialog } from '../components/InspectDialog'
+import type { TableFinding } from '../lib/inspectTable'
 import { CONSOLIDATE_LABELS, type ConsolidateFunction, type ConsolidateResult, type ConsolidateSource } from '../lib/consolidate'
 import { splitSheetRange, type CompareResult } from '../lib/compareLists'
 import { collapsedIndexes } from '../lib/outline'
@@ -129,7 +131,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[compare,setCompare]=useState<{left:CompareSource;right:CompareSource}>(),[consolidateSources,setConsolidateSources]=useState<ConsolidateSource[]>(),[consolidateSkipped,setConsolidateSkipped]=useState<string[]>([]),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[compare,setCompare]=useState<{left:CompareSource;right:CompareSource}>(),[consolidateSources,setConsolidateSources]=useState<ConsolidateSource[]>(),[inspect,setInspect]=useState<CleanupTarget>(),[consolidateSkipped,setConsolidateSkipped]=useState<string[]>([]),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -894,6 +896,21 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       await refreshWorkbook()
     }catch(error){alert(error instanceof Error?error.message:'통합 시트를 만들지 못했습니다.')}
   }
+  /**
+   * 표를 훑어 고칠 만한 것을 세어 보여 준다.
+   *
+   * 정리 도구가 여섯 개인데 사람이 "데이터 정리" 를 열어 볼 생각을 해야
+   * 알 수 있었다. 무엇이 잘못됐는지 모르는 채로 열어 보는 사람은 없다.
+   */
+  const openInspect=async()=>{
+    const {region,cells}=await resolveWorkingBlock()
+    setInspect({region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0})
+  }
+  /** 검사에서 고른 갈래를 그 갈래의 미리보기로 넘긴다. */
+  const fixFromInspect=(kind:TableFinding['kind'])=>{
+    setInspect(undefined)
+    if(kind==='unmerge'||kind==='numbers'||kind==='trim'||kind==='duplicates'||kind==='subtotals')void openCleanup(kind)
+  }
   /** 사람이 적은 "시트!범위" 를 워크북의 시트에 붙인다. */
   const parseSheetRange=(value:string,sheets:Sheet[]):{sheet:Sheet;region:GridRegion}|undefined=>{
     const parsed=splitSheetRange(value)
@@ -1206,6 +1223,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:cell-history',group:'명령',label:'편집 기록 표시',icon:<Table2/>,keywords:'history 이력 기록 변경',run:()=>setHistoryCell(address(editor.activeRow,editor.activeColumn))},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
+    {id:'cmd:inspect-table',group:'명령',label:'표 검사',icon:<Table2/>,keywords:'inspect 검사 정리 제안 점검 진단',run:()=>void openInspect()},
     {id:'cmd:consolidate',group:'명령',label:'여러 시트 합치기',icon:<Table2/>,keywords:'consolidate 통합 합치기 시트 합계',run:()=>void openConsolidate()},
     {id:'cmd:compare-lists',group:'명령',label:'두 목록 비교',icon:<Table2/>,keywords:'compare 비교 대사 목록 차이 reconcile',run:()=>void openCompare()},
     {id:'cmd:unmerge-fill',group:'명령',label:'병합 해제하고 채우기',icon:<Table2/>,keywords:'unmerge 병합 해제 채우기 merge fill',run:()=>void openCleanup('unmerge')},
@@ -1401,6 +1419,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'separator'},
       {kind:'submenu',label:'데이터 정리',disabled:!canWrite,items:[
         {kind:'item',label:'빠른 채우기…',onSelect:()=>void startFlashFill()},
+        {kind:'item',label:'표 검사…',onSelect:()=>void openInspect()},
+        {kind:'separator'},
         {kind:'item',label:'중복 항목 삭제…',onSelect:()=>void openCleanup('duplicates')},
         {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
         {kind:'item',label:'텍스트로 저장된 숫자…',onSelect:()=>void openCleanup('numbers')},
@@ -1562,6 +1582,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onApply={(region,cells,headerRows)=>applyCleanup(cleanup.mode,region,cells,headerRows)}/>}
     {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}
       onApply={delimiter=>splitColumn(delimiter,splitTarget)}/>}
+    {inspect&&<InspectDialog cells={inspect.cells} region={inspect.region} headerRows={inspect.headerRows} onClose={()=>setInspect(undefined)} onFix={fixFromInspect}/>}
     {consolidateSources&&<ConsolidateDialog sources={consolidateSources} skipped={consolidateSkipped} onClose={()=>setConsolidateSources(undefined)} onApply={writeConsolidated}/>}
     {compare&&<CompareDialog left={compare.left} right={compare.right} onClose={()=>setCompare(undefined)} onReport={writeCompareReport}/>}
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
