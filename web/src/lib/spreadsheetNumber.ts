@@ -99,17 +99,18 @@ export function numberFormatForText(value:string):string|undefined{
   if(parenthesized)text=text.slice(1,-1).trim()
   const percent=text.endsWith('%')
   if(percent)text=text.slice(0,-1).trim()
-  // formatCellValue 가 앞에 붙여 그리는 기호만 서식에 적는다. £ 는 그리지
-  // 못하므로 적지 않는다 — 적으면 기호가 사라진 채로 보인다.
-  const currency=text.match(/^([₩$€¥])/)?.[1]??''
+  const currency=text.match(/^([₩$€¥£])/)?.[1]??''
+  // 뒤에 붙은 단위도 서식으로 옮긴다. 예전에는 서식 말이 이것을 그리지 못해
+  // 놓아주었는데, 이제 따옴표로 묶은 글자를 그대로 그린다.
+  const unit=text.match(/\s*(원|달러|USD|KRW|won)$/i)?.[1]??''
   text=text.replace(/^[₩$€¥£]\s*/,'').replace(/\s*(원|달러|USD|KRW|won)$/i,'').trim()
   if(text.startsWith('-')||text.startsWith('+'))text=text.slice(1).trim()
   const grouped=text.includes(',')
   const decimals=text.split('.')[1]?.length??0
-  if(!currency&&!percent&&!grouped&&!parenthesized)return undefined
+  if(!currency&&!unit&&!percent&&!grouped&&!parenthesized)return undefined
   // 소수 자리를 서식으로 굳히면 그 자리에서 반올림해 그린다. 사람이 적은
   // 자리보다 길게 굳힐 이유는 없다.
-  const body=currency+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')
+  const body=currency+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')+(unit?`"${unit}"`:'')
   return parenthesized?`${body};(${body})`:body
 }
 

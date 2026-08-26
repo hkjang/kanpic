@@ -181,14 +181,14 @@ func formatValue(value any, pattern string) string {
 	if match := scientificPattern.FindStringSubmatch(section); match != nil {
 		return renderScientific(number, len(match[1]), len(match[3]), match[2])
 	}
-	prefix, suffix, digits := "", "", section
-	if index := strings.IndexAny(section, "0#"); index > 0 {
-		prefix, digits = section[:index], section[index:]
+	prefix, digits, suffix := splitFormatSection(section)
+	// 자리 기호가 하나도 없는 구역은 수를 적는 서식이 아니다. 날짜 서식에
+	// 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때 y 나 m 을
+	// 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 격자는 "-1" 을 그린다.
+	if !strings.ContainsAny(digits, "0#") {
+		prefix, suffix = "", ""
 	}
-	if index := strings.LastIndexAny(digits, "0#"); index >= 0 && index+1 < len(digits) {
-		suffix, digits = digits[index+1:], digits[:index+1]
-	}
-	if strings.Contains(section, "%") {
+	if strings.Contains(digits, "%") {
 		number *= 100
 	}
 	decimals := 0
@@ -196,7 +196,89 @@ func formatValue(value any, pattern string) string {
 		decimals = len(strings.TrimRight(digits[index+1:], "%"))
 	}
 	grouped := strings.Contains(digits, ",")
-	return prefix + formatNumber(number, decimals, grouped) + suffix
+	// 백분율 기호는 수 바로 뒤에 온다. 자리 기호와 함께 걷어 두었으므로
+	// 여기서 다시 붙인다. 빠뜨리면 500% 가 500 으로 보인다.
+	percentMark := ""
+	if strings.Contains(digits, "%") {
+		percentMark = "%"
+	}
+	body := formatNumber(math.Abs(number), decimals, grouped)
+	rendered := prefix + body + percentMark + suffix
+	// 빼기 부호는 기호 앞에 온다. 엑셀은 -₩5 로 적지 ₩-5 로 적지 않는다.
+	// 음수 구역을 쓴 경우에는 number 를 이미 뒤집었으므로 붙지 않는다.
+	// -0.2 를 정수 자리로 반올림하면 0 이다. "-0" 은 잘못 그린 것처럼 읽힌다.
+	if number < 0 && strings.Trim(body, "0.,") != "" && !strings.HasPrefix(rendered, "-") {
+		rendered = "-" + rendered
+	}
+	return rendered
+}
+
+// splitFormatSection 은 서식 한 구역을 앞 글자·숫자 자리·뒤 글자로 나눈다.
+//
+// 엑셀에서 온 파일은 자리 기호만 적혀 있지 않다.
+//
+//	[$-409]#,##0     나라 코드다. 409 의 0 을 자릿수로 세면 값이 달라 보인다.
+//	[$₩-412]#,##0    통화 기호는 대괄호 안의 $ 와 - 사이에 있다.
+//	#,##0"원"        따옴표 안은 그대로 적는 글자다. 따옴표는 적지 않는다.
+//	[red](#,##0)     색 이름이다. 값이 아니므로 그리지 않는다.
+//	_-* #,##0_-      _ 는 자리 비우기, * 는 채우기다. 그리지 않는다.
+//
+// 예전에는 처음 만난 0 이나 # 앞을 통째로 앞 글자로 삼았다. [$-409]#,##0 은
+// 409 의 0 에서 갈려 "[$-4" 가 값 앞에 붙어 나왔다.
+//
+// web/src/lib/cellFormat.ts 의 parseFormatSection 과 같은 규칙이다.
+// testdata/cell-formats.json 이 둘을 함께 붙잡는다.
+func splitFormatSection(section string) (string, string, string) {
+	var head, body, tail strings.Builder
+	put := func(text string) {
+		if body.Len() == 0 {
+			head.WriteString(text)
+			return
+		}
+		tail.WriteString(text)
+	}
+	runes := []rune(section)
+	closing := func(start int, mark rune) int {
+		for index := start; index < len(runes); index++ {
+			if runes[index] == mark {
+				return index
+			}
+		}
+		return len(runes)
+	}
+	for index := 0; index < len(runes); index++ {
+		character := runes[index]
+		switch {
+		case character == '"':
+			end := closing(index+1, '"')
+			put(string(runes[index+1 : end]))
+			index = end
+		case character == '[':
+			end := closing(index+1, ']')
+			inside := string(runes[index+1 : end])
+			// [$기호-나라코드] 에서 기호만 꺼낸다. [red] 나 [$-409] 는 그릴 것이 없다.
+			if strings.HasPrefix(inside, "$") {
+				if symbol := strings.SplitN(inside[1:], "-", 2)[0]; symbol != "" {
+					put(symbol)
+				}
+			}
+			index = end
+		case character == '_' || character == '*':
+			index++
+		case character == '\\':
+			if index+1 < len(runes) {
+				put(string(runes[index+1]))
+				index++
+			}
+		case strings.ContainsRune("0#?,.%", character):
+			body.WriteRune(character)
+		// 빈칸은 음수 구역의 괄호와 자리를 맞추려고 넣는 것이다. 그리지 않는다.
+		case character == ' ':
+		default:
+			put(string(character))
+		}
+	}
+	return head.String(), body.String(), tail.String()
 }
 
 // isDatePattern 은 서식이 날짜·시각을 적는 것인지 가린다.

@@ -14,7 +14,11 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
     if(date)return formatDate(date,format,locale)
   }
   if(typeof value!=='number'||!Number.isFinite(value))return String(value)
-  const section=(value<0?format.split(';')[1]:format.split(';')[0])??format
+  // 음수 구역이 따로 있으면 그 구역이 부호를 스스로 적는다. (#,##0) 은
+  // 괄호로 적겠다는 뜻이므로 빼기 부호를 덧붙이면 -(5) 가 된다.
+  const sections=format.split(';')
+  const negativeSection=value<0&&sections.length>1
+  const section=(negativeSection?sections[1]:sections[0])??format
   const scientific=section.match(/^0(?:\.(0+))?[eE]([+-])(0+)$/)
   if(scientific){
     // 지수 자리는 서식에 적은 0 개수만큼 채운다. toExponential 은 자리를
@@ -38,21 +42,74 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
   // 백분율은 100을 곱한 뒤 반올림한다. 이진 실수로 곱하면 1.005가
   // 100.49999…가 되어 100%로 내려앉는다. 사람이 적은 십진수 자리에서
   // 소수점만 옮기면 100.5가 되어 101%가 된다. 서버가 내는 답과 같다.
-  const percent=section.includes('%'),parenthesized=value<0&&section.includes('(')&&section.includes(')')
-  const base=parenthesized?Math.abs(value):value
+  const parsed=parseFormatSection(section)
+  // 자리 기호가 하나도 없는 구역은 수를 적는 서식이 아니다. 날짜 서식에
+  // 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때 y 나 m 을
+  // 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 서버도 "-1" 을 적는다.
+  const bare=!/[0#]/.test(parsed.core)
+  const {core}=parsed,prefix=bare?'':parsed.prefix,suffix=bare?'':parsed.suffix
+  const percent=core.includes('%')
+  const base=negativeSection?-value:value
   const numeric=percent?shiftDecimalPoint(base,2):base
-  const decimals=section.match(/\.(0+)/)?.[1].length??0
-  const useGrouping=section.includes(',')
-  const minimumIntegerDigits=Math.min(21,Math.max(1,(section.split('.')[0].match(/0/g)??[]).length))
-  let rendered=new Intl.NumberFormat(locale,{useGrouping,minimumIntegerDigits,minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(numeric)
-  // -0.2를 정수 자리로 반올림하면 -0이 된다. 칸에 "-0"이 보이면 잘못
-  // 그린 것처럼 읽히므로 부호를 뗀다. 서버도 그렇게 적는다.
-  if(/^-0(?:[.,]0*)?$/.test(rendered))rendered=rendered.slice(1)
+  const decimals=core.match(/\.(0+)/)?.[1].length??0
+  const useGrouping=core.includes(',')
+  const minimumIntegerDigits=Math.min(21,Math.max(1,(core.split('.')[0].match(/0/g)??[]).length))
+  let rendered=new Intl.NumberFormat(locale,{useGrouping,minimumIntegerDigits,minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(Math.abs(numeric))
+  // -0.2를 정수 자리로 반올림하면 0이 된다. 칸에 "-0"이 보이면 잘못 그린
+  // 것처럼 읽히므로 부호를 붙이지 않는다. 서버도 그렇게 적는다.
+  const roundedToZero=/^[0.,]*$/.test(rendered)
   if(percent)rendered+='%'
-  const currency=section.match(/[₩$€¥]/)?.[0]
-  if(currency)rendered=currency+rendered
-  if(parenthesized)rendered=`(${rendered})`
+  rendered=prefix+rendered+suffix
+  // 빼기 부호는 기호 앞에 온다. 엑셀은 -₩5 로 적지 ₩-5 로 적지 않는다.
+  if(numeric<0&&!roundedToZero&&!/^-/.test(rendered))rendered='-'+rendered
   return rendered
+}
+
+/**
+ * 서식 한 구역을 앞 글자·숫자 자리·뒤 글자로 나눈다.
+ *
+ * 엑셀에서 온 파일은 자리 기호만 적혀 있지 않다.
+ *
+ *   [$-409]#,##0     나라 코드다. 409 의 0 을 자릿수로 세면 5 가 05 가 된다.
+ *   [$₩-412]#,##0    통화 기호는 대괄호 안의 $ 와 - 사이에 있다. 문자열에서
+ *                    처음 만난 기호를 집으면 원화 파일이 달러로 보인다.
+ *   #,##0"원"        따옴표 안은 그대로 적는 글자다.
+ *   _-* #,##0_-      _ 는 자리 비우기, * 는 채우기다. 그리지 않는다.
+ *
+ * 자리 기호가 아닌 것을 세면 숫자가 달라 보이고, 사람은 그것을 값으로 읽는다.
+ */
+export function parseFormatSection(section:string){
+  let prefix='',core='',suffix=''
+  const put=(text:string)=>{if(core==='')prefix+=text;else suffix+=text}
+  for(let index=0;index<section.length;index+=1){
+    const character=section[index]
+    if(character==='"'){
+      const end=section.indexOf('"',index+1)
+      put(section.slice(index+1,end<0?section.length:end))
+      index=end<0?section.length:end
+      continue
+    }
+    if(character==='['){
+      const end=section.indexOf(']',index+1)
+      const inside=section.slice(index+1,end<0?section.length:end)
+      // [$기호-나라코드] 에서 기호만 꺼낸다. [Red] 나 [$-409] 는 그릴 것이 없다.
+      if(inside.startsWith('$')){
+        const symbol=inside.slice(1).split('-')[0]
+        if(symbol!=='')put(symbol)
+      }
+      index=end<0?section.length:end
+      continue
+    }
+    // _x 는 x 만큼 자리를 비우고, *x 는 x 로 채운다. 둘 다 값이 아니다.
+    if(character==='_'||character==='*'){index+=1;continue}
+    if(character==='\\'){put(section[index+1]??'');index+=1;continue}
+    if('0#?,.%'.includes(character)){core+=character;continue}
+    // 빈칸은 음수 구역의 괄호와 자리를 맞추려고 넣는 것이다. 그리면 "1,234 "
+    // 처럼 꼬리가 붙는다. 서버도 그리지 않는다.
+    if(character===' ')continue
+    put(character)
+  }
+  return {prefix,core,suffix}
 }
 
 export function wrapText(text:string,maxWidth:number,measure:(text:string)=>number){

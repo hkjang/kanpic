@@ -79,10 +79,11 @@ describe('numberFormatForText',()=>{
     // 꾸밈이 없으면 굳힐 것도 없다. General 이 사람이 적은 자리를 그대로 낸다.
     expect(numberFormatForText('1234')).toBeUndefined()
   })
-  it('drops a currency symbol it cannot draw rather than losing it silently',()=>{
-    // £ 는 formatCellValue 가 앞에 붙이지 못한다. 서식에 적으면 기호가
-    // 사라진 채로 보이므로, 적지 않고 자릿점만 남긴다.
-    expect(numberFormatForText('£5,000')).toBe('#,##0')
+  it('keeps a currency symbol and a trailing unit',()=>{
+    // 서식 말이 따옴표로 묶은 글자를 그리게 된 뒤로는 놓아줄 이유가 없다.
+    expect(shown('£5,000')).toBe('£5,000')
+    expect(shown('1,234원')).toBe('1,234원')
+    expect(numberFormatForText('£5,000')).toBe('£#,##0')
   })
   it('has no format for text that is not a number',()=>{
     expect(numberFormatForText('1,2,3')).toBeUndefined()
