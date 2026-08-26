@@ -39,7 +39,11 @@ type Props={
 export function SheetTabs({sheets,activeSheetId,version,saveState,saveLabel,readOnly=false,onStatusClick,onSelect,onCreate,onRename,onDuplicate,onMove,onColor,onHidden,onDelete,onCopyTo,onManage}:Props){
   const scroller=useRef<HTMLDivElement>(null)
   const dragged=useRef<string|undefined>(undefined)
-  const [menu,setMenu]=useState<{x:number;y:number;items:MenuItem[];label:string}>()
+  // 메뉴에 무엇을 담을지는 열 때 정하고, 각 줄을 쓸 수 있는지는 그릴 때
+  // 정한다. 항목을 통째로 굳혀 두면 여는 순간의 pending 이 그대로 남아,
+  // 시트 작업이 끝난 뒤에도 메뉴가 죽은 채로 보인다. 사람은 닫았다 다시
+  // 열어야 하는데 왜 그래야 하는지 알 수 없다.
+  const [menu,setMenu]=useState<{x:number;y:number;sheetId?:string;label:string}>()
   const [renaming,setRenaming]=useState<string>(),[name,setName]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState(''),[dropTarget,setDropTarget]=useState<string>(),[hiddenOpen,setHiddenOpen]=useState(false)
   const run=async(action:()=>Promise<void>)=>{setPending(true);setError('');try{await action();setRenaming(undefined)}catch(reason){setError(reason instanceof Error?reason.message:'시트 작업을 완료하지 못했습니다.')}finally{setPending(false)}}
   const startRename=(sheet:Sheet)=>{setRenaming(sheet.id);setName(sheet.name);setError('')}
@@ -89,13 +93,13 @@ export function SheetTabs({sheets,activeSheetId,version,saveState,saveLabel,read
   ]
   const openSheetMenu=(sheet:Sheet,event:{clientX:number;clientY:number})=>{
     if(sheet.id!==activeSheetId&&!sheet.hidden)onSelect(sheet)
-    setMenu({x:event.clientX,y:event.clientY,items:sheetMenuItems(sheet),label:`${sheet.name} 시트 메뉴`})
+    setMenu({x:event.clientX,y:event.clientY,sheetId:sheet.id,label:`${sheet.name} 시트 메뉴`})
   }
 
   return <div className="sheet-tabs" onContextMenu={event=>{
     if(event.target!==event.currentTarget&&!(event.target as HTMLElement).classList.contains('sheet-tab-scroller'))return
     event.preventDefault()
-    setMenu({x:event.clientX,y:event.clientY,items:stripMenuItems(),label:'시트 탭 메뉴'})
+    setMenu({x:event.clientX,y:event.clientY,label:'시트 탭 메뉴'})
   }}>
     <button className="tab-nav" onClick={()=>scroll(-1)} aria-label="시트 탭 왼쪽으로"><ChevronLeft/></button>
     <button className="tab-nav" onClick={()=>scroll(1)} aria-label="시트 탭 오른쪽으로"><ChevronRight/></button>
@@ -124,7 +128,13 @@ export function SheetTabs({sheets,activeSheetId,version,saveState,saveLabel,read
         </div>)}
       </div>}
     </div>}
-    {menu&&<ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={()=>setMenu(undefined)}/>}
+    {menu&&(()=>{
+      // 자리 번호도 그릴 때 다시 본다. 열 때의 시트를 그대로 들고 있으면
+      // 옆 시트가 움직인 뒤에도 옛 자리로 "왼쪽으로 이동" 을 판단한다.
+      const target=menu.sheetId?sheets.find(sheet=>sheet.id===menu.sheetId):undefined
+      if(menu.sheetId&&!target)return null
+      return <ContextMenu x={menu.x} y={menu.y} items={target?sheetMenuItems(target):stripMenuItems()} label={menu.label} onClose={()=>setMenu(undefined)}/>
+    })()}
     {error&&<span className="sheet-tabs-error">{error}</span>}
     <SelectionSummary sheetId={activeSheetId} version={version}/>
     <button className="sheet-status" disabled={!onStatusClick} onClick={onStatusClick}>{saveState==='offline'?<CloudOff/>:<Cloud/>} {saveLabel}</button>
