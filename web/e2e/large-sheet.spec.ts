@@ -70,6 +70,7 @@ test('quick sort covers the whole table, not the rows on screen', async ({ page,
   await page.locator('.name-box').fill('A2')
   await page.keyboard.press('Enter')
   await page.getByRole('menuitem',{name:'데이터'}).click()
+  await page.getByRole('menuitem',{name:'정렬',exact:true}).click()
   await page.getByRole('menuitem',{name:'선택 열 기준 정렬 A → Z'}).click()
   await page.getByRole('dialog',{name:'정렬 범위 확인'}).getByRole('button',{name:'정렬'}).click()
 

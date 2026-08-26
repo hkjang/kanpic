@@ -66,6 +66,7 @@ test('every dialog closes with Escape and restores focus', async ({ page, reques
   await expect(page.getByRole('dialog',{name:'시트 관리'})).toHaveCount(0)
 
   await page.getByRole('menuitem',{name:'데이터'}).click()
+  await page.getByRole('menuitem',{name:'정렬',exact:true}).click()
   await page.getByRole('menuitem',{name:'범위 정렬…'}).click()
   await expect(page.getByRole('dialog',{name:'범위 정렬'})).toBeVisible()
   await page.keyboard.press('Escape')

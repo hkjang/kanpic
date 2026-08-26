@@ -78,6 +78,8 @@ import { planRemoveSubtotals, type SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
 import { printAreaRegion, printableDocument, usedRegion } from '../lib/printSheet'
 import { PrintOptionsDialog, loadPrintChoice, type PrintChoice } from '../components/PrintOptionsDialog'
+import { CompareDialog, type CompareSource } from '../components/CompareDialog'
+import { splitSheetRange, type CompareResult } from '../lib/compareLists'
 import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
@@ -122,7 +124,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[compare,setCompare]=useState<{left:CompareSource;right:CompareSource}>(),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -203,7 +205,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   useEffect(()=>{if(activeSheet&&collaborationStatus==='connected'){sendCursor({sheet_id:activeSheet.id,row:editor.activeRow,column:editor.activeColumn});sendSelection({sheet_id:activeSheet.id,start:{row:editorSelection.startRow,column:editorSelection.startColumn},end:{row:editorSelection.endRow,column:editorSelection.endColumn}})}},[activeSheet,collaborationStatus,sendCursor,sendSelection])
   useEffect(()=>{if(editor.conflicts>0)client.invalidateQueries({queryKey:['cell-conflicts',workbookId]})},[client,editor.conflicts,workbookId])
   useEffect(()=>{if(!conflicts.data)return;const current=useEditorStore.getState(),count=conflicts.data.items.length;if((current.saveState==='saved'||current.saveState==='conflict')&&(current.conflicts!==count||current.saveState!==(count>0?'conflict':'saved')))current.setSaveState(count>0?'conflict':'saved',count)},[conflicts.data])
-  const nextSheetName=()=>{const used=new Set((workbook.data?.sheets??[]).map(sheet=>sheet.name.toLowerCase()));for(let index=1;;index++){const name=`Sheet${index}`;if(!used.has(name.toLowerCase()))return name}}
+  const nextSheetName=(prefix='Sheet')=>{const used=new Set((workbook.data?.sheets??[]).map(sheet=>sheet.name.toLowerCase()));for(let index=1;;index++){const name=`${prefix}${index}`;if(!used.has(name.toLowerCase()))return name}}
   const filterViews=useQuery({queryKey:['filter-views',activeSheet?.id],queryFn:()=>api<{items:FilterView[]}>(`/api/v1/sheets/${activeSheet!.id}/filter-views`),enabled:Boolean(activeSheet)})
   const activeFilter=filterViews.data?.items.find(view=>view.active)
   const filterResult=useQuery({queryKey:['filter-result',activeFilter?.id,activeFilter?.updated_at,serverVersion],queryFn:()=>api<FilterResult>(`/api/v1/filter-views/${activeFilter!.id}:evaluate`,{method:'POST',body:'{}'}),enabled:Boolean(activeFilter)})
@@ -824,6 +826,75 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const region=printAreaRegion(activeSheet.layout?.print_area)??usedRegion(printed.cells)
     setPrintOpen({region,rows:printed.rows,truncated:printed.truncated})
   }
+  /** 사람이 적은 "시트!범위" 를 워크북의 시트에 붙인다. */
+  const parseSheetRange=(value:string,sheets:Sheet[]):{sheet:Sheet;region:GridRegion}|undefined=>{
+    const parsed=splitSheetRange(value)
+    if(!parsed)return undefined
+    const name=parsed.sheetName??activeSheet?.name??''
+    const sheet=sheets.find(candidate=>candidate.name.toLowerCase()===name.toLowerCase())
+    return sheet?{sheet,region:parsed.region}:undefined
+  }
+  /**
+   * 두 목록을 견주는 흐름. 왼쪽은 지금 있는 자리의 자료 덩어리, 오른쪽은
+   * 사람이 적어 주는 "시트!범위" 다.
+   *
+   * 대사는 대개 시트 두 개를 견주는 일이다 — 은행에서 받은 내역과 장부처럼.
+   * 한 시트 안으로 제한하면 정작 하고 싶은 일을 못 한다.
+   */
+  const openCompare=async()=>{
+    if(!activeSheet)return
+    const block=await resolveWorkingBlock()
+    const sheets=workbook.data?.sheets??[]
+    const other=sheets.find(sheet=>sheet.id!==activeSheet.id&&!sheet.hidden)
+    setPrompt({
+      title:'두 목록 비교',label:'비교할 범위',confirmLabel:'비교',
+      value:other?`${other.name}!A1:${address(100,Math.max(1,block.region.endColumn))}`:'',
+      placeholder:'예: 장부!A1:C100',
+      hint:'다른 시트라면 시트 이름 뒤에 느낌표를 붙여 적으세요.',
+      validate:value=>parseSheetRange(value,sheets)?undefined:'시트!A1:C100 꼴로 적어 주세요. 시트 이름이 맞는지도 확인하세요.',
+      onSubmit:value=>{
+        const target=parseSheetRange(value,sheets)
+        if(!target)return
+        void (async()=>{
+          const label=`${address(target.region.startRow,target.region.startColumn)}:${address(target.region.endRow,target.region.endColumn)}`
+          const result=await api<{items:Cell[]}>(`/api/v1/sheets/${target.sheet.id}/ranges/${label}`).catch(()=>undefined)
+          if(!result){alert('비교할 범위를 읽지 못했습니다.');return}
+          setCompare({
+            left:{sheet:activeSheet,region:block.region,cells:block.cells},
+            right:{sheet:target.sheet,region:target.region,cells:new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell]))},
+          })
+        })()
+      },
+    })
+  }
+  /** 견준 결과를 새 시트에 적는다. 원래 자료는 건드리지 않는다. */
+  const writeCompareReport=async(result:CompareResult,keys:{left:number;right:number},headerRows:number)=>{
+    if(!compare)return
+    const rows:Array<Array<string|number>>=[]
+    rows.push(['구분','시트','행','키'])
+    for(const row of result.onlyLeft)rows.push(['왼쪽에만',compare.left.sheet.name,row.row,row.label])
+    for(const row of result.onlyRight)rows.push(['오른쪽에만',compare.right.sheet.name,row.row,row.label])
+    for(const item of result.duplicated)
+      rows.push(['거듭 나옴',item.side==='left'?compare.left.sheet.name:compare.right.sheet.name,'',`${item.label} × ${item.count}`])
+    if(rows.length===1)rows.push(['맞음','','','두 목록이 키 기준으로 완전히 맞습니다.'])
+    const cells:PastedCell[]=[]
+    rows.forEach((row,rowIndex)=>row.forEach((value,columnIndex)=>{
+      if(value==='')return
+      cells.push({row:rowIndex+1,column:columnIndex+1,value,formula:undefined,style:rowIndex===0?{bold:true}:undefined})
+    }))
+    if(cells.length>MAX_PASTE_CELLS){alert(`결과가 ${MAX_PASTE_CELLS.toLocaleString()}셀을 넘어 시트로 옮길 수 없습니다.`);return}
+    try{
+      const sheet=await api<Sheet>(`/api/v1/workbooks/${workbookId}/sheets`,{method:'POST',body:JSON.stringify({name:nextSheetName('대사')})})
+      const idempotencyKey=newIdempotencyKey()
+      const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`)
+      await api<MutationResult>(`/api/v1/sheets/${sheet.id}/cells:batch`,{method:'PATCH',
+        body:JSON.stringify({base_version:latest.version,idempotency_key:idempotencyKey,client_id:collaborationClientId(),cells})})
+      setCompare(undefined)
+      setActiveSheet(sheet)
+      await refreshWorkbook()
+    }catch(error){alert(error instanceof Error?error.message:'결과 시트를 만들지 못했습니다.')}
+    void keys;void headerRows
+  }
   const printSheet=async(choice:PrintChoice=loadPrintChoice())=>{
     if(!activeSheet)return
     // The grid holds only the rows on screen, so printing from memory would
@@ -1064,6 +1135,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:cell-history',group:'명령',label:'편집 기록 표시',icon:<Table2/>,keywords:'history 이력 기록 변경',run:()=>setHistoryCell(address(editor.activeRow,editor.activeColumn))},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
+    {id:'cmd:compare-lists',group:'명령',label:'두 목록 비교',icon:<Table2/>,keywords:'compare 비교 대사 목록 차이 reconcile',run:()=>void openCompare()},
     {id:'cmd:unmerge-fill',group:'명령',label:'병합 해제하고 채우기',icon:<Table2/>,keywords:'unmerge 병합 해제 채우기 merge fill',run:()=>void openCleanup('unmerge')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
@@ -1232,9 +1304,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'서식 지우기',shortcut:'Ctrl+\\',onSelect:()=>void clearFormat()},
     ]},
     {label:'데이터',items:[
-      {kind:'item',label:'선택 열 기준 정렬 A → Z',disabled:!canWrite,onSelect:()=>void quickSort('asc')},
-      {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
-      {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
+      {kind:'submenu',label:'정렬',items:[
+        {kind:'item',label:'선택 열 기준 정렬 A → Z',disabled:!canWrite,onSelect:()=>void quickSort('asc')},
+        {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
+        {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
+      ]},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
       {kind:'submenu',label:'가정 분석',items:[
         {kind:'item' as const,label:'목표값 찾기…',onSelect:()=>setGoalSeekOpen(true)},
@@ -1267,6 +1341,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:`선택 행 숨기기 (${selectedRows}개)`,shortcut:'Ctrl+Alt+9',onSelect:()=>void hideSelection('row')},
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
       {kind:'separator'},
+      {kind:'item',label:'두 목록 비교…',disabled:!canWrite,onSelect:()=>void openCompare()},
       {kind:'item',label:'워크북 검색',shortcut:'Ctrl+F',onSelect:()=>openSearch(false)},
     ]},
     {label:'도구',items:[
@@ -1414,6 +1489,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onApply={(region,cells,headerRows)=>applyCleanup(cleanup.mode,region,cells,headerRows)}/>}
     {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}
       onApply={delimiter=>splitColumn(delimiter,splitTarget)}/>}
+    {compare&&<CompareDialog left={compare.left} right={compare.right} onClose={()=>setCompare(undefined)} onReport={writeCompareReport}/>}
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     {linkOpen&&activeSheet&&workbook.data&&<LinkDialog workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress}
       onClose={()=>setLinkOpen(false)} onApply={formula=>{

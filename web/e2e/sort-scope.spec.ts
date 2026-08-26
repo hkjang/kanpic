@@ -60,6 +60,7 @@ test('sorting part of a table warns that the other columns stay put', async ({ p
   await page.getByRole('combobox',{name:'이름 상자'}).fill('A2:A4')
   await page.getByRole('combobox',{name:'이름 상자'}).press('Enter')
   await page.getByRole('menuitem',{name:'데이터'}).click()
+  await page.getByRole('menuitem',{name:'정렬',exact:true}).click()
   await page.getByRole('menuitem',{name:'선택 열 기준 정렬 A → Z'}).click()
   const dialog=page.getByRole('dialog',{name:'정렬 범위 확인'})
   await expect(dialog.getByLabel('표 전체 정렬')).toBeChecked()
