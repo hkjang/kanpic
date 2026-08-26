@@ -69,7 +69,7 @@ import { cellMerge,mergeInRegion,mergeStyle as applyMergeStyle,selectedMergedBou
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
-import { cleanupText, convertTextNumbers, removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { cleanupText, convertTextNumbers, removeDuplicateRows, splitTextToColumns, trimWhitespace, unmergeAndFill, type SplitDelimiter } from '../lib/dataCleanup'
 import { SplitDialog } from '../components/SplitDialog'
 import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
 import { SortScopeDialog } from '../components/SortScopeDialog'
@@ -122,7 +122,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -651,7 +651,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     alert(`${address(found.row,found.column)}은(는) 병합된 셀이므로 ${what} 수 없습니다. 병합을 해제한 뒤 다시 시도하세요.`)
     return true
   }
-  const openCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers')=>{
+  const openCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge')=>{
     if(!writable())return
     const {region,cells}=await resolveWorkingBlock()
     const target:CleanupTarget={region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0}
@@ -682,7 +682,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(mode==='duplicates'&&mergeBlocks(target.blockCells??target.cells,target.block??target.region,'중복 행을 지울'))return
     setCleanup({mode,target})
   }
-  const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+  const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
     // 미리보기를 띄운 자리와 실제로 고쳐 쓰는 자리가 다를 수 있으므로,
     // 쓰기 직전에 쓰는 자리를 놓고 한 번 더 본다.
     if((mode==='duplicates'||mode==='subtotals')&&mergeBlocks(cells,region,mode==='duplicates'?'중복 행을 지울':'부분합을 지울'))return
@@ -696,7 +696,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
           await applyLayout({action:'ungroup',axis:'row',start:group.start,count:group.end-group.start+1})
       return
     }
-    const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):mode==='numbers'?convertTextNumbers(cells,region):trimWhitespace(cells,region)
+    const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):mode==='numbers'?convertTextNumbers(cells,region):mode==='unmerge'?unmergeAndFill(cells,region):trimWhitespace(cells,region)
     await writeCells(preview.writes)
   }
   // The dialog reads the block once and previews from it, so the numbers it
@@ -1044,6 +1044,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:cell-history',group:'명령',label:'편집 기록 표시',icon:<Table2/>,keywords:'history 이력 기록 변경',run:()=>setHistoryCell(address(editor.activeRow,editor.activeColumn))},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
+    {id:'cmd:unmerge-fill',group:'명령',label:'병합 해제하고 채우기',icon:<Table2/>,keywords:'unmerge 병합 해제 채우기 merge fill',run:()=>void openCleanup('unmerge')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
     {id:'cmd:shortcuts',group:'명령',label:'단축키 목록',shortcut:'Ctrl+/',icon:<Search/>,keywords:'shortcut 단축키',run:()=>setShortcutsOpen(true)},
     ...(workbookList.data?.items??[]).filter(item=>item.id!==workbookId).map(item=>({
@@ -1237,6 +1238,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {kind:'item',label:'중복 항목 삭제…',onSelect:()=>void openCleanup('duplicates')},
         {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
         {kind:'item',label:'텍스트로 저장된 숫자…',onSelect:()=>void openCleanup('numbers')},
+        {kind:'item',label:'병합 해제하고 채우기…',onSelect:()=>void openCleanup('unmerge')},
       ]},
       {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
       {kind:'item',label:'부분합…',disabled:!canWrite,onSelect:()=>void openSubtotal()},

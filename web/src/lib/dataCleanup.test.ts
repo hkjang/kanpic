@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { convertTextNumbers, detectDelimiter, removeDuplicateRows, splitLine, splitTextToColumns, splitWouldOverwrite, trimWhitespace } from './dataCleanup'
+import { convertTextNumbers, detectDelimiter, removeDuplicateRows, splitLine, splitTextToColumns, splitWouldOverwrite, trimWhitespace, unmergeAndFill } from './dataCleanup'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown]>){
@@ -104,5 +104,53 @@ describe('convertTextNumbers',()=>{
     const cells=new Map<string,Cell>()
     cells.set('1:1',{sheet_id:'s',row:1,column:1,value:'1,2,3' as never,updated_at:''} as Cell)
     expect(convertTextNumbers(cells,region(1,1,1,1)).writes).toHaveLength(0)
+  })
+})
+
+describe('unmergeAndFill',()=>{
+  const merge=(sr:number,sc:number,er:number,ec:number)=>({merge:{start_row:sr,start_column:sc,end_row:er,end_column:ec}})
+  const cell=(row:number,column:number,value?:unknown,style?:Record<string,unknown>):Cell=>
+    ({sheet_id:'s',row,column,updated_at:'',...(value===undefined?{}:{value}),...(style?{style}:{})})
+  const map=(items:Cell[])=>new Map(items.map(item=>[cellKey(item.row,item.column),item]))
+  const whole={startRow:1,startColumn:1,endRow:4,endColumn:3}
+
+  it('fills the value the person could see into the cells it covered',()=>{
+    const box=merge(2,1,4,1)
+    const cells=map([cell(2,1,'영업1팀',box),cell(3,1,undefined,box),cell(4,1,undefined,box)])
+    const result=unmergeAndFill(cells,whole)
+    expect(result.ranges).toBe(1)
+    expect(result.filled).toBe(2)
+    expect(result.writes.map(write=>write.value)).toEqual(['영업1팀','영업1팀','영업1팀'])
+    // 병합이 남아 있으면 표는 여전히 정렬되지 않는다.
+    for(const write of result.writes)expect(write.style?.merge).toBeUndefined()
+  })
+
+  it('never overwrites a value the merge was only hiding',()=>{
+    // kanpic 의 병합은 값을 지우지 않고 가린다. 덮어 채우면 사람이 보지
+    // 못하던 값을 없애는 것이 된다 — 부탁받은 일이 아니다.
+    const box=merge(2,1,3,1)
+    const cells=map([cell(2,1,'보이는 값',box),cell(3,1,'가려진 값',box)])
+    const result=unmergeAndFill(cells,whole)
+    expect(result.filled).toBe(0)
+    expect(result.kept).toBe(1)
+    expect(result.writes.map(write=>write.value)).toEqual(['보이는 값','가려진 값'])
+  })
+
+  it('keeps the rest of the formatting',()=>{
+    const cells=map([cell(2,1,'제목',{...merge(2,1,2,2),bold:true}),cell(2,2,undefined,{...merge(2,1,2,2),bold:true})])
+    const result=unmergeAndFill(cells,whole)
+    for(const write of result.writes)expect(write.style?.bold).toBe(true)
+  })
+
+  it('unmerges the whole range even where it reaches outside the selection',()=>{
+    // 절반만 풀면 어느 곳에도 적히지 않는 반쪽짜리 병합이 남는다.
+    const box=merge(2,1,2,3)
+    const cells=map([cell(2,1,'하나',box),cell(2,2,undefined,box),cell(2,3,undefined,box)])
+    const result=unmergeAndFill(cells,{startRow:2,startColumn:1,endRow:2,endColumn:1})
+    expect(result.writes.map(write=>`${write.row}:${write.column}`)).toEqual(['2:1','2:2','2:3'])
+  })
+
+  it('does nothing when there is no merge',()=>{
+    expect(unmergeAndFill(map([cell(1,1,'가')]),whole).writes).toEqual([])
   })
 })
