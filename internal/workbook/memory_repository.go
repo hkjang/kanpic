@@ -85,6 +85,7 @@ type MemoryRepository struct {
 	shares             map[string]map[string]WorkbookShare
 	departments        map[string]Department
 	departmentMembers  map[string][]string
+	departmentManagers map[string][]string
 	accessRequests     map[string]AccessRequest
 	favorites          map[string]map[string]bool
 	trash              map[string]*workbookState
@@ -116,6 +117,7 @@ func NewMemoryRepository() *MemoryRepository {
 		shares:             make(map[string]map[string]WorkbookShare),
 		departments:        make(map[string]Department),
 		departmentMembers:  make(map[string][]string),
+		departmentManagers: make(map[string][]string),
 		accessRequests:     make(map[string]AccessRequest),
 		favorites:          make(map[string]map[string]bool),
 		trash:              make(map[string]*workbookState),

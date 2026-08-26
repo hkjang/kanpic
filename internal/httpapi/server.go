@@ -159,6 +159,8 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("DELETE /api/v1/departments/{departmentId}", s.deleteDepartment)
 	mux.HandleFunc("POST /api/v1/departments/{departmentId}/members", s.addDepartmentMembers)
 	mux.HandleFunc("DELETE /api/v1/departments/{departmentId}/members/{memberId}", s.removeDepartmentMember)
+	mux.HandleFunc("POST /api/v1/departments/{departmentId}/managers", s.addDepartmentManagers)
+	mux.HandleFunc("DELETE /api/v1/departments/{departmentId}/managers/{managerId}", s.removeDepartmentManager)
 	mux.HandleFunc("GET /api/v1/me/departments", s.listMyDepartments)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/sheets", s.createSheet)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/comments", s.listCommentThreads)

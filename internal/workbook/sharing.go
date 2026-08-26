@@ -229,18 +229,21 @@ type TransferOwnershipInput struct {
 }
 
 type Department struct {
-	ID          string    `json:"id"`
-	ParentID    string    `json:"parent_id,omitempty"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Path        string    `json:"path,omitempty"`
-	Depth       int       `json:"depth"`
-	MemberCount int       `json:"member_count"`
-	Members     []string  `json:"members,omitempty"`
-	Revision    int64     `json:"revision"`
-	CreatedBy   string    `json:"created_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string   `json:"id"`
+	ParentID    string   `json:"parent_id,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Depth       int      `json:"depth"`
+	MemberCount int      `json:"member_count"`
+	Members     []string `json:"members,omitempty"`
+	// Managers 는 이 부서를 맡은 사람들이다. 자기 부서와 그 아래 부서의
+	// 구성원 계정만 다룰 수 있고, 워크북 소유권과 설정에는 손대지 못한다.
+	Managers  []string  `json:"managers,omitempty"`
+	Revision  int64     `json:"revision"`
+	CreatedBy string    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type CreateDepartmentInput struct {

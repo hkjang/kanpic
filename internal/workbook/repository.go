@@ -49,6 +49,9 @@ type Repository interface {
 	DeleteWorkbookShare(context.Context, string, string) error
 	TransferWorkbookOwnership(context.Context, string, TransferOwnershipInput) (WorkbookSharing, error)
 	CreateDepartment(context.Context, CreateDepartmentInput) (Department, error)
+	AddDepartmentManagers(context.Context, string, DepartmentMembersInput) (Department, error)
+	RemoveDepartmentManager(context.Context, string, string) (Department, error)
+	ManagedMembers(context.Context, string) ([]string, error)
 	GetDepartment(context.Context, string) (Department, error)
 	ListDepartments(context.Context) ([]Department, error)
 	ListDepartmentsForUser(context.Context, string) ([]Department, error)

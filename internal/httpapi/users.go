@@ -147,7 +147,8 @@ func (s *Server) transferOwnedWorkbooks(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	scope, scoped := s.managedByActor(r)
+	if !s.isGlobalAdmin(r) && !scoped && !s.requireAdmin(w, r) {
 		return
 	}
 	items, err := s.repository.ListUsers(r.Context())
@@ -159,11 +160,22 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	if s.auth != nil {
 		adminRoles = s.auth.AdminRoles(r.Context())
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "admin_roles": adminRoles, "default_admin_role": auth.DefaultAdminRole})
+	// 부서 관리자에게는 맡은 구성원만 보인다. 조직 전체 명부가 보이면
+	// 위임한 범위 밖의 사람까지 알게 된다.
+	if scoped && !s.isGlobalAdmin(r) {
+		kept := make([]workbook.DirectoryUser, 0, len(scope))
+		for _, item := range items {
+			if _, managed := scope[strings.ToLower(strings.TrimSpace(item.UserID))]; managed {
+				kept = append(kept, item)
+			}
+		}
+		items = kept
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "admin_roles": adminRoles, "default_admin_role": auth.DefaultAdminRole, "scoped": scoped && !s.isGlobalAdmin(r)})
 }
 
 func (s *Server) getUser(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireMemberAdmin(w, r, r.PathValue("userId")) {
 		return
 	}
 	user, err := s.repository.GetUser(r.Context(), r.PathValue("userId"))
@@ -192,7 +204,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireMemberAdmin(w, r, r.PathValue("userId")) {
 		return
 	}
 	var input workbook.UpdateUserInput
@@ -219,7 +231,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) grantUserRole(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireMemberAdmin(w, r, r.PathValue("userId")) {
 		return
 	}
 	var input struct {
@@ -237,7 +249,7 @@ func (s *Server) grantUserRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeUserRole(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireMemberAdmin(w, r, r.PathValue("userId")) {
 		return
 	}
 	userID, role := r.PathValue("userId"), r.PathValue("role")
@@ -257,7 +269,7 @@ func (s *Server) revokeUserRole(w http.ResponseWriter, r *http.Request) {
 // revokeUserSessions signs a user out of every browser, which an administrator
 // needs when a device is lost or a role changes.
 func (s *Server) revokeUserSessions(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireMemberAdmin(w, r, r.PathValue("userId")) {
 		return
 	}
 	userID := r.PathValue("userId")

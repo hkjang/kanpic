@@ -327,6 +327,37 @@ func (s *Server) deleteDepartment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// 부서 관리자는 전역 관리자만 지정한다. 부서 관리자가 스스로를 늘릴 수
+// 있으면 위임이 아니라 승격이다.
+func (s *Server) addDepartmentManagers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var input workbook.DepartmentMembersInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.ActorID = actorID(r)
+	department, err := s.repository.AddDepartmentManagers(r.Context(), r.PathValue("departmentId"), input)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, department)
+}
+
+func (s *Server) removeDepartmentManager(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	department, err := s.repository.RemoveDepartmentManager(r.Context(), r.PathValue("departmentId"), r.PathValue("managerId"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, department)
+}
+
 func (s *Server) addDepartmentMembers(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return

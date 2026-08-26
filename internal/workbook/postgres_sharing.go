@@ -348,6 +348,11 @@ func (r *PostgresRepository) GetDepartment(ctx context.Context, id string) (Depa
 		return Department{}, err
 	}
 	department.Members = members
+	managers, err := r.listDepartmentManagers(ctx, department.ID)
+	if err != nil {
+		return Department{}, err
+	}
+	department.Managers = managers
 	return department, nil
 }
 
@@ -380,6 +385,23 @@ func (r *PostgresRepository) departmentPath(ctx context.Context, id string) (str
 		return "", 0, err
 	}
 	return strings.Join(names, " / "), depth, nil
+}
+
+func (r *PostgresRepository) listDepartmentManagers(ctx context.Context, id string) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `SELECT user_id FROM department_managers WHERE department_id=$1 ORDER BY lower(user_id)`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	managers := make([]string, 0)
+	for rows.Next() {
+		var manager string
+		if err := rows.Scan(&manager); err != nil {
+			return nil, err
+		}
+		managers = append(managers, manager)
+	}
+	return managers, rows.Err()
 }
 
 func (r *PostgresRepository) listDepartmentMembers(ctx context.Context, id string) ([]string, error) {
@@ -559,6 +581,73 @@ func (r *PostgresRepository) DeleteDepartment(ctx context.Context, id string) er
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// AddDepartmentManagers 는 이 부서를 맡을 사람을 더한다. 전역 관리자만
+// 부른다 — 부서 관리자가 스스로를 늘릴 수 있으면 위임이 아니라 승격이다.
+func (r *PostgresRepository) AddDepartmentManagers(ctx context.Context, id string, input DepartmentMembersInput) (Department, error) {
+	managers, err := normalizeMemberIDs(input)
+	if err != nil {
+		return Department{}, err
+	}
+	if _, err := r.GetDepartment(ctx, id); err != nil {
+		return Department{}, err
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Department{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, manager := range managers {
+		if _, err := tx.Exec(ctx, `INSERT INTO department_managers(department_id,user_id,added_by) VALUES($1,$2,$3) ON CONFLICT (department_id,user_id) DO NOTHING`, id, manager, input.ActorID); err != nil {
+			return Department{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Department{}, err
+	}
+	return r.GetDepartment(ctx, id)
+}
+
+func (r *PostgresRepository) RemoveDepartmentManager(ctx context.Context, id, userID string) (Department, error) {
+	if _, err := r.GetDepartment(ctx, id); err != nil {
+		return Department{}, err
+	}
+	if _, err := r.pool.Exec(ctx, `DELETE FROM department_managers WHERE department_id=$1 AND lower(user_id)=lower($2)`, id, userID); err != nil {
+		return Department{}, err
+	}
+	return r.GetDepartment(ctx, id)
+}
+
+// ManagedMembers 는 이 사람이 맡은 부서와 그 아래 부서의 구성원을 낸다.
+//
+// 아래 부서까지 보는 이유는, 부서가 나뉘어도 맡은 사람이 바뀌지 않기
+// 때문이다. 팀이 둘로 갈라졌다고 관리자가 절반을 못 보게 되면 위임이
+// 끊긴 것을 아무도 알아채지 못한다.
+func (r *PostgresRepository) ManagedMembers(ctx context.Context, managerID string) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		WITH RECURSIVE managed AS (
+			SELECT d.id FROM departments d
+			JOIN department_managers m ON m.department_id=d.id AND lower(m.user_id)=lower(btrim($1))
+			UNION
+			SELECT child.id FROM departments child JOIN managed ON child.parent_id=managed.id
+		)
+		SELECT DISTINCT member.user_id
+		FROM department_members member JOIN managed ON member.department_id=managed.id
+		ORDER BY member.user_id`, managerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := make([]string, 0)
+	for rows.Next() {
+		var member string
+		if err := rows.Scan(&member); err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+	return members, rows.Err()
 }
 
 func (r *PostgresRepository) AddDepartmentMembers(ctx context.Context, id string, input DepartmentMembersInput) (Department, error) {

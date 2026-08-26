@@ -616,7 +616,7 @@ function AdminModal({label,onClose,children}:{label:string;onClose:()=>void;chil
 function DepartmentsPanel(){
   const client=useQueryClient()
   const [name,setName]=useState(''),[parentID,setParentID]=useState(''),[description,setDescription]=useState('')
-  const [selected,setSelected]=useState<string>(),[member,setMember]=useState(''),[message,setMessage]=useState(''),[error,setError]=useState('')
+  const [selected,setSelected]=useState<string>(),[member,setMember]=useState(''),[manager,setManager]=useState(''),[message,setMessage]=useState(''),[error,setError]=useState('')
   const [showAdd,setShowAdd]=useState(false)
   const departments=useQuery({queryKey:['departments'],queryFn:()=>api<{items:Department[]}>('/api/v1/departments')})
   const items=departments.data?.items??[]
@@ -631,6 +631,11 @@ function DepartmentsPanel(){
     const created=await api<Department>('/api/v1/departments',{method:'POST',body:JSON.stringify({name:name.trim(),parent_id:parentID||undefined,description:description.trim()})})
     setName('');setDescription('');setShowAdd(false);setSelected(created.id)
   },'부서를 만들었습니다.')
+  const addManager=()=>run(async()=>{
+    await api<Department>(`/api/v1/departments/${selected}/managers`,{method:'POST',body:JSON.stringify({user_ids:manager.split(/[,\s]+/).filter(Boolean)})})
+    setManager('')
+  },'부서 관리자를 지정했습니다.')
+  const removeManager=(userID:string)=>run(()=>api<Department>(`/api/v1/departments/${selected}/managers/${encodeURIComponent(userID)}`,{method:'DELETE'}),'부서 관리자를 해제했습니다.')
   const addMember=()=>run(async()=>{
     await api<Department>(`/api/v1/departments/${selected}/members`,{method:'POST',body:JSON.stringify({user_ids:member.split(/[,\s]+/).filter(Boolean)})})
     setMember('')
@@ -674,9 +679,12 @@ function DepartmentsPanel(){
             <option value="">최상위 부서</option>
             {items.filter(item=>item.id!==current.id).map(item=><option key={item.id} value={item.id}>{item.path||item.name}</option>)}
           </select></label>
-          <label>구성원 추가<div className="inline-field"><input aria-label="추가할 구성원" placeholder="사용자 ID 또는 이메일 (쉼표로 여러 명)" value={member} onChange={event=>setMember(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&member.trim())addMember()}}/><button className="secondary" disabled={!member.trim()} onClick={addMember}>추가</button></div></label>
+          <label>부서 관리자 지정<div className="inline-field"><input aria-label="지정할 부서 관리자" placeholder="사용자 ID (쉼표로 여러 명)" value={manager} onChange={event=>setManager(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&manager.trim())addManager()}}/><button className="secondary" disabled={!manager.trim()} onClick={addManager}>지정</button></div></label>
+        <label>구성원 추가<div className="inline-field"><input aria-label="추가할 구성원" placeholder="사용자 ID 또는 이메일 (쉼표로 여러 명)" value={member} onChange={event=>setMember(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&member.trim())addMember()}}/><button className="secondary" disabled={!member.trim()} onClick={addMember}>추가</button></div></label>
         </div>
-        <div className="chip-row">{members.length===0?<span className="muted-text">아직 구성원이 없습니다.</span>:members.map(userID=><span className="role-chip" key={userID}>{userID}<button aria-label={`${userID} 제거`} onClick={()=>removeMember(userID)}><XCircle/></button></span>)}</div>
+        <p className="field-hint">부서 관리자는 <strong>이 부서와 그 아래 부서의 구성원 계정</strong> 만 다룹니다. 워크북 소유권 이전, 개요, 설정·로그·API 키는 전역 관리자만 씁니다.</p>
+      <div className="chip-row">{(current.managers??[]).length===0?<span className="muted-text">지정된 부서 관리자가 없습니다.</span>:(current.managers??[]).map(item=><span className="role-chip" key={`manager-${item}`}>{item}<button aria-label={`${item} 부서 관리자 해제`} onClick={()=>removeManager(item)}><XCircle/></button></span>)}</div>
+      <div className="chip-row">{members.length===0?<span className="muted-text">아직 구성원이 없습니다.</span>:members.map(userID=><span className="role-chip" key={userID}>{userID}<button aria-label={`${userID} 제거`} onClick={()=>removeMember(userID)}><XCircle/></button></span>)}</div>
       </div>
     </section>}
     {showAdd&&<AdminModal label="부서 추가" onClose={()=>setShowAdd(false)}>
