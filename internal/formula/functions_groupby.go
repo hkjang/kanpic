@@ -138,6 +138,9 @@ func gatherGroups(fields arrayValue, rowStart, rowEnd int) gathered {
 }
 
 // orderGroups 는 이름표 차례를 정한다. 0 이면 표에 적힌 차례를 그대로 둔다.
+//
+// 내림차순은 오름차순의 거울이다. 예전에는 "오름차순이 아니면 내림차순" 으로
+// 흉내 냈는데, 그러면 견주기가 앞뒤가 맞지 않아 정렬이 흔들릴 수 있다.
 func orderGroups(groups gathered, order int) []int {
 	positions := make([]int, len(groups.keys))
 	for index := range positions {
@@ -147,30 +150,66 @@ func orderGroups(groups gathered, order int) []int {
 		return positions
 	}
 	sort.SliceStable(positions, func(left, right int) bool {
-		a := displayChartKey(groups.keys[positions[left]].label[0])
-		b := displayChartKey(groups.keys[positions[right]].label[0])
-		less := compareGroupLabels(groups.keys[positions[left]].label[0], groups.keys[positions[right]].label[0], a, b)
+		first, second := groups.keys[positions[left]].label, groups.keys[positions[right]].label
 		if order < 0 {
-			return !less && a != b
+			first, second = second, first
 		}
-		return less
+		return lessGroupLabels(first, second)
 	})
 	return positions
 }
 
-// compareGroupLabels 는 이름표를 견준다. 숫자는 숫자로, 글자는 글자로 본다 —
-// 10월이 2월보다 앞에 오면 사람은 정렬이 망가졌다고 읽는다.
-func compareGroupLabels(left, right any, leftText, rightText string) bool {
+// lessGroupLabels 는 이름표를 앞 칸부터 차례로 견준다.
+//
+// 부서로 묶고 분기로 다시 묶었으면 분기도 차례가 있어야 한다. 첫 칸만 보면
+// 같은 부서 안에서 2분기가 1분기보다 앞에 서고, 사람은 정렬이 망가졌다고
+// 읽는다.
+func lessGroupLabels(left, right []any) bool {
+	for index := range left {
+		if index >= len(right) {
+			return false
+		}
+		switch compareGroupLabel(left[index], right[index]) {
+		case -1:
+			return true
+		case 1:
+			return false
+		}
+	}
+	return false
+}
+
+// compareGroupLabel 은 이름표 한 칸을 견준다. 숫자는 숫자로, 글자는 글자로
+// 본다 — 10 이 2 보다 앞에 오면 사람은 정렬이 망가졌다고 읽는다.
+func compareGroupLabel(left, right any) int {
 	leftNumber, leftOK := numericValue(left)
 	rightNumber, rightOK := numericValue(right)
 	if leftOK && rightOK {
-		return leftNumber < rightNumber
+		switch {
+		case leftNumber < rightNumber:
+			return -1
+		case leftNumber > rightNumber:
+			return 1
+		default:
+			return 0
+		}
 	}
+	// 숫자가 글자보다 앞이다. 엑셀도 그렇게 세운다.
 	if leftOK != rightOK {
-		return leftOK
+		if leftOK {
+			return -1
+		}
+		return 1
 	}
-	// 글자 이름표는 글자 차례로 세운다. 엑셀도 그렇게 한다.
-	return leftText < rightText
+	leftText, rightText := displayChartKey(left), displayChartKey(right)
+	switch {
+	case leftText < rightText:
+		return -1
+	case leftText > rightText:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // applyGroupFunction 은 모은 줄의 값 하나하나를 함수에 넘긴다.
