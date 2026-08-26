@@ -122,7 +122,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion}|false>(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -808,18 +808,21 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // 들어갑니다" 하고 두 장을 뱉는 일이 없다. 확대 배율은 화면 사정이므로 뺀다.
   const printColumnWidths=useMemo(()=>new Map((activeSheet?.layout?.column_widths??[]).map(item=>[item.index,item.size])),[activeSheet?.layout?.column_widths])
   /**
-   * 페이지 설정을 열기 전에 어느 열까지 찍히는지 알아 둔다. 칸을 다 읽지
-   * 않고 시트 크기만 물어보므로 값싸다. 이것이 있어야 방향과 여백을 고르는
-   * 자리에서 몇 장으로 나뉘는지 그때그때 보여 줄 수 있다.
+   * 페이지 설정을 열기 전에 인쇄가 읽는 것과 똑같은 칸을 읽는다.
+   *
+   * 처음에는 시트 크기만 물어 값싸게 넘겼는데, 그 수는 인쇄가 쓰는 범위와
+   * 달랐다. 시트 크기는 가장 큰 행과 열만 알려 주므로 자료가 D열에서
+   * 시작해도 A열부터 세었고, 값 없이 서식만 든 칸까지 세었다. 미리보기가
+   * 네 장이라고 하고 세 장이 나오면 미리보기를 볼 이유가 없다.
+   *
+   * 인쇄와 같은 칸에서 같은 함수로 범위를 구한다. 열 때 인쇄만큼 걸리지만,
+   * 값싸고 틀린 수보다 낫다.
    */
   const openPrintOptions=async()=>{
-    const area=printAreaRegion(activeSheet?.layout?.print_area)
-    if(area){setPrintOpen({region:area});return}
     if(!activeSheet){setPrintOpen({});return}
-    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
-    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
-    if(!used||used.max_row<1||used.max_column<1){setPrintOpen({});return}
-    setPrintOpen({region:{startRow:1,startColumn:1,endRow:used.max_row,endColumn:used.max_column}})
+    const printed=await readUsedCells()
+    const region=printAreaRegion(activeSheet.layout?.print_area)??usedRegion(printed.cells)
+    setPrintOpen({region,rows:printed.rows,truncated:printed.truncated})
   }
   const printSheet=async(choice:PrintChoice=loadPrintChoice())=>{
     if(!activeSheet)return
@@ -1452,7 +1455,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {presentationOpen&&activeSheet&&<PresentationDialog range={workingRegion()} onClose={()=>setPresentationOpen(false)} onPreview={previewPresentation} onCreate={createPresentation} onLoadTemplates={loadPresentationTemplates} onDownload={downloadPresentation}/>}
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {watchOpen&&activeSheet&&<WatchRuleDialog selection={editorSelection} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} rules={watchRules.data?.items??[]} onClose={()=>setWatchOpen(false)} onCreate={createWatchRule} onUpdate={updateWatchRule} onDelete={deleteWatchRule}/>}
-    {printOpen&&<PrintOptionsDialog onClose={()=>setPrintOpen(false)} region={printOpen.region}
+    {printOpen&&<PrintOptionsDialog onClose={()=>setPrintOpen(false)} region={printOpen.region} truncated={printOpen.truncated}
       columnWidth={column=>printColumnWidths.get(column)??108}
       onPrint={choice=>{setPrintOpen(false);void printSheet(choice)}}/>}
     {namedFunctionOpen&&<NamedFunctionDialog functions={namedFunctions.data?.items??[]} onClose={()=>setNamedFunctionOpen(false)} onCreate={createNamedFunction} onUpdate={updateNamedFunction} onDelete={deleteNamedFunction}/>}

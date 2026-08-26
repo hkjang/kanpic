@@ -11,3 +11,4 @@
 .print-options-pages p{margin:0}
 .print-options-pages ul{margin:.4rem 0 0;padding-left:1.1rem;display:flex;flex-wrap:wrap;gap:.15rem 1rem}
 .print-options-pages li{list-style:disc}
+.print-options-truncated{margin-top:.4rem;color:var(--warning-text,#8a5a00)}

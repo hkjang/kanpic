@@ -12,7 +12,9 @@ test('page setup says how many sheets wide the table prints, and reacts', async 
   const workbook = await page.request.get(`/api/v1/workbooks/${workbookId}`).then(r => r.json())
   const sheetId = workbook.sheets[0].id as string
   // 기본 열 너비 108px 로 스무 열이면 A4 세로 한 장에 들어가지 않는다.
-  const cells = Array.from({length:20},(_,index)=>({row:1,column:index+1,value:`열${index+1}`}))
+  // 일부러 D열에서 시작한다. 미리보기가 인쇄와 다른 범위를 세면 A열부터
+  // 세어 있지도 않은 열을 장에 넣는다.
+  const cells = Array.from({length:20},(_,index)=>({row:1,column:index+4,value:`열${index+1}`}))
   const write = await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`, {
     data: { base_version: workbook.version, idempotency_key: 'pp-seed', cells } })
   expect(write.status(), await write.text()).toBeLessThan(300)
@@ -25,7 +27,8 @@ test('page setup says how many sheets wide the table prints, and reacts', async 
   const portrait = Number((await pages.textContent())?.match(/가로로\s*(\d+)장/)?.[1])
   expect(portrait).toBeGreaterThan(1)
   // 어느 열이 어느 장에 가는지도 적혀 있어야 고르는 데 쓸모가 있다.
-  await expect(pages.locator('li').first()).toContainText('A')
+  // 자료가 있는 D열에서 시작해야 한다. A라면 빈 열을 세고 있는 것이다.
+  await expect(pages.locator('li').first()).toHaveText(/^D/)
 
   // 가로로 돌리면 그 자리에서 장수가 줄어든다.
   await dialog.getByText('가로', { exact: true }).click()

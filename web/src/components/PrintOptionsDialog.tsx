@@ -30,7 +30,7 @@ export function loadPrintChoice():PrintChoice{
 /** 열 번호를 사람이 읽는 열 이름으로 바꾼다. A1 에서 숫자를 뗀다. */
 const columnName=(column:number)=>address(1,column).replace(/\d+$/,'')
 
-export function PrintOptionsDialog({onClose,onPrint,region,columnWidth}:{onClose:()=>void;onPrint:(choice:PrintChoice)=>void;region?:GridRegion;columnWidth?:(column:number)=>number}){
+export function PrintOptionsDialog({onClose,onPrint,region,columnWidth,truncated}:{onClose:()=>void;onPrint:(choice:PrintChoice)=>void;region?:GridRegion;columnWidth?:(column:number)=>number;truncated?:boolean}){
   const [choice,setChoice]=useState<PrintChoice>(loadPrintChoice)
   // 인쇄를 누르기 전에 몇 장으로 나뉘는지 보여 준다. 종이가 나온 뒤에 아는
   // 것은 늦다 — 실제로 인쇄가 하는 셈을 그대로 쓴다.
@@ -67,6 +67,7 @@ export function PrintOptionsDialog({onClose,onPrint,region,columnWidth}:{onClose
             ?<p><b>{columnName(region.startColumn)}–{columnName(region.endColumn)}</b> 열이 가로 한 장에 들어갑니다.</p>
             :<><p>가로로 <b>{pages.length}장</b>에 나뉩니다. 세로 길이는 종이와 행 높이에 따라 달라집니다.</p>
               <ul>{pages.map(page=><li key={page.start}>{columnName(page.start)}{page.start===page.end?'':`–${columnName(page.end)}`}</li>)}</ul></>}
+        {truncated&&<p className="print-options-truncated">행이 많아 앞부분만 인쇄합니다.</p>}
       </div>}
     </div>
     <div className="modal-actions"><span/><button className="secondary" onClick={onClose}>취소</button><button className="primary" onClick={print}>인쇄</button></div>

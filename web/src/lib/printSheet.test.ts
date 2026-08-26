@@ -374,3 +374,29 @@ describe('printColumnPages',()=>{
     expect(pages[0]).toMatchObject({start:1,end:20})
   })
 })
+
+describe('the preview region matches the printed region',()=>{
+  // 미리보기가 인쇄와 다른 범위를 세면 장수가 어긋난다. 시트 크기만 물어
+  // 보던 시절에는 자료가 D열에서 시작해도 A열부터 세어, 실제로는 세 장인
+  // 표를 네 장이라고 보여 주었다.
+  it('starts where the data starts, not at A1',()=>{
+    const cells=new Map<string,Cell>()
+    for(let column=4;column<=23;column+=1)cells.set(cellKey(1,column),{sheet_id:'s',row:1,column,value:'x',updated_at:''})
+    const region=usedRegion(cells)!
+    expect(region.startColumn).toBe(4)
+    const wide=()=>200
+    const pages=printColumnPages(region,wide,'portrait','normal','none')
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:true,
+      columnWidth:wide,orientation:'portrait',margin:'normal',fit:'none'})
+    expect(html.match(/<table/g)?.length).toBe(pages.length)
+  })
+
+  it('ignores cells that hold only formatting, the way printing does',()=>{
+    // 서식만 든 칸은 종이에 아무것도 내지 않는다. 그것까지 세면 미리보기가
+    // 있지도 않은 열을 장에 넣는다.
+    const cells=new Map<string,Cell>()
+    cells.set(cellKey(1,1),{sheet_id:'s',row:1,column:1,value:'x',updated_at:''})
+    cells.set(cellKey(1,40),{sheet_id:'s',row:1,column:40,style:{bold:true},updated_at:''})
+    expect(usedRegion(cells)?.endColumn).toBe(1)
+  })
+})
