@@ -356,6 +356,8 @@ var catalog = []FunctionDoc{
 	{"ISERR", "논리", "ISERR(값)", "#N/A를 뺀 오류이면 TRUE입니다."},
 	{"ISNA", "논리", "ISNA(값)", "값이 #N/A이면 TRUE입니다."},
 	{"ISBLANK", "논리", "ISBLANK(값)", "셀이 비어 있으면 TRUE입니다."},
+	{"ISBIZNO", "논리", "ISBIZNO(값)", "사업자등록번호의 검사 숫자가 맞으면 TRUE입니다. 하이픈은 있어도 됩니다."},
+	{"ISCORPNO", "논리", "ISCORPNO(값)", "법인등록번호의 검사 숫자가 맞으면 TRUE입니다."},
 	{"ISNUMBER", "논리", "ISNUMBER(값)", "값이 숫자이면 TRUE입니다."},
 	{"ERROR.TYPE", "논리", "ERROR.TYPE(값)", "오류의 종류를 번호로 알려줍니다. #N/A는 7입니다."},
 	{"ISTEXT", "논리", "ISTEXT(값)", "값이 텍스트이면 TRUE입니다."},
@@ -444,6 +446,8 @@ var catalog = []FunctionDoc{
 	{"ARRAY_CONSTRAIN", "배열", "ARRAY_CONSTRAIN(범위, 행 수, 열 수)", "배열을 지정한 크기로 자릅니다."},
 	{"ARRAYFORMULA", "배열", "ARRAYFORMULA(수식)", "범위 전체에 수식을 한 번에 적용합니다."},
 	{"QUERY", "배열", "QUERY(범위, 질의, [머리글 행 수])", "select·where·group by·order by로 표를 조회합니다. 열은 범위 안 순서대로 A, B, C…입니다."},
+	{"FORMATBIZNO", "텍스트", "FORMATBIZNO(값)", "사업자등록번호를 123-45-67890 꼴로 적습니다."},
+	{"MASKRRN", "텍스트", "MASKRRN(값, [남길 자리])", "주민등록번호 뒷자리를 가립니다. 기본은 한 자리만 남깁니다."},
 	{"SPARKLINE", "배열", "SPARKLINE(범위, [옵션])", "셀 안에 선·막대·승패 미니 차트를 그립니다."},
 }
 
