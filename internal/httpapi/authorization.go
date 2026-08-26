@@ -98,6 +98,9 @@ func capabilityForRequest(r *http.Request) workbook.Capability {
 	// 그때 편집 권한을 검사한다.
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/goal-seek"):
 		return workbook.CapabilityRead
+	// 데이터 표도 마찬가지다. 가정을 넣어 보기만 하고 시트는 그대로 둔다.
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/data-table"):
+		return workbook.CapabilityRead
 	// Previewing an automation is a read-only operation even though the REST
 	// action uses POST so it can share the action endpoint shape with :run.
 	case r.Method == http.MethodPost && strings.HasSuffix(path, ":test") && strings.Contains(path, "/automations/"):
