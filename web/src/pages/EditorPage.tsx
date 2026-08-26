@@ -79,6 +79,8 @@ import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCe
 import { printAreaRegion, printableDocument, usedRegion } from '../lib/printSheet'
 import { PrintOptionsDialog, loadPrintChoice, type PrintChoice } from '../components/PrintOptionsDialog'
 import { CompareDialog, type CompareSource } from '../components/CompareDialog'
+import { ConsolidateDialog } from '../components/ConsolidateDialog'
+import { CONSOLIDATE_LABELS, type ConsolidateFunction, type ConsolidateResult, type ConsolidateSource } from '../lib/consolidate'
 import { splitSheetRange, type CompareResult } from '../lib/compareLists'
 import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
@@ -118,13 +120,16 @@ const FILL_COLORS:Array<{label:string;value:string|null}>=[
 ]
 const MAX_SPLIT_COLUMNS=20
 const MAX_PRINT_ROWS=20_000
+// 시트마다 칸을 통째로 읽어 한 번에 견주므로 한없이 늘릴 수 없다. 열둘이면
+// 한 해 열두 달이 들어간다 — 통합에서 가장 흔한 모양이다.
+const MAX_CONSOLIDATE_SHEETS=12
 // 서버가 한 번에 재는 조건부 서식 칸 수의 한도와 같다.
 const MAX_CONDITIONAL_CELLS=10_000
 const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','background','font_size','font_family','horizontal_align','vertical_align','number_format','text_mode','wrap','text_rotation','borders']
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[compare,setCompare]=useState<{left:CompareSource;right:CompareSource}>(),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion;rows?:number;truncated?:boolean}|false>(false),[compare,setCompare]=useState<{left:CompareSource;right:CompareSource}>(),[consolidateSources,setConsolidateSources]=useState<ConsolidateSource[]>(),[consolidateSkipped,setConsolidateSkipped]=useState<string[]>([]),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -826,6 +831,64 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     const region=printAreaRegion(activeSheet.layout?.print_area)??usedRegion(printed.cells)
     setPrintOpen({region,rows:printed.rows,truncated:printed.truncated})
   }
+  /**
+   * 여러 시트를 합치기 전에 각 시트의 자료가 있는 자리를 읽는다.
+   *
+   * 시트마다 크기가 다르므로 한 범위를 모두에 씌우면 어느 시트는 빈 줄까지
+   * 세고 어느 시트는 뒷부분이 잘린다. 시트마다 자기 크기를 물어 본다.
+   */
+  const openConsolidate=async()=>{
+    if(!writable())return
+    const sheets=(workbook.data?.sheets??[]).filter(sheet=>!sheet.hidden)
+    if(sheets.length<2){alert('합칠 시트가 두 개 이상 있어야 합니다.');return}
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    // 시트마다 칸을 통째로 읽으므로 한없이 늘리면 여는 것만으로 브라우저가
+    // 멈춘다. 넘치면 조용히 버리지 않고 무엇을 못 읽었는지 말한다.
+    if(sheets.length>MAX_CONSOLIDATE_SHEETS){
+      alert(`시트가 ${sheets.length}개입니다. 한 번에 ${MAX_CONSOLIDATE_SHEETS}개까지 합칠 수 있어 앞의 ${MAX_CONSOLIDATE_SHEETS}개만 읽습니다.`)
+    }
+    const sources:ConsolidateSource[]=[],withoutTable:string[]=[]
+    for(const sheet of sheets.slice(0,MAX_CONSOLIDATE_SHEETS)){
+      const used=stats?.items.find(item=>item.sheet_id===sheet.id)
+      if(!used||used.max_row<2||used.max_column<2){withoutTable.push(sheet.name);continue}
+      const endRow=Math.min(used.max_row,MAX_PRINT_ROWS),endColumn=Math.min(used.max_column,MAX_GRID_COLUMNS)
+      const label=`${address(1,1)}:${address(endRow,endColumn)}`
+      const result=await api<{items:Cell[]}>(`/api/v1/sheets/${sheet.id}/ranges/${label}`).catch(()=>undefined)
+      if(!result){withoutTable.push(sheet.name);continue}
+      sources.push({sheetName:sheet.name,cells:new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell])),
+        region:{startRow:1,startColumn:1,endRow,endColumn}})
+    }
+    if(sources.length<2){alert('이름표가 있는 표를 가진 시트가 두 개 이상 있어야 합니다.');return}
+    // 표가 없어 못 읽은 시트는 목록에 나오지 않는다. 왜 없는지 말하지 않으면
+    // 사람은 자기가 고른 것이 다 들어갔다고 믿는다.
+    setConsolidateSources(sources)
+    setConsolidateSkipped(withoutTable)
+  }
+  /** 합친 결과를 새 시트에 적는다. 원래 시트는 건드리지 않는다. */
+  const writeConsolidated=async(result:ConsolidateResult,operation:ConsolidateFunction)=>{
+    const cells:PastedCell[]=[{row:1,column:1,value:CONSOLIDATE_LABELS[operation],formula:undefined,style:{bold:true}}]
+    result.columnLabels.forEach((label,index)=>cells.push({row:1,column:index+2,value:label,formula:undefined,style:{bold:true}}))
+    result.rowLabels.forEach((label,rowIndex)=>{
+      cells.push({row:rowIndex+2,column:1,value:label,formula:undefined,style:{bold:true}})
+      result.columnLabels.forEach((_,columnIndex)=>{
+        const value=result.values.get(`${rowIndex}:${columnIndex}`)
+        // 없는 것은 0이 아니다. 0을 적으면 실적이 0원이었다는 뜻이 된다.
+        if(value===undefined)return
+        cells.push({row:rowIndex+2,column:columnIndex+2,value,formula:undefined,style:undefined})
+      })
+    })
+    if(cells.length>MAX_PASTE_CELLS){alert(`결과가 ${MAX_PASTE_CELLS.toLocaleString()}셀을 넘어 시트로 옮길 수 없습니다.`);return}
+    try{
+      const sheet=await api<Sheet>(`/api/v1/workbooks/${workbookId}/sheets`,{method:'POST',body:JSON.stringify({name:nextSheetName('통합')})})
+      const idempotencyKey=newIdempotencyKey()
+      const latest=await api<Workbook>(`/api/v1/workbooks/${workbookId}`)
+      await api<MutationResult>(`/api/v1/sheets/${sheet.id}/cells:batch`,{method:'PATCH',
+        body:JSON.stringify({base_version:latest.version,idempotency_key:idempotencyKey,client_id:collaborationClientId(),cells})})
+      setConsolidateSources(undefined)
+      setActiveSheet(sheet)
+      await refreshWorkbook()
+    }catch(error){alert(error instanceof Error?error.message:'통합 시트를 만들지 못했습니다.')}
+  }
   /** 사람이 적은 "시트!범위" 를 워크북의 시트에 붙인다. */
   const parseSheetRange=(value:string,sheets:Sheet[]):{sheet:Sheet;region:GridRegion}|undefined=>{
     const parsed=splitSheetRange(value)
@@ -1135,6 +1198,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:cell-history',group:'명령',label:'편집 기록 표시',icon:<Table2/>,keywords:'history 이력 기록 변경',run:()=>setHistoryCell(address(editor.activeRow,editor.activeColumn))},
     {id:'cmd:dedupe',group:'명령',label:'중복 항목 삭제',icon:<Table2/>,keywords:'duplicate 중복 정리',run:()=>void openCleanup('duplicates')},
     {id:'cmd:trim',group:'명령',label:'공백 제거',icon:<Table2/>,keywords:'trim 공백 정리',run:()=>void openCleanup('trim')},
+    {id:'cmd:consolidate',group:'명령',label:'여러 시트 합치기',icon:<Table2/>,keywords:'consolidate 통합 합치기 시트 합계',run:()=>void openConsolidate()},
     {id:'cmd:compare-lists',group:'명령',label:'두 목록 비교',icon:<Table2/>,keywords:'compare 비교 대사 목록 차이 reconcile',run:()=>void openCompare()},
     {id:'cmd:unmerge-fill',group:'명령',label:'병합 해제하고 채우기',icon:<Table2/>,keywords:'unmerge 병합 해제 채우기 merge fill',run:()=>void openCleanup('unmerge')},
     {id:'cmd:split',group:'명령',label:'텍스트를 열로 분할',icon:<Table2/>,keywords:'split 분할 열',run:()=>void openSplitDialog()},
@@ -1342,6 +1406,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:`선택 열 숨기기 (${selectedColumns}개)`,shortcut:'Ctrl+Alt+0',onSelect:()=>void hideSelection('column')},
       {kind:'separator'},
       {kind:'item',label:'두 목록 비교…',disabled:!canWrite,onSelect:()=>void openCompare()},
+      {kind:'item',label:'여러 시트 합치기…',disabled:!canWrite,onSelect:()=>void openConsolidate()},
       {kind:'item',label:'워크북 검색',shortcut:'Ctrl+F',onSelect:()=>openSearch(false)},
     ]},
     {label:'도구',items:[
@@ -1489,6 +1554,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       onApply={(region,cells,headerRows)=>applyCleanup(cleanup.mode,region,cells,headerRows)}/>}
     {splitTarget&&<SplitDialog cells={splitTarget.cells} region={splitTarget.region} onClose={()=>setSplitTarget(undefined)}
       onApply={delimiter=>splitColumn(delimiter,splitTarget)}/>}
+    {consolidateSources&&<ConsolidateDialog sources={consolidateSources} skipped={consolidateSkipped} onClose={()=>setConsolidateSources(undefined)} onApply={writeConsolidated}/>}
     {compare&&<CompareDialog left={compare.left} right={compare.right} onClose={()=>setCompare(undefined)} onReport={writeCompareReport}/>}
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     {linkOpen&&activeSheet&&workbook.data&&<LinkDialog workbookId={workbookId} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress}
