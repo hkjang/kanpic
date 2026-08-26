@@ -287,6 +287,7 @@ func (p *parser) callable(target node, err error) (node, error) {
 // cells the formula was evaluated against.
 var lambdaHelpers = map[string]struct{}{
 	"MAP": {}, "BYROW": {}, "BYCOL": {}, "REDUCE": {}, "SCAN": {}, "ISOMITTED": {},
+	"GROUPBY": {}, "PIVOTBY": {},
 }
 
 func evaluateLambdaHelper(name string, arguments []node, cells map[string]any) (any, error) {
@@ -310,6 +311,12 @@ func evaluateLambdaHelper(name string, arguments []node, cells map[string]any) (
 			return nil, err
 		}
 		values = append(values, value)
+	}
+	if name == "GROUPBY" {
+		return evaluateGroupBy(values, cells)
+	}
+	if name == "PIVOTBY" {
+		return evaluatePivotBy(values, cells)
 	}
 	function, ok := values[len(values)-1].(callableValue)
 	if !ok {
