@@ -118,13 +118,25 @@ func (s *Server) targetIsGlobalAdmin(r *http.Request, userID string) bool {
 	if err != nil {
 		return false
 	}
-	adminRoles := []string{auth.DefaultAdminRole}
+	return holdsAdminRole(user.Roles, s.adminRoleNames(r))
+}
+
+// adminRoleNames 는 관리자로 치는 역할 이름들이다. 신원 공급자 설정에서
+// 온다.
+func (s *Server) adminRoleNames(r *http.Request) []string {
 	if s.auth != nil {
-		adminRoles = s.auth.AdminRoles(r.Context())
+		return s.auth.AdminRoles(r.Context())
 	}
-	for _, held := range user.Roles {
+	return []string{auth.DefaultAdminRole}
+}
+
+// holdsAdminRole 은 가진 역할 중에 관리자 역할이 있는지 본다. 목록을 거를
+// 때와 한 사람을 볼 때가 같은 규칙을 써야, 목록에는 보이는데 열어 보면
+// 막히는 어긋남이 생기지 않는다.
+func holdsAdminRole(held []string, adminRoles []string) bool {
+	for _, role := range held {
 		for _, candidate := range adminRoles {
-			if strings.EqualFold(strings.TrimSpace(held), strings.TrimSpace(candidate)) {
+			if strings.EqualFold(strings.TrimSpace(role), strings.TrimSpace(candidate)) {
 				return true
 			}
 		}

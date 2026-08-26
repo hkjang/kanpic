@@ -164,10 +164,17 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	// 위임한 범위 밖의 사람까지 알게 된다.
 	if scoped && !s.isGlobalAdmin(r) {
 		kept := make([]workbook.DirectoryUser, 0, len(scope))
+		names := s.adminRoleNames(r)
 		for _, item := range items {
-			if _, managed := scope[strings.ToLower(strings.TrimSpace(item.UserID))]; managed {
-				kept = append(kept, item)
+			if _, managed := scope[strings.ToLower(strings.TrimSpace(item.UserID))]; !managed {
+				continue
 			}
+			// 관리자 계정은 목록에서도 뺀다. 열어 보면 막히는데 목록에는
+			// 보이면, 관리자 명단을 훑는 것은 그대로 되는 셈이다.
+			if holdsAdminRole(item.Roles, names) {
+				continue
+			}
+			kept = append(kept, item)
 		}
 		items = kept
 	}

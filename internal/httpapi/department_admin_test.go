@@ -174,3 +174,26 @@ func TestDepartmentAdminCannotLockOutAnAdministrator(t *testing.T) {
 		requestAs[map[string]any](t, server, manager, closed.method, closed.path, closed.body, http.StatusForbidden)
 	}
 }
+
+// 관리자 계정은 목록에서도 빠져야 한다. 열어 보면 막히는데 목록에는
+// 보이면, 관리자 명단을 훑는 것은 그대로 되는 셈이다.
+func TestScopedListHidesAdministratorsToo(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	manager, member, _ := seedDepartmentAdmin(t, server)
+
+	listed := requestAs[map[string]any](t, server, manager, http.MethodGet, "/api/v1/admin/users", nil, http.StatusOK)
+	if rows, _ := listed["items"].([]any); len(rows) != 1 {
+		t.Fatalf("올리기 전 목록 = %#v", listed["items"])
+	}
+	request[workbook.DirectoryUser](t, server, http.MethodPost, "/api/v1/admin/users/"+member+"/roles",
+		map[string]any{"role": "kanpic-admin"}, http.StatusOK)
+
+	after := requestAs[map[string]any](t, server, manager, http.MethodGet, "/api/v1/admin/users", nil, http.StatusOK)
+	rows, _ := after["items"].([]any)
+	if len(rows) != 0 {
+		t.Errorf("관리자가 된 뒤에도 목록에 보인다: %#v", after["items"])
+	}
+}
