@@ -1,6 +1,9 @@
 package formula
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 // evaluateKoreanIdentifiers 는 한국에서 쓰는 번호를 다루는 함수들이다.
 // 엑셀에도 구글 시트에도 없어, 지금까지는 사람이 매크로를 짜거나 손으로
@@ -25,6 +28,31 @@ func evaluateKoreanIdentifiers(name string, values []any) (any, bool, error) {
 			return nil, true, formulaError("#VALUE!", "FORMATBIZNO needs ten digits")
 		}
 		return digits[:3] + "-" + digits[3:5] + "-" + digits[5:], true, nil
+	case "HANGULNUM", "HANGULWON":
+		if len(values) != 1 {
+			return nil, true, argError(name)
+		}
+		number, ok := toNumber(values[0])
+		if !ok {
+			return nil, true, formulaError("#VALUE!", name+" needs a number")
+		}
+		// 원 단위 아래는 한글로 적을 자리가 없다. 조용히 버리면 적힌 금액과
+		// 셈한 금액이 달라지므로, 반올림은 사람이 뜻을 가지고 하게 둔다.
+		if number != math.Trunc(number) {
+			return nil, true, formulaError("#VALUE!", name+" needs a whole number; round it first")
+		}
+		if math.Abs(number) > maxHangulAmount {
+			return nil, true, formulaError("#NUM!", name+" cannot spell an amount that large exactly")
+		}
+		amount := int64(math.Abs(number))
+		text := hangulNumber(amount)
+		if name == "HANGULWON" {
+			text = "일금 " + text + "원정"
+		}
+		if number < 0 {
+			text = "마이너스 " + text
+		}
+		return text, true, nil
 	case "MASKRRN":
 		if len(values) < 1 || len(values) > 2 {
 			return nil, true, argError(name)
@@ -91,4 +119,71 @@ func validCorporateNumber(digits string) bool {
 		sum += int(digits[index]-'0') * weight
 	}
 	return (10-sum%10)%10 == int(digits[12]-'0')
+}
+
+// hangulDigits 는 자릿수 글자다. 십·백·천은 네 자리 묶음 안에서 쓰고,
+// 만·억·조는 묶음마다 붙인다.
+var (
+	hangulDigits = []rune("영일이삼사오육칠팔구")
+	hangulSmall  = []string{"", "십", "백", "천"}
+	hangulBig    = []string{"", "만", "억", "조"}
+)
+
+// maxHangulAmount 는 한글로 적을 수 있는 가장 큰 금액이다.
+//
+// 표 프로그램의 숫자는 배정도 실수라, 9,007,199,254,740,992 를 넘으면 정수를
+// 그대로 담지 못한다. 담지 못한 값을 한글로 적으면 세금계산서에 틀린 금액이
+// 조용히 적힌다. 그럴 바에는 못 적는다고 말하는 편이 낫다.
+const maxHangulAmount = 9_007_199_254_740_992
+
+// hangulNumber 는 수를 한글로 적는다. 네 자리씩 끊어 만·억·조를 붙인다.
+//
+// 십·백·천 앞의 일은 뺀다 — 15 는 십오지 일십오가 아니다. 다만 만·억·조
+// 앞에서는 남긴다: 10000 은 일만이다. 문서에 적는 꼴이 그렇다.
+func hangulNumber(amount int64) string {
+	if amount == 0 {
+		return "영"
+	}
+	parts := make([]string, 0, 4)
+	for index := 0; amount > 0; index++ {
+		group := amount % 10000
+		if group != 0 {
+			text := hangulGroup(int(group))
+			if index > 0 && group == 1 {
+				text = "일"
+			}
+			parts = append(parts, text+hangulBig[index])
+		}
+		amount /= 10000
+	}
+	var out strings.Builder
+	for index := len(parts) - 1; index >= 0; index-- {
+		out.WriteString(parts[index])
+	}
+	return out.String()
+}
+
+func hangulGroup(group int) string {
+	var out strings.Builder
+	for position := 3; position >= 0; position-- {
+		digit := (group / powerOfTen(position)) % 10
+		if digit == 0 {
+			continue
+		}
+		if position > 0 && digit == 1 {
+			out.WriteString(hangulSmall[position])
+			continue
+		}
+		out.WriteRune(hangulDigits[digit])
+		out.WriteString(hangulSmall[position])
+	}
+	return out.String()
+}
+
+func powerOfTen(exponent int) int {
+	result := 1
+	for index := 0; index < exponent; index++ {
+		result *= 10
+	}
+	return result
 }

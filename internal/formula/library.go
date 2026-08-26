@@ -446,6 +446,8 @@ var catalog = []FunctionDoc{
 	{"ARRAY_CONSTRAIN", "배열", "ARRAY_CONSTRAIN(범위, 행 수, 열 수)", "배열을 지정한 크기로 자릅니다."},
 	{"ARRAYFORMULA", "배열", "ARRAYFORMULA(수식)", "범위 전체에 수식을 한 번에 적용합니다."},
 	{"QUERY", "배열", "QUERY(범위, 질의, [머리글 행 수])", "select·where·group by·order by로 표를 조회합니다. 열은 범위 안 순서대로 A, B, C…입니다."},
+	{"HANGULNUM", "텍스트", "HANGULNUM(숫자)", "수를 한글로 적습니다. 3200000 → 삼백이십만."},
+	{"HANGULWON", "텍스트", "HANGULWON(숫자)", "금액을 문서에 적는 꼴로 바꿉니다. 3200000 → 일금 삼백이십만원정."},
 	{"FORMATBIZNO", "텍스트", "FORMATBIZNO(값)", "사업자등록번호를 123-45-67890 꼴로 적습니다."},
 	{"MASKRRN", "텍스트", "MASKRRN(값, [남길 자리])", "주민등록번호 뒷자리를 가립니다. 기본은 한 자리만 남깁니다."},
 	{"SPARKLINE", "배열", "SPARKLINE(범위, [옵션])", "셀 안에 선·막대·승패 미니 차트를 그립니다."},
