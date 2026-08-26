@@ -179,6 +179,16 @@ function formatDate(date:Date,format:string,locale:string){
   const dayName=(long:boolean)=>new Intl.DateTimeFormat(locale,{timeZone:'UTC',weekday:long?'long':'short'}).format(date)
   let out='',index=0,previousWasHour=false
   while(index<normalized.length){
+    // 따옴표 안은 그대로 적는 글자다. 미리 걷어내면 "day" 의 d 가 날짜
+    // 기호로 읽히므로, 여기서 통째로 옮긴다. 한국 파일의 yyyy"년" 이
+    // 2023"년" 으로 보이던 것이 이것 때문이다.
+    if(normalized[index]==='"'){
+      const end=normalized.indexOf('"',index+1)
+      out+=normalized.slice(index+1,end<0?undefined:end)
+      index=end<0?normalized.length:end+1
+      continue
+    }
+    if(normalized[index]==='\\'){out+=normalized[index+1]??'';index+=2;continue}
     const token=nextDateToken(normalized,index)
     if(!token){out+=normalized[index];index+=1;continue}
     switch(token){

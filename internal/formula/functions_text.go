@@ -325,11 +325,39 @@ var (
 // 아니라 12:12 였다. 격자는 web/src/lib/cellFormat.ts 에서 제대로 그리고
 // 있었으므로, 같은 값을 화면과 TEXT 가 다르게 보여주고 있었다.
 func renderDatePattern(moment time.Time, pattern string) string {
+	// 대괄호는 [h] [mm] [ss] 만 남긴다. 흘러간 시간을 적는 기호이기 때문이다.
+	// [$-412] 같은 나라 코드를 그대로 두면 날짜 앞에 붙어 나온다.
+	// web/src/lib/cellFormat.ts 의 formatDate 가 같은 것을 한다.
+	pattern = bracketSection.ReplaceAllStringFunc(pattern, func(match string) string {
+		if elapsedSection.MatchString(match) {
+			return match[1 : len(match)-1]
+		}
+		return ""
+	})
 	letters := []rune(pattern)
 	twelveHour := hasMeridiem(pattern)
 	var builder strings.Builder
 	previousWasHour := false
 	for index := 0; index < len(letters); {
+		// 따옴표 안은 그대로 적는 글자다. 미리 걷어내면 "day" 의 d 가 날짜
+		// 기호로 읽히므로 여기서 통째로 옮긴다. 한국 파일의 yyyy"년" 이
+		// 2023"년" 으로 나오던 것이 이것 때문이다.
+		if letters[index] == '"' {
+			end := index + 1
+			for end < len(letters) && letters[end] != '"' {
+				end++
+			}
+			builder.WriteString(string(letters[index+1 : end]))
+			index = end + 1
+			continue
+		}
+		if letters[index] == '\\' {
+			if index+1 < len(letters) {
+				builder.WriteRune(letters[index+1])
+			}
+			index += 2
+			continue
+		}
 		token, size := nextDateToken(letters, index)
 		switch token {
 		case "":
