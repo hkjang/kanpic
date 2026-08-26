@@ -17,6 +17,9 @@ const pointY=(value:number,min:number,max:number,top:number,height:number)=>top+
 const pointX=(index:number,count:number,left:number,width:number)=>left+(count<=1?width/2:index*width/(count-1))
 const pieArc=(cx:number,cy:number,r:number,start:number,end:number)=>{const sx=cx+r*Math.cos(start),sy=cy+r*Math.sin(start),ex=cx+r*Math.cos(end),ey=cy+r*Math.sin(end),large=end-start>Math.PI?1:0;return `M${cx},${cy} L${sx},${sy} A${r},${r} 0 ${large} 1 ${ex},${ey} Z`}
 
+/** 축과 값에 적는 수. 다른 차트가 쓰는 표기를 그대로 따른다. */
+const formatTick=(value:number)=>String(Number(value.toPrecision(4)))
+
 export function ChartPlot({data}: {data:ChartData}) {
   const chart=data.chart,series=data.series,width=520,height=280,left=chart.legend_position==='left'?125:52,right=chart.legend_position==='right'?112:24,top=chart.legend_position==='top'?42:20,bottom=chart.legend_position==='bottom'?62:48,plotWidth=width-left-right,plotHeight=height-top-bottom
   // Which series are bars and which are lines depends on the chart kind, and a
@@ -33,6 +36,40 @@ export function ChartPlot({data}: {data:ChartData}) {
     const points=series[0].points.filter(point=>point.value!=null&&point.value>=0),total=points.reduce((sum,point)=>sum+(point.value??0),0),vertical=chart.legend_position==='left'||chart.legend_position==='right',cx=chart.legend_position==='left'?355:chart.legend_position==='right'?165:260,cy=chart.legend_position==='top'?165:chart.legend_position==='bottom'?115:140,r=90;let angle=-Math.PI/2
     const pieLegend=chart.legend_position==='none'?null:points.map((point,index)=>{const x=chart.legend_position==='left'?18:chart.legend_position==='right'?330:65+(index%5)*90,y=vertical?55+index*18:chart.legend_position==='top'?18+Math.floor(index/5)*16:245+Math.floor(index/5)*16;return <g key={`legend-${point.category}-${index}`} transform={`translate(${x},${y})`}><rect width="9" height="9" rx="2" fill={palette[index%palette.length]}/><text x="13" y="8" fontSize="8" fill="#53636d">{point.category.slice(0,12)} · {point.value}</text></g>})
     return <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title||'원형 차트'}><title>{chart.title||'원형 차트'}</title><rect width={width} height={height} fill="white"/>{total>0?points.map((point,index)=>{const start=angle,end=angle+(point.value??0)/total*Math.PI*2;angle=end;return <path key={`${point.category}-${index}`} d={pieArc(cx,cy,r,start,end)} fill={palette[index%palette.length]} stroke="white" strokeWidth="2"><title>{point.category}: {point.value}</title></path>}):null}{pieLegend}</svg>
+  }
+  if(chart.type==='waterfall'){
+    // 폭포는 앞줄까지의 누계 위에 다음 막대를 얹어, 증감이 쌓여 결과에
+    // 이르는 길을 보여 준다. 막대의 아래위가 곧 그 줄의 시작과 끝이다.
+    const steps=series[0].points.filter(point=>point.x!=null&&point.value!=null)
+    const levels=steps.flatMap(point=>[point.x as number,point.value as number]).concat(0)
+    const low=Math.min(...levels),high=Math.max(...levels)
+    // 모든 값이 같으면 높이가 0 이 되어 아무것도 안 보인다.
+    const span=high>low?high-low:Math.abs(high)||1
+    const bottom0=high>low?low:low-span/2
+    const atValue=(value:number)=>top+plotHeight-((value-bottom0)/span)*plotHeight
+    const slot=plotWidth/Math.max(1,steps.length)
+    const barWidth=Math.max(3,Math.min(46,slot*0.62))
+    const marks=[0,.25,.5,.75,1].map(portion=>bottom0+span*portion)
+    // 늘어난 것과 줄어든 것을 색으로 가른다. 폭포에서 방향은 값 자체만큼
+    // 중요하다. 합계 줄은 증감이 아니므로 또 다른 색으로 둔다.
+    const paint=(point:typeof steps[number])=>point.total?'#3b6ea5':(point.value as number)>=(point.x as number)?'#2f9e5f':'#d1495b'
+    return <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chart.title||'폭포 차트'}><title>{chart.title||'폭포 차트'}</title>
+      <rect width={width} height={height} fill="white"/>
+      {marks.map(mark=><g key={mark}><line x1={left} x2={width-right} y1={atValue(mark)} y2={atValue(mark)} stroke="#e6eaee"/><text x={left-6} y={atValue(mark)+3} textAnchor="end" className="chart-axis">{formatTick(mark)}</text></g>)}
+      {low<0&&high>0&&<line x1={left} x2={width-right} y1={atValue(0)} y2={atValue(0)} stroke="#b7c0c7"/>}
+      {steps.map((point,index)=>{
+        const start=point.x as number,end=point.value as number
+        const x=left+index*slot+(slot-barWidth)/2
+        const barTop=atValue(Math.max(start,end)),barBottom=atValue(Math.min(start,end))
+        const previous=index>0?steps[index-1]:undefined
+        return <g key={`${point.category}-${index}`}>
+          {previous&&<line x1={left+(index-1)*slot+(slot+barWidth)/2} x2={x} y1={atValue(previous.value as number)} y2={atValue(point.total?end:start)} stroke="#c3ccd3" strokeDasharray="2 2"/>}
+          <rect x={x} y={barTop} width={barWidth} height={Math.max(1,barBottom-barTop)} fill={paint(point)} rx="1"><title>{point.category}: {formatTick(end-start)}</title></rect>
+          {chart.data_labels&&<text x={x+barWidth/2} y={barTop-4} textAnchor="middle" className="chart-axis">{formatTick(point.total?end:end-start)}</text>}
+          <text x={x+barWidth/2} y={height-bottom+14} textAnchor="middle" className="chart-axis">{point.category.length>7?`${point.category.slice(0,6)}…`:point.category}</text>
+        </g>
+      })}
+    </svg>
   }
   if(chart.type==='timeline'){
     // 일정표는 한 줄에 하나씩 가로 막대로 그린다. 시작과 끝이 곧 막대의

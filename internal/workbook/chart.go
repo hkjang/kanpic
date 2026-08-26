@@ -21,7 +21,7 @@ const (
 )
 
 var chartTypes = map[string]struct{}{"bar": {}, "line": {}, "area": {}, "pie": {}, "scatter": {}, "histogram": {},
-	"stacked_bar": {}, "stacked_area": {}, "combo": {}, "timeline": {}}
+	"stacked_bar": {}, "stacked_area": {}, "combo": {}, "timeline": {}, "waterfall": {}}
 var chartLegendPositions = map[string]struct{}{"none": {}, "top": {}, "right": {}, "bottom": {}, "left": {}}
 
 type ChartPosition struct {
@@ -132,6 +132,9 @@ type ChartPoint struct {
 	Category string   `json:"category"`
 	Value    *float64 `json:"value"`
 	X        *float64 `json:"x,omitempty"`
+	// Total 은 폭포 차트에서 바닥부터 그리는 줄이다. 앞의 증감을 합쳐 놓은
+	// 자리이므로 떠 있는 막대와 다른 색으로 그린다.
+	Total bool `json:"total,omitempty"`
 }
 
 type ChartSeries struct {
@@ -230,7 +233,7 @@ func normalizeChart(item Chart, allowBrokenReference bool) (Chart, error) {
 		return Chart{}, fmt.Errorf("%w: source_sheet_id is required", ErrInvalid)
 	}
 	if _, found := chartTypes[item.Type]; !found {
-		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, histogram, timeline, stacked_bar, stacked_area, or combo", ErrInvalid)
+		return Chart{}, fmt.Errorf("%w: chart type must be bar, line, area, pie, scatter, histogram, timeline, waterfall, stacked_bar, stacked_area, or combo", ErrInvalid)
 	}
 	if len([]rune(item.Title)) > 200 || len([]rune(item.XAxisTitle)) > 100 || len([]rune(item.YAxisTitle)) > 100 {
 		return Chart{}, fmt.Errorf("%w: chart title or axis title is too long", ErrInvalid)
@@ -519,6 +522,9 @@ func buildChartData(chart Chart, version int64, cells []Cell) (ChartData, error)
 	if chart.Type == "timeline" {
 		return buildTimelineData(chart, version, matrix), nil
 	}
+	if chart.Type == "waterfall" {
+		return buildWaterfallData(chart, version, matrix), nil
+	}
 	rowStart, columnStart := 0, 0
 	if chart.FirstRowHeaders && rows > 1 {
 		rowStart = 1
@@ -642,6 +648,75 @@ func buildHistogramData(chart Chart, version int64, matrix [][]any) ChartData {
 		points[index] = ChartPoint{Category: fmt.Sprintf("%.4g–%.4g", start, end), Value: &copy}
 	}
 	return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{{Name: "빈도", Points: points}}}
+}
+
+// buildWaterfallData 는 증감이 쌓여 결과에 이르는 과정을 그린다.
+//
+// 열을 앞에서부터 이름 · 값 · (합계 여부) 로 읽는다. 일정표가 이름 · 시작 ·
+// 끝을 자리로 읽는 것과 같은 방식이다.
+//
+// 막대는 앞줄까지의 누계에서 시작해 값만큼 자란다. 그래서 매출에서 원가와
+// 판관비를 빼 영업이익에 이르는 길이 한눈에 보인다.
+//
+// 셋째 칸에 TRUE 나 "합계" 를 적은 줄은 바닥부터 그린다. 그런 줄은 앞의
+// 증감을 합쳐 놓은 자리이지 또 하나의 증감이 아니다. 표에 적힌 값을 그대로
+// 믿는다 — 우리가 더한 값과 다르더라도 그림이 표와 어긋나는 편이 더 나쁘다.
+func buildWaterfallData(chart Chart, version int64, matrix [][]any) ChartData {
+	rowStart := 0
+	if chart.FirstRowHeaders && len(matrix) > 1 {
+		rowStart = 1
+	}
+	if len(matrix) <= rowStart || len(matrix[0]) < 2 {
+		return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{}, Warning: "폭포 차트에는 이름 열과 값 열이 있어야 합니다."}
+	}
+	name := "증감"
+	if chart.FirstRowHeaders {
+		if header := displayChartValue(matrix[0][1]); header != "" {
+			name = header
+		}
+	}
+	points := make([]ChartPoint, 0, len(matrix)-rowStart)
+	running := 0.0
+	for row := rowStart; row < len(matrix); row++ {
+		if len(matrix[row]) < 2 {
+			continue
+		}
+		value, ok := numericChartValue(matrix[row][1])
+		if !ok {
+			continue
+		}
+		total := len(matrix[row]) > 2 && isWaterfallTotal(matrix[row][2])
+		label := displayChartValue(matrix[row][0])
+		if label == "" {
+			label = strconv.Itoa(row - rowStart + 1)
+		}
+		start, end := running, running+value
+		if total {
+			start, end = 0, value
+		}
+		running = end
+		points = append(points, ChartPoint{Category: label, X: &start, Value: &end, Total: total})
+	}
+	if len(points) == 0 {
+		return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{}, Warning: "숫자로 읽을 수 있는 값이 없습니다."}
+	}
+	return ChartData{Chart: chart, WorkbookVersion: version, Series: []ChartSeries{{Name: name, Points: points}}}
+}
+
+// isWaterfallTotal 은 셋째 칸이 "이 줄은 합계" 라고 말하는지 본다.
+func isWaterfallTotal(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case float64:
+		return typed != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "합계", "소계", "누계", "계", "total", "subtotal", "y", "yes":
+			return true
+		}
+	}
+	return false
 }
 
 func displayChartValue(value any) string {
