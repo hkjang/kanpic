@@ -146,3 +146,55 @@ func TestGroupBySortsNumberLabelsAsNumbers(t *testing.T) {
 		t.Errorf("차례 = %v, 원하는 것은 [1 3 10]", got)
 	}
 }
+
+// 열 이름표가 여러 칸이면 머리글도 그 칸 수만큼 낸다. 첫 칸만 적으면
+// 연도 × 분기로 묶었을 때 "2026" 이 두 번 나오고 어느 쪽이 1분기인지 알 수
+// 없다. 값은 맞는데 표가 거짓말을 하는 것이 가장 나쁘다.
+func TestPivotByLabelsEveryColumnFieldLevel(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": "영업", "B1": 2026.0, "C1": "1분기", "D1": 10.0,
+		"A2": "영업", "B2": 2026.0, "C2": "2분기", "D2": 20.0,
+		"A3": "관리", "B3": 2025.0, "C3": "1분기", "D3": 30.0,
+	}
+	result := New().Evaluate("=PIVOTBY(A1:A3,B1:C3,D1:D3,SUM)", cells)
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	got := result.Value.([][]any)
+	want := [][]any{
+		{nil, 2025.0, 2026.0, 2026.0, nil},
+		{nil, "1분기", "1분기", "2분기", groupTotalLabel},
+		{"관리", 30.0, nil, nil, 30.0},
+		{"영업", nil, 10.0, 20.0, 30.0},
+		{groupTotalLabel, 30.0, 10.0, 20.0, 60.0},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PIVOTBY = %#v,\n원하는 것은 %#v", got, want)
+	}
+}
+
+// 이름 줄이 있다고 알려 주면 첫 줄을 자료로 세지 않고 이름으로 쓴다.
+func TestGroupByUsesTheHeaderRowItIsToldAbout(t *testing.T) {
+	t.Parallel()
+	cells := map[string]any{
+		"A1": "부서", "B1": "분기", "C1": "금액",
+		"A2": "영업", "B2": "1분기", "C2": 10.0,
+		"A3": "영업", "B3": "2분기", "C3": 20.0,
+	}
+	grouped := New().Evaluate("=GROUPBY(A1:A3,C1:C3,SUM,TRUE)", cells)
+	if grouped.Error != nil {
+		t.Fatal(grouped.Error)
+	}
+	want := [][]any{{"부서", "금액"}, {"영업", 30.0}, {groupTotalLabel, 30.0}}
+	if !reflect.DeepEqual(grouped.Value, want) {
+		t.Errorf("GROUPBY = %#v, 원하는 것은 %#v", grouped.Value, want)
+	}
+	pivoted := New().Evaluate("=PIVOTBY(A1:A3,B1:B3,C1:C3,SUM,TRUE)", cells)
+	if pivoted.Error != nil {
+		t.Fatal(pivoted.Error)
+	}
+	if first := pivoted.Value.([][]any)[0]; first[0] != "부서" {
+		t.Errorf("행 이름표의 이름이 머리글에 없다: %#v", first)
+	}
+}

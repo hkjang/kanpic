@@ -365,21 +365,38 @@ func evaluatePivotBy(arguments []any, cells map[string]any) (any, error) {
 		width++
 	}
 	rows := make([][]any, 0, len(downOrder)+2)
-	header := make([]any, 0, width)
-	for column := 0; column < rowFields.columns; column++ {
-		if options.headers {
-			header = append(header, rowFields.at(0, column))
-			continue
+	// 열 이름표 칸 수만큼 머리글 줄을 낸다. 첫 칸만 적으면 연도 × 분기로
+	// 묶었을 때 "2026" 이 두 번 나오고 어느 쪽이 1분기인지 알 수 없다.
+	// 값은 맞는데 표가 거짓말을 하는 것이 가장 나쁘다.
+	headerDepth := columnFields.columns
+	for depth := 0; depth < headerDepth; depth++ {
+		last := depth == headerDepth-1
+		header := make([]any, 0, width)
+		for column := 0; column < rowFields.columns; column++ {
+			// 행 이름표의 이름은 마지막 머리글 줄에 적는다.
+			if options.headers && last {
+				header = append(header, rowFields.at(0, column))
+				continue
+			}
+			header = append(header, nil)
 		}
-		header = append(header, nil)
+		for _, position := range acrossOrder {
+			label := acrossGroups.keys[position].label
+			if depth < len(label) {
+				header = append(header, label[depth])
+				continue
+			}
+			header = append(header, nil)
+		}
+		if options.totalDepth > 0 {
+			if last {
+				header = append(header, groupTotalLabel)
+			} else {
+				header = append(header, nil)
+			}
+		}
+		rows = append(rows, header)
 	}
-	for _, position := range acrossOrder {
-		header = append(header, acrossGroups.keys[position].label[0])
-	}
-	if options.totalDepth > 0 {
-		header = append(header, groupTotalLabel)
-	}
-	rows = append(rows, header)
 
 	emit := func(label []any, byAcross map[int][]int, everyRow []int) error {
 		line := make([]any, 0, width)
