@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -157,7 +158,7 @@ func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook
 	reader.FieldsPerRecord = -1
 	reader.TrimLeadingSpace = false
 	cells := make([]workbook.CellInput, 0)
-	rows, maxColumns := 0, 0
+	rows, maxColumns, textNumbers := 0, 0, 0
 	for {
 		record, err := reader.Read()
 		if errors.Is(err, io.EOF) {
@@ -174,7 +175,11 @@ func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook
 			if raw == "" {
 				continue
 			}
-			value, err := json.Marshal(parseScalar(raw))
+			scalar := parseScalar(raw)
+			if text, ok := scalar.(string); ok && looksLikeNumberStoredAsText(text) {
+				textNumbers++
+			}
+			value, err := json.Marshal(scalar)
 			if err != nil {
 				return ParsedWorkbook{}, err
 			}
@@ -185,7 +190,14 @@ func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook
 		}
 	}
 	name := "Sheet1"
-	preview := Preview{FileName: fileName, Format: format, SizeBytes: len(data), Sheets: []SheetPreview{{Name: name, Rows: rows, Columns: maxColumns, NonEmptyCells: len(cells)}}, TotalCells: len(cells), Warnings: []string{}}
+	warnings := []string{}
+	// 쉼표나 통화 기호가 붙은 값은 글자로 들어온다. =SUM 이 조용히 빼고
+	// 셈하므로 합계가 작게 나오는데, 무엇이 빠졌는지는 아무 데도 적히지
+	// 않는다. 가져오기 전에 몇 칸인지 알려 주고 고치는 자리를 가리킨다.
+	if textNumbers > 0 {
+		warnings = append(warnings, fmt.Sprintf("숫자처럼 보이지만 글자로 담긴 칸이 %d개 있습니다. 가져온 뒤 데이터 › 데이터 정리 › 텍스트로 저장된 숫자로 고칠 수 있습니다.", textNumbers))
+	}
+	preview := Preview{FileName: fileName, Format: format, SizeBytes: len(data), Sheets: []SheetPreview{{Name: name, Rows: rows, Columns: maxColumns, NonEmptyCells: len(cells)}}, TotalCells: len(cells), Warnings: warnings}
 	return ParsedWorkbook{Title: title, Format: format, Sheets: []workbook.ImportSheet{{Name: name, Cells: cells}}, Preview: preview}, nil
 }
 
@@ -1036,13 +1048,55 @@ func parseScalar(value string) any {
 	if lower == "false" {
 		return false
 	}
-	if !hasSignificantLeadingZero(value) {
+	if !hasSignificantLeadingZero(value) && !tooLongToHoldExactly(value) {
 		if number, err := strconv.ParseFloat(value, 64); err == nil {
 			return number
 		}
 	}
 	return value
 }
+
+// tooLongToHoldExactly 는 배정밀도가 정확히 담지 못할 만큼 긴 수인지 본다.
+//
+// 스무 자리 계좌번호를 실수로 읽으면 1.2345678901234567e+19 가 되어 뒤가
+// 뭉개진다. 파일에 적힌 것과 다른 값이 칸에 들어가고, 되돌릴 방법이 없다.
+// 그런 것은 금액이 아니라 번호이므로 글자로 둔다 — 적어도 그대로 남는다.
+//
+// 지수로 적은 것(1e30)은 사람이 수로 적은 것이므로 건드리지 않는다.
+// web/src/lib/spreadsheetNumber.ts 의 significantDigits 와 같은 한도다.
+func tooLongToHoldExactly(value string) bool {
+	if !plainNumber.MatchString(value) {
+		return false
+	}
+	digits := strings.TrimLeft(strings.Replace(strings.TrimLeft(value, "+-"), ".", "", 1), "0")
+	return len(digits) > 15
+}
+
+var plainNumber = regexp.MustCompile(`^[+-]?\d+(\.\d+)?$`)
+
+// looksLikeNumberStoredAsText 는 글자로 남은 값이 사람 눈에는 숫자인지 본다.
+//
+// 가져오기 미리보기에 몇 칸인지 적어 주기 위한 어림이다. 값을 바꾸지 않으므로
+// 조금 넉넉해도 되지만, 바꾸는 규칙과 같지는 않다 — 바꾸는 일은 사람이
+// 데이터 정리에서 미리보기를 보고 정한다.
+func looksLikeNumberStoredAsText(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || !strings.ContainsAny(trimmed, "0123456789") {
+		return false
+	}
+	if _, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		return false
+	}
+	stripped := decorations.ReplaceAllString(trimmed, "")
+	if stripped == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(stripped, 64)
+	return err == nil
+}
+
+var decorations = regexp.MustCompile(`[₩$€¥£¢,()%\s]|원$|달러$|USD$|KRW$`)
+
 func parseXLSXValue(value string, cellType excelize.CellType) any {
 	switch cellType {
 	case excelize.CellTypeUnset:
