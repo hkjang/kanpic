@@ -220,6 +220,16 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	input.ActorID = actorID(r)
 	userID := r.PathValue("userId")
+	// 알림 메일은 디렉터리에 적힌 이메일로 간다. 부서 관리자가 그것을 바꿀
+	// 수 있으면 구성원의 알림을 조용히 자기 쪽으로 돌릴 수 있다 — 지켜보기
+	// 알림에는 바뀐 칸이, 멘션에는 댓글이 실려 나간다. 받는 사람은 메일이
+	// 끊긴 것을 한참 뒤에야 안다.
+	if input.Email != nil && !s.isGlobalAdmin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{
+			"code": "forbidden", "message": "부서 관리자는 이메일을 바꿀 수 없습니다.",
+		}})
+		return
+	}
 	// Suspending yourself would lock the last administrator out of the console.
 	if input.Status != nil && *input.Status == workbook.UserStatusSuspended && strings.EqualFold(userID, actorID(r)) {
 		s.writeError(w, r, workbook.ErrInvalid)

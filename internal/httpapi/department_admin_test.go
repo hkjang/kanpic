@@ -197,3 +197,30 @@ func TestScopedListHidesAdministratorsToo(t *testing.T) {
 		t.Errorf("관리자가 된 뒤에도 목록에 보인다: %#v", after["items"])
 	}
 }
+
+// 알림 메일은 디렉터리에 적힌 이메일로 간다. 부서 관리자가 그것을 바꿀 수
+// 있으면 구성원의 알림을 조용히 자기 쪽으로 돌릴 수 있다 — 지켜보기
+// 알림에는 바뀐 칸이, 멘션에는 댓글이 실려 나간다.
+func TestDepartmentAdminCannotRedirectSomebodysMail(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	manager, member, _ := seedDepartmentAdmin(t, server)
+
+	requestAs[map[string]any](t, server, manager, http.MethodPatch, "/api/v1/admin/users/"+member,
+		map[string]any{"email": "lead.kim@corp.example"}, http.StatusForbidden)
+
+	// 이름과 메모는 그대로 고칠 수 있어야 한다. 계정 관리가 위임의 몫이다.
+	renamed := requestAs[workbook.DirectoryUser](t, server, manager, http.MethodPatch, "/api/v1/admin/users/"+member,
+		map[string]any{"display_name": "박팀원"}, http.StatusOK)
+	if renamed.DisplayName != "박팀원" {
+		t.Errorf("이름을 못 고쳤다: %#v", renamed)
+	}
+	requestAs[workbook.DirectoryUser](t, server, manager, http.MethodPatch, "/api/v1/admin/users/"+member,
+		map[string]any{"note": "인수인계 중"}, http.StatusOK)
+
+	// 전역 관리자는 그대로 바꿀 수 있다.
+	request[workbook.DirectoryUser](t, server, http.MethodPatch, "/api/v1/admin/users/"+member,
+		map[string]any{"email": "team.park@corp.example"}, http.StatusOK)
+}
