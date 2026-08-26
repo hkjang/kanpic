@@ -22,9 +22,9 @@ func TestWaterfallStacksFromTheRunningTotal(t *testing.T) {
 		t.Fatalf("계열이 %d 개다", len(data.Series))
 	}
 	want := []struct {
-		category    string
-		start, end  float64
-		total       bool
+		category   string
+		start, end float64
+		total      bool
 	}{
 		{"매출", 0, 1000, false},
 		{"원가", 1000, 400, false},
