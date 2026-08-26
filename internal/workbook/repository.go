@@ -144,6 +144,13 @@ type Repository interface {
 	GetSheetTable(context.Context, string) (SheetTable, error)
 	UpdateSheetTable(context.Context, string, string, UpdateSheetTableInput) (SheetTable, error)
 	DeleteSheetTable(context.Context, string, string, *int64) error
+
+	// 가정 한 벌에 붙인 이름. 회의에서 두 안을 나란히 놓고 보는 그것이다.
+	CreateScenario(context.Context, string, string, CreateScenarioInput) (Scenario, error)
+	ListScenarios(context.Context, string) ([]Scenario, error)
+	GetScenario(context.Context, string) (Scenario, error)
+	UpdateScenario(context.Context, string, string, UpdateScenarioInput) (Scenario, error)
+	DeleteScenario(context.Context, string, string, *int64) error
 	CreateNamedFunction(context.Context, string, string, CreateNamedFunctionInput) (NamedFunction, error)
 	ListNamedFunctions(context.Context, string) ([]NamedFunction, error)
 	GetNamedFunction(context.Context, string) (NamedFunction, error)

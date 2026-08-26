@@ -125,6 +125,26 @@ func TestWhatTravelsWithADuplicateAndARestore(t *testing.T) {
 			},
 		},
 		{
+			name: "시나리오", travels: true, restores: true,
+			reason: "가정 한 벌에 붙인 이름이다. 사본에서 견줄 수 없으면 사본은 반쪽이다.",
+			create: func() error {
+				value := 1200.0
+				_, err := repository.CreateScenario(ctx, book.ID, "alice", CreateScenarioInput{
+					IdempotencyKey: "sc", SheetID: sheetID, Name: "낙관",
+					Inputs: []ScenarioInput{{Cell: "B2", Value: &value}},
+				})
+				return err
+			},
+			remove: func() error {
+				items, _ := repository.ListScenarios(ctx, book.ID)
+				return repository.DeleteScenario(ctx, items[0].ID, "alice", nil)
+			},
+			countIn: func(workbookID, _ string) int {
+				items, _ := repository.ListScenarios(ctx, workbookID)
+				return len(items)
+			},
+		},
+		{
 			name: "댓글", travels: false, restores: false,
 			reason: "대화는 그 워크북에서 오간 것이다. 사본에 옮기면 사람들이 하지 않은 말을 한 것이 된다.",
 			create: func() error {

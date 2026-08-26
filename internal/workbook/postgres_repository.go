@@ -94,6 +94,7 @@ type snapshotDocument struct {
 	// 보호 범위도 스키마 9 부터 담는다. 되돌렸는데 보호가 사라지면 사람은
 	// 지켜지고 있다고 믿는 칸을 아무나 고치게 된다.
 	Protections []ProtectedRange `json:"protections,omitempty"`
+	Scenarios   []Scenario       `json:"scenarios,omitempty"`
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
@@ -784,6 +785,24 @@ func (r *PostgresRepository) DuplicateWorkbook(ctx context.Context, id string, i
 			item.ID, item.WorkbookID, item.CreateKey, item.Name, item.Parameters, item.Body, item.Description,
 			item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
 			return Workbook{}, mapPostgresError(err)
+		}
+	}
+	copiedScenarios, err := listScenariosFrom(ctx, tx, source.ID)
+	if err != nil {
+		return Workbook{}, err
+	}
+	for _, item := range copiedScenarios {
+		destinationSheetID, found := sheetIDs[item.SheetID]
+		if !found {
+			return Workbook{}, fmt.Errorf("%w: scenario references an unknown sheet", ErrInvalid)
+		}
+		item.ID, item.WorkbookID, item.WorkbookVersion = identity.New(), duplicated.ID, 1
+		item.SheetID = destinationSheetID
+		item.CreateKey, item.Revision = "copy:"+item.ID, 1
+		item.CreatedBy, item.UpdatedBy = ownerID, ownerID
+		item.CreatedAt, item.UpdatedAt = now, now
+		if err := insertScenarioTx(ctx, tx, item); err != nil {
+			return Workbook{}, err
 		}
 	}
 	copiedTables, err := listSheetTablesFrom(ctx, tx, source.ID)
@@ -2038,6 +2057,10 @@ func (r *PostgresRepository) buildSnapshot(ctx context.Context, tx pgx.Tx, workb
 	if err != nil {
 		return snapshotDocument{}, err
 	}
+	document.Scenarios, err = listScenariosFrom(ctx, tx, workbookID)
+	if err != nil {
+		return snapshotDocument{}, err
+	}
 	document.SheetTables, err = listSheetTablesFrom(ctx, tx, workbookID)
 	if err != nil {
 		return snapshotDocument{}, err
@@ -2151,6 +2174,9 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 			return MutationResult{}, err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM sheet_tables WHERE workbook_id=$1`, workbookID); err != nil {
+			return MutationResult{}, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM scenarios WHERE workbook_id=$1`, workbookID); err != nil {
 			return MutationResult{}, err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM protected_ranges USING sheets WHERE protected_ranges.sheet_id=sheets.id AND sheets.workbook_id=$1`, workbookID); err != nil {
@@ -2374,6 +2400,25 @@ func (r *PostgresRepository) RestoreVersion(ctx context.Context, versionID, acto
 				rule.CreatedAt = now
 			}
 			if err := insertProtectedRangeForCopy(ctx, tx, rule); err != nil {
+				return MutationResult{}, err
+			}
+		}
+		for _, item := range snapshot.Scenarios {
+			if _, found := desiredSheetIDs[item.SheetID]; !found {
+				return MutationResult{}, fmt.Errorf("%w: version snapshot contains a scenario on an unknown sheet", ErrInvalid)
+			}
+			item.CreateKey, item.WorkbookID, item.WorkbookVersion = "restore:"+item.ID, workbookID, base+1
+			if item.Revision < 1 {
+				item.Revision = 1
+			}
+			if item.CreatedBy == "" {
+				item.CreatedBy = actorID
+			}
+			item.UpdatedBy, item.UpdatedAt = actorID, now
+			if item.CreatedAt.IsZero() {
+				item.CreatedAt = now
+			}
+			if err := insertScenarioTx(ctx, tx, item); err != nil {
 				return MutationResult{}, err
 			}
 		}

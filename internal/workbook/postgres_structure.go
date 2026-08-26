@@ -117,6 +117,36 @@ func (r *PostgresRepository) ApplyStructure(ctx context.Context, raw StructuralM
 			return MutationResult{}, err
 		}
 	}
+	scenarios, err := listScenariosFrom(ctx, tx, target.WorkbookID)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	for _, item := range scenarios {
+		if item.SheetID != target.ID {
+			continue
+		}
+		updated, remains, transformErr := transformScenarioForStructure(item, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if !remains {
+			if _, err := tx.Exec(ctx, `DELETE FROM scenarios WHERE id=$1`, item.ID); err != nil {
+				return MutationResult{}, err
+			}
+			continue
+		}
+		if updated.Revision == item.Revision {
+			continue
+		}
+		encoded, marshalErr := json.Marshal(updated.Inputs)
+		if marshalErr != nil {
+			return MutationResult{}, marshalErr
+		}
+		if _, err := tx.Exec(ctx, `UPDATE scenarios SET inputs=$2,revision=$3,updated_by=$4,updated_at=$5 WHERE id=$1`,
+			item.ID, encoded, updated.Revision, updated.UpdatedBy, updated.UpdatedAt); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	tables, err := listSheetTablesFrom(ctx, tx, target.WorkbookID)
 	if err != nil {
 		return MutationResult{}, err

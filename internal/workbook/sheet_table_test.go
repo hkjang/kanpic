@@ -511,3 +511,58 @@ func TestDuplicateAndRestoreCarryProtectionsAndFilterViews(t *testing.T) {
 		t.Fatalf("되돌린 필터 보기=%#v, %v", restoredViews, err)
 	}
 }
+
+// 시나리오의 가정은 칸 주소를 들고 있다. 행이 움직이면 그 주소도 따라가야
+// 한다. 옮기지 않으면 "낙관" 이 엉뚱한 칸에 값을 넣게 되는데, 이름은 그대로
+// 라서 사람은 그것이 여전히 그 가정인 줄 안다.
+func TestScenarioAssumptionsFollowStructure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository, book, sheetID := tableSeed(t)
+	value := 1200.0
+	scenario, err := repository.CreateScenario(ctx, book.ID, "alice", CreateScenarioInput{
+		IdempotencyKey: "sc-1", SheetID: sheetID, Name: "낙관",
+		Inputs: []ScenarioInput{{Cell: "B2", Value: &value}, {Cell: "B3", Value: &value}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{
+		SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version,
+		IdempotencyKey: "sc-insert", Axis: "row", Action: "insert", Index: 1, Count: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetScenario(ctx, scenario.ID)
+	if err != nil || len(moved.Inputs) != 2 || moved.Inputs[0].Cell != "B3" || moved.Inputs[1].Cell != "B4" {
+		t.Fatalf("옮긴 가정=%#v, %v", moved, err)
+	}
+	// 가리키던 칸이 지워지면 그 가정만 뺀다. 한 칸이 사라졌다고 시나리오를
+	// 통째로 버리면 사람이 적어 둔 것을 다 잃는다.
+	current, _ = repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, StructuralMutation{
+		SheetID: sheetID, ActorID: "alice", BaseVersion: current.Version,
+		IdempotencyKey: "sc-delete", Axis: "row", Action: "delete", Index: 4, Count: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shrunk, err := repository.GetScenario(ctx, scenario.ID)
+	if err != nil || len(shrunk.Inputs) != 1 || shrunk.Inputs[0].Cell != "B3" {
+		t.Fatalf("줄어든 가정=%#v, %v", shrunk, err)
+	}
+	// 같은 칸에 값이 둘이면 어느 쪽으로 셈할지 알 수 없다.
+	if _, err := repository.CreateScenario(ctx, book.ID, "alice", CreateScenarioInput{
+		IdempotencyKey: "sc-2", SheetID: sheetID, Name: "겹침",
+		Inputs: []ScenarioInput{{Cell: "B2", Value: &value}, {Cell: "b2", Value: &value}},
+	}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("겹친 칸=%v", err)
+	}
+	// 이름이 겹치면 회의에서 어느 것을 보고 있는지 알 수 없다.
+	if _, err := repository.CreateScenario(ctx, book.ID, "alice", CreateScenarioInput{
+		IdempotencyKey: "sc-3", SheetID: sheetID, Name: "낙관",
+		Inputs: []ScenarioInput{{Cell: "C2", Value: &value}},
+	}); !errors.Is(err, ErrDuplicateName) {
+		t.Errorf("겹친 이름=%v", err)
+	}
+}

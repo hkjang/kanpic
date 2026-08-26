@@ -412,6 +412,20 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 			nextWatchRules[id] = updated
 		}
 	}
+	nextScenarios := make(map[string]Scenario, len(r.scenarios))
+	for id, item := range r.scenarios {
+		if item.SheetID != target.ID {
+			nextScenarios[id] = item
+			continue
+		}
+		updated, remains, transformErr := transformScenarioForStructure(item, input, input.ActorID, now)
+		if transformErr != nil {
+			return MutationResult{}, transformErr
+		}
+		if remains {
+			nextScenarios[id] = updated
+		}
+	}
 	nextTables := make(map[string]SheetTable, len(r.sheetTables))
 	for id, item := range r.sheetTables {
 		if item.SheetID != target.ID {
@@ -510,7 +524,7 @@ func (r *MemoryRepository) ApplyStructure(_ context.Context, raw StructuralMutat
 		nextNotifications[id] = copy
 	}
 	state.cells, r.namedRanges, r.validations, r.conditionalFormats, r.filters, r.comments, r.notifications, r.charts, r.pivots = nextCells, nextNames, nextValidations, nextConditionalFormats, nextFilters, nextComments, nextNotifications, nextCharts, nextPivots
-	r.protections, r.watchRules, r.sheetTables = nextProtections, nextWatchRules, nextTables
+	r.protections, r.watchRules, r.sheetTables, r.scenarios = nextProtections, nextWatchRules, nextTables, nextScenarios
 	for pivotID, pivot := range nextPivots {
 		if pivot.WorkbookID == state.workbook.ID {
 			delete(r.pivotCache, pivotID)

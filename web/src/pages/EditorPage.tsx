@@ -33,6 +33,7 @@ import { ConditionalFormatDialog } from '../components/ConditionalFormatDialog'
 import { PresentationPanel,type PresentationRecord } from '../components/PresentationPanel'
 import { GoalSeekDialog,type GoalSeekOutcome } from '../components/GoalSeekDialog'
 import { DataTableDialog,type DataTableOutcome } from '../components/DataTableDialog'
+import { ScenarioDialog } from '../components/ScenarioDialog'
 import { FlashFillDialog } from '../components/FlashFillDialog'
 import { planFlashFill,type FillPlan } from '../lib/flashFillPlan'
 import { PresentationDialog,type PresentationAnalysis,type PresentationDeck,type PresentationResult,type PresentationTemplate } from '../components/PresentationDialog'
@@ -81,7 +82,7 @@ import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedFunction, NamedRange, Pivot, WatchRule as WatchRuleType, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetTable, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedFunction, NamedRange, Pivot, WatchRule as WatchRuleType, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetTable, Scenario, ScenarioComparison, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -121,10 +122,15 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
+  const scenarios=useQuery({queryKey:['scenarios',workbookId],queryFn:()=>api<{items:Scenario[]}>(`/api/v1/workbooks/${workbookId}/scenarios`)})
+  const refreshScenarios=async()=>{await client.invalidateQueries({queryKey:['scenarios',workbookId]})}
+  const createScenario=async(input:Record<string,unknown>)=>{const item=await api<Scenario>(`/api/v1/workbooks/${workbookId}/scenarios`,{method:'POST',body:JSON.stringify({...input,idempotency_key:newIdempotencyKey()})});updateVersion(item.workbook_version);await refreshScenarios();return item}
+  const updateScenario=async(id:string,input:Record<string,unknown>)=>{const item=await api<Scenario>(`/api/v1/scenarios/${id}`,{method:'PATCH',body:JSON.stringify(input)});updateVersion(item.workbook_version);await refreshScenarios();return item}
+  const deleteScenario=async(item:Scenario)=>{await api(`/api/v1/scenarios/${item.id}?expected_revision=${item.revision}`,{method:'DELETE'});await refreshScenarios()}
   const sheetTables=useQuery({queryKey:['tables',workbookId],queryFn:()=>api<{items:SheetTable[]}>(`/api/v1/workbooks/${workbookId}/tables`)})
   const functionCatalog=useFunctionCatalog([...namedFunctionDocs(namedFunctions.data?.items??[]),...sheetTableDocs(sheetTables.data?.items??[])])
   const formulaInput=useRef<HTMLTextAreaElement|null>(null)
@@ -1189,6 +1195,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
       {kind:'item',label:'목표값 찾기…',onSelect:()=>setGoalSeekOpen(true)},
       {kind:'item',label:'데이터 표…',onSelect:()=>setDataTableOpen(true)},
+      {kind:'item',label:'시나리오…',onSelect:()=>{void refreshScenarios();setScenarioOpen(true)}},
       ...(presentationEnabled?[{kind:'submenu' as const,label:'프레젠테이션',items:[
         {kind:'item' as const,label:'프레젠테이션 만들기…',onSelect:()=>setPresentationOpen(true)},
         {kind:'item' as const,label:'만든 프레젠테이션 목록',onSelect:()=>setRightPanel('presentations')},
@@ -1374,6 +1381,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {validationOpen&&<DataValidationDialog range={editorSelection} rules={validations.data?.items??[]} onClose={()=>setValidationOpen(false)} onCreate={createValidation} onUpdate={updateValidation} onDelete={deleteValidation} onEvaluate={evaluateValidation}/>} 
     {flashFill&&<FlashFillDialog plan={flashFill.plan} column={flashFill.column} onClose={()=>setFlashFill(undefined)}
       onApply={async plan=>{await writeCells(plan.writes.map(write=>({row:write.row,column:plan.column,value:write.value})))}}/>}
+    {scenarioOpen&&activeSheet&&<ScenarioDialog
+      scenarios={scenarios.data?.items??[]}
+      activeSheetId={activeSheet.id}
+      defaultTarget={address(editorSelection.startRow,editorSelection.startColumn)}
+      onClose={()=>setScenarioOpen(false)}
+      onCreate={createScenario} onUpdate={updateScenario} onDelete={deleteScenario}
+      onCompare={async targets=>(await api<{result:ScenarioComparison}>(`/api/v1/sheets/${activeSheet.id}/scenarios:compare`,{method:'POST',body:JSON.stringify({targets})})).result}/>}
     {dataTableOpen&&activeSheet&&<DataTableDialog
       defaultTarget={address(editorSelection.startRow,editorSelection.startColumn)}
       onClose={()=>setDataTableOpen(false)}

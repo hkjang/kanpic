@@ -24,6 +24,7 @@ var resourceCollections = map[string]string{
 	"watch-rules":         "watchRuleId",
 	"named-functions":     "namedFunctionId",
 	"tables":              "sheetTableId",
+	"scenarios":           "scenarioId",
 	"named-ranges":        "namedRangeId",
 	"comments":            "commentId",
 	"comment-messages":    "messageId",
@@ -100,6 +101,9 @@ func capabilityForRequest(r *http.Request) workbook.Capability {
 		return workbook.CapabilityRead
 	// 데이터 표도 마찬가지다. 가정을 넣어 보기만 하고 시트는 그대로 둔다.
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/data-table"):
+		return workbook.CapabilityRead
+	// 시나리오 견주기도 읽기만 한다. 저장은 따로 하는 일이다.
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/scenarios:compare"):
 		return workbook.CapabilityRead
 	// Previewing an automation is a read-only operation even though the REST
 	// action uses POST so it can share the action endpoint shape with :run.

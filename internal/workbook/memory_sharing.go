@@ -567,6 +567,10 @@ func (r *MemoryRepository) WorkbookIDForResource(_ context.Context, kind, id str
 		if table, ok := r.sheetTables[id]; ok {
 			return table.WorkbookID, nil
 		}
+	case "scenarioId":
+		if item, ok := r.scenarios[id]; ok {
+			return item.WorkbookID, nil
+		}
 	case "commentId":
 		if thread, ok := r.comments[id]; ok {
 			return thread.WorkbookID, nil

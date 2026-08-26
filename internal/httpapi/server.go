@@ -219,6 +219,12 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/ranges/{range}", s.readRange)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/goal-seek", s.goalSeek)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/data-table", s.dataTable)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/scenarios", s.listScenarios)
+	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/scenarios", s.createScenario)
+	mux.HandleFunc("GET /api/v1/scenarios/{scenarioId}", s.getScenario)
+	mux.HandleFunc("PATCH /api/v1/scenarios/{scenarioId}", s.updateScenario)
+	mux.HandleFunc("DELETE /api/v1/scenarios/{scenarioId}", s.deleteScenario)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/scenarios:compare", s.compareScenarios)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/filter-views", s.listFilterViews)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/filter-views", s.createFilterView)
 	mux.HandleFunc("GET /api/v1/filter-views/{filterViewId}", s.getFilterView)
@@ -1320,6 +1326,14 @@ func requiredScope(r *http.Request) string {
 	// 걸 수 있고, 남의 것은 건드릴 수 없다.
 	if strings.Contains(path, "/watch-rules") {
 		return "workbook.read"
+	}
+	// 시나리오는 가정 한 벌을 담아 둔 것이다. 견주기는 아무것도 쓰지 않지만
+	// 저장은 워크북을 바꾸므로, 표와 같은 권한으로 지킨다.
+	if strings.Contains(path, "/scenarios") {
+		if r.Method == http.MethodGet || strings.HasSuffix(path, ":compare") {
+			return "range.read"
+		}
+		return "range.write"
 	}
 	// 표는 이름으로 범위를 가리키는 것이다. 이름을 바꾸거나 지우면 그것을
 	// 쓰는 모든 칸의 셈이 바뀌므로, 이름 범위와 같은 권한으로 지킨다.

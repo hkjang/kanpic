@@ -4650,3 +4650,75 @@ func TestPostgresDuplicateAndRestoreCarryProtectionsAndFilterViews(t *testing.T)
 		t.Fatalf("되돌린 필터 보기=%#v, %v", restoredViews, err)
 	}
 }
+
+// 시나리오는 가정 한 벌에 붙인 이름이다. 복제와 되돌리기를 따라가야 하고,
+// 행이 움직이면 가정이 가리키는 칸도 함께 움직여야 한다.
+func TestPostgresScenariosFollowStructureCopyAndRestore(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := database.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository := workbook.NewPostgresRepository(pool)
+	owner := fmt.Sprintf("scenario-owner-%d", time.Now().UnixNano())
+	book, err := repository.CreateWorkbook(ctx, workbook.CreateWorkbookInput{Title: "가정", WorkspaceID: "integration", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), book.ID, "integration-cleanup")
+	sheet := book.Sheets[0]
+	value := 12000.0
+	scenario, err := repository.CreateScenario(ctx, book.ID, owner, workbook.CreateScenarioInput{
+		IdempotencyKey: "sc-1", SheetID: sheet.ID, Name: "낙관",
+		Inputs: []workbook.ScenarioInput{{Cell: "B2", Value: &value}, {Cell: "B5", Value: &value}},
+	})
+	if err != nil || len(scenario.Inputs) != 2 {
+		t.Fatalf("만든 시나리오=%#v, %v", scenario, err)
+	}
+	// 위에 행을 끼우면 가정이 가리키는 칸도 내려가야 한다.
+	current, _ := repository.GetWorkbook(ctx, book.ID)
+	if _, err := repository.ApplyStructure(ctx, workbook.StructuralMutation{
+		SheetID: sheet.ID, ActorID: owner, BaseVersion: current.Version,
+		IdempotencyKey: "sc-insert", Axis: "row", Action: "insert", Index: 1, Count: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := repository.GetScenario(ctx, scenario.ID)
+	if err != nil || moved.Inputs[0].Cell != "B3" || moved.Inputs[1].Cell != "B6" {
+		t.Fatalf("옮긴 가정=%#v, %v", moved, err)
+	}
+	// 복제하면 사본으로 간다.
+	copied, err := repository.DuplicateWorkbook(ctx, book.ID, workbook.DuplicateWorkbookInput{Title: "사본", OwnerID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.DeleteWorkbook(context.Background(), copied.ID, "integration-cleanup")
+	copiedScenarios, err := repository.ListScenarios(ctx, copied.ID)
+	if err != nil || len(copiedScenarios) != 1 || copiedScenarios[0].Name != "낙관" {
+		t.Fatalf("사본의 시나리오=%#v, %v", copiedScenarios, err)
+	}
+	if copiedScenarios[0].SheetID != copied.Sheets[0].ID {
+		t.Errorf("사본의 시나리오가 원본 시트를 가리킨다: %s", copiedScenarios[0].SheetID)
+	}
+	// 버전을 찍고 지운 뒤 되돌리면 살아나야 한다.
+	version, err := repository.CreateVersion(ctx, book.ID, "가정 있는 상태", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteScenario(ctx, scenario.ID, owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RestoreVersion(ctx, version.ID, owner); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := repository.ListScenarios(ctx, book.ID)
+	if err != nil || len(restored) != 1 || restored[0].Name != "낙관" || len(restored[0].Inputs) != 2 {
+		t.Fatalf("되돌린 시나리오=%#v, %v", restored, err)
+	}
+}
