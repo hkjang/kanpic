@@ -855,8 +855,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       const label=`${address(1,1)}:${address(endRow,endColumn)}`
       const result=await api<{items:Cell[]}>(`/api/v1/sheets/${sheet.id}/ranges/${label}`).catch(()=>undefined)
       if(!result){withoutTable.push(sheet.name);continue}
-      sources.push({sheetName:sheet.name,cells:new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell])),
-        region:{startRow:1,startColumn:1,endRow,endColumn}})
+      const cells=new Map(result.items.map(cell=>[cellKey(cell.row,cell.column),cell]))
+      // 표가 A1 에서 시작한다고 여기면 안 된다. C3 에서 시작하는 시트는 첫
+      // 행이 비어 있어 항목 이름을 하나도 못 찾고, 고른 목록에는 남아 있는
+      // 채로 아무것도 보태지 않는다. 인쇄에서 똑같은 잘못을 한 적이 있다.
+      const region=usedRegion(cells)
+      if(!region||region.endRow<=region.startRow||region.endColumn<=region.startColumn){withoutTable.push(sheet.name);continue}
+      sources.push({sheetName:sheet.name,cells,region})
     }
     if(sources.length<2){alert('이름표가 있는 표를 가진 시트가 두 개 이상 있어야 합니다.');return}
     // 표가 없어 못 읽은 시트는 목록에 나오지 않는다. 왜 없는지 말하지 않으면
