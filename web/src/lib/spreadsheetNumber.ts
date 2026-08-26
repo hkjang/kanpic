@@ -110,7 +110,10 @@ export function numberFormatForText(value:string):string|undefined{
   if(!currency&&!unit&&!percent&&!grouped&&!parenthesized)return undefined
   // 소수 자리를 서식으로 굳히면 그 자리에서 반올림해 그린다. 사람이 적은
   // 자리보다 길게 굳힐 이유는 없다.
-  const body=currency+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')+(unit?`"${unit}"`:'')
+  // 기호는 따옴표로 묶는다. 엑셀 서식 말에서 따옴표 안은 언제나 그대로
+  // 적는 글자이므로, $ 처럼 다른 뜻으로 읽힐 수 있는 기호도 안전하다.
+  // 붙여넣기가 내는 서식과 같은 글자이기도 하다.
+  const body=(currency?`"${currency}"`:'')+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')+(unit?`"${unit}"`:'')
   return parenthesized?`${body};(${body})`:body
 }
 

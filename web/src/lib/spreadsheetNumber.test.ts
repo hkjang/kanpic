@@ -83,7 +83,9 @@ describe('numberFormatForText',()=>{
     // 서식 말이 따옴표로 묶은 글자를 그리게 된 뒤로는 놓아줄 이유가 없다.
     expect(shown('£5,000')).toBe('£5,000')
     expect(shown('1,234원')).toBe('1,234원')
-    expect(numberFormatForText('£5,000')).toBe('£#,##0')
+    // 기호는 따옴표로 묶는다. 붙여넣기가 내는 서식과 같은 글자여야, 같은
+    // 값이 어떻게 들어왔는지에 따라 다르게 저장되지 않는다.
+    expect(numberFormatForText('£5,000')).toBe('"£"#,##0')
   })
   it('has no format for text that is not a number',()=>{
     expect(numberFormatForText('1,2,3')).toBeUndefined()

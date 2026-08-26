@@ -48,6 +48,7 @@ test('numbers stored as text are found and fixed, and the total changes', async 
   // 서식으로 옮겨 두었으므로 칸은 그대로 ₩5,000 으로 보여야 한다.
   const after = await page.request.get(`/api/v1/sheets/${sheetId}/ranges/A3:A3`).then(r => r.json())
   expect(after.items[0]?.value).toBe(5000)
-  expect(after.items[0]?.style?.number_format).toBe('₩#,##0')
+  // 기호는 따옴표로 묶는다. 붙여넣기가 내는 서식과 같은 글자다.
+  expect(after.items[0]?.style?.number_format).toBe('"₩"#,##0')
   expect(alerts, '조용히 실패한 것이 있다').toEqual([])
 })
