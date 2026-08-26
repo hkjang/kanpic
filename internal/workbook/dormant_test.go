@@ -48,3 +48,40 @@ func TestDormantFilterKeepsOnlyOldWorkbooks(t *testing.T) {
 		t.Error("dormant 거르개를 모른다")
 	}
 }
+
+// 부서가 여러 겹이어도 위 부서를 맡은 사람이 아래 구성원을 본다. 부서가
+// 나뉘어도 맡은 사람이 바뀌지 않아야 하기 때문이다.
+func TestManagedMembersReachDownTheTree(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository()
+	ctx := context.Background()
+	top, err := repository.CreateDepartment(ctx, CreateDepartmentInput{Name: "본부"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	middle, err := repository.CreateDepartment(ctx, CreateDepartmentInput{Name: "실", ParentID: top.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bottom, err := repository.CreateDepartment(ctx, CreateDepartmentInput{Name: "팀", ParentID: middle.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AddDepartmentMembers(ctx, bottom.ID, DepartmentMembersInput{UserIDs: []string{"deep.kim"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AddDepartmentManagers(ctx, top.ID, DepartmentMembersInput{UserIDs: []string{"lead.park"}}); err != nil {
+		t.Fatal(err)
+	}
+	members, err := repository.ManagedMembers(ctx, "lead.park")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0] != "deep.kim" {
+		t.Errorf("맡은 구성원 = %#v", members)
+	}
+	// 맡지 않은 사람에게는 아무것도 없다.
+	if others, err := repository.ManagedMembers(ctx, "nobody"); err != nil || len(others) != 0 {
+		t.Errorf("맡지 않은 사람 = %#v err=%v", others, err)
+	}
+}

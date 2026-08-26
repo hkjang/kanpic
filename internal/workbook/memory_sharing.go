@@ -461,15 +461,21 @@ func (r *MemoryRepository) ManagedMembers(_ context.Context, managerID string) (
 		return nil, nil
 	}
 	inScope := func(id string) bool {
-		// 위로 거슬러 올라가며 맡은 부서를 만나는지 본다. 고리가 생겨도
-		// 멈추도록 걸음 수를 제한한다.
-		for cursor, ok := r.departments[id], true; ok; cursor, ok = r.departments[cursor.ParentID] {
+		// 위로 거슬러 올라가며 맡은 부서를 만나는지 본다.
+		//
+		// 걸음 수를 제한한다. 부모를 바꿀 때 자기 자손을 부모로 삼는 것은
+		// 막고 있으므로 고리는 생기지 않아야 하지만, 그것 하나에 기대어
+		// 끝없이 도는 반복문을 두면 자료가 한 번 어긋났을 때 서버가 선다.
+		// 옆의 깊이·경로 계산도 같은 이유로 걸음을 센다.
+		cursor, ok := r.departments[id]
+		for steps := 0; ok && steps <= MaxDepartmentDepth; steps++ {
 			if _, managed := roots[cursor.ID]; managed {
 				return true
 			}
 			if cursor.ParentID == "" {
 				return false
 			}
+			cursor, ok = r.departments[cursor.ParentID]
 		}
 		return false
 	}
