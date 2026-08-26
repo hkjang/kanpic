@@ -148,3 +148,29 @@ func TestDepartmentAdminCannotMintAGlobalAdministrator(t *testing.T) {
 	requestAs[map[string]any](t, server, manager, http.MethodDelete,
 		"/api/v1/admin/users/"+member+"/roles/kanpic-admin", nil, http.StatusForbidden)
 }
+
+// 맡은 구성원 중에 전역 관리자가 섞여 있을 수 있다. 그 사람을 정지시키거나
+// 세션을 끊으면 관리자를 콘솔에서 잠가 버리는 것이 된다. 부서 하나를
+// 맡겼을 뿐인데 조직의 관리 자체를 멈출 수 있으면 위임이 아니다.
+func TestDepartmentAdminCannotLockOutAnAdministrator(t *testing.T) {
+	t.Parallel()
+	repository := workbook.NewMemoryRepository()
+	server := httptest.NewServer(New(repository, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	manager, member, _ := seedDepartmentAdmin(t, server)
+
+	// 전역 관리자가 그 구성원을 관리자로 올렸다.
+	request[workbook.DirectoryUser](t, server, http.MethodPost, "/api/v1/admin/users/"+member+"/roles",
+		map[string]any{"role": "kanpic-admin"}, http.StatusOK)
+
+	for _, closed := range []struct {
+		method, path string
+		body         map[string]any
+	}{
+		{http.MethodPatch, "/api/v1/admin/users/" + member, map[string]any{"status": workbook.UserStatusSuspended}},
+		{http.MethodDelete, "/api/v1/admin/users/" + member + "/sessions", nil},
+		{http.MethodGet, "/api/v1/admin/users/" + member, nil},
+	} {
+		requestAs[map[string]any](t, server, manager, closed.method, closed.path, closed.body, http.StatusForbidden)
+	}
+}
