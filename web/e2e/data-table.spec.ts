@@ -19,6 +19,7 @@ test('a data table spells out one and two variable assumptions', async ({ page }
   expect(write.status(), await write.text()).toBeLessThan(300)
 
   await page.getByRole('menuitem', { name: '데이터' }).click()
+  await page.getByRole('menuitem', { name: '가정 분석' }).click()
   await page.getByRole('menuitem', { name: '데이터 표…' }).click()
   const dialog = page.getByRole('dialog', { name: '데이터 표' })
   await dialog.getByLabel('데이터 표 결과 셀').fill('B3')

@@ -1193,9 +1193,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'선택 열 기준 정렬 Z → A',disabled:!canWrite,onSelect:()=>void quickSort('desc')},
       {kind:'item',label:'범위 정렬…',onSelect:()=>setSortOpen(true)},
       {kind:'item',label:'필터 보기…',onSelect:()=>setFilterOpen(true)},
-      {kind:'item',label:'목표값 찾기…',onSelect:()=>setGoalSeekOpen(true)},
-      {kind:'item',label:'데이터 표…',onSelect:()=>setDataTableOpen(true)},
-      {kind:'item',label:'시나리오…',onSelect:()=>{void refreshScenarios();setScenarioOpen(true)}},
+      {kind:'submenu',label:'가정 분석',items:[
+        {kind:'item' as const,label:'목표값 찾기…',onSelect:()=>setGoalSeekOpen(true)},
+        {kind:'item' as const,label:'데이터 표…',onSelect:()=>setDataTableOpen(true)},
+        {kind:'item' as const,label:'시나리오…',onSelect:()=>{void refreshScenarios();setScenarioOpen(true)}},
+      ]},
       ...(presentationEnabled?[{kind:'submenu' as const,label:'프레젠테이션',items:[
         {kind:'item' as const,label:'프레젠테이션 만들기…',onSelect:()=>setPresentationOpen(true)},
         {kind:'item' as const,label:'만든 프레젠테이션 목록',onSelect:()=>setRightPanel('presentations')},

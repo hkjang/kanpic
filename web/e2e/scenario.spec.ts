@@ -20,6 +20,7 @@ test('scenarios are saved and compared side by side', async ({ page }) => {
   expect(write.status(), await write.text()).toBeLessThan(300)
 
   await page.getByRole('menuitem', { name: '데이터' }).click()
+  await page.getByRole('menuitem', { name: '가정 분석' }).click()
   await page.getByRole('menuitem', { name: '시나리오…' }).click()
   const dialog = page.getByRole('dialog', { name: '시나리오' })
   for (const [name, inputs] of [['낙관','B1=12000\nB3=1500'],['보수','B1=9000\nB3=800']] as const) {
