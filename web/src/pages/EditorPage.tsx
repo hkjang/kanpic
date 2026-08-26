@@ -910,7 +910,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
    * 한 시트 안으로 제한하면 정작 하고 싶은 일을 못 한다.
    */
   const openCompare=async()=>{
-    if(!activeSheet)return
+    // 메뉴에서는 보기 전용일 때 잠겨 있지만 명령 팔레트는 그대로 부른다.
+    // 막지 않으면 보기 전용 사용자가 범위를 고르고 견주기까지 한 뒤에야
+    // 결과를 적을 수 없다는 말을 듣는다.
+    if(!activeSheet||!writable())return
     const block=await resolveWorkingBlock()
     const sheets=workbook.data?.sheets??[]
     const other=sheets.find(sheet=>sheet.id!==activeSheet.id&&!sheet.hidden)
