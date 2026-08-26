@@ -14,7 +14,7 @@ test('scenarios are saved and compared side by side', async ({ page }) => {
   const write = await page.request.patch(`/api/v1/sheets/${sheetId}/cells:batch`, { data: {
     base_version: workbook.version, idempotency_key: 'sc-seed', cells: [
       {row:1,column:2,value:10000},{row:2,column:2,value:6000},{row:3,column:2,value:1000},
-      {row:4,column:2,formula:'=(B1-B2)*B3'},
+      {row:4,column:2,formula:'=(B1-B2)*B3'},{row:5,column:2,formula:'=B4/B3'},
     ],
   }})
   expect(write.status(), await write.text()).toBeLessThan(300)
@@ -36,6 +36,17 @@ test('scenarios are saved and compared side by side', async ({ page }) => {
   for (const expected of ['4,000,000','9,000,000','2,400,000']) {
     await expect(dialog.locator('td', { hasText: new RegExp(`^${expected.replace(/,/g,',')}$`) })).toBeVisible({ timeout: 15_000 })
   }
+  // 셈하지 못한 자리는 까닭을 그 자리에 적어야 한다. 비워 두기만 하면
+  // 사람은 왜 비었는지 알 수 없고, 지금 값을 적으면 가정이 먹힌 것처럼 보인다.
+  await dialog.getByRole('button', { name: '새 시나리오' }).click()
+  await dialog.getByLabel('시나리오 이름').fill('0으로')
+  await dialog.getByLabel('시나리오 가정').fill('B3=0')
+  await dialog.getByRole('button', { name: '저장', exact: true }).click()
+  await expect(dialog.locator('aside').getByRole('button', { name: /0으로/ })).toBeVisible({ timeout: 15_000 })
+  await dialog.getByLabel('시나리오 결과 셀').fill('B5')
+  await dialog.getByRole('button', { name: '견주기' }).click()
+  await expect(dialog.locator('td', { hasText: '#DIV/0!' })).toBeVisible({ timeout: 15_000 })
+
   // 시트는 그대로여야 한다.
   const after = await page.request.get(`/api/v1/sheets/${sheetId}/ranges/B1:B4`).then(r => r.json())
   expect(after.items.map((cell:{value:unknown})=>cell.value)).toEqual([10000, 6000, 1000, 4000000])
