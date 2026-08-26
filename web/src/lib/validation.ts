@@ -1,6 +1,7 @@
 import { parseFilterInput,parseFilterRange } from './filter'
 import type { DataValidation,ValidationOperator,ValidationOption,ValidationViolation } from '../types'
 import { spreadsheetDate } from './cellFormat'
+import { parseValidationDate } from './validationDate'
 
 export type ValidationInputCell={row:number;column:number;value?:unknown;formula?:string}
 
@@ -41,8 +42,7 @@ function compare(actual:number,first:number,second:number,operator:ValidationOpe
 function dateValue(value:unknown){
   if(typeof value==='number'){const moment=spreadsheetDate(value);return moment?moment.getTime():undefined}
   if(typeof value!=='string')return
-  const timestamp=Date.parse(value)
-  return Number.isFinite(timestamp)?timestamp:undefined
+  return parseValidationDate(value)
 }
 
 /**
