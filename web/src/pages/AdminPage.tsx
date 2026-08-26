@@ -43,6 +43,7 @@ function OverviewPanel({onNavigate}:{onNavigate:(tab:'users'|'departments'|'work
     {label:'링크가 있는 모든 사용자에게 공개',value:data?.anyone_shared??0,filter:'anyone',tone:'error-text'},
     {label:'조직 전체 공개',value:data?.organization_shared??0,filter:'organization',tone:'warn-text'},
     {label:'소유자가 없거나 정지된 워크북',value:data?.orphan_workbooks??0,filter:'orphan',tone:'warn-text'},
+    {label:'1년 이상 손대지 않은 워크북',value:data?.dormant_workbooks??0,filter:'dormant',tone:'muted-text'},
     {label:'대기 중인 액세스 요청',value:data?.pending_access_requests??0,filter:'all',tone:''},
   ]
   return <main className="console-content">
@@ -96,7 +97,7 @@ function WorkbookGovernancePanel(){
     void run(()=>api(`/api/v1/workbooks/${item.id}`,{method:'DELETE'}),'휴지통으로 옮겼습니다.')
   }
   const restore=(item:GovernedWorkbook)=>void run(()=>api(`/api/v1/workbooks/${item.id}/restore`,{method:'POST'}),'워크북을 복원했습니다.')
-  const filters=[{id:'all',label:'전체'},{id:'anyone',label:'링크 공개'},{id:'organization',label:'조직 전체'},{id:'orphan',label:'소유자 문제'},{id:'trashed',label:'휴지통'}]
+  const filters=[{id:'all',label:'전체'},{id:'anyone',label:'링크 공개'},{id:'organization',label:'조직 전체'},{id:'orphan',label:'소유자 문제'},{id:'dormant',label:'잠든 워크북'},{id:'trashed',label:'휴지통'}]
   return <main className="console-content">
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
     <div className="content-title"><div><span className="eyebrow">WORKBOOK GOVERNANCE</span><h1>워크북 거버넌스</h1><p>모든 워크북의 소유자와 공유 범위를 점검하고 과도한 공개를 되돌리거나 소유권을 이전합니다.</p></div><button className="secondary" onClick={()=>workbooks.refetch()}><RefreshCw/> 새로고침</button></div>
@@ -135,11 +136,16 @@ function WorkbookGovernancePanel(){
  * console manages what kanpic owns: account status, kanpic roles that
  * role-based sharing can target, notes, administrator rights and sessions.
  */
+// 서버의 workbook.DormantUserDays 와 같은 수다. 화면과 서버가 다른 날 수를
+// 쓰면 개요에 적힌 수와 목록의 줄 수가 어긋난다.
+const DORMANT_USER_DAYS=90
+
 function UsersPanel(){
   const client=useQueryClient()
   const [search,setSearch]=useState(''),[selected,setSelected]=useState<string>(),[role,setRole]=useState('')
   const [newUser,setNewUser]=useState({user_id:'',display_name:'',email:''})
   const [handover,setHandover]=useState<DirectoryUser>()
+  const [dormantOnly,setDormantOnly]=useState(false)
   const [showAdd,setShowAdd]=useState(false)
   const [message,setMessage]=useState(''),[error,setError]=useState(''),[prompt,setPrompt]=useState<PromptRequest>()
   const users=useQuery({queryKey:['admin-users'],queryFn:()=>api<{items:DirectoryUser[];admin_roles:string[];default_admin_role:string}>('/api/v1/admin/users')})
@@ -147,6 +153,12 @@ function UsersPanel(){
   const defaultAdminRole=users.data?.default_admin_role??'kanpic-admin'
   const isAdmin=(user:DirectoryUser)=>(user.roles??[]).some(item=>adminRoles.some(candidate=>candidate.toLowerCase()===item.toLowerCase()))
   const items=(users.data?.items??[]).filter(user=>{
+    // 한 번도 들어온 적 없는 계정도 잠든 것으로 센다. 미리 등록해 두고
+    // 아무도 쓰지 않은 계정이 그대로 남는 일이 흔하다.
+    if(dormantOnly&&user.status==='active'){
+      const seen=user.last_seen_at?Date.parse(user.last_seen_at):Number.NaN
+      if(Number.isFinite(seen)&&Date.now()-seen<DORMANT_USER_DAYS*86_400_000)return false
+    }else if(dormantOnly)return false
     const needle=search.trim().toLowerCase()
     if(!needle)return true
     return [user.user_id,user.display_name,user.email,...(user.roles??[]),...(user.departments??[])].filter(Boolean).some(value=>String(value).toLowerCase().includes(needle))
@@ -197,7 +209,7 @@ function UsersPanel(){
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}
     <div className="metric-row"><div><small>전체 사용자</small><strong>{(users.data?.items??[]).length.toLocaleString()}</strong><span className="metric-note">디렉터리 등록 기준</span></div><div><small>관리자</small><strong>{(users.data?.items??[]).filter(isAdmin).length}</strong><span className="metric-note">{adminRoles.join(', ')}</span></div><div><small>정지된 계정</small><strong className={(users.data?.items??[]).some(user=>user.status==='suspended')?'error-text':''}>{(users.data?.items??[]).filter(user=>user.status==='suspended').length}</strong><span className="metric-note">모든 요청이 차단됩니다</span></div></div>
     <section className="admin-card">
-      <div className="log-filters"><div><Search/><input aria-label="사용자 검색" value={search} onChange={event=>setSearch(event.target.value)} placeholder="사용자, 이메일, 역할, 부서 검색"/></div></div>
+      <div className="log-filters"><div><Search/><input aria-label="사용자 검색" value={search} onChange={event=>setSearch(event.target.value)} placeholder="사용자, 이메일, 역할, 부서 검색"/></div><label className="dormant-toggle"><input type="checkbox" aria-label="잠든 계정만" checked={dormantOnly} onChange={event=>setDormantOnly(event.target.checked)}/> 잠든 계정만({DORMANT_USER_DAYS}일)</label></div>
       <div className="settings-table">
         <div className="settings-row user-row head"><span>사용자</span><span>역할</span><span>부서</span><span>워크북</span><span>마지막 접속</span><span>상태</span></div>
         {users.isLoading?<div className="loading-card">사용자를 불러오는 중…</div>

@@ -266,6 +266,10 @@ func (r *MemoryRepository) AdminOverview(_ context.Context) (AdminOverview, erro
 	defer r.mu.RUnlock()
 	overview := AdminOverview{Users: len(r.directory), Departments: len(r.departments), TrashedWorkbooks: len(r.trash)}
 	suspended := make(map[string]struct{}, len(r.directory))
+	// 잠든 것을 재는 기준 시각. 한 번만 읽어 사용자와 워크북이 같은 시각을
+	// 쓴다 — 세는 도중에 날이 바뀌면 수가 서로 어긋난다.
+	dormantUsers := r.now().AddDate(0, 0, -DormantUserDays)
+	dormantBooks := r.now().AddDate(0, 0, -DormantWorkbookDays)
 	for key, user := range r.directory {
 		if user.Status == UserStatusSuspended {
 			overview.SuspendedUsers++
@@ -273,6 +277,11 @@ func (r *MemoryRepository) AdminOverview(_ context.Context) (AdminOverview, erro
 			continue
 		}
 		overview.ActiveUsers++
+		// 한 번도 들어온 적 없는 계정도 잠든 것으로 센다. 미리 등록해 두고
+		// 아무도 쓰지 않은 계정이 그대로 남는 일이 흔하다.
+		if user.LastSeenAt == nil || user.LastSeenAt.Before(dormantUsers) {
+			overview.DormantUsers++
+		}
 	}
 	for id, state := range r.workbooks {
 		overview.Workbooks++
@@ -289,6 +298,9 @@ func (r *MemoryRepository) AdminOverview(_ context.Context) (AdminOverview, erro
 		if len(r.shares[id]) > 0 {
 			overview.SharedWorkbooks++
 			overview.Shares += len(r.shares[id])
+		}
+		if state.workbook.UpdatedAt.Before(dormantBooks) {
+			overview.DormantWorkbooks++
 		}
 	}
 	for _, request := range r.accessRequests {
@@ -386,6 +398,10 @@ func (r *MemoryRepository) GovernedWorkbooks(_ context.Context, filter string, l
 			}
 		case GovernanceFilterOrphan:
 			if strings.TrimSpace(item.OwnerID) != "" && item.OwnerStatus != UserStatusSuspended {
+				continue
+			}
+		case GovernanceFilterDormant:
+			if item.UpdatedAt.After(r.now().AddDate(0, 0, -DormantWorkbookDays)) {
 				continue
 			}
 		}

@@ -158,8 +158,11 @@ type AdminOverview struct {
 	OrganizationShared int `json:"organization_shared"`
 	AnyoneShared       int `json:"anyone_shared"`
 	OrphanWorkbooks    int `json:"orphan_workbooks"`
-	PendingRequests    int `json:"pending_access_requests"`
-	Shares             int `json:"shares"`
+	// 잠든 것들. 무엇이 잠들어 있는지 알아야 정리할지 남길지 정할 수 있다.
+	DormantWorkbooks int `json:"dormant_workbooks"`
+	DormantUsers     int `json:"dormant_users"`
+	PendingRequests  int `json:"pending_access_requests"`
+	Shares           int `json:"shares"`
 }
 
 // GovernedWorkbook is one row of the administrator workbook list: who owns it,
@@ -187,11 +190,22 @@ const (
 	GovernanceFilterAnyone       = "anyone"
 	GovernanceFilterOrphan       = "orphan"
 	GovernanceFilterTrashed      = "trashed"
+	// GovernanceFilterDormant 는 오래 손대지 않은 워크북이다. 무엇이 잠들어
+	// 있는지 알아야 정리할지 남길지 정할 수 있다.
+	GovernanceFilterDormant = "dormant"
 )
+
+// DormantWorkbookDays 는 "오래 손대지 않았다" 고 볼 날 수다. 한 해를 넘기면
+// 그 해의 자료는 이미 마감된 것이 보통이다.
+const DormantWorkbookDays = 365
+
+// DormantUserDays 는 "오래 들어오지 않았다" 고 볼 날 수다. 석 달이면 분기
+// 하나가 통째로 지난 것이다.
+const DormantUserDays = 90
 
 func ValidGovernanceFilter(value string) bool {
 	switch value {
-	case "", GovernanceFilterAll, GovernanceFilterOrganization, GovernanceFilterAnyone, GovernanceFilterOrphan, GovernanceFilterTrashed:
+	case "", GovernanceFilterAll, GovernanceFilterOrganization, GovernanceFilterAnyone, GovernanceFilterOrphan, GovernanceFilterTrashed, GovernanceFilterDormant:
 		return true
 	default:
 		return false

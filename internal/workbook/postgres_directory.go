@@ -271,7 +271,7 @@ func (r *PostgresRepository) SearchUsers(ctx context.Context, query string, limi
 
 func (r *PostgresRepository) AdminOverview(ctx context.Context) (AdminOverview, error) {
 	var overview AdminOverview
-	err := r.pool.QueryRow(ctx, `
+	err := r.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT
 			(SELECT count(*) FROM directory_users),
 			(SELECT count(*) FROM directory_users WHERE status='active'),
@@ -285,10 +285,14 @@ func (r *PostgresRepository) AdminOverview(ctx context.Context) (AdminOverview, 
 			(SELECT count(*) FROM workbooks w WHERE w.deleted_at IS NULL AND (btrim(w.owner_id)='' OR EXISTS(
 				SELECT 1 FROM directory_users u WHERE lower(u.user_id)=lower(w.owner_id) AND u.status='suspended'))),
 			(SELECT count(*) FROM workbook_access_requests WHERE status='pending'),
-			(SELECT count(*) FROM workbook_shares)`).
+			(SELECT count(*) FROM workbook_shares),
+			(SELECT count(*) FROM workbooks WHERE deleted_at IS NULL AND updated_at < now() - interval '%d days'),
+			-- 한 번도 들어온 적 없는 계정도 잠든 것으로 센다. 미리 등록해 두고
+			-- 아무도 쓰지 않은 계정이 그대로 남는 일이 흔하다.
+			(SELECT count(*) FROM directory_users WHERE status='active' AND (last_seen_at IS NULL OR last_seen_at < now() - interval '%d days'))`, DormantWorkbookDays, DormantUserDays)).
 		Scan(&overview.Users, &overview.ActiveUsers, &overview.SuspendedUsers, &overview.Departments, &overview.Workbooks,
 			&overview.TrashedWorkbooks, &overview.SharedWorkbooks, &overview.OrganizationShared, &overview.AnyoneShared,
-			&overview.OrphanWorkbooks, &overview.PendingRequests, &overview.Shares)
+			&overview.OrphanWorkbooks, &overview.PendingRequests, &overview.Shares, &overview.DormantWorkbooks, &overview.DormantUsers)
 	if err != nil {
 		return AdminOverview{}, err
 	}
@@ -353,6 +357,8 @@ func (r *PostgresRepository) GovernedWorkbooks(ctx context.Context, filter strin
 		condition += " AND (btrim(w.owner_id)='' OR EXISTS(SELECT 1 FROM directory_users u WHERE lower(u.user_id)=lower(w.owner_id) AND u.status='suspended'))"
 	case GovernanceFilterTrashed:
 		condition = "w.deleted_at IS NOT NULL"
+	case GovernanceFilterDormant:
+		condition += fmt.Sprintf(" AND w.updated_at < now() - interval '%d days'", DormantWorkbookDays)
 	}
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT w.id::text,w.title,w.owner_id,coalesce(u.display_name,''),coalesce(u.status,''),w.link_access,w.link_role,w.version,w.updated_at,w.deleted_at,
