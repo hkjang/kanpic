@@ -89,3 +89,15 @@ describe('numberFormatForText',()=>{
     expect(numberFormatForText('사과')).toBeUndefined()
   })
 })
+
+describe('numbers too long to hold exactly',()=>{
+  it('refuses to convert what a double cannot carry',()=>{
+    // 스무 자리는 계좌번호이지 금액이 아니다. 숫자로 바꾸면 뒤가 뭉개져
+    // 사람이 적은 것과 다른 값이 칸에 들어간다.
+    expect(textToNumber('₩12345678901234567890')).toBeUndefined()
+    expect(looksLikeNumberStoredAsText('₩12345678901234567890')).toBe(false)
+  })
+  it('still converts amounts of an ordinary size',()=>{
+    expect(textToNumber('₩123,456,789,012')).toBe(123456789012)
+  })
+})

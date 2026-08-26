@@ -1,7 +1,7 @@
 import type { Cell } from '../types'
 import { cellKey } from '../state/editor'
 import type { GridRegion } from './dataRegion'
-import { textToNumber } from './spreadsheetNumber'
+import { significantDigits, textToNumber } from './spreadsheetNumber'
 import { parseFilterRange } from './filter'
 
 export type CompareSide='left'|'right'
@@ -27,6 +27,27 @@ export type CompareResult={
  * 이름은 그 정도로 흔들리고, 그 흔들림까지 "없는 항목" 으로 세면 대사표가
  * 쓸모없어진다.
  */
+/**
+ * 수로 바꾸면 안 되는 것을 가려낸다.
+ *
+ *   "007"    앞의 0은 번호를 뜻한다. 수로 보면 7 과 같아져,
+ *            007번 전표와 7번 전표가 한 항목이 된다.
+ *   20자리   배정밀도가 정확히 담는 것은 열다섯 자리까지다. 서로 다른
+ *            계좌번호 둘이 같은 키가 되어 "맞았다" 고 나온다.
+ *
+ * 대사에서 틀리게 맞았다고 하는 것은 안 맞았다고 하는 것보다 나쁘다.
+ * 안 맞으면 사람이 들여다보지만, 맞았다고 하면 거기서 끝난다.
+ *
+ * 쉼표나 통화 기호가 붙은 금액은 여기서 걸리지 않는다. 그것은 번호가 아니라
+ * 금액이고, "1,000" 과 1000 은 같아야 한다.
+ */
+function looksLikeIdentifier(text:string){
+  const digits=text.replace(/^[+-]/,'')
+  if(!/^\d+(\.\d+)?$/.test(digits))return false
+  if(/^0\d/.test(digits))return true
+  return significantDigits(digits)>15
+}
+
 export function compareKey(value:unknown):string|undefined{
   if(value==null)return undefined
   if(typeof value==='boolean')return value?'TRUE':'FALSE'
@@ -34,6 +55,7 @@ export function compareKey(value:unknown):string|undefined{
   if(typeof value!=='string')return undefined
   const text=value.trim()
   if(text==='')return undefined
+  if(looksLikeIdentifier(text))return text.toLowerCase()
   const numeric=Number(text)
   if(Number.isFinite(numeric))return String(numeric)
   const loose=textToNumber(text)

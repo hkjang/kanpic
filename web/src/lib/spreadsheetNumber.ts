@@ -71,6 +71,10 @@ export function textToNumber(value:string):number|undefined{
     text=text.replace(/,/g,'')
   }
   if(!/^\d+(\.\d+)?$/.test(text))return undefined
+  // 배정밀도가 정확히 담는 것은 열다섯 자리까지다. 그보다 긴 것은 계좌번호나
+  // 전표번호이지 금액이 아니다. 숫자로 바꾸면 뒤가 뭉개져 사람이 적은 것과
+  // 다른 값이 칸에 들어간다.
+  if(significantDigits(text)>15)return undefined
   const parsed=Number(text)
   if(!Number.isFinite(parsed))return undefined
   return sign*(percent?parsed/100:parsed)
@@ -107,4 +111,9 @@ export function numberFormatForText(value:string):string|undefined{
   // 자리보다 길게 굳힐 이유는 없다.
   const body=currency+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')
   return parenthesized?`${body};(${body})`:body
+}
+
+/** 앞의 0과 소수점을 뺀 자릿수. 배정밀도가 정확히 담는 한도를 재는 데 쓴다. */
+export function significantDigits(text:string){
+  return text.replace('.','').replace(/^0+/,'').length
 }

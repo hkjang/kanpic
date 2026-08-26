@@ -88,3 +88,27 @@ describe('splitSheetRange',()=>{
     expect(splitSheetRange('!A1:B2')).toBeUndefined()
   })
 })
+
+describe('keys that must not be read as numbers',()=>{
+  // 대사에서 틀리게 "맞았다" 고 하는 것은 "안 맞았다" 고 하는 것보다 나쁘다.
+  // 안 맞으면 사람이 들여다보지만, 맞았다고 하면 거기서 끝난다.
+  it('keeps a leading zero apart from the bare number',()=>{
+    expect(compareKey('007')).not.toBe(compareKey('7'))
+    expect(compareKey('007')).toBe('007')
+  })
+  it('keeps two long account numbers apart',()=>{
+    // 배정밀도로 읽으면 뒤가 뭉개져 둘이 같은 키가 된다.
+    expect(compareKey('12345678901234567890')).not.toBe(compareKey('12345678901234567891'))
+  })
+  it('still matches amounts written with separators',()=>{
+    expect(compareKey('1,000')).toBe(compareKey(1000))
+    expect(compareKey('0')).toBe(compareKey(0))
+    expect(compareKey('0.5')).toBe(compareKey(0.5))
+  })
+  it('finds the difference two long numbers really have',()=>{
+    const result=compareLists(side(['12345678901234567890']),side(['12345678901234567891']))
+    expect(result.both).toBe(0)
+    expect(result.onlyLeft).toHaveLength(1)
+    expect(result.onlyRight).toHaveLength(1)
+  })
+})
