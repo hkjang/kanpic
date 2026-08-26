@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, Eraser, Rows3 } from 'lucide-react'
 import { useDialog } from '../lib/useDialog'
-import { cleanupText, removeDuplicateRows, trimWhitespace } from '../lib/dataCleanup'
+import { cleanupText, convertTextNumbers, removeDuplicateRows, trimWhitespace } from '../lib/dataCleanup'
 import { planRemoveSubtotals } from '../lib/subtotal'
 import { cellKey } from '../state/editor'
 import type { Cell } from '../types'
@@ -28,7 +28,7 @@ export type CleanupTarget={
  * some columns and not others quietly misaligns the data.
  */
 export function CleanupDialog({mode,target,onClose,onApply}:{
-  mode:'duplicates'|'trim'|'subtotals'|'subtotals'
+  mode:'duplicates'|'trim'|'subtotals'|'numbers'
   target:CleanupTarget
   onClose:()=>void
   onApply:(region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>Promise<void>
@@ -67,7 +67,16 @@ export function CleanupDialog({mode,target,onClose,onApply}:{
     }))
   },[mode,region,cells])
 
-  const count=mode==='duplicates'?(duplicates?.length??0):mode==='subtotals'?(subtotals?.length??0):(trims?.length??0)
+  const numbers=useMemo(()=>{
+    if(mode!=='numbers')return undefined
+    return convertTextNumbers(cells,region).writes.map(write=>({
+      row:write.row,column:write.column,
+      before:cleanupText(cells.get(cellKey(write.row,write.column))),
+      after:String(write.value??''),
+    }))
+  },[mode,region,cells])
+
+  const count=mode==='duplicates'?(duplicates?.length??0):mode==='subtotals'?(subtotals?.length??0):mode==='numbers'?(numbers?.length??0):(trims?.length??0)
   const apply=async()=>{
     setBusy(true)
     try{await onApply(region,cells,headerRows);onClose()}
@@ -75,8 +84,8 @@ export function CleanupDialog({mode,target,onClose,onApply}:{
     finally{setBusy(false)}
   }
   return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section className="modal cleanup-modal" ref={dialog as React.RefObject<never>} role="dialog" aria-modal="true" aria-label={mode==='duplicates'?'중복 항목 삭제':mode==='subtotals'?'부분합 제거':'공백 제거'}>
-      <h2>{mode==='trim'?<Eraser/>:<Rows3/>} {mode==='duplicates'?'중복 항목 삭제':mode==='subtotals'?'부분합 제거':'공백 제거'}</h2>
+    <section className="modal cleanup-modal" ref={dialog as React.RefObject<never>} role="dialog" aria-modal="true" aria-label={mode==='numbers'?'텍스트로 저장된 숫자':mode==='duplicates'?'중복 항목 삭제':mode==='subtotals'?'부분합 제거':'공백 제거'}>
+      <h2>{mode==='trim'||mode==='numbers'?<Eraser/>:<Rows3/>} {mode==='numbers'?'텍스트로 저장된 숫자':mode==='duplicates'?'중복 항목 삭제':mode==='subtotals'?'부분합 제거':'공백 제거'}</h2>
       <p>{label(region)} 범위를 정리합니다.</p>
       {narrower&&<label className="cleanup-expand">
         <input type="checkbox" aria-label="표 전체로 확장" checked={expand} onChange={event=>setExpand(event.target.checked)}/>
@@ -90,22 +99,22 @@ export function CleanupDialog({mode,target,onClose,onApply}:{
       </label>}
       <div className="cleanup-preview">
         {count===0
-          ?<p className="cleanup-empty">{mode==='duplicates'?'중복된 행이 없습니다.':mode==='subtotals'?'이 표에는 부분합 행이 없습니다.':'제거할 공백이 없습니다.'}</p>
+          ?<p className="cleanup-empty">{mode==='numbers'?'글자로 담긴 숫자가 없습니다.':mode==='duplicates'?'중복된 행이 없습니다.':mode==='subtotals'?'이 표에는 부분합 행이 없습니다.':'제거할 공백이 없습니다.'}</p>
           :mode==='subtotals'
             ?<ul>{subtotals!.slice(0,PREVIEW_ROWS).map(item=><li key={item.row}><b>{item.row}행</b><span>{item.label||'(소계 행)'}</span></li>)}</ul>
           :mode==='duplicates'
             ?<ul>{duplicates!.slice(0,PREVIEW_ROWS).map(item=><li key={item.row}><b>{item.row}행</b><span>{item.text||'(빈 행)'}</span></li>)}</ul>
-            :<ul>{trims!.slice(0,PREVIEW_ROWS).map(item=><li key={`${item.row}:${item.column}`}>
+            :<ul>{(mode==='numbers'?numbers!:trims!).slice(0,PREVIEW_ROWS).map(item=><li key={`${item.row}:${item.column}`}>
               <b>{address(item.row,item.column)}</b><span><code>{item.before}</code> → <code>{item.after}</code></span>
             </li>)}</ul>}
       </div>
       {count>0&&<p className="cleanup-summary">
-        {mode==='duplicates'?`중복된 ${count.toLocaleString()}개 행을 삭제합니다.`:mode==='subtotals'?`부분합 ${count.toLocaleString()}개 행을 지우고 그룹을 풉니다.`:`${count.toLocaleString()}개 셀의 공백을 정리합니다.`}
+        {mode==='numbers'?`글자로 담긴 숫자 ${count.toLocaleString()}칸을 숫자로 바꿉니다. 지금은 =SUM 이 이 칸들을 빼고 셈합니다.`:mode==='duplicates'?`중복된 ${count.toLocaleString()}개 행을 삭제합니다.`:mode==='subtotals'?`부분합 ${count.toLocaleString()}개 행을 지우고 그룹을 풉니다.`:`${count.toLocaleString()}개 셀의 공백을 정리합니다.`}
         {count>PREVIEW_ROWS?` 위에는 앞의 ${PREVIEW_ROWS}건만 표시했습니다.`:''}
       </p>}
       <div className="modal-actions">
         <button onClick={onClose}>취소</button>
-        <button className="primary" disabled={busy||count===0} onClick={()=>void apply()}>{mode==='trim'?'정리':'삭제'}</button>
+        <button className="primary" disabled={busy||count===0} onClick={()=>void apply()}>{mode==='numbers'?'숫자로 바꾸기':mode==='trim'?'정리':'삭제'}</button>
       </div>
     </section>
   </div>

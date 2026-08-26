@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { detectDelimiter, removeDuplicateRows, splitLine, splitTextToColumns, splitWouldOverwrite, trimWhitespace } from './dataCleanup'
+import { convertTextNumbers, detectDelimiter, removeDuplicateRows, splitLine, splitTextToColumns, splitWouldOverwrite, trimWhitespace } from './dataCleanup'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown]>){
@@ -79,5 +79,30 @@ describe('splitLine',()=>{
 
   it('splits on a multi-character separator',()=>{
     expect(splitLine('서울 :: 100 :: 완료',' :: ')).toEqual(['서울','100','완료'])
+  })
+})
+
+// 다른 곳에서 붙여 넣으면 "1,234" 처럼 글자로 들어온다. 사람 눈에는 숫자인데
+// =SUM 은 조용히 빼고 셈한다 — 합계가 작게 나오는데 무엇이 빠졌는지는 아무
+// 데도 적히지 않는다.
+describe('convertTextNumbers',()=>{
+  it('글자로 담긴 숫자만 바꾼다',()=>{
+    const cells=new Map<string,Cell>()
+    const put=(row:number,column:number,value:unknown,formula?:string)=>
+      cells.set(`${row}:${column}`,{sheet_id:'s',row,column,value:value as never,formula,updated_at:''} as Cell)
+    put(1,1,'1,234')
+    put(2,1,'₩5,000')
+    put(3,1,'(500)')
+    put(4,1,1000)        // 이미 숫자다
+    put(5,1,'2000')      // 수식도 세는 꼴이다
+    put(6,1,'아무개')     // 숫자가 아니다
+    put(7,1,'1,234',  '=A1')  // 수식 칸은 건드리지 않는다
+    const result=convertTextNumbers(cells,region(1,1,7,1))
+    expect(result.writes.map(write=>[write.row,write.value])).toEqual([[1,1234],[2,5000],[3,-500]])
+  })
+  it('숫자가 아닌 것을 억지로 만들지 않는다',()=>{
+    const cells=new Map<string,Cell>()
+    cells.set('1:1',{sheet_id:'s',row:1,column:1,value:'1,2,3' as never,updated_at:''} as Cell)
+    expect(convertTextNumbers(cells,region(1,1,1,1)).writes).toHaveLength(0)
   })
 })

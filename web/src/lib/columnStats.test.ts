@@ -19,8 +19,18 @@ describe('columnStats', () => {
     expect(stats.buckets.reduce((total,bucket)=>total+bucket.count,0)).toBe(4)
   })
 
-  it('reads numbers that arrived as text with separators', () => {
-    expect(columnStats(column([[1,'1,500'],[2,'2,500']]),1,1,2).sum).toBe(4000)
+  // 쉼표가 붙어 글자로 담긴 것은 세지 않는다. 예전에는 셌지만, 그러면 이
+  // 화면에만 나오고 어떤 수식으로도 재현되지 않는 합계가 된다 — =SUM 은 그
+  // 칸을 빼고 셈하기 때문이다. 같은 열에서 두 가지 합계가 나오면 사람은
+  // 어느 쪽을 믿어야 할지 알 수 없다.
+  //
+  // 그 자료를 쓰고 싶으면 숫자로 바꾸면 된다. 데이터 정리에 그 자리가 있다.
+  it('leaves numbers that arrived as text out, the way a formula does', () => {
+    // 셀 수 있는 숫자가 없으면 합계를 아예 내지 않는다. 0 으로 내면 사람은
+    // 그것을 답으로 읽는다.
+    expect(columnStats(column([[1,'1,500'],[2,'2,500']]),1,1,2).sum).toBeUndefined()
+    // 쉼표 없이 담긴 것은 수식도 세므로 여기서도 센다.
+    expect(columnStats(column([[1,'1500'],[2,'2500']]),1,1,2).sum).toBe(4000)
   })
 
   it('leaves other columns out', () => {

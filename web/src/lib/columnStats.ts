@@ -1,4 +1,5 @@
 import type { Cell } from '../types'
+import { spreadsheetNumber } from './spreadsheetNumber'
 
 export type ValueCount={value:string;count:number;share:number}
 
@@ -27,15 +28,9 @@ const BUCKETS=10
 
 const text=(value:unknown)=>value==null?'':typeof value==='number'?String(value):String(value).trim()
 
-const numeric=(value:unknown):number|undefined=>{
-  if(typeof value==='number')return Number.isFinite(value)?value:undefined
-  if(typeof value==='boolean')return value?1:0
-  if(typeof value==='string'&&value.trim()!==''){
-    const parsed=Number(value.replace(/,/g,''))
-    return Number.isFinite(parsed)?parsed:undefined
-  }
-  return undefined
-}
+// 셈하는 규칙은 서버의 수식 엔진이 정한다. 여기서 따로 세면 =SUM 이 내는
+// 값과 화면에 보이는 합계가 달라진다.
+const numeric=spreadsheetNumber
 
 /**
  * Whether the first row is a label rather than data: text on top of a column

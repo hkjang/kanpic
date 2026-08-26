@@ -69,7 +69,7 @@ import { cellMerge,mergeStyle as applyMergeStyle,selectedMergedBounds } from '..
 import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
-import { cleanupText, removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
+import { cleanupText, convertTextNumbers, removeDuplicateRows, splitTextToColumns, trimWhitespace, type SplitDelimiter } from '../lib/dataCleanup'
 import { SplitDialog } from '../components/SplitDialog'
 import { CleanupDialog, type CleanupTarget } from '../components/CleanupDialog'
 import { SortScopeDialog } from '../components/SortScopeDialog'
@@ -122,7 +122,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -637,7 +637,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // Both cleanups preview before they write. Deduplication also needs to know
   // the table around the selection: shifting rows up in some columns and not
   // the others is how a tidy-up turns into scrambled data.
-  const openCleanup=async(mode:'duplicates'|'trim'|'subtotals')=>{
+  const openCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers')=>{
     if(!writable())return
     const {region,cells}=await resolveWorkingBlock()
     const target:CleanupTarget={region,cells,headerRows:looksLikeHeaderRow(cells,region)?1:0}
@@ -666,7 +666,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     }
     setCleanup({mode,target})
   }
-  const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
+  const applyCleanup=async(mode:'duplicates'|'trim'|'subtotals'|'numbers',region:GridRegion,cells:Map<string,Cell>,headerRows:number)=>{
     if(mode==='subtotals'){
       await writeCells(planRemoveSubtotals(cells,region).writes)
       // The folds the run created have nothing left to fold, so they go with
@@ -677,7 +677,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
           await applyLayout({action:'ungroup',axis:'row',start:group.start,count:group.end-group.start+1})
       return
     }
-    const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):trimWhitespace(cells,region)
+    const preview=mode==='duplicates'?removeDuplicateRows(cells,region,headerRows):mode==='numbers'?convertTextNumbers(cells,region):trimWhitespace(cells,region)
     await writeCells(preview.writes)
   }
   // The dialog reads the block once and previews from it, so the numbers it
@@ -1214,6 +1214,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {kind:'item',label:'빠른 채우기…',onSelect:()=>void startFlashFill()},
         {kind:'item',label:'중복 항목 삭제…',onSelect:()=>void openCleanup('duplicates')},
         {kind:'item',label:'공백 제거…',onSelect:()=>void openCleanup('trim')},
+        {kind:'item',label:'텍스트로 저장된 숫자…',onSelect:()=>void openCleanup('numbers')},
       ]},
       {kind:'item',label:'텍스트를 열로 분할…',disabled:!canWrite,onSelect:()=>void openSplitDialog()},
       {kind:'item',label:'부분합…',disabled:!canWrite,onSelect:()=>void openSubtotal()},

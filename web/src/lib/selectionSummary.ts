@@ -1,4 +1,5 @@
 import type { Cell } from '../types'
+import { spreadsheetNumber } from './spreadsheetNumber'
 
 export type SummaryKey='sum'|'average'|'count'|'counta'|'min'|'max'
 
@@ -20,14 +21,9 @@ export type SelectionStats={
   max:number
 }
 
-const numeric=(value:unknown):number|undefined=>{
-  if(typeof value==='number')return Number.isFinite(value)?value:undefined
-  if(typeof value==='string'&&value.trim()!==''){
-    const parsed=Number(value)
-    return Number.isFinite(parsed)?parsed:undefined
-  }
-  return undefined
-}
+// 셈하는 규칙은 서버의 수식 엔진이 정한다. 여기서 따로 세면 =SUM 이 내는
+// 값과 화면에 보이는 합계가 달라진다.
+const numeric=spreadsheetNumber
 
 /**
  * Summarises the selected cells the way a spreadsheet status bar does: text
