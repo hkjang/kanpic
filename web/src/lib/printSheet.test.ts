@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { columnPages, printableDocument, printableWidth, usedRegion , cellCSSForTest } from './printSheet'
+import { columnPages, printableDocument, printableWidth, usedRegion , cellCSSForTest , printColumnPages } from './printSheet'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown,Record<string,unknown>?]>){
@@ -339,5 +339,38 @@ describe('종이 방향과 여백', () => {
     const cells=new Map<string,Cell>([['1:1',{sheet_id:'s',row:1,column:1,value:'값',updated_at:''}],['2:1',{sheet_id:'s',row:2,column:1,value:'값',updated_at:''}]])
     const fitted=printableDocument(cells,{title:'작은 표',sheetName:'Sheet1',gridlines:true,headers:true,columnWidth:()=>100,fit:'width'})
     expect(fitted).not.toContain('zoom:')
+  })
+})
+
+describe('printColumnPages',()=>{
+  const region={startRow:1,startColumn:1,endRow:10,endColumn:20}
+  const wide=()=>200
+
+  it('is the same split the printed document uses',()=>{
+    // 미리보기가 실제 인쇄와 다른 셈을 쓰면 "한 장에 들어갑니다" 라고 보여
+    // 주고 두 장을 뱉는다. 한 쪽만 고쳐도 어긋나므로 문서에서 세어 맞춘다.
+    const pages=printColumnPages(region,wide,'portrait','normal','none')
+    const cells=new Map<string,Cell>()
+    for(let column=region.startColumn;column<=region.endColumn;column+=1)
+      cells.set(cellKey(1,column),{sheet_id:'s',row:1,column,value:'x',updated_at:''})
+    const html=printableDocument(cells,{title:'t',sheetName:'s',gridlines:true,headers:true,
+      columnWidth:wide,orientation:'portrait',margin:'normal',fit:'none'})
+    expect(html.match(/<table/g)?.length).toBe(pages.length)
+  })
+
+  it('splits fewer times on landscape than portrait',()=>{
+    expect(printColumnPages(region,wide,'landscape','normal','none').length)
+      .toBeLessThan(printColumnPages(region,wide,'portrait','normal','none').length)
+  })
+
+  it('splits fewer times with narrow margins',()=>{
+    expect(printColumnPages(region,wide,'portrait','narrow','none').length)
+      .toBeLessThanOrEqual(printColumnPages(region,wide,'portrait','wide','none').length)
+  })
+
+  it('never splits when the table is squeezed onto one page width',()=>{
+    const pages=printColumnPages(region,wide,'portrait','normal','width')
+    expect(pages).toHaveLength(1)
+    expect(pages[0]).toMatchObject({start:1,end:20})
   })
 })

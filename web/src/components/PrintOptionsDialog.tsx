@@ -1,6 +1,9 @@
 import { Printer } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { PrintFit,PrintMargin,PrintOrientation } from '../lib/printSheet'
+import { printColumnPages } from '../lib/printSheet'
+import type { GridRegion } from '../lib/dataRegion'
+import { address } from '../lib/api'
 import './PrintOptionsDialog.css'
 import { useDialog } from '../lib/useDialog'
 
@@ -24,8 +27,17 @@ export function loadPrintChoice():PrintChoice{
   }catch{return fallback}
 }
 
-export function PrintOptionsDialog({onClose,onPrint}:{onClose:()=>void;onPrint:(choice:PrintChoice)=>void}){
+/** 열 번호를 사람이 읽는 열 이름으로 바꾼다. A1 에서 숫자를 뗀다. */
+const columnName=(column:number)=>address(1,column).replace(/\d+$/,'')
+
+export function PrintOptionsDialog({onClose,onPrint,region,columnWidth}:{onClose:()=>void;onPrint:(choice:PrintChoice)=>void;region?:GridRegion;columnWidth?:(column:number)=>number}){
   const [choice,setChoice]=useState<PrintChoice>(loadPrintChoice)
+  // 인쇄를 누르기 전에 몇 장으로 나뉘는지 보여 준다. 종이가 나온 뒤에 아는
+  // 것은 늦다 — 실제로 인쇄가 하는 셈을 그대로 쓴다.
+  const pages=useMemo(()=>{
+    if(!region)return undefined
+    return printColumnPages(region,columnWidth??(()=>108),choice.orientation,choice.margin,choice.fit)
+  },[region,columnWidth,choice])
   const dialog=useDialog<HTMLElement>(onClose)
   const print=()=>{
     try{window.localStorage.setItem(STORE_KEY,JSON.stringify(choice))}catch{/* 저장하지 못해도 인쇄는 한다 */}
@@ -48,6 +60,14 @@ export function PrintOptionsDialog({onClose,onPrint}:{onClose:()=>void;onPrint:(
         <label><input type="radio" name="fit" checked={choice.fit==='width'} onChange={()=>setChoice(current=>({...current,fit:'width'}))}/> 한 장 너비에 맞추기</label>
       </fieldset>
       <p className="print-options-note">한 장 너비에 맞추면 글자가 작아집니다. 열이 아주 많으면 가로 방향과 함께 쓰세요.</p>
+      {pages&&region&&<div className="print-options-pages">
+        {choice.fit==='width'
+          ?<p><b>{columnName(region.startColumn)}–{columnName(region.endColumn)}</b> 열을 한 장 너비에 맞춰 찍습니다.</p>
+          :pages.length===1
+            ?<p><b>{columnName(region.startColumn)}–{columnName(region.endColumn)}</b> 열이 가로 한 장에 들어갑니다.</p>
+            :<><p>가로로 <b>{pages.length}장</b>에 나뉩니다. 세로 길이는 종이와 행 높이에 따라 달라집니다.</p>
+              <ul>{pages.map(page=><li key={page.start}>{columnName(page.start)}{page.start===page.end?'':`–${columnName(page.end)}`}</li>)}</ul></>}
+      </div>}
     </div>
     <div className="modal-actions"><span/><button className="secondary" onClick={onClose}>취소</button><button className="primary" onClick={print}>인쇄</button></div>
   </div></div>

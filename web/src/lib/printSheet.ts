@@ -108,6 +108,20 @@ export function columnPages(startColumn:number,endColumn:number,widthOf:(column:
   return pages
 }
 
+/**
+ * 표가 종이에서 가로로 몇 장에 나뉘는지, 어느 열이 어느 장에 가는지.
+ *
+ * 미리보기와 실제 인쇄가 이 하나를 같이 쓴다. 따로 세면 "한 장에 들어갑니다"
+ * 라고 보여 주고 두 장을 뱉는 일이 생긴다 — 미리보기가 틀리면 없느니만
+ * 못하다.
+ */
+export function printColumnPages(region:GridRegion,widthOf:(column:number)=>number,orientation:PrintOrientation='portrait',margin:PrintMargin='normal',fit:PrintFit='none'){
+  // 너비에 맞추라고 하면 열을 넘기지 않는다. 표 전체를 줄여 한 장에 담는다.
+  if(fit==='width')return [{start:region.startColumn,end:region.endColumn,
+    widths:Array.from({length:region.endColumn-region.startColumn+1},(_,index)=>Math.max(1,Math.round(widthOf(region.startColumn+index))))}]
+  return columnPages(region.startColumn,region.endColumn,widthOf,printableWidth(orientation,margin))
+}
+
 const escapeHTML=(value:string)=>value.replace(/[&<>"]/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[character] as string))
 
 /** The smallest rectangle that holds every non-empty cell of the sheet. */
@@ -233,9 +247,7 @@ export function printableDocument(cells:Map<string,Cell>,options:PrintOptions){
     // 다시 찍어야 어느 칸이 무슨 열의 몇 행인지 알 수 있다.
     // 너비에 맞추라고 하면 열을 다음 장으로 넘기지 않는다. 대신 아래에서
     // 표 전체를 줄여 한 장 너비에 담는다.
-    const pages=fit==='width'
-      ? [{start:region.startColumn,end:region.endColumn,widths:Array.from({length:region.endColumn-region.startColumn+1},(_,index)=>Math.max(1,Math.round(widthOf(region.startColumn+index))))}]
-      : columnPages(region.startColumn,region.endColumn,widthOf,pageWidth)
+    const pages=printColumnPages(region,widthOf,orientation,margin,fit)
     for(const page of pages){
       const columnGroup=[options.headers?`<col style="width:${ROW_HEAD_WIDTH}px">`:'']
         .concat(page.widths.map(width=>`<col style="width:${width}px">`)).join('')

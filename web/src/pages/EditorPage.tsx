@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, AlignCenter, Eye, Grid2X2, Lock, MessageCircle, Settings, AlignLeft, AlignRight, ArrowUpDown, BadgeCheck, BarChart3, Bold, Bot, ChevronLeft, Download, Filter, Grid3X3, History, Italic, Link2, MessageSquare, MoreHorizontal, Paintbrush, Palette, Presentation, Redo2, Search, Share2, Square, Table, Table2, TableCellsMerge, TableCellsSplit, Underline, Undo2, Workflow, ZoomIn, ZoomOut } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { AIPanel } from '../components/AIPanel'
@@ -76,7 +76,7 @@ import { SortScopeDialog } from '../components/SortScopeDialog'
 import { SubtotalDialog } from '../components/SubtotalDialog'
 import { planRemoveSubtotals, type SubtotalPlan } from '../lib/subtotal'
 import { clearTableStyleCells, DEFAULT_TABLE_OPTIONS, TABLE_THEMES, tableStyleCells, type TableStyleOptions } from '../lib/tableStyle'
-import { printableDocument, usedRegion } from '../lib/printSheet'
+import { printAreaRegion, printableDocument, usedRegion } from '../lib/printSheet'
 import { PrintOptionsDialog, loadPrintChoice, type PrintChoice } from '../components/PrintOptionsDialog'
 import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
@@ -122,7 +122,7 @@ const CLEARABLE_STYLE_KEYS=['bold','italic','underline','strike','color','backgr
 
 export function EditorPage({workbookId,build,session}:{workbookId:string;build?:BuildInfo;session?:Session}) {
   const client=useQueryClient();const workbook=useQuery({queryKey:['workbook',workbookId],queryFn:()=>api<Workbook>(`/api/v1/workbooks/${workbookId}`),retry:(count,error)=>!(error instanceof ApiError&&error.status===403)&&count<2})
-  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
+  const [activeSheet,setActiveSheet]=useState<Sheet|undefined>();const [serverVersion,setServerVersion]=useState(1);const [rightPanel,setRightPanel]=useState<RightPanelKey|null>(()=>new URLSearchParams(window.location.search).has('comment_id')?'comments':'ai'),[searchOpen,setSearchOpen]=useState(false),[shortcutsOpen,setShortcutsOpen]=useState(false),[sortOpen,setSortOpen]=useState(false),[structureOpen,setStructureOpen]=useState(false),[layoutOpen,setLayoutOpen]=useState(false),[noteOpen,setNoteOpen]=useState(false),[historyCell,setHistoryCell]=useState<string>(),[linkOpen,setLinkOpen]=useState(false),[splitTarget,setSplitTarget]=useState<{region:GridRegion;cells:Map<string,Cell>}>(),[cleanup,setCleanup]=useState<{mode:'duplicates'|'trim'|'subtotals'|'numbers'|'unmerge';target:CleanupTarget}>(),[sortScope,setSortScope]=useState<{column:number;direction:'asc'|'desc';block:{region:GridRegion;cells:Map<string,Cell>};selection:GridRegion}>(),[subtotal,setSubtotal]=useState<{region:GridRegion;cells:Map<string,Cell>;headerRows:number;occupiedBelow:number}>(),[prompt,setPrompt]=useState<PromptRequest>(),[protectedOpen,setProtectedOpen]=useState(false),[columnFilter,setColumnFilter]=useState<{column:number;x:number;y:number}>(),[formatBrush,setFormatBrush]=useState<{style:Record<string,unknown>;sticky:boolean}>(),[formatOpen,setFormatOpen]=useState(false),[filterOpen,setFilterOpen]=useState(false),[validationOpen,setValidationOpen]=useState(false),[conditionalFormatOpen,setConditionalFormatOpen]=useState(false),[presentationOpen,setPresentationOpen]=useState(false),[goalSeekOpen,setGoalSeekOpen]=useState(false),[flashFill,setFlashFill]=useState<{plan:FillPlan;column:number}>(),[namedRangeOpen,setNamedRangeOpen]=useState(false),[namedFunctionOpen,setNamedFunctionOpen]=useState(false),[sheetTableOpen,setSheetTableOpen]=useState(false),[dataTableOpen,setDataTableOpen]=useState(false),[scenarioOpen,setScenarioOpen]=useState(false),[printOpen,setPrintOpen]=useState<{region?:GridRegion}|false>(false),[watchOpen,setWatchOpen]=useState(false),[chartDialog,setChartDialog]=useState<Chart|null>(),[pivotDialog,setPivotDialog]=useState<Pivot|null>(),[pivotResult,setPivotResult]=useState<Pivot>()
   // 수식 입력창에도 그리드와 같은 함수 제안을 붙인다. 긴 수식일수록 이쪽에
   // 쓰는데, 정작 인수 안내는 셀 안에서만 나오고 있었다.
   const namedFunctions=useQuery({queryKey:['named-functions',workbookId],queryFn:()=>api<{items:NamedFunction[]}>(`/api/v1/workbooks/${workbookId}/named-functions`)})
@@ -804,6 +804,23 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     if(plan==='no-rule'){alert('채워 둔 값에서 규칙을 찾지 못했습니다. 본보기를 하나 더 채워 보거나, 옆 열의 값으로 만들 수 있는 값인지 확인하세요.');return}
     setFlashFill({plan,column})
   }
+  // 화면에서 정한 열 너비. 미리보기와 실제 인쇄가 같은 너비로 세야 "한 장에
+  // 들어갑니다" 하고 두 장을 뱉는 일이 없다. 확대 배율은 화면 사정이므로 뺀다.
+  const printColumnWidths=useMemo(()=>new Map((activeSheet?.layout?.column_widths??[]).map(item=>[item.index,item.size])),[activeSheet?.layout?.column_widths])
+  /**
+   * 페이지 설정을 열기 전에 어느 열까지 찍히는지 알아 둔다. 칸을 다 읽지
+   * 않고 시트 크기만 물어보므로 값싸다. 이것이 있어야 방향과 여백을 고르는
+   * 자리에서 몇 장으로 나뉘는지 그때그때 보여 줄 수 있다.
+   */
+  const openPrintOptions=async()=>{
+    const area=printAreaRegion(activeSheet?.layout?.print_area)
+    if(area){setPrintOpen({region:area});return}
+    if(!activeSheet){setPrintOpen({});return}
+    const stats=await api<{items:SheetStats[]}>(`/api/v1/workbooks/${workbookId}/sheet-stats`).catch(()=>undefined)
+    const used=stats?.items.find(item=>item.sheet_id===activeSheet.id)
+    if(!used||used.max_row<1||used.max_column<1){setPrintOpen({});return}
+    setPrintOpen({region:{startRow:1,startColumn:1,endRow:used.max_row,endColumn:used.max_column}})
+  }
   const printSheet=async(choice:PrintChoice=loadPrintChoice())=>{
     if(!activeSheet)return
     // The grid holds only the rows on screen, so printing from memory would
@@ -818,13 +835,13 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     for(const row of collapsedIndexes(activeSheet.layout?.row_groups))hiddenRows.add(row)
     // 화면에서 정한 열 너비 그대로 찍어야 종이 폭에 몇 열이 들어가는지 셀 수
     // 있다. 확대 배율은 화면 사정이므로 뺀다.
-    const printWidths=new Map((activeSheet.layout?.column_widths??[]).map(item=>[item.index,item.size]))
+    const printWidths=printColumnWidths
     // 조건부 서식은 값에 따라 그때그때 정해지므로 셀에 저장돼 있지 않다.
     // 따로 물어보지 않으면 사람이 읽으라고 칠해 놓은 표가 종이에서는 아무
     // 표시 없는 숫자 뭉치가 된다.
     const conditional=await printConditional(activeSheet.id,printed.cells)
     const html=printableDocument(printed.cells,{title:workbook.data?.title??'kanpic',sheetName:activeSheet.name,gridlines:showGridlines,headers:true,hiddenRows,conditional,
-      columnWidth:column=>printWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0,
+      columnWidth:column=>printColumnWidths.get(column)??108,frozenRows:activeSheet.layout?.frozen_rows??0,
       printArea:activeSheet.layout?.print_area,
       orientation:choice.orientation,margin:choice.margin,fit:choice.fit})
     const frame=document.createElement('iframe')
@@ -1031,7 +1048,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {id:'cmd:export',group:'명령',label:'XLSX로 내보내기',icon:<Download/>,keywords:'export xlsx 내보내기',run:()=>void exportWorkbook('xlsx')},
     {id:'cmd:print',group:'명령',label:'인쇄',shortcut:'Ctrl+P',icon:<Download/>,keywords:'print 인쇄 출력',run:()=>void printSheet()},
     {id:'cmd:watch',group:'명령',label:'변경 알림 설정',icon:<Link2/>,keywords:'watch notify 알림 변경 지켜보기 메일',run:()=>setWatchOpen(true)},
-    {id:'cmd:page-setup',group:'명령',label:'페이지 설정',icon:<Download/>,keywords:'page setup 페이지 설정 인쇄 방향 여백 가로 세로',run:()=>setPrintOpen(true)},
+    {id:'cmd:page-setup',group:'명령',label:'페이지 설정',icon:<Download/>,keywords:'page setup 페이지 설정 인쇄 방향 여백 가로 세로',run:()=>void openPrintOptions()},
     {id:'cmd:functions',group:'명령',label:'함수 목록',icon:<Search/>,keywords:'function 함수 수식',run:()=>setFunctionsOpen(true)},
     {id:'cmd:gridlines',group:'명령',label:showGridlines?'눈금선 숨기기':'눈금선 표시',icon:<Grid2X2/>,keywords:'gridline 눈금선 격자',run:()=>setShowGridlines(current=>!current)},
     {id:'cmd:fullscreen',group:'명령',label:'전체 화면',shortcut:'F11',icon:<Grid2X2/>,keywords:'fullscreen 전체 화면',run:()=>toggleFullscreen()},
@@ -1095,7 +1112,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
       {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>void printSheet()},
-      {kind:'item',label:'페이지 설정…',onSelect:()=>setPrintOpen(true)},
+      {kind:'item',label:'페이지 설정…',onSelect:()=>void openPrintOptions()},
       {kind:'item',label:'인쇄 영역으로 설정',onSelect:()=>void setPrintArea()},
       {kind:'item',label:'인쇄 영역 해제',disabled:!activeSheet?.layout?.print_area,onSelect:()=>void clearPrintArea()},
       {kind:'separator'},
@@ -1435,7 +1452,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     {presentationOpen&&activeSheet&&<PresentationDialog range={workingRegion()} onClose={()=>setPresentationOpen(false)} onPreview={previewPresentation} onCreate={createPresentation} onLoadTemplates={loadPresentationTemplates} onDownload={downloadPresentation}/>}
     {conditionalFormatOpen&&<ConditionalFormatDialog range={editorSelection} rules={conditionalFormats.data?.items??[]} onClose={()=>setConditionalFormatOpen(false)} onCreate={createConditionalFormat} onUpdate={updateConditionalFormat} onDelete={deleteConditionalFormat}/>}
     {watchOpen&&activeSheet&&<WatchRuleDialog selection={editorSelection} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} rules={watchRules.data?.items??[]} onClose={()=>setWatchOpen(false)} onCreate={createWatchRule} onUpdate={updateWatchRule} onDelete={deleteWatchRule}/>}
-    {printOpen&&<PrintOptionsDialog onClose={()=>setPrintOpen(false)} onPrint={choice=>{setPrintOpen(false);void printSheet(choice)}}/>}
+    {printOpen&&<PrintOptionsDialog onClose={()=>setPrintOpen(false)} region={printOpen.region}
+      columnWidth={column=>printColumnWidths.get(column)??108}
+      onPrint={choice=>{setPrintOpen(false);void printSheet(choice)}}/>}
     {namedFunctionOpen&&<NamedFunctionDialog functions={namedFunctions.data?.items??[]} onClose={()=>setNamedFunctionOpen(false)} onCreate={createNamedFunction} onUpdate={updateNamedFunction} onDelete={deleteNamedFunction}/>}
     {sheetTableOpen&&<SheetTableDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} tables={sheetTables.data?.items??[]} onClose={()=>setSheetTableOpen(false)} onCreate={createSheetTable} onUpdate={updateSheetTable} onDelete={deleteSheetTable} onRefresh={refreshSheetTables} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setSheetTableOpen(false)}}/>}
     {namedRangeOpen&&<NamedRangeDialog selection={editorSelection} activeSheetId={activeSheet.id} sheets={workbook.data.sheets} ranges={namedRanges.data?.items??[]} onClose={()=>setNamedRangeOpen(false)} onCreate={createNamedRange} onUpdate={updateNamedRange} onDelete={deleteNamedRange} onNavigate={item=>{navigateToRange(item.sheet_id,item.range);setNamedRangeOpen(false)}}/>}
