@@ -291,6 +291,7 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		mux.HandleFunc("DELETE /api/v1/me/api-keys/{keyId}", s.revokeKey)
 		mux.HandleFunc("POST /api/v1/me/api-keys/{keyAction}", s.rotateKey)
 		mux.HandleFunc("GET /api/v1/admin/api-keys", s.listAllKeys)
+		mux.HandleFunc("DELETE /api/v1/admin/api-keys/{keyId}", s.revokeAnyKey)
 	}
 	if authService != nil {
 		mux.HandleFunc("GET /api/v1/auth/config", s.authConfig)
