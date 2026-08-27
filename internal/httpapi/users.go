@@ -65,6 +65,62 @@ func (s *Server) governedWorkbooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// restrictLinks 는 링크로 열려 있는 워크북을 한꺼번에 닫는다.
+//
+// 하나씩 닫는 단추는 전부터 있었다. 그런데 "링크 공개 47개" 를 보고 마흔일곱
+// 번 누르는 사람은 없다. 몇 개는 남고, 남은 것은 아무도 세지 않는다.
+//
+// 한 번에 다 닫지 않는다. 한 번에 오백 개까지 닫고, 남은 수를 세어 돌려준다.
+// 조직이 크면 요청 하나가 몇 분씩 걸리는 편보다, 몇 번 나눠 누르되 몇 개가
+// 남았는지 아는 편이 낫다.
+const maxLinkRestrictBatch = 500
+
+func (s *Server) restrictLinks(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var input struct {
+		Filter string `json:"filter"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	filter := strings.TrimSpace(input.Filter)
+	// 닫을 수 있는 것은 링크로 열린 것뿐이다. 다른 거르개를 받으면 무엇을
+	// 닫는지 알 수 없는 채로 자료가 바뀐다.
+	if filter != workbook.GovernanceFilterAnyone && filter != workbook.GovernanceFilterOrganization {
+		s.writeError(w, r, fmt.Errorf("%w: filter must be anyone or organization", workbook.ErrInvalid))
+		return
+	}
+	items, err := s.repository.GovernedWorkbooks(r.Context(), filter, maxLinkRestrictBatch)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	restricted := make([]map[string]any, 0, len(items))
+	failed := make([]map[string]any, 0)
+	closed := workbook.LinkAccessRestricted
+	for _, item := range items {
+		update := workbook.UpdateSharingInput{LinkAccess: &closed, ActorID: actorID(r)}
+		if _, updateErr := s.repository.UpdateWorkbookSharing(r.Context(), item.ID, update); updateErr != nil {
+			failed = append(failed, map[string]any{"id": item.ID, "title": item.Title, "reason": updateErr.Error()})
+			continue
+		}
+		restricted = append(restricted, map[string]any{"id": item.ID, "title": item.Title})
+	}
+	// 몇 개가 남았는지 다시 세어 준다. 한 번에 다 닫지 못했다는 것을
+	// 사람이 알아야 다시 누른다.
+	remaining := 0
+	if left, leftErr := s.repository.GovernedWorkbooks(r.Context(), filter, maxLinkRestrictBatch); leftErr == nil {
+		remaining = len(left)
+	}
+	s.recordAdminAction(r, "workbooks.restrict_links", filter,
+		"restricted", len(restricted), "failed", len(failed), "remaining", remaining)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"restricted": restricted, "failed": failed, "remaining": remaining,
+	})
+}
+
 // ownedWorkbooks 는 한 사람이 가진 워크북을 모두 낸다. 퇴사자를 정리하려면
 // "이 사람이 무엇을 가지고 있는가" 를 먼저 알아야 한다.
 func (s *Server) ownedWorkbooks(w http.ResponseWriter, r *http.Request) {

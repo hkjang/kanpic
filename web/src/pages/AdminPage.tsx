@@ -98,10 +98,27 @@ function WorkbookGovernancePanel(){
     void run(()=>api(`/api/v1/workbooks/${item.id}`,{method:'DELETE'}),'휴지통으로 옮겼습니다.')
   }
   const restore=(item:GovernedWorkbook)=>void run(()=>api(`/api/v1/workbooks/${item.id}/restore`,{method:'POST'}),'워크북을 복원했습니다.')
+  // "링크 공개 47개" 를 보고 마흔일곱 번 누르는 사람은 없다. 남은 수를
+  // 함께 알려 주어, 한 번에 다 닫지 못한 것을 사람이 알게 한다.
+  const restrictAll=(scope:'anyone'|'organization')=>{
+    const label=scope==='anyone'?'링크가 있는 모든 사용자에게 공개':'조직 전체 공개'
+    if(!window.confirm(`${label} 상태인 워크북의 링크 액세스를 한 번에 제한할까요? 링크로만 접근하던 사용자는 열 수 없게 됩니다.`))return
+    setError('');setMessage('')
+    void api<{restricted:unknown[];failed:unknown[];remaining:number}>('/api/v1/admin/workbooks:restrict-links',
+      {method:'POST',body:JSON.stringify({filter:scope})})
+      .then(async result=>{
+        await workbooks.refetch()
+        const parts=[`${result.restricted.length}개를 제한했습니다.`]
+        if(result.failed.length>0)parts.push(`${result.failed.length}개는 실패했습니다.`)
+        if(result.remaining>0)parts.push(`아직 ${result.remaining}개 남았습니다. 다시 눌러 주세요.`)
+        setMessage(parts.join(' '))
+      })
+      .catch(reason=>setError(reason instanceof Error?reason.message:'공개를 해제하지 못했습니다.'))
+  }
   const filters=[{id:'all',label:'전체'},{id:'anyone',label:'링크 공개'},{id:'organization',label:'조직 전체'},{id:'orphan',label:'소유자 문제'},{id:'dormant',label:'잠든 워크북'},{id:'trashed',label:'휴지통'}]
   return <main className="console-content">
     {prompt&&<PromptDialog request={prompt} onClose={()=>setPrompt(undefined)}/>}
-    <div className="content-title"><div><span className="eyebrow">WORKBOOK GOVERNANCE</span><h1>워크북 거버넌스</h1><p>모든 워크북의 소유자와 공유 범위를 점검하고 과도한 공개를 되돌리거나 소유권을 이전합니다.</p></div><button className="secondary" onClick={()=>workbooks.refetch()}><RefreshCw/> 새로고침</button></div>
+    <div className="content-title"><div><span className="eyebrow">WORKBOOK GOVERNANCE</span><h1>워크북 거버넌스</h1><p>모든 워크북의 소유자와 공유 범위를 점검하고 과도한 공개를 되돌리거나 소유권을 이전합니다.</p></div><div className="log-actions">{(filter==='anyone'||filter==='organization')&&<button className="secondary" onClick={()=>restrictAll(filter as 'anyone'|'organization')}><ShieldCheck/> 이 목록 전체 공개 해제</button>}<button className="secondary" onClick={()=>workbooks.refetch()}><RefreshCw/> 새로고침</button></div></div>
     {message&&<div className="result-banner" role="status"><CheckCircle2/><pre>{message}</pre><button onClick={()=>setMessage('')}>×</button></div>}
     {error&&<div className="result-banner error" role="alert"><XCircle/><pre>{error}</pre><button onClick={()=>setError('')}>×</button></div>}
     <div className="metric-row"><div><small>표시 중</small><strong>{items.length.toLocaleString()}</strong><span className="metric-note">최대 200개</span></div><div><small>공개 범위 확장</small><strong className={items.filter(item=>item.link_access!=='restricted').length>0?'warn-text':''}>{items.filter(item=>item.link_access!=='restricted').length}</strong><span className="metric-note">조직 전체 또는 링크 공개</span></div><div><small>소유자 문제</small><strong className={items.filter(item=>!item.owner_id||item.owner_status==='suspended').length>0?'error-text':''}>{items.filter(item=>!item.owner_id||item.owner_status==='suspended').length}</strong><span className="metric-note">이전이 필요합니다</span></div></div>
