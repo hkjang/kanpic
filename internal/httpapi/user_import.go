@@ -156,5 +156,6 @@ func (s *Server) importUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		created++
 	}
+	s.recordAdminAction(r, "users.import", "", "created", created, "updated", updated, "rows", len(items))
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "applied": true, "created": created, "updated": updated})
 }

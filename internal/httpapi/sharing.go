@@ -178,6 +178,7 @@ func (s *Server) transferWorkbookOwnership(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "workbook.transfer", workbookID, "new_owner", input.NewOwnerID)
 	response, err := s.sharingWithAccess(r, workbookID)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -343,6 +344,7 @@ func (s *Server) addDepartmentManagers(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "department.manager.add", r.PathValue("departmentId"), "managers", strings.Join(input.UserIDs, ","))
 	writeJSON(w, http.StatusOK, department)
 }
 
@@ -355,6 +357,7 @@ func (s *Server) removeDepartmentManager(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "department.manager.remove", r.PathValue("departmentId"), "manager", r.PathValue("managerId"))
 	writeJSON(w, http.StatusOK, department)
 }
 

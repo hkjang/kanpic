@@ -141,6 +141,8 @@ func (s *Server) transferOwnedWorkbooks(w http.ResponseWriter, r *http.Request) 
 		}
 		transferred = append(transferred, map[string]any{"id": item.ID, "title": item.Title})
 	}
+	s.recordAdminAction(r, "workbooks.transfer", previous,
+		"new_owner", next, "transferred", len(transferred), "failed", len(failed), "skipped_trashed", skipped)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"transferred": transferred, "failed": failed, "skipped_trashed": skipped,
 	})
@@ -207,6 +209,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "user.create", user.UserID)
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -240,6 +243,11 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	if input.Status != nil {
+		s.recordAdminAction(r, "user.status", userID, "status", *input.Status)
+	} else {
+		s.recordAdminAction(r, "user.update", userID)
+	}
 	// A suspended account keeps no active sessions.
 	if input.Status != nil && *input.Status == workbook.UserStatusSuspended && s.auth != nil {
 		_ = s.auth.RevokeUserSessions(r.Context(), user.UserID)
@@ -265,6 +273,7 @@ func (s *Server) grantUserRole(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "user.role.grant", r.PathValue("userId"), "role", input.Role)
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -286,6 +295,7 @@ func (s *Server) revokeUserRole(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	s.recordAdminAction(r, "user.role.revoke", userID, "role", role)
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -309,6 +319,7 @@ func (s *Server) revokeUserSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		count = revoked
 	}
+	s.recordAdminAction(r, "user.sessions.revoke", r.PathValue("userId"))
 	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "revoked_sessions": count})
 }
 
