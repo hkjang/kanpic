@@ -69,3 +69,22 @@ test('a workbook whose queue gave up does not stop saving in another workbook', 
   // B 는 자기 큐가 비어 있으므로 알림도 뜨지 않는다.
   await expect(page.locator('.stalled-save')).toHaveCount(0)
 })
+
+// 오프라인에서 몇 건이 밀려 있는지 화면이 말하지 않으면, 사람은 저장된 줄 알고 닫는다.
+test('the badge counts what is still waiting to reach the server', async ({ page, context, request }) => {
+  const workbook=await seed(request,`대기 수 ${Date.now()}`)
+  await openEditor(page,workbook.id)
+  await context.setOffline(true)
+  await typeIntoA1(page,'첫 값')
+  const box=await page.locator('.grid-canvas').boundingBox()
+  if(!box)throw new Error('grid canvas is not visible')
+  await page.mouse.click(box.x+80,box.y+62)
+  await page.keyboard.type('둘째 값')
+  await page.keyboard.press('Enter')
+
+  await expect(page.locator('.sheet-status')).toContainText('2건 대기',{timeout:15_000})
+  await context.setOffline(false)
+  await expect(page.locator('.sheet-status')).toContainText('모든 변경사항 저장됨',{timeout:20_000})
+  await expect(page.locator('.sheet-status')).not.toContainText('대기')
+  expect(await valueAt(request,workbook.sheets[0].id,'A1')).toBe('첫 값')
+})

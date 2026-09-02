@@ -67,7 +67,8 @@ import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type PastedCell } from '../lib/clipboard'
 import { cellMerge,mergeInRegion,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
-import { blockedOutbox, discardOutbox, enqueue, flushOutbox, listOutbox, retryOutbox, type OutboxOperation } from '../lib/outbox'
+import { discardOutbox, enqueue, flushOutbox, listOutbox, retryOutbox, type OutboxOperation } from '../lib/outbox'
+import { blocked } from '../lib/outboxQueue'
 import { forSheet, pendingInWorkbook } from '../lib/outboxScope'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
@@ -358,8 +359,21 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // 큐가 포기한 변경은 화면에 나와야 한다. 멈춘 것을 말하지 않으면 사람은
   // 저장된 줄 알고 창을 닫는다.
   const [stalled,setStalled]=useState<OutboxOperation[]>([])
-  const refreshStalled=useCallback(async()=>{setStalled(pendingInWorkbook(await blockedOutbox(),(workbook.data?.sheets??[]).map(sheet=>sheet.id)))},[workbook.data])
-  useEffect(()=>{void refreshStalled();const notice=()=>void refreshStalled();window.addEventListener('kanpic:outbox-blocked',notice);return()=>window.removeEventListener('kanpic:outbox-blocked',notice)},[refreshStalled])
+  const [pending,setPending]=useState(0)
+  const refreshStalled=useCallback(async()=>{
+    const own=pendingInWorkbook(await listOutbox(),(workbook.data?.sheets??[]).map(sheet=>sheet.id))
+    setPending(own.length);setStalled(blocked(own))
+  },[workbook.data])
+  useEffect(()=>{void refreshStalled();const notice=()=>void refreshStalled();window.addEventListener('kanpic:outbox-blocked',notice)
+    const timer=window.setInterval(()=>void refreshStalled(),3000)
+    return()=>{window.removeEventListener('kanpic:outbox-blocked',notice);window.clearInterval(timer)}},[refreshStalled])
+  // 밀린 편집을 두고 창을 닫으면, 그 워크북을 다시 열기 전까지는 서버로 나가지 못한다.
+  // 곧 나갈 것까지 붙잡지는 않는다. 연결이 끊겼거나 이미 멈춘 것이 있을 때만 묻는다.
+  useEffect(()=>{
+    if(pending===0||(navigator.onLine&&stalled.length===0))return
+    const ask=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue=''}
+    window.addEventListener('beforeunload',ask);return()=>window.removeEventListener('beforeunload',ask)
+  },[pending,stalled.length])
   // 저장 큐는 다른 워크북에서 밀린 작업까지 함께 보낸다. 그 응답을 이 시트에 얹으면
   // 남의 서버 버전과 작업 번호가 섞이므로, 화면에 반영하는 것은 이 시트의 결과뿐이다.
   const outboxApplied=(sheetId:string|undefined)=>forSheet<MutationResult>(sheetId,applied=>{updateVersion(applied.server_version);editor.reportEdit(applied);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
@@ -1172,7 +1186,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const readOnly=!canWrite
   const conflictCount=Math.max(conflicts.data?.items.length??0,editor.conflicts)
   const displaySaveState=conflictCount>0&&editor.saveState==='saved'?'conflict':editor.saveState
-  const saveLabel={saved:'모든 변경사항 저장됨',saving:'저장 중…',offline:'오프라인 · 로컬 저장',conflict:`충돌 ${conflictCount}건`,error:'저장 오류'}[displaySaveState]
+  const queueLabel=pending>0&&(displaySaveState==='saving'||displaySaveState==='offline')?` · ${pending.toLocaleString()}건 대기`:''
+  const saveLabel={saved:'모든 변경사항 저장됨',saving:'저장 중…',offline:'오프라인 · 로컬 저장',conflict:`충돌 ${conflictCount}건`,error:'저장 오류'}[displaySaveState]+queueLabel
   const mergedSelection=Boolean(cellMerge(editor.cells.get(cellKey(editorSelection.startRow,editorSelection.startColumn))))
   const selectedRows=editorSelection.endRow-editorSelection.startRow+1,selectedColumns=editorSelection.endColumn-editorSelection.startColumn+1
   const numberFormatItems:MenuItem[]=[
