@@ -95,6 +95,8 @@ type ExportedFile struct {
 	// 조용히 빠뜨리면 사람은 파일을 열어 보고서야 알게 되고, 그때는 이미
 	// 그 파일을 남에게 보낸 뒤다.
 	SkippedCharts int
+	// SkippedImages 는 파일에 담지 못한 그림의 수다.
+	SkippedImages int
 }
 
 type Service struct{ repository workbook.Repository }
@@ -343,6 +345,9 @@ func parseXLSX(fileName, title string, data []byte, maxExpanded int64) (ParsedWo
 	// 시트에 붙인다 — 그림이 어느 시트 위에 놓여 있었는지는 그리기 관계를
 	// 따라가야 알 수 있는데, 자료 옆에 두는 편이 다시 찾기 쉽다.
 	charts, unreadCharts := importCharts(archive)
+	for index := range parsed.Sheets {
+		parsed.Sheets[index].Images = importPictures(file, parsed.Sheets[index].Name)
+	}
 	for _, item := range charts {
 		for index := range parsed.Sheets {
 			if parsed.Sheets[index].Name == item.SheetName {
@@ -877,11 +882,39 @@ func (s *Service) exportXLSX(ctx context.Context, wb workbook.Workbook) (Exporte
 			return ExportedFile{}, err
 		}
 	}
+	// 그림은 셀 닻과 배율로 옮긴다. 엑셀에는 픽셀 좌표가 없으므로 자리는 차트와
+	// 같은 방식으로 근사하고, 크기는 원본 대비 배율로 정확히 남긴다.
+	skippedImages := 0
+	if images, listErr := s.repository.ListImages(ctx, wb.ID, ""); listErr == nil {
+		for _, item := range images {
+			target, known := sheetNames[item.SheetID]
+			extension := pictureExtension(item.ContentType)
+			if !known || extension == "" {
+				skippedImages++
+				continue
+			}
+			content, contentErr := s.repository.GetImageContent(ctx, item.ID)
+			if contentErr != nil || item.NaturalWidth < 1 || item.NaturalHeight < 1 {
+				skippedImages++
+				continue
+			}
+			options := &excelize.GraphicOptions{
+				ScaleX:  float64(item.Position.Width) / float64(item.NaturalWidth),
+				ScaleY:  float64(item.Position.Height) / float64(item.NaturalHeight),
+				OffsetX: item.Position.X % int(defaultColumnPixels),
+				OffsetY: item.Position.Y % int(defaultRowPixels),
+			}
+			if err := file.AddPictureFromBytes(target, anchorCell(item.Position), &excelize.Picture{Extension: extension, File: content.Bytes(), Format: options}); err != nil {
+				skippedImages++
+			}
+		}
+	}
+
 	var buffer bytes.Buffer
 	if err := file.Write(&buffer); err != nil {
 		return ExportedFile{}, err
 	}
-	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes(), SkippedCharts: skippedCharts}, nil
+	return ExportedFile{Name: safeFileName(wb.Title) + ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Data: buffer.Bytes(), SkippedCharts: skippedCharts, SkippedImages: skippedImages}, nil
 }
 
 // applyImportedComments carries Excel cell comments over as kanpic notes. A
@@ -1234,4 +1267,69 @@ func sanitizeSheetName(value string, index int) string {
 		value = fmt.Sprintf("Sheet%d", index+1)
 	}
 	return value
+}
+
+// pictureExtension names the file type excelize expects for a stored picture.
+// Anything else — there is nothing else after upload sniffing — is skipped.
+func pictureExtension(contentType string) string {
+	switch contentType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	}
+	return ""
+}
+
+// importPictures reads the pictures floating over a sheet and converts each
+// cell anchor and scale back into the pixel position and size kanpic keeps.
+// A part that is not a picture kanpic accepts is left behind; the repository
+// checks the bytes again before storing anything.
+func importPictures(file *excelize.File, sheetName string) []workbook.ImportImage {
+	cells, err := file.GetPictureCells(sheetName)
+	if err != nil || len(cells) == 0 {
+		return nil
+	}
+	images := make([]workbook.ImportImage, 0, len(cells))
+	for _, cell := range cells {
+		pictures, err := file.GetPictures(sheetName, cell)
+		if err != nil {
+			continue
+		}
+		position, err := cellrange.Parse(cell)
+		if err != nil {
+			continue
+		}
+		for _, picture := range pictures {
+			width, height, sizeErr := workbook.ImageDimensions(picture.File)
+			if sizeErr != nil {
+				continue
+			}
+			scaleX, scaleY, offsetX, offsetY := 1.0, 1.0, 0, 0
+			if picture.Format != nil {
+				if picture.Format.ScaleX > 0 {
+					scaleX = picture.Format.ScaleX
+				}
+				if picture.Format.ScaleY > 0 {
+					scaleY = picture.Format.ScaleY
+				}
+				offsetX, offsetY = picture.Format.OffsetX, picture.Format.OffsetY
+			}
+			placed := workbook.ChartPosition{
+				X:      max(0, (position.Start.Column-1)*int(defaultColumnPixels)+offsetX),
+				Y:      max(0, (position.Start.Row-1)*int(defaultRowPixels)+offsetY),
+				Width:  min(4000, max(16, int(float64(width)*scaleX+0.5))),
+				Height: min(4000, max(16, int(float64(height)*scaleY+0.5))),
+			}
+			images = append(images, workbook.ImportImage{Data: picture.File, Position: placed})
+		}
+	}
+	if len(images) == 0 {
+		return nil
+	}
+	return images
 }

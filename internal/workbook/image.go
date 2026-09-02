@@ -122,6 +122,13 @@ func webpSize(data []byte) (int, int, error) {
 	return 0, 0, bad
 }
 
+// ImageDimensions reports a picture's natural size, refusing what is not a
+// picture. Import uses it to turn a file's scale factors into a display size.
+func ImageDimensions(data []byte) (width, height int, err error) {
+	_, width, height, err = sniffImage(data)
+	return width, height, err
+}
+
 func imageFromInput(workbookID, key, actor string, input CreateImageInput) (Image, error) {
 	sheetID := strings.TrimSpace(input.SheetID)
 	if sheetID == "" {

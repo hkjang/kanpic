@@ -63,10 +63,7 @@ func (r *PostgresRepository) CreateImage(ctx context.Context, workbookID, actor 
 	}
 	now := r.now()
 	item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
-	if _, err := tx.Exec(ctx, `INSERT INTO sheet_images(id,workbook_id,sheet_id,idempotency_key,content_type,byte_size,natural_width,natural_height,position_x,position_y,width,height,data,revision,created_by,updated_by,created_at,updated_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-		item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.ContentType, item.ByteSize, item.NaturalWidth, item.NaturalHeight,
-		item.Position.X, item.Position.Y, item.Position.Width, item.Position.Height, item.data, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt); err != nil {
+	if err := insertImageTx(ctx, tx, item); err != nil {
 		return Image{}, err
 	}
 	item.WorkbookVersion = currentVersion + 1
@@ -194,4 +191,12 @@ func (r *PostgresRepository) DeleteImage(ctx context.Context, imageID, actor str
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func insertImageTx(ctx context.Context, tx pgx.Tx, item Image) error {
+	_, err := tx.Exec(ctx, `INSERT INTO sheet_images(id,workbook_id,sheet_id,idempotency_key,content_type,byte_size,natural_width,natural_height,position_x,position_y,width,height,data,revision,created_by,updated_by,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		item.ID, item.WorkbookID, item.SheetID, item.CreateKey, item.ContentType, item.ByteSize, item.NaturalWidth, item.NaturalHeight,
+		item.Position.X, item.Position.Y, item.Position.Width, item.Position.Height, item.data, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt)
+	return err
 }

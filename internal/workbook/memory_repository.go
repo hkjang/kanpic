@@ -213,6 +213,15 @@ func (r *MemoryRepository) ImportWorkbook(_ context.Context, input ImportWorkboo
 			chart.CreatedAt, chart.UpdatedAt = now, now
 			r.charts[chart.ID] = chart
 		}
+		for index, picture := range imported.Images {
+			position := picture.Position
+			item, err := imageFromInput(wb.ID, fmt.Sprintf("import:image:%d", index), input.ActorID, CreateImageInput{SheetID: sheetID, Data: picture.Data, Position: &position})
+			if err != nil {
+				continue
+			}
+			item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
+			r.images[item.ID] = item
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {

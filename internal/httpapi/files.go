@@ -75,6 +75,9 @@ func (s *Server) executeExport(w http.ResponseWriter, r *http.Request) {
 	if exported.SkippedCharts > 0 {
 		w.Header().Set("X-Kanpic-Skipped-Charts", strconv.Itoa(exported.SkippedCharts))
 	}
+	if exported.SkippedImages > 0 {
+		w.Header().Set("X-Kanpic-Skipped-Images", strconv.Itoa(exported.SkippedImages))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(exported.Data)
 }

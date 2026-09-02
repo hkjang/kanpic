@@ -194,6 +194,17 @@ func (r *PostgresRepository) ImportWorkbook(ctx context.Context, input ImportWor
 				return Workbook{}, err
 			}
 		}
+		for index, picture := range imported.Images {
+			position := picture.Position
+			item, imageErr := imageFromInput(wb.ID, fmt.Sprintf("import:image:%d", index), input.ActorID, CreateImageInput{SheetID: sheet.ID, Data: picture.Data, Position: &position})
+			if imageErr != nil {
+				continue
+			}
+			item.ID, item.Revision, item.CreatedAt, item.UpdatedAt = identity.New(), 1, now, now
+			if err := insertImageTx(ctx, tx, item); err != nil {
+				return Workbook{}, err
+			}
+		}
 		for index, rule := range imported.Validations {
 			created, ok := importedValidationInput(rule, index)
 			if !ok {

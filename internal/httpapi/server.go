@@ -978,7 +978,7 @@ func (s *Server) workbookIDForSheet(ctx context.Context, sheetID string) string 
 // 에서는 없는 것으로 보이므로, 개발 서버(:5173)로 띄운 화면에서만 조용히
 // 동작하지 않는 일이 생긴다. 내려받는 파일의 이름과, 파일에 담지 못한 차트의
 // 수가 그렇게 사라지고 있었다.
-const exposedHeaders = "Content-Disposition, X-Kanpic-Skipped-Charts, X-Trace-ID"
+const exposedHeaders = "Content-Disposition, X-Kanpic-Skipped-Charts, X-Kanpic-Skipped-Images, X-Trace-ID"
 
 func (s *Server) pagePolicy(ctx context.Context, path, nonce string) string {
 	return s.policyFor(s.analyticsConfig(ctx), path, nonce)

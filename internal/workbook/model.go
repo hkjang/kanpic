@@ -578,6 +578,9 @@ type ImportSheet struct {
 	// Charts are the pictures the file drew from this sheet's data. A report
 	// that arrives without them looks like a table nobody bothered to explain.
 	Charts []ImportChart `json:"charts,omitempty"`
+	// Images are the pictures the file had floating over this sheet. A
+	// workbook exported from here minutes ago should come back with them.
+	Images []ImportImage `json:"images,omitempty"`
 	// Layout carries what the file said about arrangement: hidden rows and
 	// columns, sizes, frozen panes and outline groups. An import that drops it
 	// flattens a workbook that was exported from here minutes earlier.
@@ -719,4 +722,11 @@ type FilterResult struct {
 	VisibleCount int    `json:"visible_count"`
 	HiddenCount  int    `json:"hidden_count"`
 	TotalCount   int    `json:"total_count"`
+}
+
+// ImportImage is one picture read out of an imported file: its bytes and where
+// the file hung it, already converted to the pixel position kanpic keeps.
+type ImportImage struct {
+	Data     []byte        `json:"-"`
+	Position ChartPosition `json:"position"`
 }
