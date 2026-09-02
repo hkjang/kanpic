@@ -52,32 +52,88 @@ export function looksLikeNumberStoredAsText(value:unknown):boolean{
  * 회계에서 음수를 적는 꼴이고, 백분율은 100 으로 나눈다 — 화면에 보이던 것과
  * 셈하는 값이 같아야 한다.
  */
-export function textToNumber(value:string):number|undefined{
+/**
+ * 글자 하나를 숫자와 표시 형식으로 뜯는다.
+ *
+ * 같은 글자가 이 앱에 들어오는 길은 셋이다 — 붙여넣기, 데이터 정리, 그리고
+ * 셀에 직접 치는 것. 셋이 따로 뜯으면 같은 "₩5,000" 이 어떻게 들어왔는지에
+ * 따라 다른 값이나 다른 서식으로 저장된다. 사람에게는 같은 자료인데 파일에서는
+ * 다르다. 그래서 뜯는 일은 여기 한 군데서만 한다.
+ *
+ * 뜯은 것은 반드시 원래 글자로 다시 그려져야 한다. 기호와 단위에 붙어 있던
+ * 빈칸까지 서식 안에 담는 것은 그 때문이다 — `5000 USD` 를 `5000USD` 로
+ * 되돌리면 사람이 옮긴 표와 다른 것을 보게 된다.
+ */
+export type NumberText={value:number;format?:string}
+
+const CURRENCY_SIGN=/^([₩$€¥£¢])(\s*)/
+const UNIT_SUFFIX=/(\s*)(원|달러|USD|KRW|won)$/i
+const GROUPED_INTEGER=/^\d{1,3}(,\d{3})+$/
+const PLAIN_INTEGER=/^\d+$/
+
+export function decomposeNumberText(value:string):NumberText|undefined{
   let text=value.trim()
-  if(text==='')return undefined
-  let sign=1
-  // (500) 은 회계에서 -500 이다.
-  if(/^\(.*\)$/.test(text)){sign=-1;text=text.slice(1,-1).trim()}
-  const percent=text.endsWith('%')
-  if(percent)text=text.slice(0,-1).trim()
-  // 앞뒤의 통화 기호와 단위를 떼어 낸다. 가운데 것은 건드리지 않는다 —
-  // "1,2,3" 같은 것을 억지로 숫자로 만들면 안 된다.
-  text=text.replace(/^[₩$€¥£]\s*/,'').replace(/\s*(원|달러|USD|KRW|won)$/i,'').trim()
-  if(text.startsWith('-')){sign*=-1;text=text.slice(1).trim()}
-  else if(text.startsWith('+'))text=text.slice(1).trim()
-  // 쉼표는 세 자리마다 하나여야 한다. 아무 데나 찍힌 것은 숫자가 아니다.
-  if(text.includes(',')){
-    if(!/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(text))return undefined
-    text=text.replace(/,/g,'')
+  // 마흔 자를 넘는 것은 금액이 아니라 문장이다.
+  if(text===''||text.length>40)return undefined
+  let negative=false
+  const parenthesized=/^\(.*\)$/.test(text)
+  if(parenthesized){negative=true;text=text.slice(1,-1).trim()}
+  const leading=(prefix:string)=>{
+    if(!text.startsWith(prefix))return false
+    text=text.slice(1).trim();return true
   }
-  if(!/^\d+(\.\d+)?$/.test(text))return undefined
+  if(leading('-'))negative=!negative
+  else leading('+')
+  let currency='',currencyGap=''
+  const sign=text.match(CURRENCY_SIGN)
+  if(sign){currency=sign[1];currencyGap=sign[2];text=text.slice(sign[0].length)}
+  // `$-5` 처럼 기호 뒤에 부호가 오는 표기도 있다.
+  if(currency!==''){if(leading('-'))negative=!negative;else leading('+')}
+  let percent=false
+  if(text.endsWith('%')){percent=true;text=text.slice(0,-1).trim()}
+  let unit='',unitGap=''
+  const suffix=text.match(UNIT_SUFFIX)
+  if(suffix){unitGap=suffix[1];unit=suffix[2];text=text.slice(0,text.length-suffix[0].length)}
+  // 백분율에 단위를 붙인 것은 뜻이 없다. `5%원` 을 억지로 읽지 않는다.
+  if(percent&&unit!=='')return undefined
+  const [integer,fraction,...rest]=text.trim().split('.')
+  if(rest.length>0)return undefined
+  if(fraction!==undefined&&!PLAIN_INTEGER.test(fraction))return undefined
+  // 쉼표는 세 자리마다 하나여야 한다. 아무 데나 찍힌 `1,2` 는 소수점으로
+  // 쉼표를 쓰는 표기이지 자릿수 구분이 아니다.
+  const grouped=GROUPED_INTEGER.test(integer)
+  if(!grouped&&!PLAIN_INTEGER.test(integer))return undefined
+  const digits=integer.replace(/,/g,'')+(fraction===undefined?'':'.'+fraction)
   // 배정밀도가 정확히 담는 것은 열다섯 자리까지다. 그보다 긴 것은 계좌번호나
-  // 전표번호이지 금액이 아니다. 숫자로 바꾸면 뒤가 뭉개져 사람이 적은 것과
-  // 다른 값이 칸에 들어간다.
-  if(significantDigits(text)>15)return undefined
-  const parsed=Number(text)
+  // 전표번호이지 금액이 아니다. 숫자로 바꾸면 뒤가 뭉개져, 적은 사람이 보던
+  // 것과 다른 값이 칸에 들어간다. 글자로 두면 적어도 그대로 남는다.
+  if(significantDigits(digits)>15)return undefined
+  const parsed=Number(digits)
   if(!Number.isFinite(parsed))return undefined
-  return sign*(percent?parsed/100:parsed)
+  const value_=(negative?-parsed:parsed)/(percent?100:1)
+  // 서식이 필요 없는 평범한 숫자에는 서식을 붙이지 않는다. 붙이면 칸마다
+  // 쓸모없는 스타일이 하나씩 생긴다.
+  if(!grouped&&currency===''&&unit===''&&!percent&&!parenthesized)return {value:value_}
+  return {value:value_,format:numberTextFormat({grouped,currency,currencyGap,unit,unitGap,percent,parenthesized,decimals:fraction?.length??0})}
+}
+
+function numberTextFormat({grouped,currency,currencyGap,unit,unitGap,percent,parenthesized,decimals}:{
+  grouped:boolean;currency:string;currencyGap:string;unit:string;unitGap:string;percent:boolean;parenthesized:boolean;decimals:number}){
+  // 기호는 따옴표로 묶는다. 엑셀 서식 말에서 따옴표 안은 언제나 그대로 적는
+  // 글자이므로, `$` 처럼 다른 뜻으로 읽힐 수 있는 기호도 안전하다. 빈칸도
+  // 따옴표 안에 넣어야 그려질 때 살아남는다.
+  const body=(currency!==''?`"${currency}${currencyGap}"`:'')
+    +(grouped?'#,##0':'0')
+    +(decimals>0?'.'+'0'.repeat(decimals):'')
+    +(percent?'%':'')
+    +(unit!==''?`"${unitGap}${unit}"`:'')
+  // 회계 표기의 괄호는 음수를 적는 꼴이다. 떼어 버리면 (500) 이 -500 으로
+  // 보이고, 사람은 자기가 옮긴 표와 다른 것을 보게 된다.
+  return parenthesized?`${body};(${body})`:body
+}
+
+export function textToNumber(value:string):number|undefined{
+  return decomposeNumberText(value)?.value
 }
 
 /**
@@ -93,28 +149,7 @@ export function textToNumber(value:string):number|undefined{
  * 그리지 못할 서식을 적어 두면 칸이 빈 것처럼 보인다.
  */
 export function numberFormatForText(value:string):string|undefined{
-  if(textToNumber(value)===undefined)return undefined
-  let text=value.trim()
-  const parenthesized=/^\(.*\)$/.test(text)
-  if(parenthesized)text=text.slice(1,-1).trim()
-  const percent=text.endsWith('%')
-  if(percent)text=text.slice(0,-1).trim()
-  const currency=text.match(/^([₩$€¥£])/)?.[1]??''
-  // 뒤에 붙은 단위도 서식으로 옮긴다. 예전에는 서식 말이 이것을 그리지 못해
-  // 놓아주었는데, 이제 따옴표로 묶은 글자를 그대로 그린다.
-  const unit=text.match(/\s*(원|달러|USD|KRW|won)$/i)?.[1]??''
-  text=text.replace(/^[₩$€¥£]\s*/,'').replace(/\s*(원|달러|USD|KRW|won)$/i,'').trim()
-  if(text.startsWith('-')||text.startsWith('+'))text=text.slice(1).trim()
-  const grouped=text.includes(',')
-  const decimals=text.split('.')[1]?.length??0
-  if(!currency&&!unit&&!percent&&!grouped&&!parenthesized)return undefined
-  // 소수 자리를 서식으로 굳히면 그 자리에서 반올림해 그린다. 사람이 적은
-  // 자리보다 길게 굳힐 이유는 없다.
-  // 기호는 따옴표로 묶는다. 엑셀 서식 말에서 따옴표 안은 언제나 그대로
-  // 적는 글자이므로, $ 처럼 다른 뜻으로 읽힐 수 있는 기호도 안전하다.
-  // 붙여넣기가 내는 서식과 같은 글자이기도 하다.
-  const body=(currency?`"${currency}"`:'')+(grouped?'#,##0':'0')+(decimals?'.'+'0'.repeat(decimals):'')+(percent?'%':'')+(unit?`"${unit}"`:'')
-  return parenthesized?`${body};(${body})`:body
+  return decomposeNumberText(value)?.format
 }
 
 /** 앞의 0과 소수점을 뺀 자릿수. 배정밀도가 정확히 담는 한도를 재는 데 쓴다. */
