@@ -122,3 +122,40 @@ test('copying puts a formatted table on the clipboard, not only plain text', asy
   expect(copied.html).toContain('x:num="1234.5"')
   await request.delete(`/api/v1/workbooks/${workbook.id}`)
 })
+
+// 취소선은 이 앱 어디에서나 `strike` 다. 클립보드로 내보내는 쪽만 `strikethrough`
+// 라는, 아무도 쓰지 않는 이름을 읽고 있었다. 읽는 쪽에는 아예 없었다. 그래서
+// 취소선과 글꼴은 엑셀과 오갈 때 양쪽 모두에서 조용히 사라졌다.
+test('a strikethrough and a font name survive the trip from Excel and back', async ({ page, request }) => {
+  const stamp=Date.now()
+  const workbook=await request.post('/api/v1/workbooks',{data:{title:`취소선 글꼴 ${stamp}`}}).then(response=>response.json())
+  const sheet=workbook.sheets[0].id as string
+  await openAtA1(page,workbook.id)
+  await pasteInto(page,
+    '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><body><table><tr>'
+    +'<td style="text-decoration:line-through;font-family:맑은 고딕">지난 계획</td>'
+    // 서버는 72pt 까지 받는다. 더 큰 것을 그대로 보내면 붙여넣기 전체가 400 이 된다.
+    +'<td style="font-size:80pt;font-family:\'Malgun Gothic\', sans-serif">제목</td></tr></table></body></html>',
+    '지난 계획\t제목')
+
+  await expect.poll(async()=>{
+    const items=(await request.get(`/api/v1/sheets/${sheet}/ranges/A1:B1`).then(r=>r.json())).items
+    return items.length
+  }).toBe(2)
+  const items=(await request.get(`/api/v1/sheets/${sheet}/ranges/A1:B1`).then(r=>r.json())).items
+  const at=(row:number,column:number)=>items.find((cell:{row:number;column:number})=>cell.row===row&&cell.column===column)
+  expect(at(1,1)!.style).toMatchObject({strike:true,font_family:'맑은 고딕'})
+  expect(at(1,2)!.style).toMatchObject({font_size:72,font_family:'Malgun Gothic'})
+
+  // 다시 복사하면 클립보드의 HTML 이 그 둘을 다시 담아야 한다.
+  const box=(await page.locator('.grid-canvas').boundingBox())!
+  await page.mouse.click(box.x+80,box.y+42)
+  const copied=await page.evaluate(()=>{
+    const data=new DataTransfer()
+    document.querySelector('.grid-viewport')?.dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,bubbles:true,cancelable:true}))
+    return data.getData('text/html')
+  })
+  expect(copied).toContain('line-through')
+  expect(copied).toContain('font-family:맑은 고딕')
+  await request.delete(`/api/v1/workbooks/${workbook.id}`)
+})

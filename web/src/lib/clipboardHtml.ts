@@ -14,6 +14,24 @@ export type HtmlCell={
 
 const COLOR=/^#[0-9a-f]{3}([0-9a-f]{3})?$/i
 
+/**
+ * 글꼴 이름은 CSS 선언 한가운데로 들어가고 나온다. 세미콜론이나 따옴표가 섞이면
+ * 선언이 끊어지므로, 글자·숫자·공백·`._-` 만 통과시킨다. `\w` 로 거르면
+ * `맑은 고딕` 같은 한글 이름이 전부 떨어진다 — 읽는 쪽과 쓰는 쪽이 같은 자를 쓴다.
+ */
+const FONT_FAMILY=/^[\p{L}\p{N} ._-]{1,64}$/u
+
+/** 서버가 받아 주는 한도. `internal/workbook/style.go` 의 `ValidateStylePatch` 와
+ *  같아야 한다. 여기서 더 넉넉하게 만들면 붙여넣기 전체가 400 으로 떨어진다. */
+const MAX_FONT_FAMILY_BYTES=100
+export const MIN_FONT_SIZE=6, MAX_FONT_SIZE=72
+
+export function fontFamilyName(value:string|undefined){
+  const first=(value??'').split(',')[0].trim().replace(/^["']|["']$/g,'').trim()
+  if(first===''||!FONT_FAMILY.test(first))return
+  return new TextEncoder().encode(first).length<=MAX_FONT_FAMILY_BYTES?first:undefined
+}
+
 /** 표 하나를 찾아 셀의 값과 서식을 읽는다. 표가 없으면 undefined 를 돌려
  *  평문 경로가 그대로 처리하게 둔다. */
 export function parseClipboardHtml(html:string,maxCells:number):HtmlCell[]|undefined{
@@ -113,6 +131,8 @@ function readStyle(element:HTMLElement):Record<string,unknown>|undefined{
   if(italic==='italic'||italic==='oblique'||italic==='inherited')style.italic=true
   const decoration=(inline.get('text-decoration')??inline.get('text-decoration-line')??'').toLowerCase()
   if(decoration.includes('underline')||inheritedTag(element,'U'))style.underline=true
+  // 취소선은 이 앱 어디에서나 `strike` 다. 읽지 않으면 엑셀에서 그은 줄이 사라진다.
+  if(decoration.includes('line-through')||inheritedTag(element,'S','STRIKE','DEL'))style.strike=true
   const color=hexColor(inline.get('color')??'')
   if(color)style.color=color
   const background=hexColor(inline.get('background-color')??firstColorToken(inline.get('background')??''))
@@ -126,6 +146,8 @@ function readStyle(element:HTMLElement):Record<string,unknown>|undefined{
   if(wrap==='normal'||wrap==='pre-wrap'||wrap==='pre-line')style.text_mode='wrap'
   const size=fontSize(inline.get('font-size')??'')
   if(size!==undefined)style.font_size=size
+  const family=fontFamilyName(inline.get('font-family')??element.getAttribute('face')??undefined)
+  if(family)style.font_family=family
   return Object.keys(style).length>0?style:undefined
 }
 
@@ -144,7 +166,10 @@ function fontSize(value:string){
   // 엑셀은 pt, 구글 시트는 px 로 쓴다. kanpic 은 pt 로 센다.
   const points=value.trim().endsWith('px')?parsed*0.75:parsed
   const rounded=Math.round(points)
-  return rounded>=6&&rounded<=96?rounded:undefined
+  if(!(rounded>=MIN_FONT_SIZE))return
+  // 서버 한도를 넘는 크기는 버리지 않고 한도에 맞춘다. 80pt 제목을 떨어뜨리면
+  // 기본 12pt 로 앉지만, 72pt 로 두면 "크다" 는 뜻은 남는다.
+  return Math.min(rounded,MAX_FONT_SIZE)
 }
 
 function inheritedTag(element:HTMLElement,...tags:string[]){

@@ -46,3 +46,24 @@ describe('clipboardHtml',()=>{
     expect(read[1]).toMatchObject({value:98000})
   })
 })
+
+describe('formatting that has to survive the trip to Excel', () => {
+  const cell=(style:Record<string,unknown>)=>clipboardHtml({version:1,sourceRow:1,sourceColumn:1,rows:1,columns:1,
+    cells:[{rowOffset:0,columnOffset:0,value:'값',style}]})
+
+  // 이 앱은 취소선을 어디서나 `strike` 라 부른다. 쓰는 쪽만 다른 이름을 보면
+  // 그은 줄이 조용히 사라진다.
+  it('writes the strikethrough under the name the app stores it as', () => {
+    expect(cell({strike:true})).toContain('line-through')
+    expect(cell({underline:true,strike:true})).toContain('text-decoration:underline line-through')
+  })
+
+  it('writes a Korean font name instead of dropping it', () => {
+    expect(cell({font_family:'맑은 고딕'})).toContain('font-family:맑은 고딕')
+    expect(cell({font_family:'Arial'})).toContain('font-family:Arial')
+  })
+
+  it('drops a font name that would break out of the declaration', () => {
+    expect(cell({font_family:'evil;color:red'})).not.toContain('font-family')
+  })
+})

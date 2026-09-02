@@ -1,5 +1,6 @@
 import { formatCellValue } from './cellFormat'
 import type { KanpicClipboard } from './clipboard'
+import { fontFamilyName } from './clipboardHtml'
 
 /**
  * 복사할 때 클립보드에 `text/html` 표도 함께 올린다. 평문만 올리면 엑셀,
@@ -37,7 +38,7 @@ function cssFor(style:Record<string,unknown>|undefined,value:unknown){
   const declarations:string[]=[]
   if(style?.bold===true)declarations.push('font-weight:700')
   if(style?.italic===true)declarations.push('font-style:italic')
-  const decoration=[style?.underline===true?'underline':'',style?.strikethrough===true?'line-through':''].filter(Boolean)
+  const decoration=[style?.underline===true?'underline':'',style?.strike===true?'line-through':''].filter(Boolean)
   if(decoration.length>0)declarations.push(`text-decoration:${decoration.join(' ')}`)
   const color=hex(style?.color)
   if(color)declarations.push(`color:${color}`)
@@ -52,8 +53,8 @@ function cssFor(style:Record<string,unknown>|undefined,value:unknown){
   if(style?.text_mode==='wrap'||style?.wrap===true)declarations.push('white-space:pre-wrap')
   const size=typeof style?.font_size==='number'?style.font_size:undefined
   if(size!==undefined&&size>=6&&size<=96)declarations.push(`font-size:${size}pt`)
-  const family=typeof style?.font_family==='string'?style.font_family.trim():''
-  if(family!==''&&/^[\w .-]{1,64}$/.test(family))declarations.push(`font-family:${family}`)
+  const family=fontFamilyName(typeof style?.font_family==='string'?style.font_family:undefined)
+  if(family)declarations.push(`font-family:${family}`)
   // 엑셀은 붙여넣을 때 이 표시 형식을 읽어 셀에 그대로 적용한다. 세미콜론은
   // 선언을 끊어 버리므로 그런 형식은 넘기지 않는다(조건부 형식 구문).
   const format=typeof style?.number_format==='string'?style.number_format.trim():''

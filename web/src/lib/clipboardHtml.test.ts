@@ -43,3 +43,39 @@ describe('parseClipboardHtml',()=>{
     expect(cells).toHaveLength(25)
   })
 })
+
+describe('formatting that Excel and Sheets actually send', () => {
+  const style=(html:string)=>parseClipboardHtml(`<table><tr><td ${html}>값</td></tr></table>`,10)?.[0]?.style
+
+  it('reads a strikethrough as the key the rest of the app uses', () => {
+    expect(style('style="text-decoration:line-through"')?.strike).toBe(true)
+    expect(style('style="text-decoration:underline line-through"')).toMatchObject({underline:true,strike:true})
+  })
+
+  it('reads a strikethrough written as a tag', () => {
+    expect(parseClipboardHtml('<table><tr><td><s>값</s></td></tr></table>',10)?.[0]?.style?.strike).toBe(true)
+  })
+
+  it('leaves the strikethrough off when nothing struck the text', () => {
+    expect(style('style="text-decoration:underline"')?.strike).toBeUndefined()
+  })
+
+  it('keeps the font family, including a Korean one', () => {
+    expect(style('style="font-family:맑은 고딕"')?.font_family).toBe('맑은 고딕')
+    expect(style(`style="font-family:'Malgun Gothic', sans-serif"`)?.font_family).toBe('Malgun Gothic')
+    expect(style('face="Arial"')?.font_family).toBe('Arial')
+  })
+
+  // 읽어들인 이름은 다시 내보낼 수 있어야 한다. 두 쪽이 같은 자를 쓰는지 본다.
+  it('drops a font family that could not be written back out', () => {
+    expect(style('style="font-family:&lt;script&gt;"')?.font_family).toBeUndefined()
+    expect(style('style="font-family:a(b)"')?.font_family).toBeUndefined()
+  })
+
+  // 서버는 6..72pt 만 받는다. 더 넉넉하게 읽으면 붙여넣기 전체가 400 으로 떨어진다.
+  it('holds an oversized font to what the server accepts instead of failing the paste', () => {
+    expect(style('style="font-size:80pt"')?.font_size).toBe(72)
+    expect(style('style="font-size:14pt"')?.font_size).toBe(14)
+    expect(style('style="font-size:4pt"')?.font_size).toBeUndefined()
+  })
+})
