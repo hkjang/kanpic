@@ -1575,7 +1575,8 @@ func decimalRat(number float64) (*big.Rat, bool) {
 // 나온다. 0.30000000000000004 를 0.1 로 나누면 3.0000000000000004 가 되기
 // 때문이다. 십진수로 나누면 3 이 되어 0.3 이 나온다.
 //
-// 부호가 다른 경우는 부르는 쪽에서 이미 걸러내므로 몫은 늘 0 이상이다.
+// 몫은 음수일 수 있다. CEILING(-4.5,2) 처럼 수와 배수의 부호가 다른 경우를
+// 부르는 쪽이 받아 주므로, 어느 쪽으로 보낼지는 부르는 쪽이 mode 로 정한다.
 func decimalMultiple(number, factor float64, mode roundMode) (float64, bool) {
 	value, ok := decimalRat(number)
 	if !ok {

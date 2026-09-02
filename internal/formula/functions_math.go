@@ -30,17 +30,33 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 		if factor == 0 {
 			return float64(0), true, nil
 		}
-		if number*factor < 0 {
+		// MROUND 는 부호가 어긋나면 답이 없다. CEILING·FLOOR 는 음수를
+		// 양의 배수로 맞추는 것을 받아 준다 — CEILING(-4.5,2) 는 -4 다.
+		// 양수를 음의 배수로 맞추는 것만 #NUM! 이다.
+		if name == "MROUND" && number*factor < 0 {
+			return nil, true, formulaError("#NUM!", name+" needs a factor with the same sign as the number")
+		}
+		if number > 0 && factor < 0 {
 			return nil, true, formulaError("#NUM!", name+" needs a factor with the same sign as the number")
 		}
 		// ROUND 와 같은 십진 셈을 쓴다. 배수를 이진 실수로 나누면
 		// CEILING(0.1+0.2, 0.1) 이 0.3 이 아니라 0.4 가 된다.
+		//
+		// 몫이 음수이면 0 에서 멀어지는 쪽과 위쪽이 서로 반대다. CEILING 은
+		// 언제나 몫을 위로, FLOOR 는 언제나 아래로 보내야 한다.
 		mode := roundHalfAway
+		negativeQuotient := (number < 0) != (factor < 0)
 		switch name {
 		case "CEILING":
 			mode = roundAwayFromZero
+			if negativeQuotient {
+				mode = roundTowardZero
+			}
 		case "FLOOR":
 			mode = roundTowardZero
+			if negativeQuotient {
+				mode = roundAwayFromZero
+			}
 		}
 		if result, ok := decimalMultiple(number, factor, mode); ok {
 			return result, true, nil
