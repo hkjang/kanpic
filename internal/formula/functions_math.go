@@ -80,8 +80,11 @@ func evaluateMath(name string, values []any) (any, bool, error) {
 		if len(values) == 2 && !omitted(values[1]) {
 			digits, _ = toNumber(values[1])
 		}
-		factor := math.Pow(10, digits)
-		return math.Trunc(number*factor) / factor, true, nil
+		// ROUNDDOWN 과 같은 십진 셈을 쓴다. 이진 실수로 자리를 밀면
+		// 0.29*100 이 28.999999999999996 이 되어 TRUNC(0.29,2) 가 0.28 을,
+		// TRUNC(1.001,3) 이 1 을 냈다 — 이미 그 자리에 딱 맞는 수인데도
+		// 마지막 자리가 깎였다.
+		return decimalRound(number, decimalPlaces(digits), roundTowardZero), true, nil
 	case "SIGN", "EXP", "LN", "LOG10", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "SINH", "COSH", "TANH", "RADIANS", "DEGREES", "FACT", "EVEN", "ODD":
 		if len(values) != 1 {
 			return nil, true, argError(name)

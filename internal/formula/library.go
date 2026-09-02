@@ -541,9 +541,9 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 		}
 		// ROUND 와 같은 십진 셈을 쓴다. 세 함수가 서로 다른 값을 내면 안 된다.
 		if name == "ROUNDUP" {
-			return decimalRound(number, int(digits), roundAwayFromZero), true, nil
+			return decimalRound(number, decimalPlaces(digits), roundAwayFromZero), true, nil
 		}
-		return decimalRound(number, int(digits), roundTowardZero), true, nil
+		return decimalRound(number, decimalPlaces(digits), roundTowardZero), true, nil
 	case "ABS", "INT", "SQRT":
 		if len(values) != 1 {
 			return nil, true, argError(name)

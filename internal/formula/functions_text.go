@@ -501,6 +501,12 @@ func formatNumber(number float64, decimals int, grouped bool) string {
 	if decimals < 0 {
 		decimals = 0
 	}
+	// FIXED(1,999999999) 처럼 자릿수가 터무니없이 크면 그만큼의 0 을 이어
+	// 붙이느라 글자가 기가바이트로 자란다. float64 가 담는 십진수는
+	// maxDecimalPlaces 자리 안에서 끝나므로 그 뒤는 어차피 0 뿐이다.
+	if decimals > maxDecimalPlaces {
+		decimals = maxDecimalPlaces
+	}
 	text := strconv.FormatFloat(rounded, 'f', decimals, 64)
 	negative := strings.HasPrefix(text, "-")
 	text = strings.TrimPrefix(text, "-")

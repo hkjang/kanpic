@@ -634,7 +634,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		if len(values) == 2 && !omitted(values[1]) {
 			digits, _ = toNumber(values[1])
 		}
-		return decimalRound(number, int(digits), roundHalfAway), nil
+		return decimalRound(number, decimalPlaces(digits), roundHalfAway), nil
 	// CONCATENATE 는 CONCAT 의 옛 이름이다. 엑셀 강의와 오래된 통합 문서가
 	// 아직 이 이름을 쓰므로 둘 다 알아듣는다.
 	case "CONCAT", "CONCATENATE":
@@ -1532,10 +1532,47 @@ func finiteValue(value any) bool {
 //  2. 그 십진수를 그대로 분수로 옮겨 어긋남 없이 자른다.
 //
 // 자릿수가 음수면 정수 쪽으로 자른다. ROUND(1234,-2) 는 1200 이다.
+//
+// 자릿수는 사람이 적는 인수라 =ROUND(1,999999999) 처럼 터무니없이 클 수
+// 있다. 그대로 받으면 10^999999999 을 만드느라 한 칸이 서버의 기억 장소를
+// 수백 메가바이트씩 물고 늘어진다. maxDecimalPlaces 는 답을 바꾸지 않으면서
+// 그 일을 막는 자리다 — float64 는 소수점 아래로 1074 자리(가장 작은 값
+// 4.9e-324)까지, 위로는 1.8e308 까지밖에 담지 못하고, 여기서 다루는
+// 십진수는 열다섯 자리뿐이므로 400 자리 밖에서는 어떤 반올림도 값을
+// 움직이지 못한다.
+const maxDecimalPlaces = 400
+
+func boundedDecimalPlaces(digits int) int {
+	switch {
+	case digits > maxDecimalPlaces:
+		return maxDecimalPlaces
+	case digits < -maxDecimalPlaces:
+		return -maxDecimalPlaces
+	}
+	return digits
+}
+
+// decimalPlaces 는 사람이 적은 자릿수 인수를 정수로 옮긴다. 엑셀은 소수점
+// 아래를 잘라 내므로 ROUND(1.234,1.9) 는 한 자리다. float64 를 곧바로 int
+// 로 바꾸면 1e300 처럼 int 에 담기지 않는 값에서 무엇이 나올지 정해져
+// 있지 않으므로, 자르기 전에 먼저 범위 안으로 들인다.
+func decimalPlaces(digits float64) int {
+	switch {
+	case math.IsNaN(digits):
+		return 0
+	case digits > maxDecimalPlaces:
+		return maxDecimalPlaces
+	case digits < -maxDecimalPlaces:
+		return -maxDecimalPlaces
+	}
+	return int(math.Trunc(digits))
+}
+
 func decimalRound(number float64, digits int, mode roundMode) float64 {
 	if number == 0 || math.IsNaN(number) || math.IsInf(number, 0) {
 		return number
 	}
+	digits = boundedDecimalPlaces(digits)
 	value, ok := decimalRat(number)
 	if !ok {
 		return number

@@ -484,9 +484,10 @@ func evaluateRangeStatistics(name string, values []any) (any, bool, error) {
 				}
 			}
 		}
-		// 엑셀은 자리 수를 반올림하지 않고 잘라 낸다.
-		scale := math.Pow(10, math.Trunc(digits))
-		return math.Trunc(rank*scale) / scale, true, nil
+		// 엑셀은 자리 수를 반올림하지 않고 잘라 낸다. 자르는 일은 TRUNC 와
+		// 같은 십진 셈에 맡긴다. 이진 실수로 밀면 순위가 마침 0.29 일 때
+		// 두 자리로 잘라 0.28 이 나온다.
+		return decimalRound(rank, decimalPlaces(digits), roundTowardZero), true, nil
 	case "TRIMMEAN":
 		if len(values) != 2 {
 			return nil, true, argError(name)
