@@ -5,9 +5,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"kanpic/internal/formula"
 )
@@ -142,5 +144,78 @@ func TestImportDataParsesATableAndCachesIt(t *testing.T) {
 	fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})
 	if hits != 2 {
 		t.Fatalf("캐시가 지나면 다시 불러야 한다: %d번", hits)
+	}
+}
+
+// 관리자가 allowed_hosts 를 고치면 곧바로 통해야 한다. 정책은 아무 데도 닿지 않고
+// 설정만 읽으므로 캐시의 바깥에 있다.
+func TestPolicyIsNotCachedInEitherDirection(t *testing.T) {
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
+	settings := fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{"api.example.com"}, "external.cache_seconds": float64(300)}
+	fetcher := withInsecureTLS(testFetcher(settings), server)
+	now := time.Now()
+	fetcher.now = func() time.Time { return now }
+	request := formula.ExternalRequest{Function: "WEBSERVICE", URL: server.URL + "/x"}
+	key := formula.ExternalKey(request.Function, request.URL)
+	resolve := func() formula.ExternalResult {
+		return fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[key]
+	}
+	if got := resolve(); got.Err == nil || !strings.Contains(got.Err.Message, "허용되지 않은 호스트") {
+		t.Fatalf("목록에 없으면 거절해야 한다: %+v", got)
+	}
+	settings["external.allowed_hosts"] = []any{host}
+	if got := resolve(); got.Err != nil || got.Text != "ok" {
+		t.Fatalf("목록에 넣으면 캐시가 살아 있어도 곧바로 가져와야 한다: %+v", got)
+	}
+	settings["external.allowed_hosts"] = []any{"api.example.com"}
+	if got := resolve(); got.Err == nil || !strings.Contains(got.Err.Message, "허용되지 않은 호스트") {
+		t.Fatalf("목록에서 빼면 캐시에 든 답도 내주면 안 된다: %+v", got)
+	}
+}
+
+// 캐시를 지우는 것은 새 답이 들어올 때뿐이다. 상한이 없으면 매번 다른 주소를 부르는
+// 워크북 하나가 지도를 끝없이 키운다.
+func TestCacheSweepsExpiredAndStaysBounded(t *testing.T) {
+	fetcher := New(nil, nil)
+	now := time.Now()
+	fetcher.now = func() time.Time { return now }
+	put := func(key string, live time.Duration) {
+		fetcher.store(key, formula.ExternalResult{Text: key}, now.Add(live))
+	}
+	for index := 0; index < maxCacheEntries; index++ {
+		put("old"+strconv.Itoa(index), time.Minute)
+	}
+	if len(fetcher.cache) != maxCacheEntries {
+		t.Fatalf("가득 차야 한다: %d", len(fetcher.cache))
+	}
+	now = now.Add(2 * time.Minute)
+	put("fresh", time.Minute)
+	if len(fetcher.cache) != 1 {
+		t.Fatalf("지난 항목은 새 답이 들어올 때 쓸려 나가야 한다: %d", len(fetcher.cache))
+	}
+	for index := 0; index < maxCacheEntries+50; index++ {
+		put("live"+strconv.Itoa(index), time.Hour+time.Duration(index)*time.Second)
+	}
+	if len(fetcher.cache) > maxCacheEntries {
+		t.Fatalf("살아 있는 항목만 있어도 상한을 넘으면 안 된다: %d", len(fetcher.cache))
+	}
+	if _, ok := fetcher.cache["live"+strconv.Itoa(maxCacheEntries+49)]; !ok {
+		t.Error("가장 나중에 들어온 답은 남아 있어야 한다")
+	}
+	if _, ok := fetcher.cache["live0"]; ok {
+		t.Error("먼저 만료될 답부터 나가야 한다")
+	}
+}
+
+func TestShortKeepsKoreanLettersWhole(t *testing.T) {
+	trimmed := short(strings.Repeat("한", 200))
+	if !utf8.ValidString(trimmed) || strings.ContainsRune(trimmed, utf8.RuneError) {
+		t.Fatalf("글자를 쪼개면 안 된다: %q", trimmed)
+	}
+	if got := utf8.RuneCountInString(trimmed); got != maxMessageRunes+1 {
+		t.Fatalf("%d글자 + 말줄임표여야 한다: %d", maxMessageRunes, got)
+	}
+	if short("짧은 메시지") != "짧은 메시지" {
+		t.Error("짧은 메시지는 그대로 두어야 한다")
 	}
 }

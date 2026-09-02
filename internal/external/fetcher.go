@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"kanpic/internal/formula"
 )
@@ -46,6 +47,12 @@ const (
 	// MaxRequestsPerRecalculation bounds one recalculation's outbound calls.
 	MaxRequestsPerRecalculation = 20
 	maxCSVCells                 = formula.MaxImportedCells
+	// maxCacheEntries bounds the answer cache. Nothing but a new answer ever
+	// touches the map, so without a ceiling a workbook that fetches a fresh
+	// address on every recalculation would grow it until the process died.
+	maxCacheEntries = 512
+	// maxMessageRunes trims a foreign error before it goes in a cell.
+	maxMessageRunes = 160
 )
 
 type cached struct {
@@ -134,6 +141,15 @@ func (f *Fetcher) Resolve(ctx context.Context, requests []formula.ExternalReques
 }
 
 func (f *Fetcher) one(ctx context.Context, config Config, request formula.ExternalRequest) formula.ExternalResult {
+	// The policy check reads the administrator's settings and reaches nothing,
+	// so it stands outside the cache in both directions: a refusal is not kept,
+	// and an answer kept earlier is not handed back once the address has left
+	// the allow-list. Otherwise a fixed allowed_hosts would take up to
+	// cache_seconds to be believed.
+	target, err := CheckURL(request.URL, config.AllowedHosts)
+	if err != nil {
+		return formula.ExternalResult{Err: &formula.Error{Code: "#N/A", Message: err.Error()}}
+	}
 	key := formula.ExternalKey(request.Function, request.URL)
 	f.mu.Lock()
 	if hit, ok := f.cache[key]; ok && f.now().Before(hit.expires) {
@@ -141,7 +157,7 @@ func (f *Fetcher) one(ctx context.Context, config Config, request formula.Extern
 		return hit.result
 	}
 	f.mu.Unlock()
-	body, err := f.fetch(ctx, config, request.URL)
+	body, err := f.fetch(ctx, config, target)
 	var result formula.ExternalResult
 	if err != nil {
 		result = formula.ExternalResult{Err: &formula.Error{Code: "#N/A", Message: err.Error()}}
@@ -151,11 +167,36 @@ func (f *Fetcher) one(ctx context.Context, config Config, request formula.Extern
 		result = formula.ExternalResult{Text: body}
 	}
 	if config.CacheFor > 0 {
-		f.mu.Lock()
-		f.cache[key] = cached{result: result, expires: f.now().Add(config.CacheFor)}
-		f.mu.Unlock()
+		f.store(key, result, f.now().Add(config.CacheFor))
 	}
 	return result
+}
+
+// store keeps one answer and takes out the rubbish while it is holding the
+// lock: expired entries first, and if the map is still full, whichever live
+// entry expires soonest.
+func (f *Fetcher) store(key string, result formula.ExternalResult, expires time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, replacing := f.cache[key]; !replacing && len(f.cache) >= maxCacheEntries {
+		now := f.now()
+		for existing, entry := range f.cache {
+			if !now.Before(entry.expires) {
+				delete(f.cache, existing)
+			}
+		}
+		if len(f.cache) >= maxCacheEntries {
+			var oldest string
+			var oldestAt time.Time
+			for existing, entry := range f.cache {
+				if oldestAt.IsZero() || entry.expires.Before(oldestAt) {
+					oldest, oldestAt = existing, entry.expires
+				}
+			}
+			delete(f.cache, oldest)
+		}
+	}
+	f.cache[key] = cached{result: result, expires: expires}
 }
 
 // Policy errors are what the cell shows, so they say what the person can do.
@@ -231,11 +272,7 @@ func PublicAddress(ip net.IP) bool {
 	return true
 }
 
-func (f *Fetcher) fetch(ctx context.Context, config Config, raw string) (string, error) {
-	target, err := CheckURL(raw, config.AllowedHosts)
-	if err != nil {
-		return "", err
-	}
+func (f *Fetcher) fetch(ctx context.Context, config Config, target *url.URL) (string, error) {
 	dialer := &net.Dialer{Timeout: config.Timeout}
 	transport := &http.Transport{
 		Proxy: nil,
@@ -410,9 +447,19 @@ func bounded(value any, fallback, minimum, maximum int) int {
 	return number
 }
 
+// short trims a message that came from elsewhere. It counts letters, not
+// bytes, so a Korean message comes back whole instead of ending in a half
+// letter the terminal draws as a question mark.
 func short(text string) string {
-	if len(text) > 160 {
-		return text[:160] + "…"
+	if utf8.RuneCountInString(text) <= maxMessageRunes {
+		return text
+	}
+	counted := 0
+	for index := range text {
+		if counted == maxMessageRunes {
+			return text[:index] + "…"
+		}
+		counted++
 	}
 	return text
 }
