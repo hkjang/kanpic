@@ -187,3 +187,5 @@ button.ai-history-row:hover{background:#f6f9f9}
 .cell-link a{display:flex;align-items:center;gap:5px;color:#1155cc;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cell-link a:hover{text-decoration:underline}
 .cell-link svg{width:12px;flex:none}
+
+.stalled-save{bottom:112px;border-color:#e6cfa8;border-left-color:#d9973f;box-shadow:0 12px 30px #4a3a1420}.stalled-save>svg{color:#c48429}.stalled-save strong{color:#7e5b24}.stalled-save small{color:#94795a;white-space:normal}

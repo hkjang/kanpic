@@ -9,6 +9,7 @@ import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { survivesChange, transformSelection } from '../lib/structureTransform'
 import { FormulaIssueNotice } from '../components/FormulaIssueNotice'
+import { StalledSaveNotice } from '../components/StalledSaveNotice'
 import { cycleReference } from '../lib/referenceCycle'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
 import { WorkbookMenuBar,type WorkbookMenu } from '../components/WorkbookMenuBar'
@@ -66,7 +67,7 @@ import { api, address, newIdempotencyKey } from '../lib/api'
 import { collaborationClientId } from '../lib/client'
 import { MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type PastedCell } from '../lib/clipboard'
 import { cellMerge,mergeInRegion,mergeStyle as applyMergeStyle,selectedMergedBounds } from '../lib/merge'
-import { enqueue, flushOutbox, listOutbox } from '../lib/outbox'
+import { blockedOutbox, discardOutbox, enqueue, flushOutbox, listOutbox, retryOutbox, type OutboxOperation } from '../lib/outbox'
 import { forSheet, pendingInWorkbook } from '../lib/outboxScope'
 import { materializeSort,type SortOptions } from '../lib/sort'
 import { dataRegion, looksLikeHeaderRow, type GridRegion } from '../lib/dataRegion'
@@ -354,6 +355,11 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   const revertOperation=async(mode:'undo'|'redo')=>{if(!writable())return;if(!navigator.onLine){alert('Undo와 Redo는 서버에 다시 연결한 후 사용할 수 있습니다.');return}const target=mode==='undo'?editor.takeUndo():editor.takeRedo();if(!target)return;editor.setSaveState('saving');try{const result=await api<MutationResult>(`/api/v1/operations/${target}:undo`,{method:'POST',body:JSON.stringify({idempotency_key:`undo:${target}`,client_id:collaborationClientId()})});updateVersion(result.server_version);if(result.applied_cells>0){if(mode==='undo')editor.completeUndo(result.operation_id);else editor.completeRedo(result.operation_id)}else{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target)}editor.setSaveState(result.conflicts.length?'conflict':'saved',result.conflicts.length)}catch{if(mode==='undo')editor.restoreUndo(target);else editor.restoreRedo(target);editor.setSaveState('error')}}
   const denyWrite=()=>{editor.setSaveState('error');alert('보기 전용 권한입니다. 소유자에게 편집 권한을 요청하세요.')}
   const writable=()=>{const role=workbook.data?.access_role??'owner';if(role==='editor'||role==='owner')return true;denyWrite();return false}
+  // 큐가 포기한 변경은 화면에 나와야 한다. 멈춘 것을 말하지 않으면 사람은
+  // 저장된 줄 알고 창을 닫는다.
+  const [stalled,setStalled]=useState<OutboxOperation[]>([])
+  const refreshStalled=useCallback(async()=>{setStalled(pendingInWorkbook(await blockedOutbox(),(workbook.data?.sheets??[]).map(sheet=>sheet.id)))},[workbook.data])
+  useEffect(()=>{void refreshStalled();const notice=()=>void refreshStalled();window.addEventListener('kanpic:outbox-blocked',notice);return()=>window.removeEventListener('kanpic:outbox-blocked',notice)},[refreshStalled])
   // 저장 큐는 다른 워크북에서 밀린 작업까지 함께 보낸다. 그 응답을 이 시트에 얹으면
   // 남의 서버 버전과 작업 번호가 섞이므로, 화면에 반영하는 것은 이 시트의 결과뿐이다.
   const outboxApplied=(sheetId:string|undefined)=>forSheet<MutationResult>(sheetId,applied=>{updateVersion(applied.server_version);editor.reportEdit(applied);if(!applied.duplicate&&applied.applied_cells>0)editor.recordOperation(applied.operation_id);editor.setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)})
@@ -1546,6 +1552,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
         {rightPanel==='pivots'&&<PivotPanel pivots={pivots.data?.items??[]} sheets={workbook.data.sheets} onClose={()=>setRightPanel(null)} onCreate={()=>setPivotDialog(null)} onEdit={item=>setPivotDialog(item)} onOpen={setPivotResult} onRefresh={refreshPivot} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>}
       </ResizableRightPanel>}
     </div>
+    <StalledSaveNotice count={stalled.length}
+      onRetry={()=>{void retryOutbox(stalled).then(()=>{setStalled([]);editor.setSaveState('saving');return flushOutbox(outboxApplied(activeSheet?.id))}).then(refreshStalled)}}
+      onDiscard={()=>{if(!confirm(`저장하지 못한 변경 ${stalled.length.toLocaleString()}건을 버립니다. 이 변경은 사라지고 서버에 있는 값이 남습니다.`))return;void discardOutbox(stalled).then(()=>{setStalled([]);editor.setSaveState('saved');window.dispatchEvent(new CustomEvent('kanpic:outbox-discarded'));return client.invalidateQueries({queryKey:['workbook',workbookId]})})}}/>
     <FormulaIssueNotice issues={editor.formulaIssues} dropped={editor.droppedCells} automations={editor.automationFailures} backup={editor.editBackup} onClose={()=>editor.clearFormulaIssues()}
       onRevert={async backup=>{
         // 행·열 삭제는 서버가 셀 단위로 되돌리지 못한다. 삭제 직전에 남겨 둔
