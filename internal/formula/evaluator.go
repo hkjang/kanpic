@@ -696,7 +696,7 @@ func (n functionNode) eval(cells map[string]any) (any, error) {
 		evaluateEngineering, evaluateMathExtra, evaluateDistribution, evaluateTestDistributions,
 		evaluateSecurities, evaluateCoupon, evaluateBond, evaluateByteText, evaluateWidthConversion,
 		evaluateRoman, evaluateInternationalWorkdays, evaluateEpoch, evaluateComplex,
-		evaluateKoreanIdentifiers,
+		evaluateKoreanIdentifiers, evaluateKoreanHolidays,
 	} {
 		if result, handled, err := group(name, values); handled {
 			return result, err

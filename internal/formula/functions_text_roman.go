@@ -187,7 +187,9 @@ func evaluateInternationalWorkdays(name string, values []any) (any, bool, error)
 	default:
 		return nil, false, nil
 	}
-	if len(values) < 2 || len(values) > 4 {
+	// 휴일은 넷째 인자부터 전부다. 평가기는 범위와 배열을 낱개 값으로 펼쳐
+	// 넘기므로, 인자 수를 넷으로 못 박으면 휴일 범위가 오는 순간 거절된다.
+	if len(values) < 2 {
 		return nil, true, argError(name)
 	}
 	start, ok := parseDate(values[0])
@@ -203,14 +205,16 @@ func evaluateInternationalWorkdays(name string, values []any) (any, bool, error)
 		return nil, true, err
 	}
 	holidays := map[string]struct{}{}
-	if len(values) == 4 {
-		holidayValues := []any{values[3]}
-		if array, arrayErr := toArray(values[3]); arrayErr == nil {
-			holidayValues = array.values
-		}
-		for _, value := range holidayValues {
-			if moment, dateOK := parseDate(value); dateOK {
-				holidays[moment.Format(dateLayout)] = struct{}{}
+	if len(values) >= 4 {
+		for _, argument := range values[3:] {
+			holidayValues := []any{argument}
+			if array, arrayErr := toArray(argument); arrayErr == nil {
+				holidayValues = array.values
+			}
+			for _, value := range holidayValues {
+				if moment, dateOK := parseDate(value); dateOK {
+					holidays[moment.Format(dateLayout)] = struct{}{}
+				}
 			}
 		}
 	}
