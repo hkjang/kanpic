@@ -817,7 +817,9 @@ func (p *queryParser) value() (any, error) {
 	if strings.HasPrefix(token, "'") {
 		return token[1:], nil
 	}
-	if number, err := strconv.ParseFloat(token, 64); err == nil {
+	// 질의문의 값도 셀 값과 같은 자로 읽는다. Go 의 리터럴 문법(1_000, Inf)은
+	// 스프레드시트의 숫자가 아니다.
+	if number, ok := numberFromText(token); ok {
 		return number, nil
 	}
 	switch strings.ToLower(token) {

@@ -409,7 +409,9 @@ func compileCriterion(value any) (criterionMatcher, error) {
 	}
 	operand = strings.TrimSpace(operand)
 	var expected any = operand
-	if number, parseErr := strconv.ParseFloat(operand, 64); parseErr == nil {
+	// 조건도 셀 값과 같은 자로 읽는다. ParseFloat 를 그대로 쓰면 "1_000" 이나
+	// "Inf" 같은 조건이 숫자가 되어, 그 글자가 적힌 칸을 하나도 세지 못한다.
+	if number, ok := numberFromText(operand); ok {
 		expected = number
 	} else if boolean, parseErr := strconv.ParseBool(operand); parseErr == nil {
 		expected = boolean
