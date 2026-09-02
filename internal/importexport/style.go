@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/xuri/excelize/v2"
+
+	"kanpic/internal/workbook"
 )
 
 var builtInNumberFormats = map[int]string{
@@ -94,11 +96,27 @@ func canonicalStyleFromXLSX(source *excelize.Style) json.RawMessage {
 	} else if format := builtInNumberFormats[source.NumFmt]; format != "" {
 		style["number_format"] = format
 	}
+	style = acceptedStyle(style)
 	if len(style) == 0 {
 		return nil
 	}
 	data, _ := json.Marshal(style)
 	return data
+}
+
+// acceptedStyle drops the properties this service would refuse from any other
+// caller. Importing more than the validator accepts does not fail the import —
+// it leaves cells whose style comes straight back on the next edit and turns a
+// single keystroke into a 400. The rule is not restated here; the server's own
+// validator is asked, one property at a time, so the two cannot drift apart.
+func acceptedStyle(style map[string]any) map[string]any {
+	for key, value := range style {
+		encoded, err := json.Marshal(map[string]any{key: value})
+		if err != nil || workbook.ValidateStylePatch(encoded) != nil {
+			delete(style, key)
+		}
+	}
+	return style
 }
 
 func xlsxStyle(raw json.RawMessage) *excelize.Style {
