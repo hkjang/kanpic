@@ -22,6 +22,8 @@ type EditorState = {
   /** 방금 저장한 편집이 실행시킨 자동화 중 실패한 것. 셀 변경 트리거는
    *  아무도 지켜보지 않으므로 편집자에게 그 자리에서 알려야 한다. */
   automationFailures:NonNullable<MutationResult['automation_failures']>
+  /** 방금 한 편집이 풀어 버린 병합. 붙여넣기 아래로 조용히 사라지지 않게 말한다. */
+  unmergedRanges:string[]
   /**
    * 되돌릴 수 없는 편집 직전에 서버가 남긴 자동 백업. 행·열 삭제는 실행
    * 취소로 되살릴 수 없어서, 이 버전으로 복원하는 것이 유일한 회수 경로다.
@@ -52,7 +54,7 @@ type EditorState = {
   setSaveState:(saveState:SaveState,conflicts?:number)=>void
   /** 방금 한 편집이 다른 사람 때문에 자리를 잃은 경우 그 좌표. */
   droppedCells:NonNullable<MutationResult['dropped_cells']>
-  reportEdit:(result:Pick<MutationResult,'formula_errors'|'dropped_cells'|'automation_failures'>)=>void
+  reportEdit:(result:Pick<MutationResult,'formula_errors'|'dropped_cells'|'automation_failures'|'unmerged_ranges'>)=>void
   reportRecoverableEdit:(backup:{versionId:string;summary:string}|undefined,errors?:MutationResult['formula_errors'])=>void
   clearFormulaIssues:()=>void
   recordOperation:(operationId:string)=>void
@@ -68,7 +70,7 @@ type EditorState = {
 const key=(row:number,column:number)=>`${row}:${column}`
 
 export const useEditorStore=create<EditorState>((set,get)=>({
-  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],droppedCells:[],automationFailures:[],editBackup:undefined,undoStack:[],redoStack:[],
+  activeRow:1,activeColumn:1,anchorRow:1,anchorColumn:1,editing:false,draft:'',zoom:1,cells:new Map(),saveState:'saved',conflicts:0,formulaIssues:[],droppedCells:[],automationFailures:[],unmergedRanges:[],editBackup:undefined,undoStack:[],redoStack:[],
   select:(activeRow,activeColumn,extend=false)=>set((state)=>({activeRow,activeColumn,anchorRow:extend?state.anchorRow:activeRow,anchorColumn:extend?state.anchorColumn:activeColumn,editing:false})),
   setEditing:(editing)=>set({editing}),
   setDraft:(draft)=>set({draft}),
@@ -81,9 +83,9 @@ export const useEditorStore=create<EditorState>((set,get)=>({
   setSaveState:(saveState,conflicts=0)=>set({saveState,conflicts}),
   // 오류가 없는 편집은 이전 안내를 지운다. 고친 뒤에도 경고가 남아 있으면
   // 무엇이 지금 문제인지 알 수 없다.
-  reportEdit:(result)=>set({formulaIssues:result.formula_errors?.length?result.formula_errors:[],droppedCells:result.dropped_cells?.length?result.dropped_cells:[],automationFailures:result.automation_failures?.length?result.automation_failures:[],editBackup:undefined}),
-  reportRecoverableEdit:(editBackup,errors)=>set({formulaIssues:errors&&errors.length>0?errors:[],droppedCells:[],automationFailures:[],editBackup}),
-  clearFormulaIssues:()=>set({formulaIssues:[],droppedCells:[],automationFailures:[],editBackup:undefined}),
+  reportEdit:(result)=>set({formulaIssues:result.formula_errors?.length?result.formula_errors:[],droppedCells:result.dropped_cells?.length?result.dropped_cells:[],automationFailures:result.automation_failures?.length?result.automation_failures:[],unmergedRanges:result.unmerged_ranges?.length?result.unmerged_ranges:[],editBackup:undefined}),
+  reportRecoverableEdit:(editBackup,errors)=>set({formulaIssues:errors&&errors.length>0?errors:[],droppedCells:[],automationFailures:[],unmergedRanges:[],editBackup}),
+  clearFormulaIssues:()=>set({formulaIssues:[],droppedCells:[],automationFailures:[],unmergedRanges:[],editBackup:undefined}),
   recordOperation:(operationId)=>{if(!operationId||get().undoStack.at(-1)===operationId)return;set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100),redoStack:[]}))},
   takeUndo:()=>{const stack=get().undoStack;if(stack.length===0)return;const operationId=stack[stack.length-1];set({undoStack:stack.slice(0,-1)});return operationId},
   restoreUndo:(operationId)=>set((state)=>({undoStack:[...state.undoStack,operationId].slice(-100)})),

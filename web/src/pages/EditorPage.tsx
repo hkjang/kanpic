@@ -1570,7 +1570,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     <StalledSaveNotice count={stalled.length}
       onRetry={()=>{void retryOutbox(stalled).then(()=>{setStalled([]);editor.setSaveState('saving');return flushOutbox(outboxApplied(activeSheet?.id))}).then(refreshStalled)}}
       onDiscard={()=>{if(!confirm(`저장하지 못한 변경 ${stalled.length.toLocaleString()}건을 버립니다. 이 변경은 사라지고 서버에 있는 값이 남습니다.`))return;void discardOutbox(stalled).then(()=>{setStalled([]);editor.setSaveState('saved');window.dispatchEvent(new CustomEvent('kanpic:outbox-discarded'));return client.invalidateQueries({queryKey:['workbook',workbookId]})})}}/>
-    <FormulaIssueNotice issues={editor.formulaIssues} dropped={editor.droppedCells} automations={editor.automationFailures} backup={editor.editBackup} onClose={()=>editor.clearFormulaIssues()}
+    <FormulaIssueNotice issues={editor.formulaIssues} dropped={editor.droppedCells} automations={editor.automationFailures} unmerged={editor.unmergedRanges} backup={editor.editBackup} onClose={()=>editor.clearFormulaIssues()}
       onRevert={async backup=>{
         // 행·열 삭제는 서버가 셀 단위로 되돌리지 못한다. 삭제 직전에 남겨 둔
         // 자동 백업으로 복원하는 것이 유일한 회수 경로다.

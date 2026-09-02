@@ -259,10 +259,14 @@ type MutationResult struct {
 	Duplicate          bool                  `json:"duplicate"`
 	Conflicts          []CellConflict        `json:"conflicts"`
 	BackupVersionID    string                `json:"backup_version_id,omitempty"`
-	StructuralAxis     string                `json:"structural_axis,omitempty"`
-	StructuralAction   string                `json:"structural_action,omitempty"`
-	StructuralIndex    int                   `json:"structural_index,omitempty"`
-	StructuralCount    int                   `json:"structural_count,omitempty"`
+	// UnmergedRanges names the merges this write dissolved because it wrote
+	// into one of their cells. The grid says so instead of the merge quietly
+	// vanishing under a paste.
+	UnmergedRanges   []string `json:"unmerged_ranges,omitempty"`
+	StructuralAxis   string   `json:"structural_axis,omitempty"`
+	StructuralAction string   `json:"structural_action,omitempty"`
+	StructuralIndex  int      `json:"structural_index,omitempty"`
+	StructuralCount  int      `json:"structural_count,omitempty"`
 	// StructuralDestination is where a moved band landed. It is needed to
 	// replay the move onto a write that was addressed before it happened.
 	StructuralDestination int `json:"structural_destination,omitempty"`

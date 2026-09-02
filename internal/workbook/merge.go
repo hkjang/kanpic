@@ -116,3 +116,86 @@ func setMergeMetadata(current json.RawMessage, metadata MergeMetadata, merge boo
 	}
 	return json.Marshal(style)
 }
+
+// Address is the range in A1 notation, e.g. "A1:B2".
+func (m MergeMetadata) Address() string {
+	return cellrange.Address(m.StartRow, m.StartColumn) + ":" + cellrange.Address(m.EndRow, m.EndColumn)
+}
+
+// brokenMerges finds the merges a write is about to break: a cell that belonged
+// to a merge is being given a style that no longer carries that merge. Every
+// covered cell stores the full range, so the written cell alone names it.
+func brokenMerges(effective []CellInput, current func(row, column int) (Cell, bool)) []MergeMetadata {
+	seen := make(map[MergeMetadata]struct{})
+	ranges := make([]MergeMetadata, 0)
+	for _, input := range effective {
+		cell, ok := current(input.Row, input.Column)
+		if !ok {
+			continue
+		}
+		stored, existed, err := CellMerge(cell)
+		if err != nil || !existed {
+			continue
+		}
+		next, keeps, err := CellMerge(Cell{Row: input.Row, Column: input.Column, Style: input.Style})
+		if err == nil && keeps && next == stored {
+			continue
+		}
+		if _, done := seen[stored]; done {
+			continue
+		}
+		seen[stored] = struct{}{}
+		ranges = append(ranges, stored)
+	}
+	return ranges
+}
+
+// dissolveMerges makes a write that touches a merge dissolve the whole merge
+// in the same operation. Leaving the other cells as they were used to produce
+// a merge that some cells remembered and others did not: a value pasted into a
+// covered cell was drawn over and invisible, and a fill that took the anchor
+// left the rest pointing at a merge that no longer existed, which the next
+// edit refused as invalid metadata. Google Sheets dissolves the merge; so do
+// we, and the result names what was dissolved so the grid can say so.
+//
+// The written inputs inside a dissolved range lose the key too, and the cells
+// the write did not mention come back as extra inputs that keep their value,
+// formula and note. Undo restores the merge because both are in the operation.
+func dissolveMerges(sheetID string, effective []CellInput, ranges []MergeMetadata, current func(row, column int) (Cell, bool)) ([]CellInput, []CellInput, error) {
+	if len(ranges) == 0 {
+		return effective, nil, nil
+	}
+	written := make(map[cellKey]int, len(effective))
+	for index, input := range effective {
+		written[cellKey{input.Row, input.Column}] = index
+	}
+	extra := make([]CellInput, 0)
+	for _, merged := range ranges {
+		for row := merged.StartRow; row <= merged.EndRow; row++ {
+			for column := merged.StartColumn; column <= merged.EndColumn; column++ {
+				if index, ok := written[cellKey{row, column}]; ok {
+					style, err := setMergeMetadata(effective[index].Style, MergeMetadata{}, false)
+					if err != nil {
+						return nil, nil, err
+					}
+					effective[index].Style = style
+					continue
+				}
+				cell, exists := current(row, column)
+				if !exists {
+					continue
+				}
+				stored, existed, err := CellMerge(cell)
+				if err != nil || !existed || stored != merged {
+					continue
+				}
+				style, err := setMergeMetadata(cell.Style, MergeMetadata{}, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				extra = append(extra, CellInput{SheetID: sheetID, Row: row, Column: column, Value: cloneJSON(cell.Value), Formula: cell.Formula, Style: style, Note: cell.Note, SpillSource: cell.SpillSource})
+			}
+		}
+	}
+	return effective, extra, nil
+}

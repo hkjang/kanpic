@@ -49,6 +49,7 @@ type operationDocument struct {
 	StructuralAction      string                `json:"structural_action,omitempty"`
 	StructuralIndex       int                   `json:"structural_index,omitempty"`
 	StructuralCount       int                   `json:"structural_count,omitempty"`
+	UnmergedRanges        []string              `json:"unmerged_ranges,omitempty"`
 	StructuralDestination int                   `json:"structural_destination,omitempty"`
 }
 
@@ -1714,6 +1715,74 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 		result := MutationResult{WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: currentVersion, Conflicts: conflicts, CreatedAt: r.now()}
 		return result, tx.Commit(ctx)
 	}
+	// A write into a merged cell dissolves the whole merge, in this operation,
+	// so no cell is left remembering a merge the others have lost. The other
+	// cells of the merge may sit in blocks this write did not load; they are
+	// locked and read here, because writing a block that was not read would
+	// replace everything else in it.
+	var unmerged []string
+	// An explicit merge or unmerge already writes every cell of its range
+	// consistently, and must not report itself as a merge it broke.
+	if !formatMutation && mutation.OperationType != "range.merge" && mutation.OperationType != "range.unmerge" {
+		currentCell := func(row, column int) (Cell, bool) {
+			cell, ok := existing[mutation.SheetID][cellKey{row, column}]
+			return cell, ok
+		}
+		dissolved := brokenMerges(effective, currentCell)
+		if len(dissolved) > 0 {
+			missing := make([][3]any, 0)
+			for _, merged := range dissolved {
+				for blockRow := (merged.StartRow - 1) / cellBlockSize; blockRow <= (merged.EndRow-1)/cellBlockSize; blockRow++ {
+					for blockColumn := (merged.StartColumn - 1) / cellBlockSize; blockColumn <= (merged.EndColumn-1)/cellBlockSize; blockColumn++ {
+						key := blockKey{sheetID: mutation.SheetID, row: blockRow, column: blockColumn}
+						if _, loaded := payloads[key]; loaded {
+							continue
+						}
+						payloads[key] = make(map[string]Cell)
+						missing = append(missing, [3]any{key.sheetID, key.row, key.column})
+					}
+				}
+			}
+			if len(missing) > 0 {
+				moreRows, moreErr := tx.Query(ctx, `SELECT b.sheet_id::text,b.block_row,b.block_column,b.payload FROM cell_blocks b
+					JOIN unnest($1::uuid[],$2::int[],$3::int[]) AS t(sheet_id,block_row,block_column) ON t.sheet_id=b.sheet_id AND t.block_row=b.block_row AND t.block_column=b.block_column
+					FOR UPDATE OF b`, columnOf(missing, 0), columnOf(missing, 1), columnOf(missing, 2))
+				if moreErr != nil {
+					return MutationResult{}, moreErr
+				}
+				for moreRows.Next() {
+					var block blockKey
+					var data []byte
+					if err := moreRows.Scan(&block.sheetID, &block.row, &block.column, &data); err != nil {
+						moreRows.Close()
+						return MutationResult{}, err
+					}
+					payload := make(map[string]Cell)
+					if err := json.Unmarshal(data, &payload); err != nil {
+						moreRows.Close()
+						return MutationResult{}, err
+					}
+					payloads[block] = payload
+					for _, cell := range payload {
+						existing[block.sheetID][cellKey{cell.Row, cell.Column}] = cell
+					}
+				}
+				if err := moreRows.Err(); err != nil {
+					moreRows.Close()
+					return MutationResult{}, err
+				}
+				moreRows.Close()
+			}
+			adjusted, extra, dissolveErr := dissolveMerges(mutation.SheetID, effective, dissolved, currentCell)
+			if dissolveErr != nil {
+				return MutationResult{}, dissolveErr
+			}
+			effective = append(adjusted, extra...)
+			for _, item := range dissolved {
+				unmerged = append(unmerged, item.Address())
+			}
+		}
+	}
 	// Protection is checked before anything is applied: a paste that touches a
 	// protected block is refused whole rather than applied in part.
 	protections, err := listProtectedRangesTx(ctx, tx, mutation.SheetID)
@@ -1815,7 +1884,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if _, err := tx.Exec(ctx, `UPDATE workbooks SET version=$2,updated_at=$3 WHERE id=$1`, workbookID, serverVersion, now); err != nil {
 		return MutationResult{}, err
 	}
-	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: workbookID, SheetID: mutation.SheetID, BaseVersion: mutation.BaseVersion, ServerVersion: serverVersion, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, UnmergedRanges: unmerged, CreatedAt: now}
 	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
 		cell, ok := after[operationCoordinateKey(mutation.SheetID, row, column)]
 		if !ok {
@@ -1828,7 +1897,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 	if operationType == "" {
 		operationType = "cells.batch"
 	}
-	document, _ := json.Marshal(operationDocument{Before: before, After: after, SubmittedCells: submittedCoordinates(effective), Conflicts: conflicts, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, UndoOfOperationID: mutation.UndoOfOperationID})
+	document, _ := json.Marshal(operationDocument{Before: before, After: after, SubmittedCells: submittedCoordinates(effective), Conflicts: conflicts, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, UnmergedRanges: unmerged, UndoOfOperationID: mutation.UndoOfOperationID})
 	_, err = tx.Exec(ctx, `INSERT INTO cell_operations(operation_id,idempotency_key,workbook_id,sheet_id,actor_id,client_id,base_version,server_version,operation_type,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, result.OperationID, mutation.IdempotencyKey, workbookID, mutation.SheetID, mutation.ActorID, mutation.ClientID, mutation.BaseVersion, serverVersion, operationType, document, now)
 	if err != nil {
 		return MutationResult{}, mapPostgresError(err)
@@ -2601,6 +2670,9 @@ func (r *PostgresRepository) findDuplicate(ctx context.Context, tx pgx.Tx, workb
 	result.StructuralIndex = document.StructuralIndex
 	result.StructuralCount = document.StructuralCount
 	result.StructuralDestination = document.StructuralDestination
+	// A replayed write must say what the first one said, or the grid that
+	// only saw the replay never learns the merge is gone.
+	result.UnmergedRanges = document.UnmergedRanges
 	return result, true, nil
 }
 

@@ -1176,6 +1176,26 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	var formulaErrors []CellFormulaError
 	var validationWarnings []ValidationViolation
 	var grownTables []SheetTable
+	// A write into a merged cell dissolves the whole merge, in this operation,
+	// so no cell is left remembering a merge the others have lost.
+	var unmerged []string
+	// An explicit merge or unmerge already writes every cell of its range
+	// consistently, and must not report itself as a merge it broke.
+	if !formatMutation && mutation.OperationType != "range.merge" && mutation.OperationType != "range.unmerge" {
+		currentCell := func(row, column int) (Cell, bool) {
+			cell, ok := state.cells[mutation.SheetID][cellKey{row, column}]
+			return cell, ok
+		}
+		dissolved := brokenMerges(effective, currentCell)
+		adjusted, extra, dissolveErr := dissolveMerges(mutation.SheetID, effective, dissolved, currentCell)
+		if dissolveErr != nil {
+			return MutationResult{}, dissolveErr
+		}
+		effective = append(adjusted, extra...)
+		for _, item := range dissolved {
+			unmerged = append(unmerged, item.Address())
+		}
+	}
 	// Protection is checked before anything is applied: a paste that touches a
 	// protected block is refused whole rather than applied in part.
 	if blocked, _ := CheckProtectedRanges(r.protectionsForSheetLocked(mutation.SheetID), mutation.ActorID, state.workbook.OwnerID, effective); len(blocked) > 0 {
@@ -1223,7 +1243,7 @@ func (r *MemoryRepository) ApplyCells(_ context.Context, mutation CellMutation) 
 	}
 	baseVersion := mutation.BaseVersion
 	r.bump(state)
-	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, CreatedAt: now}
+	result := MutationResult{OperationID: identity.New(), WorkbookID: state.workbook.ID, SheetID: mutation.SheetID, BaseVersion: baseVersion, ServerVersion: state.workbook.Version, AppliedCells: len(effective), RecalculatedCells: recalculated, FormulaErrors: formulaErrors, ValidationWarnings: validationWarnings, RebasedCells: movedCells, DroppedCells: droppedCells, UnmergedRanges: unmerged, CreatedAt: now}
 	conflicts = finalizeCellConflicts(conflicts, mutation, result, func(row, column int) (Cell, bool) {
 		cell, ok := after[scopedCellKey{sheetID: mutation.SheetID, cellKey: cellKey{row: row, column: column}}]
 		return cell, ok
