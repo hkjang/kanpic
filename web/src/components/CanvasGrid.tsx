@@ -21,6 +21,7 @@ import { clipboardHtml } from '../lib/clipboardHtmlOut'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
 import { enqueue, flushOutbox } from '../lib/outbox'
+import { forSheet } from '../lib/outboxScope'
 import { axisIndexAtViewport,axisViewportPosition,createDimensionAxis,type DimensionAxis,rowHeaderWidth,presenceLabelTop} from '../lib/dimensionAxis'
 import { formatCellValue,wrapText,type CellBorders,type BorderSide } from '../lib/cellFormat'
 import { describeSparkline,drawSparkline,parseSparkline } from '../lib/sparkline'
@@ -433,7 +434,7 @@ export function CanvasGrid({sheetId,layout=DEFAULT_LAYOUT,version,onVersion,hidd
     }
   },[size,scroll,rowAxis,columnAxis,frozenRows,frozenColumns,cells,conditionalCells,activeRow,activeColumn,activeCell,zoom,visibleRange,collaborators,userLabels,sheetId,selection.startRow,selection.startColumn,selection.endRow,selection.endColumn,fillPreview,validations,showFormulas,showGridlines,resizePreview,movePreview])
 
-  const handleApplied=useCallback((_operation:unknown,result:unknown)=>{const applied=result as MutationResult;onVersion(applied.server_version);reportEdit(applied);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)},[onVersion,recordOperation,setSaveState,reportEdit])
+  const handleApplied=useMemo(()=>forSheet<MutationResult>(sheetId,applied=>{onVersion(applied.server_version);reportEdit(applied);if(!applied.duplicate&&applied.applied_cells>0)recordOperation(applied.operation_id);setSaveState(applied.conflicts?.length?'conflict':'saved',applied.conflicts?.length||0)}),[sheetId,onVersion,recordOperation,setSaveState,reportEdit])
 
   const readOnlyNotice=useCallback(()=>{setSaveState('error');alert('보기 전용 권한입니다. 소유자에게 편집 권한을 요청하세요.')},[setSaveState])
   const queueCells=useCallback(async(inputs:PastedCell[],endpoint:'batch'|'paste'|'fill')=>{
