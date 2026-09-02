@@ -1622,3 +1622,31 @@ func TestProperCapitalisesAfterEveryNonLetter(t *testing.T) {
 		}
 	}
 }
+
+// 자릿수가 음수면 소수점 왼쪽에서 반올림한다. ROUND(1234.567,-2) 가
+// 1200 인 것과 같은 규칙이며, FIXED·DOLLAR 도 이를 따라야 한다.
+func TestFixedAndDollarRoundLeftOfThePoint(t *testing.T) {
+	t.Parallel()
+	engine := New()
+	for _, item := range []struct {
+		expression string
+		expected   string
+	}{
+		{`=FIXED(1234.567,-2)`, "1,200"},
+		{`=FIXED(1234.567,-2,TRUE)`, "1200"},
+		{`=FIXED(1250,-2)`, "1,300"},
+		{`=FIXED(-1234.567,-2)`, "-1,200"},
+		{`=FIXED(1234.567,-10)`, "0"},
+		{`=DOLLAR(1234.567,-2)`, "₩1,200"},
+		{`=FIXED(1234.567,2)`, "1,234.57"},
+	} {
+		result := engine.Evaluate(item.expression, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s -> %s %s", item.expression, result.Error.Code, result.Error.Message)
+			continue
+		}
+		if actual := display(result.Value); actual != item.expected {
+			t.Errorf("%s=%s, 기대=%s", item.expression, actual, item.expected)
+		}
+	}
+}

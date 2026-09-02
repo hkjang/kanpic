@@ -490,14 +490,18 @@ func renderScientific(number float64, mantissaDecimals, exponentDigits int, sign
 }
 
 func formatNumber(number float64, decimals int, grouped bool) string {
-	if decimals < 0 {
-		decimals = 0
-	}
 	// 화면에 보이는 자릿수도 사람이 적은 십진수를 따라야 한다. 그냥
 	// FormatFloat 에 맡기면 이진 실수를 그대로 반올림하므로 1.005 가
 	// "1.00" 이 된다. 브라우저의 Intl.NumberFormat 은 "1.01" 을 내므로,
 	// 그대로 두면 화면과 TEXT 의 답이 서로 달라진다.
-	text := strconv.FormatFloat(decimalRound(number, decimals, roundHalfAway), 'f', decimals, 64)
+	rounded := decimalRound(number, decimals, roundHalfAway)
+	// 자릿수가 음수면 소수점 왼쪽에서 반올림한다 — ROUND 와 같은 규칙이다.
+	// 예전에는 여기서 0 으로 깎아 버려 FIXED(1234.567,-2) 가 "1,200" 이
+	// 아니라 "1,235" 였다. 소수점 뒤에 적을 자리는 없으므로 0 으로 적는다.
+	if decimals < 0 {
+		decimals = 0
+	}
+	text := strconv.FormatFloat(rounded, 'f', decimals, 64)
 	negative := strings.HasPrefix(text, "-")
 	text = strings.TrimPrefix(text, "-")
 	whole, fraction := text, ""
