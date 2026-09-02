@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // FunctionDoc describes one supported function so the product can list what the
@@ -785,6 +786,13 @@ func roundingArguments(name string, values []any) (float64, float64, error) {
 	return number, digits, nil
 }
 
+// properCase 는 글자가 아닌 것 뒤에 오는 글자를 모두 큰 글자로 적는다.
+//
+// 예전에는 빈칸·탭·붙임표·밑줄 뒤만 낱말의 처음으로 보았다. 그래서
+// PROPER("o'neil") 이 "O'neil", PROPER("76budget") 이 "76budget" 이었다.
+// 엑셀은 따옴표든 숫자든 글자가 아니면 그 뒤를 낱말의 처음으로 본다:
+// "O'Neil", "76Budget". 사람이 이름과 주소를 다듬을 때 쓰는 함수라,
+// 답이 다르면 엑셀에서 옮겨 온 표가 조용히 어긋난다.
 func properCase(text string) string {
 	var builder strings.Builder
 	start := true
@@ -794,7 +802,7 @@ func properCase(text string) string {
 		} else {
 			builder.WriteString(strings.ToLower(string(letter)))
 		}
-		start = letter == ' ' || letter == '\t' || letter == '-' || letter == '_'
+		start = !unicode.IsLetter(letter)
 	}
 	return builder.String()
 }

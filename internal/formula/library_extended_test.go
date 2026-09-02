@@ -1594,3 +1594,59 @@ func TestExclusivePercentilesDifferFromInclusiveOnes(t *testing.T) {
 		t.Errorf("없는 값의 등수=%#v", result)
 	}
 }
+
+// 엑셀은 글자가 아닌 것 뒤를 낱말의 처음으로 본다. 따옴표와 숫자도
+// 글자가 아니므로 그 뒤가 큰 글자가 된다. 이름·주소를 다듬으려고 쓰는
+// 함수라 답이 다르면 옮겨 온 표가 조용히 어긋난다.
+func TestProperCapitalisesAfterEveryNonLetter(t *testing.T) {
+	t.Parallel()
+	engine := New()
+	for _, item := range []struct {
+		expression string
+		expected   string
+	}{
+		{`=PROPER("hello kanpic")`, "Hello Kanpic"},
+		{`=PROPER("o'neil")`, "O'Neil"},
+		{`=PROPER("76budGet")`, "76Budget"},
+		{`=PROPER("mcdonald-smith")`, "Mcdonald-Smith"},
+		{`=PROPER("a.b c_d")`, "A.B C_D"},
+		{`=PROPER("서울시 gangnam-gu")`, "서울시 Gangnam-Gu"},
+	} {
+		result := engine.Evaluate(item.expression, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s -> %s %s", item.expression, result.Error.Code, result.Error.Message)
+			continue
+		}
+		if actual := display(result.Value); actual != item.expected {
+			t.Errorf("%s=%s, 기대=%s", item.expression, actual, item.expected)
+		}
+	}
+}
+
+// 자릿수가 음수면 소수점 왼쪽에서 반올림한다. ROUND(1234.567,-2) 가
+// 1200 인 것과 같은 규칙이며, FIXED·DOLLAR 도 이를 따라야 한다.
+func TestFixedAndDollarRoundLeftOfThePoint(t *testing.T) {
+	t.Parallel()
+	engine := New()
+	for _, item := range []struct {
+		expression string
+		expected   string
+	}{
+		{`=FIXED(1234.567,-2)`, "1,200"},
+		{`=FIXED(1234.567,-2,TRUE)`, "1200"},
+		{`=FIXED(1250,-2)`, "1,300"},
+		{`=FIXED(-1234.567,-2)`, "-1,200"},
+		{`=FIXED(1234.567,-10)`, "0"},
+		{`=DOLLAR(1234.567,-2)`, "₩1,200"},
+		{`=FIXED(1234.567,2)`, "1,234.57"},
+	} {
+		result := engine.Evaluate(item.expression, map[string]any{})
+		if result.Error != nil {
+			t.Errorf("%s -> %s %s", item.expression, result.Error.Code, result.Error.Message)
+			continue
+		}
+		if actual := display(result.Value); actual != item.expected {
+			t.Errorf("%s=%s, 기대=%s", item.expression, actual, item.expected)
+		}
+	}
+}
