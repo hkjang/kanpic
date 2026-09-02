@@ -10,3 +10,4 @@ web/vite.config.d.ts
 *.log
 .DS_Store
 output/
+*.test
