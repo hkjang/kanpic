@@ -19,6 +19,9 @@ type Scope struct {
 	// Imports holds the cross-workbook blocks IMPORTRANGE asked for, fetched
 	// and permission-checked by the workbook layer before evaluation starts.
 	Imports map[string]ImportedRange
+	// External holds the WEBSERVICE and IMPORTDATA responses, fetched under
+	// the administrator's policy before evaluation starts.
+	External map[string]ExternalResult
 	// NamedFunctions 는 워크북에 저장해 둔, 이름으로 부르는 수식이다.
 	NamedFunctions map[string]NamedFunction
 	// Tables 는 이름을 가진 표다. 매출표[금액] 처럼 열 이름으로 가리키면

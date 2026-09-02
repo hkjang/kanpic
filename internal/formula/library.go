@@ -454,6 +454,8 @@ var catalog = []FunctionDoc{
 	{"MASKRRN", "텍스트", "MASKRRN(값, [남길 자리])", "주민등록번호 뒷자리를 가립니다. 기본은 한 자리만 남깁니다."},
 	{"KOREANHOLIDAYS", "날짜", "KOREANHOLIDAYS(연도)", "그 해 한국 공휴일을 대체공휴일까지 날짜 배열로 돌려줍니다. NETWORKDAYS 나 WORKDAY 의 휴일 인자에 그대로 씁니다. 2020~2030년."},
 	{"KOREANHOLIDAYNAME", "날짜", "KOREANHOLIDAYNAME(날짜)", "그 날이 한국 공휴일이면 이름을, 아니면 빈 글자를 돌려줍니다."},
+	{"WEBSERVICE", "웹", "WEBSERVICE(\"https://주소\")", "허용된 주소에서 본문을 글자로 가져옵니다. 관리자가 외부 호출을 켜고 허용 호스트에 적은 곳만 됩니다."},
+	{"IMPORTDATA", "웹", "IMPORTDATA(\"https://주소\")", "허용된 주소의 CSV 를 표로 가져옵니다. 관리자가 외부 호출을 켜고 허용 호스트에 적은 곳만 됩니다."},
 	{"SPARKLINE", "배열", "SPARKLINE(범위, [옵션])", "셀 안에 선·막대·승패 미니 차트를 그립니다."},
 }
 

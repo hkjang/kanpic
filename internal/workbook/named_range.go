@@ -339,7 +339,7 @@ func (r *MemoryRepository) recalculateAllLocked(state *workbookState) error {
 		currentSheetID = sheetID
 		break
 	}
-	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(r.sheetTablesForWorkbookLocked(state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, state.cells, nil)})
+	expanded, _, _, err := recalculateCellInputs(state.sheets, state.cells, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(r.namedRangesForWorkbookLocked(state.workbook.ID)), Functions: r.namedFunctionDefinitionsLocked(state.workbook.ID), Tables: formulaTables(r.sheetTablesForWorkbookLocked(state.workbook.ID)), Imports: r.importsForLocked(state.workbook.ID, state.cells, nil), External: r.externalForLocked(state.cells, nil)})
 	if err != nil {
 		return err
 	}

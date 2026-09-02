@@ -24,8 +24,9 @@ import (
 const cellBlockSize = 64
 
 type PostgresRepository struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	external ExternalFetcher
+	pool     *pgxpool.Pool
+	now      func() time.Time
 }
 
 type sheetProperties struct {
@@ -1461,7 +1462,7 @@ func (r *PostgresRepository) DeleteSheet(ctx context.Context, sheetID, actorID s
 	if err != nil {
 		return SheetDeletion{}, err
 	}
-	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, nil)})
+	expanded, _, _, err := recalculateCellInputs(sheets, existing, currentSheetID, nil, true, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, nil), External: r.externalFor(ctx, existing, nil)})
 	if err != nil {
 		return SheetDeletion{}, err
 	}
@@ -1822,7 +1823,7 @@ func (r *PostgresRepository) ApplyCells(ctx context.Context, mutation CellMutati
 			}
 		}
 		sheetTables = mergeSheetTables(sheetTables, grown)
-		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, effective)})
+		expanded, recalculated, formulaErrors, err = recalculateCellInputs(sheets, existing, mutation.SheetID, effective, false, nameContext{Ranges: formulaNamedRanges(namedRanges), Functions: NamedFunctionDefinitions(namedFunctions), Tables: formulaTables(sheetTables), Imports: r.importsFor(ctx, workbookID, existing, effective), External: r.externalFor(ctx, existing, effective)})
 		if err != nil {
 			return MutationResult{}, err
 		}

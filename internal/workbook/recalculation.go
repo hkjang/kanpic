@@ -60,6 +60,7 @@ type nameContext struct {
 	Ranges    map[string]formula.NamedRange
 	Functions map[string]formula.NamedFunction
 	Imports   map[string]formula.ImportedRange
+	External  map[string]formula.ExternalResult
 	// Tables 는 이름을 가진 표다. 매출표[금액] 이 가리킬 곳이다.
 	Tables map[string]formula.Table
 }
@@ -148,7 +149,7 @@ func recalculateCellInputs(sheets map[string]Sheet, existing map[string]map[cell
 		sheetNames[sheet.Name] = sheetID
 		sheetIDs[strings.ToUpper(sheetID)] = sheetID
 	}
-	evaluator := formula.NewScopedWithNames("", sheetNames, names.Ranges).WithImports(names.Imports)
+	evaluator := formula.NewScopedWithNames("", sheetNames, names.Ranges).WithImports(names.Imports).WithExternal(names.External)
 	evaluator.SetNamedFunctions(names.Functions)
 	evaluator.SetTables(tablesWithColumns(names.Tables, prospective))
 	forcedSpills := make(map[string]*formula.Error)

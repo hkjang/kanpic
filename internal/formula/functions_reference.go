@@ -65,6 +65,9 @@ func (p *parser) referenceFunction(name string, arguments []node) (node, bool, e
 	case "IMPORTRANGE":
 		result, err := p.evaluateImportRange(arguments)
 		return result, true, err
+	case "WEBSERVICE", "IMPORTDATA":
+		result, err := p.evaluateExternal(name, arguments)
+		return result, true, err
 	case "INDIRECT":
 		if len(arguments) < 1 || len(arguments) > 2 {
 			return nil, true, argError(name)

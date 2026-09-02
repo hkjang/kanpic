@@ -17,6 +17,7 @@ import (
 	"kanpic/internal/auth"
 	"kanpic/internal/automation"
 	"kanpic/internal/database"
+	"kanpic/internal/external"
 	"kanpic/internal/httpapi"
 	"kanpic/internal/mail"
 	"kanpic/internal/observability"
@@ -65,6 +66,7 @@ func main() {
 	authService := auth.New(pool, settingRepository, bootstrap)
 	aiService := ai.NewService(pool, settingRepository, repository, logger)
 	automationService := automation.NewService(pool, settingRepository, repository, logger)
+	repository.SetExternalFetcher(external.New(settingRepository, logger))
 	mailService := mail.NewService(pool, settingRepository, httpapi.NewMailDirectory(repository), logger)
 	presentationService := presentation.NewService(settingRepository, repository, presentation.NewPostgresStore(pool), map[string]presentation.Factory{"ptium": ptium.Factory})
 	handler := httpapi.NewPlatformWithServices(repository, settingRepository, keyRepository, authService, logStore, aiService, automationService, logger, httpapi.WithMail(mailService), httpapi.WithPresentations(presentationService))
