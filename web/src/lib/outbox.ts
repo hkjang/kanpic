@@ -3,6 +3,9 @@ import { blocked, isBlocked, sendable } from './outboxQueue'
 export type OutboxOperation = {
   id: string
   sheetId: string
+  /** 어느 워크북의 편집인지. 목록 화면은 시트만으로는 워크북을 찾을 수 없다.
+   *  이 칸이 생기기 전에 쌓인 작업에는 없을 수 있다. */
+  workbookId?: string
   endpoint?: 'batch'|'paste'|'fill'|'format'|'note'|'merge'|'unmerge'|'sort'
   body: Record<string, unknown>
   attempts: number

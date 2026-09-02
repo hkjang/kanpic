@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
-import { Building2, ChevronRight, Clock3, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users, Grid3X3 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Building2, ChevronRight, Clock3, CloudOff, Copy, FilePlus2, FileUp, Grid2X2, Link as LinkIcon, Lock, MoreHorizontal, Pencil, Plus, RotateCcw, Share2, SquareArrowOutUpRight, Star, Trash, Trash2, UploadCloud, Users, Grid3X3 } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { QuickSwitcher, type QuickItem } from '../components/QuickSwitcher'
 import './HomePage.css'
@@ -8,6 +8,7 @@ import './HomePage.css'
 /** 한 번에 받아 오는 워크북 수. 화면을 채우고도 남을 만큼이면 된다. */
 const WORKBOOK_PAGE=60
 import { api, newIdempotencyKey } from '../lib/api'
+import { blockedOutbox, discardOutbox, flushOutbox, type OutboxOperation } from '../lib/outbox'
 import type { BuildInfo, Session, ShareRole, Workbook } from '../types'
 import { ShareDialog } from '../components/ShareDialog'
 import { useUserDirectory, userLabel, userTooltip } from '../state/directory'
@@ -120,6 +121,47 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   const visibleWorkbooks=workbooks.data?.items??[]
 
   /**
+   * 저장 큐를 비우는 일은 편집기 화면에서만 돌았다. 그래서 다시 열지 않는 워크북에
+   * 갇힌 편집은 영영 나가지 못했다. 목록 화면에서도 비워 준다. 여기까지 와서도
+   * 나가지 못한 것만 사람에게 보인다.
+   */
+  const [stranded,setStranded]=useState<OutboxOperation[]>([])
+  useEffect(()=>{
+    let alive=true
+    const sweep=async()=>{
+      const sent=await flushOutbox()
+      if(!alive)return
+      if(sent>0)void client.invalidateQueries({queryKey:['workbooks']})
+      setStranded(await blockedOutbox())
+    }
+    void sweep()
+    const timer=window.setInterval(()=>void sweep(),5000)
+    return()=>{alive=false;window.clearInterval(timer)}
+  },[client])
+  const strandedGroups=useMemo(()=>{
+    const counts=new Map<string,number>()
+    for(const operation of stranded)counts.set(operation.workbookId??'',(counts.get(operation.workbookId??'')??0)+1)
+    return[...counts.entries()].map(([workbookId,count])=>({workbookId,count}))
+  },[stranded])
+  /**
+   * 편집기 화면은 서버가 거절한 편집을 alert 로 알렸다. 목록 화면에서 큐를 비우기
+   * 시작했으니 여기서도 말해야 한다. 권한이 사라진 워크북의 편집이 조용히 사라지면
+   * 사람은 저장된 줄 안다.
+   */
+  const [rejected,setRejected]=useState('')
+  useEffect(()=>{
+    const notice=(event:Event)=>setRejected((event as CustomEvent<{message?:string}>).detail?.message??'서버가 저장을 거절했습니다.')
+    window.addEventListener('kanpic:outbox-rejected',notice)
+    return()=>window.removeEventListener('kanpic:outbox-rejected',notice)
+  },[])
+  const discardStranded=async(workbookId:string)=>{
+    const group=stranded.filter(operation=>(operation.workbookId??'')===workbookId)
+    if(!confirm(`저장하지 못한 편집 ${group.length.toLocaleString()}건을 버립니다. 이 편집은 사라지고 서버에 있는 값이 남습니다.`))return
+    await discardOutbox(group)
+    setStranded(await blockedOutbox())
+  }
+
+  /**
    * 빠른 이동은 편집기에만 있었다. 목록 화면에서 Ctrl/⌘+K 를 누르면 아무
    * 일도 일어나지 않아, 단축키가 고장 난 것처럼 보였다.
    *
@@ -159,6 +201,27 @@ export function HomePage({build,session}:{build?:BuildInfo;session?:Session}) {
   ]
 
   return <div className="page-shell"><AppHeader build={build} session={session}/><main className="home-content">
+    {rejected&&<section className="stranded-edits" role="alert">
+      <CloudOff/>
+      <div><strong>서버가 저장을 거절했습니다</strong><small>{rejected}</small></div>
+      <div className="stranded-actions"><span><button className="link-button" onClick={()=>setRejected('')}>확인</button></span></div>
+    </section>}
+    {strandedGroups.length>0&&<section className="stranded-edits" role="alert">
+      <CloudOff/>
+      <div>
+        <strong>서버에 닿지 못한 편집이 {stranded.length.toLocaleString()}건 남아 있습니다</strong>
+        <small>여러 번 다시 보냈지만 서버가 받지 않았습니다. 워크북을 열어 다시 시도하거나, 여기서 버릴 수 있습니다.</small>
+      </div>
+      <div className="stranded-actions">{strandedGroups.map(group=>{
+        const title=visibleWorkbooks.find(workbook=>workbook.id===group.workbookId)?.title
+        return <span key={group.workbookId||'unknown'}>
+          {group.workbookId
+            ?<a href={`/workbooks/${group.workbookId}`}>{title??'워크북'} {group.count.toLocaleString()}건 열기</a>
+            :<em>워크북을 알 수 없는 편집 {group.count.toLocaleString()}건</em>}
+          <button className="link-button" onClick={()=>void discardStranded(group.workbookId)}>버리기</button>
+        </span>
+      })}</div>
+    </section>}
     <section className="home-title"><div><span className="eyebrow">WORKSPACE</span><h1>좋은 아침이에요.</h1><p>오늘도 데이터에서 더 나은 답을 만들어 보세요.</p></div><div className="home-title-actions"><input ref={inputRef} type="file" hidden accept=".csv,.tsv,.xlsx" onChange={event=>chooseImport(event.target.files?.[0])}/><button className="secondary" onClick={()=>inputRef.current?.click()}><FileUp size={18}/> 파일 가져오기</button><button className="primary" onClick={()=>create.mutate(undefined)}><Plus size={18}/> 새 워크북</button></div></section>
     <section className="quick-start"><div className="section-heading"><h2>빠른 시작</h2><button className="link-button" onClick={()=>setGalleryOpen(true)}>템플릿 갤러리{templates.length>0?` (${templates.length})`:''} <ChevronRight size={14}/></button></div><div className="template-row">
       <button className="template blank" onClick={()=>create.mutate(undefined)}><span><FilePlus2/></span><strong>빈 워크북</strong><small>새로운 데이터 작업 시작</small></button>
