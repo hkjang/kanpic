@@ -61,6 +61,7 @@ type workbookState struct {
 }
 
 type MemoryRepository struct {
+	images             map[string]Image
 	external           ExternalFetcher
 	mu                 sync.RWMutex
 	resolveMu          sync.Mutex
@@ -110,6 +111,7 @@ func NewMemoryRepository() *MemoryRepository {
 		sheetTables:        make(map[string]SheetTable),
 		scenarios:          make(map[string]Scenario),
 		charts:             make(map[string]Chart),
+		images:             make(map[string]Image),
 		pivots:             make(map[string]Pivot),
 		pivotCache:         make(map[string]PivotData),
 		comments:           make(map[string]CommentThread),

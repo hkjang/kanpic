@@ -180,6 +180,12 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("GET /api/v1/charts/{chartId}/data", s.getChartData)
 	mux.HandleFunc("PATCH /api/v1/charts/{chartId}", s.updateChart)
 	mux.HandleFunc("DELETE /api/v1/charts/{chartId}", s.deleteChart)
+	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/images", s.createImage)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/images", s.listImages)
+	mux.HandleFunc("GET /api/v1/images/{imageId}", s.getImage)
+	mux.HandleFunc("GET /api/v1/images/{imageId}/content", s.getImageContent)
+	mux.HandleFunc("PATCH /api/v1/images/{imageId}", s.updateImage)
+	mux.HandleFunc("DELETE /api/v1/images/{imageId}", s.deleteImage)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/pivots", s.listPivots)
 	mux.HandleFunc("POST /api/v1/workbooks/{workbookId}/pivots", s.createPivot)
 	mux.HandleFunc("GET /api/v1/pivots/{pivotId}", s.getPivot)
@@ -1243,7 +1249,8 @@ func requiredScope(r *http.Request) string {
 		}
 		return "comment.write"
 	}
-	if strings.Contains(path, "/charts") {
+	// Pictures are floating objects like charts and share their scopes.
+	if strings.Contains(path, "/charts") || strings.Contains(path, "/images") {
 		if r.Method == http.MethodGet {
 			return "chart.read"
 		}

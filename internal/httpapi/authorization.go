@@ -20,6 +20,7 @@ var resourceCollections = map[string]string{
 	"workbooks":           "workbookId",
 	"sheets":              "sheetId",
 	"charts":              "chartId",
+	"images":              "imageId",
 	"pivots":              "pivotId",
 	"watch-rules":         "watchRuleId",
 	"named-functions":     "namedFunctionId",

@@ -17,6 +17,7 @@ var resourceWorkbookQueries = map[string]string{
 	"workbookId":          `SELECT id::text FROM workbooks WHERE id=$1 AND deleted_at IS NULL`,
 	"sheetId":             `SELECT workbook_id::text FROM sheets WHERE id=$1`,
 	"chartId":             `SELECT workbook_id::text FROM charts WHERE id=$1`,
+	"imageId":             `SELECT workbook_id::text FROM sheet_images WHERE id=$1`,
 	"pivotId":             `SELECT workbook_id::text FROM pivots WHERE id=$1`,
 	"watchRuleId":         `SELECT workbook_id::text FROM watch_rules WHERE id=$1`,
 	"namedFunctionId":     `SELECT workbook_id::text FROM named_functions WHERE id=$1`,

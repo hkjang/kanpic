@@ -9,6 +9,7 @@ import { applySuggestion } from '../lib/formulaSuggest'
 import { explainFormulaError, formulaErrorCode } from '../lib/formulaError'
 import { survivesChange, transformSelection } from '../lib/structureTransform'
 import { FormulaIssueNotice } from '../components/FormulaIssueNotice'
+import { ImageOverlay } from '../components/ImageOverlay'
 import { StalledSaveNotice } from '../components/StalledSaveNotice'
 import { cycleReference } from '../lib/referenceCycle'
 import { CanvasGrid,type GridMenuCommand,type GridShortcut } from '../components/CanvasGrid'
@@ -91,7 +92,7 @@ import { collapsedIndexes } from '../lib/outline'
 import { useCollaborationStore } from '../state/collaboration'
 import type { ServerEvent } from '../state/collaboration'
 import { cellKey, selectedBounds, useEditorStore } from '../state/editor'
-import type { ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedFunction, NamedRange, Pivot, WatchRule as WatchRuleType, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetTable, Scenario, ScenarioComparison, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
+import type { SheetImage,ShareRole,AIExecutionResult, AutomationExecutionResult, BuildInfo, Cell, CellConflict, CellConflictResolutionResult, Chart, ConditionalFormat, ConditionalFormatCell, ConditionalFormatEvaluation, DataValidation, FilterResult, FilterView, MutationResult, NamedFunction, NamedRange, Pivot, WatchRule as WatchRuleType, ProtectedRange, SheetStats, PivotData, ReplaceResult, Session, Sheet, SheetTable, Scenario, ScenarioComparison, SheetLayoutResult, Slicer, WorkbookConnections, ValidationEvaluation, Workbook, WorkbookSearchMatch } from '../types'
 
 function patchStyle(style:Record<string,unknown>|undefined,patch:Record<string,unknown>){const merged={...(style??{})};for(const [key,value] of Object.entries(patch)){if(value===null)delete merged[key];else merged[key]=value}return merged}
 function parseCellAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
@@ -276,6 +277,19 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
     enabled:quickOpen&&quickQuery.trim().length>=2,
   })
   const namedRanges=useQuery({queryKey:['named-ranges',workbookId],queryFn:()=>api<{items:NamedRange[]}>(`/api/v1/workbooks/${workbookId}/named-ranges`)})
+	const images=useQuery({queryKey:['images',workbookId,activeSheet?.id],queryFn:()=>api<{items:SheetImage[]}>(`/api/v1/workbooks/${workbookId}/images?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
+	const imageInput=useRef<HTMLInputElement>(null)
+	/** 그림을 올린다. 파일을 고르거나 클립보드에서 붙여넣거나 — 길은 둘, 하는 일은 하나다. */
+	const uploadImage=async(file:File)=>{
+		if(!activeSheet||!writable())return
+		const body=new FormData();body.append('file',file,file.name||'image')
+		try{
+			await api<SheetImage>(`/api/v1/sheets/${activeSheet.id}/images`,{method:'POST',headers:{'Idempotency-Key':newIdempotencyKey()},body})
+			await client.invalidateQueries({queryKey:['images',workbookId]})
+		}catch(reason){alert(reason instanceof Error?reason.message:'그림을 넣지 못했습니다.')}
+	}
+	const updateImage=async(image:SheetImage,input:Record<string,unknown>)=>{const updated=await api<SheetImage>(`/api/v1/images/${image.id}`,{method:'PATCH',body:JSON.stringify(input)});await client.invalidateQueries({queryKey:['images',workbookId]});return updated}
+	const deleteImage=async(image:SheetImage)=>{await api<void>(`/api/v1/images/${image.id}?expected_revision=${image.revision}`,{method:'DELETE'});await client.invalidateQueries({queryKey:['images',workbookId]})}
 	const charts=useQuery({queryKey:['charts',workbookId,activeSheet?.id],queryFn:()=>api<{items:Chart[]}>(`/api/v1/workbooks/${workbookId}/charts?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
 	const pivots=useQuery({queryKey:['pivots',workbookId,activeSheet?.id],queryFn:()=>api<{items:Pivot[]}>(`/api/v1/workbooks/${workbookId}/pivots?sheet_id=${activeSheet!.id}`),enabled:Boolean(activeSheet)})
   // 표가 바뀌면 그 이름을 쓰는 모든 칸의 값이 바뀐다. 워크북까지 함께 새로
@@ -1362,6 +1376,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'item',label:'행과 열 관리…',onSelect:()=>setStructureOpen(true)},
       {kind:'separator'},
       {kind:'item',label:'차트…',disabled:!canWrite,onSelect:()=>setChartDialog(null)},
+      {kind:'item',label:'이미지…',disabled:!canWrite,onSelect:()=>imageInput.current?.click()},
       {kind:'item',label:'피벗 테이블…',disabled:!canWrite,onSelect:()=>setPivotDialog(null)},
       {kind:'item',label:'댓글',shortcut:'Ctrl+Alt+M',disabled:!canComment,onSelect:()=>setRightPanel('comments')},
       {kind:'item',label:'이름 범위…',onSelect:()=>setNamedRangeOpen(true)},
@@ -1553,7 +1568,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {/* 오류는 마우스를 올려야만 설명을 볼 수 있으면 안 된다. 키보드로 셀을
           옮겨 다니는 사람에게는 이 자리가 유일한 안내다. */}
       {!editor.editing&&activeError&&<span className="formula-error" title={activeError.next}><strong>{activeError.code}</strong> {activeError.summary}</span>}</div>
-    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} workbookId={workbookId} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} tables={sheetTables.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange} onResolveNumericRun={resolveNumericRun}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
+    <div className="editor-body"><div className="sheet-area"><CanvasGrid sheetId={activeSheet.id} workbookId={workbookId} onPasteImage={file=>void uploadImage(file)} layout={activeSheet.layout} version={serverVersion} onVersion={updateVersion} hiddenRows={filterResult.data?.hidden_rows??[]} validations={validations.data?.items??[]} conditionalFormats={conditionalFormats.data?.items??[]} tables={sheetTables.data?.items??[]} filterView={activeFilter} formatBrush={Boolean(formatBrush)} onPaintFormat={range=>void paintFormat(range)} showFormulas={showFormulas} showGridlines={showGridlines} readOnly={readOnly} userLabels={collaboratorLabels} onLayout={applyLayout} onStructure={applyStructure} onMenuCommand={handleGridMenu} onOpenRange={navigateToRange} onResolveNumericRun={resolveNumericRun}/><SheetTabs sheets={workbook.data.sheets} activeSheetId={activeSheet.id} version={serverVersion} saveState={displaySaveState} saveLabel={activeFilter&&filterResult.data?`${saveLabel} · 필터 ${filterResult.data.visible_count.toLocaleString()}행` :saveLabel} onStatusClick={conflictCount>0?()=>setRightPanel('conflicts'):undefined} onSelect={setActiveSheet} onCreate={createSheet} onRename={(sheet,name)=>updateSheet(sheet,{name})} onDuplicate={duplicateSheet} onMove={(sheet,position)=>updateSheet(sheet,{position})} onColor={(sheet,color)=>updateSheet(sheet,{color})} onHidden={setSheetHidden} onDelete={deleteSheet} readOnly={readOnly} onManage={()=>setSheetManagerOpen(true)} onCopyTo={sheet=>setCopySheet(sheet)}/></div>
       {rightPanel&&<ResizableRightPanel key={rightPanel} panelKey={rightPanel}>
         {rightPanel==='ai'&&<AIPanel key={agentDraft.key} workbookId={workbookId} workbookName={workbook.data.title} sheetId={activeSheet.id} sheetName={activeSheet.name} selectionRange={selectionAddress} baseVersion={serverVersion} initialMode={agentDraft.mode} initialRequest={agentDraft.request} onClose={()=>setRightPanel(null)} onExecuted={handleAIExecuted}/>}
         {rightPanel==='automation'&&<AutomationPanel workbookId={workbookId} workbookVersion={serverVersion} sheets={workbook.data.sheets} activeSheetId={activeSheet.id} selectionRange={selectionAddress} prepareExecution={prepareAutomationExecution} onClose={()=>setRightPanel(null)} onExecuted={handleAutomationExecuted}/>}
@@ -1592,6 +1607,8 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       }}/>
     <SlicerOverlay slicers={activeSheet.layout?.slicers??[]} views={filterViews.data?.items??[]} sheetId={activeSheet.id} version={serverVersion} readOnly={readOnly}
       onApply={async(view,criteria)=>{await updateFilter(view.id,{criteria})}} onUpdate={updateSlicer} onRemove={removeSlicer}/>
+    <input ref={imageInput} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void uploadImage(file)}}/>
+    <ImageOverlay images={images.data?.items??[]} readOnly={!canWrite} onUpdate={updateImage} onDelete={deleteImage}/>
     <ChartOverlay charts={charts.data?.items??[]} version={serverVersion} onEdit={item=>setChartDialog(item)} onUpdate={updateChart} onDelete={deleteChart} onNavigate={item=>{if(item.source_sheet_id&&item.source_range!=='#REF!')navigateToRange(item.source_sheet_id,item.source_range)}}/>
     {chartDialog!==undefined&&<ChartDialog chart={chartDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setChartDialog(undefined)} onCreate={createChart} onUpdate={updateChart} onDelete={deleteChart}/>}
     {pivotDialog!==undefined&&<PivotDialog pivot={pivotDialog??undefined} activeSheetId={activeSheet.id} selectionRange={selectionAddress} sheets={workbook.data.sheets} onClose={()=>setPivotDialog(undefined)} onCreate={createPivot} onUpdate={updatePivot} onDelete={deletePivot}/>}

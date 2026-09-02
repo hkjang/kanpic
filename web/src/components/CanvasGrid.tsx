@@ -94,7 +94,7 @@ function paintCellBorders(context:CanvasRenderingContext2D,borders:CellBorders,x
   context.save();for(const side of ['top','right','bottom','left'] as const){const definition=borders[side];if(!definition)continue;if(definition.style==='double'){line(side,definition,1);line(side,definition,4)}else line(side,definition)}context.restore()
 }
 
-export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],tables=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange,onResolveNumericRun}:{sheetId:string;workbookId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];tables?:SheetTable[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean;onResolveNumericRun?:(row:number,column:number)=>Promise<number|undefined>}) {
+export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onVersion,hiddenRows=[],validations=[],conditionalFormats=[],tables=[],filterView,formatBrush=false,onPaintFormat,showFormulas=false,showGridlines=true,readOnly=false,userLabels,onLayout,onStructure,onMenuCommand,onOpenRange,onResolveNumericRun,onPasteImage}:{sheetId:string;workbookId:string;layout?:SheetLayout;version:number;onVersion:(version:number)=>void;hiddenRows?:number[];validations?:DataValidation[];conditionalFormats?:ConditionalFormat[];tables?:SheetTable[];filterView?:FilterView;formatBrush?:boolean;onPaintFormat?:(range:{startRow:number;startColumn:number;endRow:number;endColumn:number})=>void;showFormulas?:boolean;showGridlines?:boolean;readOnly?:boolean;userLabels?:Record<string,string>;onLayout?:(command:LayoutCommand)=>Promise<void>;onStructure?:(command:StructureCommand)=>Promise<void>;onMenuCommand?:(command:GridMenuCommand)=>void;onOpenRange?:(sheetId:string,range:string)=>boolean;onResolveNumericRun?:(row:number,column:number)=>Promise<number|undefined>;onPasteImage?:(file:File)=>void}) {
   const viewport=useRef<HTMLDivElement>(null),editorInput=useRef<HTMLTextAreaElement>(null),composing=useRef(false),canvas=useRef<HTMLCanvasElement>(null),dragging=useRef(false),filling=useRef(false),fillPreviewRef=useRef<FillRange|undefined>(undefined),pasteAsValues=useRef(false)
   const headerDrag=useRef<{axis:'row'|'column';anchor:number}|null>(null),resizeDrag=useRef<{axis:'row'|'column';index:number;origin:number;start:number;count:number;size:number}|null>(null),internalClipboard=useRef<KanpicClipboard|undefined>(undefined)
   const moveDrag=useRef<{axis:'row'|'column';start:number;count:number;origin:number;destination:number;armed:boolean}|null>(null)
@@ -811,6 +811,10 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
     // While a cell is open the paste belongs to the text being edited.
     if(editing)return
     event.preventDefault()
+    // 클립보드에 그림이 있으면 글자가 아니라 그림을 넣는다. 화면을 캡처해
+    // Ctrl+V 를 누른 사람은 그 그림이 시트에 놓이기를 바란다.
+    const picture=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'))
+    if(picture&&onPasteImage){onPasteImage(picture);return}
     const valuesOnly=pasteAsValues.current;pasteAsValues.current=false
     runPaste(event.clipboardData.getData('text/plain'),event.clipboardData.getData(KANPIC_CLIPBOARD_TYPE),valuesOnly?'values':'all',event.clipboardData.getData('text/html'))
   }

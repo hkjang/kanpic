@@ -656,6 +656,10 @@ func (r *MemoryRepository) WorkbookIDForResource(_ context.Context, kind, id str
 		if chart, ok := r.charts[id]; ok {
 			return chart.WorkbookID, nil
 		}
+	case "imageId":
+		if image, ok := r.images[id]; ok {
+			return image.WorkbookID, nil
+		}
 	case "pivotId":
 		if pivot, ok := r.pivots[id]; ok {
 			return pivot.WorkbookID, nil

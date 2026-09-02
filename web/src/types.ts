@@ -41,6 +41,7 @@ export type CommentThread = { id:string; workbook_id:string; sheet_id:string; sh
 export type MentionNotification = { id:string; recipient:string; actor_id:string; workbook_id:string; sheet_id:string; sheet_name:string; thread_id:string; message_id:string; range:string; read_at?:string; created_at:string }
 export type ChartType = 'bar'|'line'|'area'|'pie'|'scatter'|'histogram'|'stacked_bar'|'stacked_area'|'combo'|'timeline'|'waterfall'
 export type ChartPosition = { x:number; y:number; width:number; height:number }
+export type SheetImage = { id:string; workbook_id:string; workbook_version:number; sheet_id:string; content_type:string; byte_size:number; natural_width:number; natural_height:number; position:ChartPosition; revision:number; created_by:string; updated_by:string; created_at:string; updated_at:string }
 export type Chart = { id:string; workbook_id:string; workbook_version:number; sheet_id:string; source_sheet_id?:string; type:ChartType; title:string; source_range:string; first_row_headers:boolean; first_column_labels:boolean; legend_position:'none'|'top'|'right'|'bottom'|'left'; x_axis_title?:string; y_axis_title?:string; data_labels?:boolean; y_axis_min?:number|null; y_axis_max?:number|null; secondary_axis?:boolean; position:ChartPosition; revision:number; created_by:string; updated_by:string; created_at:string; updated_at:string }
 export type ChartPoint = { category:string; value:number|null; x?:number; total?:boolean }
 export type ChartSeries = { name:string; points:ChartPoint[] }

@@ -127,6 +127,12 @@ type Repository interface {
 	GetChartData(context.Context, string) (ChartData, error)
 	UpdateChart(context.Context, string, string, UpdateChartInput) (Chart, error)
 	DeleteChart(context.Context, string, string, *int64) error
+	CreateImage(context.Context, string, string, CreateImageInput) (Image, error)
+	ListImages(context.Context, string, string) ([]Image, error)
+	GetImage(context.Context, string) (Image, error)
+	GetImageContent(context.Context, string) (Image, error)
+	UpdateImage(context.Context, string, string, UpdateImageInput) (Image, error)
+	DeleteImage(context.Context, string, string, *int64) error
 	CreatePivot(context.Context, string, string, CreatePivotInput) (Pivot, error)
 	ListPivots(context.Context, string, string) ([]Pivot, error)
 	GetPivot(context.Context, string) (Pivot, error)

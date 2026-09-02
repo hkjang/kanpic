@@ -83,6 +83,7 @@ var defaults = []Setting{
 	{Key: "auth.session_hours", Value: json.RawMessage(`8`), ValueType: "number", Description: "로그인 세션 유지 시간"},
 	{Key: "server.public_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "프록시 외부 공개 URL (비우면 요청 Host 사용)"},
 	{Key: "files.max_import_mb", Value: json.RawMessage(`20`), ValueType: "number", Description: "Import 파일 최대 크기"},
+	{Key: "files.max_image_mb", Value: json.RawMessage(`5`), ValueType: "number", Description: "시트에 넣는 이미지 한 장의 최대 크기(MB)"},
 	{Key: "ai.enabled", Value: json.RawMessage(`false`), ValueType: "boolean", Description: "AI 기능 사용"},
 	{Key: "ai.gateway_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 OpenAI 호환 LLM Gateway"},
 	{Key: "ai.model", Value: json.RawMessage(`"kanpic-default"`), ValueType: "string", Description: "AI 작업에 사용할 모델"},
