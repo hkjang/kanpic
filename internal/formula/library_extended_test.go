@@ -942,6 +942,49 @@ func TestRoundingFollowsTheDecimalPeopleTyped(t *testing.T) {
 	}
 }
 
+// CEILING·FLOOR 는 음수를 양의 배수로 맞추는 것을 받아 준다. 부호가 어긋나면
+// 무조건 #NUM! 을 내던 때에는 엑셀·구글 시트가 답을 내는 =CEILING(-4.5,2) 가
+// 오류였다. 답이 없는 것은 양수를 음의 배수로 맞추는 쪽 하나뿐이다.
+// 부호가 어긋나면 답이 없는 것은 MROUND 다.
+func TestCeilingAndFloorFollowExcelSignRules(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		// 몫이 음수면 0 에서 멀어지는 쪽과 위쪽이 서로 반대다.
+		{"=CEILING(-4.5,2)", -4},
+		{"=FLOOR(-4.5,2)", -6},
+		{"=CEILING(-2.5,2)", -2},
+		{"=FLOOR(-2.5,2)", -4},
+		{"=CEILING(-2.5,-2)", -4},
+		{"=FLOOR(-2.5,-2)", -2},
+		{"=CEILING(-2.5)", -2},
+		{"=FLOOR(-2.5)", -3},
+		// 십진 셈은 부호가 어긋나도 그대로 따라야 한다.
+		{"=CEILING(-0.1-0.2,0.1)", -0.3},
+		{"=FLOOR(-0.1-0.2,0.1)", -0.3},
+		// 배수로 나누어떨어지면 어느 쪽으로도 움직이지 않는다.
+		{"=CEILING(-4,2)", -4},
+		{"=FLOOR(-4,2)", -4},
+		{"=CEILING(0,-2)", 0},
+	} {
+		assertClose(t, testCase.formula, evaluateNumber(t, testCase.formula, map[string]any{}), testCase.want, 1e-12)
+	}
+
+	for _, formula := range []string{
+		"=CEILING(2.5,-2)",
+		"=FLOOR(2.5,-2)",
+		"=MROUND(-4.5,2)",
+		"=MROUND(4.5,-2)",
+	} {
+		result := New().Evaluate(formula, map[string]any{})
+		if result.Error == nil || result.Error.Code != "#NUM!" {
+			t.Errorf("%s: %v 를 냈다. #NUM! 이어야 한다", formula, result.Error)
+		}
+	}
+}
+
 // 배수로 맞추는 함수도 십진수를 따라야 한다. 나눗셈을 이진 실수로 하면
 // 0.1+0.2 를 0.1 단위로 올릴 때 0.4 가 나온다. 0.30000000000000004 를
 // 0.1 로 나누면 3.0000000000000004 가 되기 때문이다.

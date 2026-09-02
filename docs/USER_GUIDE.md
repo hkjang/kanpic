@@ -726,7 +726,7 @@ kanpic은 문맥 인식 수식 파서를 통해 셀 참조와 계산을 실시�
 - **흩어진 정도와 범위 셈.** `=AVEDEV`, `=DEVSQ`, `=SKEW`, `=KURT`, `=MODE.MULT`, `=PERCENTRANK`, `=TRIMMEAN`, `=PROB`, `=STEYX`, `=ZTEST` 를 씁니다. `=PERCENTRANK` 는 엑셀과 같이 자릿수를 **반올림하지 않고 잘라 냅니다** — 0.5555…는 0.555입니다. `=PROB` 는 확률의 합이 1이 아니면 `#NUM!` 을 냅니다. 확률표가 아닌 것을 조용히 세면 뜻 없는 답이 나옵니다.
 
 - **삼각의 역수와 쌍곡선.** `=SEC`, `=CSC`, `=COT`, `=SECH`, `=CSCH`, `=COTH`, `=ACOT`, `=ACOTH`, `=ACOSH`, `=ASINH`, `=ATANH`, `=GAMMALN`, `=SQRTPI` 를 씁니다. 나누는 쪽이 0이면 무한대 대신 `#DIV/0!` 을 냅니다 — 무한대를 내면 뒤의 셈이 조용히 망가집니다. `=ACOT` 은 엑셀과 같이 **0과 파이 사이** 의 값을 냅니다.
-- **자리 올림에는 갈래가 여럿이고 음수에서 갈립니다.** `=CEILING.MATH(-5.5)` 는 0 쪽으로 올려 **-5**, 방식을 주면(`=CEILING.MATH(-5.5,1,1)`) 0에서 멀어져 **-6** 입니다. `=FLOOR.MATH` 는 반대입니다. `=CEILING.PRECISE`, `=FLOOR.PRECISE`, `=ISO.CEILING` 은 언제나 한 방향이고 기준의 부호를 무시합니다.
+- **자리 올림에는 갈래가 여럿이고 음수에서 갈립니다.** `=CEILING.MATH(-5.5)` 는 0 쪽으로 올려 **-5**, 방식을 주면(`=CEILING.MATH(-5.5,1,1)`) 0에서 멀어져 **-6** 입니다. `=FLOOR.MATH` 는 반대입니다. `=CEILING.PRECISE`, `=FLOOR.PRECISE`, `=ISO.CEILING` 은 언제나 한 방향이고 기준의 부호를 무시합니다. 갈래 없는 `=CEILING`·`=FLOOR` 는 배수의 부호를 따집니다 — `=CEILING(-4.5,2)` 는 **-4**, `=CEILING(-4.5,-2)` 는 **-6** 이고, `=FLOOR` 는 반대입니다. 답이 없는 것은 양수를 음의 배수로 맞추는 `=CEILING(2.5,-2)` 뿐입니다. 부호가 어긋나면 언제나 `#NUM!` 인 것은 `=MROUND` 입니다.
 - **조합과 제곱합.** `=COMBINA`(되풀이를 허용한 조합), `=FACTDOUBLE`(이중 계승), `=MULTINOMIAL`, `=SUMX2MY2`, `=SUMX2PY2`, `=SUMXMY2`, `=SERIESSUM` 이 있습니다. `=BASE` 와 `=DECIMAL` 로 2~36진법을 오갑니다. `=MUNIT` 은 단위 행렬을, `=RANDARRAY` 는 지정한 크기의 난수를 펼칩니다.
 
 - **진법과 비트도 다룹니다.** `=BIN2DEC`, `=BIN2OCT`, `=BIN2HEX`, `=OCT2DEC`, `=OCT2BIN`, `=OCT2HEX`, `=HEX2DEC`, `=HEX2BIN`, `=HEX2OCT`, `=DEC2BIN`, `=DEC2OCT`, `=DEC2HEX` 로 진법을 바꾸고, `=BITAND`, `=BITOR`, `=BITXOR`, `=BITLSHIFT`, `=BITRSHIFT` 로 비트를 셉니다. `=DELTA`, `=GESTEP`, `=ERF`, `=ERFC` 도 있습니다.
