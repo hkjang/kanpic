@@ -17,12 +17,19 @@
  * 화면에는 더해지는데 수식에서는 빠지므로 두 숫자가 어긋난 채로 남는다.
  * 그런 칸은 세는 대신 찾아서 알려 주고 숫자로 바꿔 주는 편이 낫다.
  */
+/** 스프레드시트가 숫자라고 부르는 글자. 서버의 internal/formula/evaluator.go
+ *  decimalText 와 같은 자다. testdata/numeric-text.json 이 둘을 붙들어 둔다. */
+const DECIMAL_TEXT=/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/
+
 export function spreadsheetNumber(value:unknown):number|undefined{
   if(typeof value==='number')return Number.isFinite(value)?value:undefined
   if(typeof value==='boolean')return value?1:0
   if(typeof value==='string'){
     const text=value.trim()
-    if(text==='')return undefined
+    // Number() 는 스프레드시트보다 넓다. `0x1F` 를 31 로, `0b101` 을 5 로 읽는다.
+    // 엔진은 그것을 세지 않으므로, 그대로 두면 상태 줄 합계에만 들어가고
+    // =SUM 에는 빠진 채 두 숫자가 어긋난다. 실제로 그랬다.
+    if(!DECIMAL_TEXT.test(text))return undefined
     const parsed=Number(text)
     return Number.isFinite(parsed)?parsed:undefined
   }

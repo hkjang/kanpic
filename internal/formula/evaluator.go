@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1357,10 +1358,28 @@ func toNumber(value any) (float64, bool) {
 		}
 		return 0, true
 	case string:
-		number, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
-		return number, err == nil
+		return numberFromText(typed)
 	}
 	return 0, false
+}
+
+// decimalText is what a spreadsheet calls a number written as text. Go's
+// ParseFloat is wider than that: it takes NaN, Inf, hex floats like 0x1p4 and
+// underscore separators like 1_000. Those are Go literals, not spreadsheet
+// values, and letting them through cost more than it gave — one cell holding
+// the text "NaN", which every CSV exported from pandas or R is full of, turned
+// =SUM over the whole column into #NUM!. The grid's own rule (spreadsheetNumber
+// in web/src/lib) matches this pattern exactly; testdata/numeric-text.json
+// holds both sides to it.
+var decimalText = regexp.MustCompile(`^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$`)
+
+func numberFromText(value string) (float64, bool) {
+	text := strings.TrimSpace(value)
+	if !decimalText.MatchString(text) {
+		return 0, false
+	}
+	number, err := strconv.ParseFloat(text, 64)
+	return number, err == nil
 }
 func numericValues(values []any) []float64 {
 	result := make([]float64, 0)
