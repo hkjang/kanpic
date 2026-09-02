@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every documented function has to exist: a catalog entry the engine cannot
@@ -1691,5 +1692,100 @@ func TestFixedAndDollarRoundLeftOfThePoint(t *testing.T) {
 		if actual := display(result.Value); actual != item.expected {
 			t.Errorf("%s=%s, 기대=%s", item.expression, actual, item.expected)
 		}
+	}
+}
+
+// TRUNC 은 ROUNDDOWN 과 같은 함수다. 자리를 이진 실수로 밀면 0.29*100 이
+// 28.999999999999996 이 되어 이미 그 자리에 딱 맞는 수인데도 마지막 자리가
+// 깎였다 — TRUNC(0.29,2) 가 0.28, TRUNC(1.001,3) 이 1 이었다. 두 이름이
+// 서로 다른 답을 내면 안 된다.
+func TestTruncCutsDecimalDigitsLikeRoundDown(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		formula string
+		want    float64
+	}{
+		{"=TRUNC(0.29,2)", 0.29},
+		{"=TRUNC(1.001,3)", 1.001},
+		{"=TRUNC(-0.58,2)", -0.58},
+		{"=TRUNC(2.29,1)", 2.2},
+		{"=TRUNC(8.115,2)", 8.11},
+		{"=TRUNC(1234.5678)", 1234},
+		{"=TRUNC(-8.9)", -8},
+		{"=TRUNC(1234.5,-2)", 1200},
+		// 엑셀은 자릿수의 소수점 아래를 잘라 낸다. 1.9 는 한 자리다.
+		{"=TRUNC(2.345,1.9)", 2.3},
+	} {
+		got := evaluateNumber(t, testCase.formula, map[string]any{})
+		if got != testCase.want {
+			t.Errorf("%s = %v, want %v", testCase.formula, got, testCase.want)
+		}
+	}
+
+	// 같은 값을 두 이름으로 물으면 같은 답이 나와야 한다.
+	for number := 1; number < 3000; number++ {
+		value := float64(number) / 1000
+		for digits := -2; digits <= 4; digits++ {
+			cells := map[string]any{"A1": value, "A2": float64(digits)}
+			cut := evaluateNumber(t, "=TRUNC(A1,A2)", cells)
+			down := evaluateNumber(t, "=ROUNDDOWN(A1,A2)", cells)
+			if cut != down {
+				t.Fatalf("TRUNC(%v,%d) = %v 인데 ROUNDDOWN 은 %v 를 냈다", value, digits, cut, down)
+			}
+		}
+	}
+}
+
+// 자릿수는 사람이 적는 인수라 터무니없이 클 수 있다. 예전에는
+// =ROUND(1.5,999999999) 한 칸이 10^999999999 을 만드느라 서버의 기억
+// 장소를 수백 메가바이트씩 물고 몇 초를 붙잡았고, FIXED 는 그만큼의 0 을
+// 이어 붙여 기가바이트짜리 글자를 냈다. 그렇게 먼 자리는 어차피 답을
+// 바꾸지 못한다.
+func TestOutlandishDigitCountsDoNotStallRounding(t *testing.T) {
+	t.Parallel()
+	checks := []struct{ formula, want string }{
+		{"=ROUND(1.5,999999999)", "1.5"},
+		{"=ROUNDUP(1.5,999999999)", "1.5"},
+		{"=ROUNDDOWN(1.5,999999999)", "1.5"},
+		{"=TRUNC(1.5,999999999)", "1.5"},
+		// int 에 담기지 않는 자릿수도 지나간다.
+		{"=TRUNC(1.5,1E+300)", "1.5"},
+		{"=ROUND(1.5,-999999999)", "0"},
+		{"=TRUNC(1.5,-999999999)", "0"},
+		{"=PERCENTRANK({1,2,3,4},2,999999999)", "0.333333333333333"},
+	}
+	results := make([]string, len(checks))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		engine := New()
+		for index, item := range checks {
+			result := engine.Evaluate(item.formula, map[string]any{})
+			if result.Error != nil {
+				results[index] = result.Error.Code
+				continue
+			}
+			results[index] = display(result.Value)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("자릿수가 큰 반올림이 끝나지 않는다")
+	}
+	for index, item := range checks {
+		if results[index] != item.want {
+			t.Errorf("%s = %s, want %s", item.formula, results[index], item.want)
+		}
+	}
+
+	// FIXED 는 글자를 내므로 길이도 함께 묶어 둔다.
+	text := New().Evaluate("=FIXED(1.5,999999999)", map[string]any{})
+	if text.Error != nil {
+		t.Fatalf("FIXED: %v", text.Error)
+	}
+	rendered, _ := text.Value.(string)
+	if !strings.HasPrefix(rendered, "1.5") || len(rendered) > 1000 {
+		t.Errorf("FIXED(1.5,999999999) 가 %d 글자를 냈다", len(rendered))
 	}
 }
