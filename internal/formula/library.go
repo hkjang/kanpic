@@ -58,7 +58,8 @@ var catalog = []FunctionDoc{
 	{"FIND", "텍스트", "FIND(찾을 값, 텍스트, [시작 위치])", "대소문자를 구분해 위치를 찾습니다."},
 	{"SEARCH", "텍스트", "SEARCH(찾을 값, 텍스트, [시작 위치])", "대소문자를 구분하지 않고 위치를 찾습니다."},
 	{"REPT", "텍스트", "REPT(텍스트, 횟수)", "텍스트를 지정한 횟수만큼 반복합니다."},
-	{"VALUE", "텍스트", "VALUE(텍스트)", "숫자 형태의 텍스트를 숫자로 바꿉니다."},
+	{"VALUE", "텍스트", "VALUE(텍스트)", "숫자 형태의 텍스트를 숫자로 바꿉니다. 백분율(10%), 통화($1,000), 자릿점, 시각, 날짜도 읽습니다."},
+	{"NUMBERVALUE", "텍스트", "NUMBERVALUE(텍스트, [소수 구분 기호], [자릿수 구분 기호])", "구분 기호를 지정해 텍스트를 숫자로 바꿉니다. 나라마다 다른 표기(1.234,5)를 읽을 때 씁니다."},
 	{"HYPERLINK", "텍스트", "HYPERLINK(주소, [표시할 텍스트])", "링크 주소와 표시 텍스트를 만듭니다."},
 	{"DATE", "날짜", "DATE(연, 월, 일)", "연·월·일로 날짜를 만듭니다."},
 	{"TODAY", "날짜", "TODAY()", "오늘 날짜를 반환합니다."},
@@ -685,7 +686,7 @@ func evaluateLibrary(name string, values []any) (any, bool, error) {
 		if len(values) != 1 {
 			return nil, true, argError(name)
 		}
-		number, ok := toNumber(values[0])
+		number, ok := valueOfText(values[0])
 		if !ok {
 			return nil, true, formulaError("#VALUE!", "VALUE requires a number in text form")
 		}
@@ -881,14 +882,22 @@ func DateSerial(value any) (float64, bool) {
 	}
 	day := time.Date(moment.Year(), moment.Month(), moment.Day(), 0, 0, 0, 0, time.UTC)
 	seconds := float64(moment.Hour()*3600 + moment.Minute()*60 + moment.Second())
-	serial := day.Sub(time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)).Hours() / 24
+	// Sub 로 세지 않는다. time.Duration 은 나노초를 int64 에 담아 292 년까지만
+	// 세므로, 1899 년에서 2192 년보다 먼 날을 빼면 조용히 넘쳐 엉뚱한 수가
+	// 나왔다. serialDate 는 9999-12-31(2958465)까지 읽으니 짝이 어긋난다.
+	serial := float64(day.Unix()-epochUnix(1899, 12, 30)) / 86400
 	// 1900 년을 윤년으로 잘못 센 자리. serialDate 가 60 보다 작은 번호를
 	// 하루 뒤에서 세므로 되돌릴 때도 그렇게 해야 짝이 맞는다.
 	if serial < 60 {
-		serial = day.Sub(time.Date(1899, 12, 31, 0, 0, 0, 0, time.UTC)).Hours() / 24
+		serial = float64(day.Unix()-epochUnix(1899, 12, 31)) / 86400
 	}
 	if serial < 0 {
 		return 0, false
 	}
 	return serial + seconds/86400, true
+}
+
+// epochUnix 는 표 프로그램이 날 수를 세기 시작하는 날의 초다.
+func epochUnix(year int, month time.Month, day int) int64 {
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Unix()
 }
