@@ -159,6 +159,11 @@ func TestDateSerialRoundTripsWithSerialDate(t *testing.T) {
 		{"1900-03-01", 61},
 		{"2026/02/10", 46063},
 		{45000.0, 45000},
+		// serialDate 가 읽는 마지막 날. 여기까지 짝이 맞아야 한다 — 예전에는
+		// time.Duration 이 292 년까지만 세는 바람에 2192 년 너머가 넘쳐서,
+		// 9999-12-31 이 106751 로(2192-04-08) 돌아왔다.
+		{"2200-01-01", 109575},
+		{"9999-12-31", 2958465},
 	} {
 		serial, ok := DateSerial(sample.value)
 		if !ok || serial != sample.serial {

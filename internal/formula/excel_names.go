@@ -79,7 +79,8 @@ var excelPrefixedFunctions = map[string]string{
 	"WRAPROWS": excelModernPrefix, "WRAPCOLS": excelModernPrefix, "EXPAND": excelModernPrefix,
 	"ISFORMULA": excelModernPrefix, "DAYS": excelModernPrefix, "ISOWEEKNUM": excelModernPrefix,
 	"UNICHAR": excelModernPrefix, "UNICODE": excelModernPrefix,
-	"PDURATION": excelModernPrefix, "RRI": excelModernPrefix,
+	"NUMBERVALUE": excelModernPrefix,
+	"PDURATION":   excelModernPrefix, "RRI": excelModernPrefix,
 	"FILTER": excelWorksheetPrefix, "SORT": excelWorksheetPrefix,
 }
 

@@ -17,6 +17,22 @@ func evaluateText(name string, values []any) (any, bool, error) {
 			return nil, true, argError(name)
 		}
 		return formatValue(values[0], display(values[1])), true, nil
+	case "NUMBERVALUE":
+		if len(values) < 1 || len(values) > 3 {
+			return nil, true, argError(name)
+		}
+		decimal, group := ".", ","
+		if len(values) >= 2 {
+			decimal = separatorArgument(values[1], decimal)
+		}
+		if len(values) >= 3 {
+			group = separatorArgument(values[2], group)
+		}
+		number, ok := numberValueOfText(display(values[0]), decimal, group)
+		if !ok {
+			return nil, true, formulaError("#VALUE!", "NUMBERVALUE requires a number in text form")
+		}
+		return number, true, nil
 	case "TO_TEXT", "T":
 		if len(values) != 1 {
 			return nil, true, argError(name)
