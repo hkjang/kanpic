@@ -187,20 +187,29 @@ func formatValue(value any, pattern string) string {
 	if !ok {
 		return display(value)
 	}
-	// A format can carry a positive and a negative section separated by ";".
-	sections := strings.Split(pattern, ";")
-	section := sections[0]
-	if number < 0 && len(sections) > 1 {
-		section, number = sections[1], -number
+	// 서식은 값의 부호마다 다른 구역을 담는다. ";" 로 나눈다.
+	sections := formatSections(pattern)
+	section, flipped := sectionForNumber(sections, number)
+	if flipped {
+		number = -number
+	}
+	// 비워 둔 구역은 "그 값은 적지 말라" 는 뜻이다. "0;;" 은 음수와 0 을 감춘다.
+	if section == "" {
+		return ""
 	}
 	// 0.00E+00 처럼 지수로 적는 서식. E 뒤의 0 개수만큼 지수 자리를 채운다.
 	if match := scientificPattern.FindStringSubmatch(section); match != nil {
 		return renderScientific(number, len(match[1]), len(match[3]), match[2])
 	}
 	prefix, digits, suffix := splitFormatSection(section)
-	// 자리 기호가 하나도 없는 구역은 수를 적는 서식이 아니다. 날짜 서식에
-	// 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때 y 나 m 을
-	// 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 격자는 "-1" 을 그린다.
+	// 자리 기호가 하나도 없는 구역은 수를 적지 않고 적어 둔 글자만 적는다.
+	// 회계 서식의 0 구역이 그 꼴이다 — #,##0;(#,##0);"-" 의 0 은 "-" 이다.
+	if !strings.ContainsAny(digits, "0#?") && !isDatePattern(section) {
+		return prefix + suffix
+	}
+	// 날짜 서식에 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때
+	// y 나 m 을 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 격자는 "-1" 을 그린다.
+	// 분수 서식(? /?)도 아직 분수로 그리지 못하므로 수만 적는다.
 	if !strings.ContainsAny(digits, "0#") {
 		prefix, suffix = "", ""
 	}
@@ -209,9 +218,14 @@ func formatValue(value any, pattern string) string {
 	}
 	decimals := 0
 	if index := strings.Index(digits, "."); index >= 0 {
-		decimals = len(strings.TrimRight(digits[index+1:], "%"))
+		// 뒤에 붙은 쉼표는 소수 자리가 아니라 천 단위 축약이다. 세면
+		// 0.0,, 이 소수 세 자리가 되어 1.2 대신 1.235 가 나온다.
+		decimals = len(strings.TrimRight(digits[index+1:], "%,"))
 	}
-	grouped := strings.Contains(digits, ",")
+	scaled, grouped := thousandsScale(digits)
+	if scaled > 0 {
+		number /= math.Pow(1000, float64(scaled))
+	}
 	// 백분율 기호는 수 바로 뒤에 온다. 자리 기호와 함께 걷어 두었으므로
 	// 여기서 다시 붙인다. 빠뜨리면 500% 가 500 으로 보인다.
 	percentMark := ""
@@ -227,6 +241,77 @@ func formatValue(value any, pattern string) string {
 		rendered = "-" + rendered
 	}
 	return rendered
+}
+
+// formatSections 는 서식을 구역으로 나눈다. 따옴표 안과 대괄호 안의 ";" 는
+// 구역을 가르지 않는다 — #,##0;"내려감;" 처럼 글자로 적은 쌍반점이 있다.
+//
+// web/src/lib/cellFormat.ts 의 formatSections 와 같은 규칙이다.
+func formatSections(pattern string) []string {
+	sections := make([]string, 0, 4)
+	var current strings.Builder
+	runes := []rune(pattern)
+	for index := 0; index < len(runes); index++ {
+		switch character := runes[index]; character {
+		case '\\':
+			current.WriteRune(character)
+			if index+1 < len(runes) {
+				index++
+				current.WriteRune(runes[index])
+			}
+		case '"', '[':
+			closer := '"'
+			if character == '[' {
+				closer = ']'
+			}
+			current.WriteRune(character)
+			for index++; index < len(runes); index++ {
+				current.WriteRune(runes[index])
+				if runes[index] == closer {
+					break
+				}
+			}
+		case ';':
+			sections = append(sections, current.String())
+			current.Reset()
+		default:
+			current.WriteRune(character)
+		}
+	}
+	return append(sections, current.String())
+}
+
+// sectionForNumber 는 값의 부호에 맞는 구역을 고른다. 엑셀의 규칙이다.
+//
+//	한 구역    모든 값
+//	두 구역    양수와 0 ; 음수
+//	세 구역    양수 ; 음수 ; 0
+//
+// 음수 구역을 골랐으면 그 구역이 부호를 스스로 적으므로(대개 괄호다) 값을
+// 뒤집어 돌려준다. 예전에는 구역이 둘뿐인 줄 알고 0 을 늘 양수 구역으로
+// 보냈다. 회계 서식의 0 은 "-" 인데 "0" 이라고 적혀 있었다.
+func sectionForNumber(sections []string, number float64) (string, bool) {
+	switch {
+	case number < 0 && len(sections) > 1:
+		return sections[1], true
+	case number == 0 && len(sections) > 2:
+		return sections[2], false
+	}
+	return sections[0], false
+}
+
+// thousandsScale 은 자리 기호 **뒤** 에 붙은 쉼표를 센다. 그 쉼표는 자릿점이
+// 아니라 "천 단위로 줄여 적으라" 는 뜻이다 — #,##0, 은 천 단위, #,##0,, 은
+// 백만 단위다. 자리 기호 사이의 쉼표만 자릿점이므로 함께 가려낸다.
+//
+// 예전에는 쉼표가 있기만 하면 자릿점으로 보아 #,##0,, 이 1,234,567 을
+// 그대로 적었다. 재무 자료의 "백만 원 단위" 표가 통째로 백만 배로 보였다.
+func thousandsScale(digits string) (int, bool) {
+	last := strings.LastIndexAny(digits, "0#?")
+	if last < 0 {
+		return 0, strings.Contains(digits, ",")
+	}
+	return strings.Count(digits[last+1:], ","), strings.Contains(digits[:last], ",")
 }
 
 // splitFormatSection 은 서식 한 구역을 앞 글자·숫자 자리·뒤 글자로 나눈다.
