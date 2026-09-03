@@ -43,6 +43,9 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
     const marker=exponent<0?'-':scientific[2]==='-'?'':'+'
     return `${mantissa}E${marker}${String(Math.abs(exponent)).padStart(exponentDigits,'0')}`
   }
+  // # ?/? 처럼 빗금 양쪽에 자리 기호가 붙은 서식은 분수로 적는다.
+  const fraction=parseFractionFormat(section)
+  if(fraction&&Math.abs(value)<MAX_FRACTION_VALUE)return renderFraction(value,fraction,locale)
   // 백분율은 100을 곱한 뒤 반올림한다. 이진 실수로 곱하면 1.005가
   // 100.49999…가 되어 100%로 내려앉는다. 사람이 적은 십진수 자리에서
   // 소수점만 옮기면 100.5가 되어 101%가 된다. 서버가 내는 답과 같다.
@@ -162,6 +165,93 @@ export function parseFormatSection(section:string){
     put(character)
   }
   return {prefix,core,suffix}
+}
+
+/**
+ * 분수 서식은 값을 소수가 아니라 분수로 적는다 — 2.75 는 "2 3/4" 다.
+ * 엑셀 기본 서식 12·13 번(`# ?/?`, `# ??/??`)이라 XLSX 로 그냥 들어온다.
+ *
+ * 예전에는 자리 기호만 세고 "/" 를 그냥 글자로 흘려 보내, `# ?/?` 가 0.5 를
+ * "1/2" 가 아니라 "1/" 로 그렸다 — 반올림한 값 뒤에 빗금만 남은 꼴이다.
+ *
+ * 서버의 internal/formula 의 parseFractionFormat·renderFraction 이 같은
+ * 규칙을 쓴다. testdata/cell-formats.json 이 둘을 함께 붙잡는다.
+ */
+type FractionFormat={prefix:string;suffix:string;integer:string;denominator:number;maxDenominator:number}
+
+// 이보다 큰 값은 분수로 적지 않는다. 그만큼 큰 수에서는 소수 부분이 이미
+// 이진 실수의 어긋남뿐이다.
+const MAX_FRACTION_VALUE=1e15
+
+function parseFractionFormat(section:string):FractionFormat|undefined{
+  let slash=-1
+  for(let index=0;index<section.length&&slash<0;index+=1){
+    const character=section[index]
+    if(character==='\\'){index+=1;continue}
+    if(character==='"'||character==='['){
+      const closer=character==='['?']':'"'
+      const end=section.indexOf(closer,index+1)
+      index=end<0?section.length:end
+      continue
+    }
+    if(character==='/')slash=index
+  }
+  if(slash<0)return
+  // 분자는 빗금 바로 앞에 이어진 자리 기호다.
+  let start=slash
+  while(start>0&&'0#?'.includes(section[start-1]))start-=1
+  if(start===slash)return
+  // 분모는 빗금 바로 뒤에 이어진 자리 기호이거나, 못 박은 숫자다.
+  let end=slash+1
+  while(end<section.length&&'0#?'.includes(section[end]))end+=1
+  let denominator=0,maxDenominator=0
+  const places=end-slash-1
+  if(places>0)maxDenominator=10**Math.min(places,9)-1
+  else{
+    while(end<section.length&&section[end]>='0'&&section[end]<='9')end+=1
+    denominator=Number(section.slice(slash+1,end))
+    if(!Number.isInteger(denominator)||denominator<=0)return
+  }
+  const head=parseFormatSection(section.slice(0,start)),tail=parseFormatSection(section.slice(end))
+  return {
+    prefix:head.prefix+head.suffix,
+    suffix:tail.prefix+tail.suffix,
+    // 정수 자리가 없으면 가분수로 적는다 — #/# 은 5.25 를 21/4 로 적는다.
+    integer:/[0#?]/.test(head.core)?head.core:'',
+    denominator,maxDenominator,
+  }
+}
+
+function renderFraction(value:number,spec:FractionFormat,locale:string){
+  let rest=Math.abs(value),whole=0
+  if(spec.integer){whole=Math.floor(rest);rest-=whole}
+  let {numerator,denominator}=bestFraction(rest,spec)
+  // 0.99 를 `# ?/?` 로 적으면 분자가 분모까지 올라간다. 정수 자리로 올린다.
+  if(spec.integer&&numerator>=denominator){whole+=Math.floor(numerator/denominator);numerator%=denominator}
+  const useGrouping=spec.integer.includes(',')
+  const wholeText=()=>new Intl.NumberFormat(locale,{useGrouping,maximumFractionDigits:0}).format(whole)
+  let body:string
+  if(spec.integer&&numerator===0)body=wholeText()
+  else if(spec.integer&&(whole!==0||spec.integer.includes('0')))body=`${wholeText()} ${numerator}/${denominator}`
+  else body=`${numerator}/${denominator}`
+  let rendered=spec.prefix+body+spec.suffix
+  // -0.02 를 `# ?/?` 로 적으면 0 이 된다. "-0" 은 잘못 그린 것처럼 읽힌다.
+  if(value<0&&!(whole===0&&numerator===0)&&!/^-/.test(rendered))rendered='-'+rendered
+  return rendered
+}
+
+// 값에 가장 가까운 분수를 고른다. 분모를 못 박은 서식이면 그 분모를 그대로
+// 쓰고(`?/8` 은 0.5 를 4/8 로 적는다), 아니면 자리 기호가 허락하는 분모를
+// 모두 재어 가장 덜 어긋나는 것을 고른다. 같은 만큼 어긋나면 분모가 작은
+// 쪽이다 — 0.5 는 `# ??/??` 에서도 1/2 다.
+function bestFraction(value:number,spec:FractionFormat){
+  if(spec.denominator>0)return{numerator:Math.round(value*spec.denominator),denominator:spec.denominator}
+  let denominator=1,numerator=Math.round(value),error=Math.abs(value-numerator)
+  for(let candidate=2;candidate<=spec.maxDenominator;candidate+=1){
+    const top=Math.round(value*candidate),difference=Math.abs(value-top/candidate)
+    if(difference<error-1e-12){denominator=candidate;numerator=top;error=difference}
+  }
+  return{numerator,denominator}
 }
 
 export function wrapText(text:string,maxWidth:number,measure:(text:string)=>number){

@@ -201,6 +201,10 @@ func formatValue(value any, pattern string) string {
 	if match := scientificPattern.FindStringSubmatch(section); match != nil {
 		return renderScientific(number, len(match[1]), len(match[3]), match[2])
 	}
+	// # ?/? 처럼 빗금 양쪽에 자리 기호가 붙은 서식은 분수로 적는다.
+	if spec, ok := parseFractionFormat(section); ok && math.Abs(number) < maxFractionValue {
+		return renderFraction(number, spec)
+	}
 	prefix, digits, suffix := splitFormatSection(section)
 	// 자리 기호가 하나도 없는 구역은 수를 적지 않고 적어 둔 글자만 적는다.
 	// 회계 서식의 0 구역이 그 꼴이다 — #,##0;(#,##0);"-" 의 0 은 "-" 이다.
@@ -209,7 +213,6 @@ func formatValue(value any, pattern string) string {
 	}
 	// 날짜 서식에 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때
 	// y 나 m 을 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 격자는 "-1" 을 그린다.
-	// 분수 서식(? /?)도 아직 분수로 그리지 못하므로 수만 적는다.
 	if !strings.ContainsAny(digits, "0#") {
 		prefix, suffix = "", ""
 	}
