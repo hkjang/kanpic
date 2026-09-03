@@ -14,11 +14,15 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
     if(date)return formatDate(date,format,locale)
   }
   if(typeof value!=='number'||!Number.isFinite(value))return String(value)
-  // 음수 구역이 따로 있으면 그 구역이 부호를 스스로 적는다. (#,##0) 은
-  // 괄호로 적겠다는 뜻이므로 빼기 부호를 덧붙이면 -(5) 가 된다.
-  const sections=format.split(';')
+  // 서식은 값의 부호마다 다른 구역을 담는다. 음수 구역이 따로 있으면 그
+  // 구역이 부호를 스스로 적는다. (#,##0) 은 괄호로 적겠다는 뜻이므로 빼기
+  // 부호를 덧붙이면 -(5) 가 된다.
+  const sections=formatSections(format)
   const negativeSection=value<0&&sections.length>1
-  const section=(negativeSection?sections[1]:sections[0])??format
+  const zeroSection=value===0&&sections.length>2
+  const section=(negativeSection?sections[1]:zeroSection?sections[2]:sections[0])??format
+  // 비워 둔 구역은 "그 값은 적지 말라" 는 뜻이다. "0;;" 은 음수와 0 을 감춘다.
+  if(section==='')return ''
   const scientific=section.match(/^0(?:\.(0+))?[eE]([+-])(0+)$/)
   if(scientific){
     // 지수 자리는 서식에 적은 0 개수만큼 채운다. toExponential 은 자리를
@@ -43,16 +47,19 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
   // 100.49999…가 되어 100%로 내려앉는다. 사람이 적은 십진수 자리에서
   // 소수점만 옮기면 100.5가 되어 101%가 된다. 서버가 내는 답과 같다.
   const parsed=parseFormatSection(section)
-  // 자리 기호가 하나도 없는 구역은 수를 적는 서식이 아니다. 날짜 서식에
-  // 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때 y 나 m 을
-  // 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 서버도 "-1" 을 적는다.
+  // 자리 기호가 하나도 없는 구역은 수를 적지 않고 적어 둔 글자만 적는다.
+  // 회계 서식의 0 구역이 그 꼴이다 — #,##0;(#,##0);"-" 의 0 은 "-" 이다.
+  if(!/[0#?]/.test(parsed.core)&&!isDateFormat(section))return parsed.prefix+parsed.suffix
+  // 날짜 서식에 날짜가 될 수 없는 수가 들어오면 여기까지 흘러오는데, 그때 y 나
+  // m 을 글자로 적으면 "-yyyy-mm-dd1" 이 된다. 서버도 "-1" 을 적는다.
   const bare=!/[0#]/.test(parsed.core)
   const {core}=parsed,prefix=bare?'':parsed.prefix,suffix=bare?'':parsed.suffix
   const percent=core.includes('%')
   const base=negativeSection?-value:value
-  const numeric=percent?shiftDecimalPoint(base,2):base
+  const {scale,useGrouping}=thousandsScale(core)
+  const percented=percent?shiftDecimalPoint(base,2):base
+  const numeric=scale?shiftDecimalPoint(percented,-3*scale):percented
   const decimals=core.match(/\.(0+)/)?.[1].length??0
-  const useGrouping=core.includes(',')
   const minimumIntegerDigits=Math.min(21,Math.max(1,(core.split('.')[0].match(/0/g)??[]).length))
   let rendered=new Intl.NumberFormat(locale,{useGrouping,minimumIntegerDigits,minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(Math.abs(numeric))
   // -0.2를 정수 자리로 반올림하면 0이 된다. 칸에 "-0"이 보이면 잘못 그린
@@ -63,6 +70,51 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
   // 빼기 부호는 기호 앞에 온다. 엑셀은 -₩5 로 적지 ₩-5 로 적지 않는다.
   if(numeric<0&&!roundedToZero&&!/^-/.test(rendered))rendered='-'+rendered
   return rendered
+}
+
+/**
+ * 서식을 구역으로 나눈다. 값의 부호마다 구역이 다르다.
+ *
+ *   한 구역    모든 값
+ *   두 구역    양수와 0 ; 음수
+ *   세 구역    양수 ; 음수 ; 0
+ *
+ * 따옴표 안과 대괄호 안의 ";" 는 구역을 가르지 않는다 — #,##0;"내려감;"
+ * 처럼 글자로 적은 쌍반점이 있다. 예전에는 그냥 잘라서 그 글자가 구역을
+ * 하나 더 만들었다. 서버의 internal/formula 의 formatSections 와 같은 규칙이다.
+ */
+export function formatSections(format:string){
+  const sections:string[]=[]
+  let current=''
+  for(let index=0;index<format.length;index+=1){
+    const character=format[index]
+    if(character==='\\'){current+=character+(format[index+1]??'');index+=1;continue}
+    if(character==='"'||character==='['){
+      const closer=character==='['?']':'"'
+      const end=format.indexOf(closer,index+1)
+      current+=format.slice(index,end<0?format.length:end+1)
+      index=end<0?format.length:end
+      continue
+    }
+    if(character===';'){sections.push(current);current='';continue}
+    current+=character
+  }
+  sections.push(current)
+  return sections
+}
+
+/**
+ * 자리 기호 뒤에 붙은 쉼표는 자릿점이 아니라 "천 단위로 줄여 적으라" 는
+ * 뜻이다 — #,##0, 은 천 단위, #,##0,, 은 백만 단위다. 자리 기호 사이의
+ * 쉼표만 자릿점이므로 함께 가려낸다. 예전에는 쉼표가 있기만 하면 자릿점으로
+ * 보아 백만 원 단위 표가 통째로 백만 배로 보였다.
+ *
+ * 서버의 internal/formula 의 thousandsScale 이 같은 셈을 한다.
+ */
+function thousandsScale(core:string){
+  const last=Math.max(core.lastIndexOf('0'),core.lastIndexOf('#'),core.lastIndexOf('?'))
+  if(last<0)return{scale:0,useGrouping:core.includes(',')}
+  return{scale:(core.slice(last+1).match(/,/g)??[]).length,useGrouping:core.slice(0,last).includes(',')}
 }
 
 /**

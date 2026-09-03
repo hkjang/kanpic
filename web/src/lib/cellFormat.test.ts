@@ -42,6 +42,38 @@ describe('the grid rounds the way the server does',()=>{
   })
 })
 
+// 엑셀 서식은 값의 부호마다 다른 구역을 담고, 자리 기호 뒤의 쉼표는 자릿점이
+// 아니라 천 단위 축약이다. 둘 다 재무 자료에서 온 파일에 흔하다.
+//
+// 예전에는 구역이 둘뿐인 줄 알고 0 을 늘 양수 구역으로 보냈고(회계 서식의 0 은
+// "-" 인데 "0" 이었다), 비워 둔 구역을 감추지 않았으며, 쉼표가 있기만 하면
+// 자릿점으로 보아 "#,##0,," 이 백만 배로 보였다. 아래 값은 서버의
+// internal/formula/cell_formats_test.go 와 **같은 글자** 를 고정한다.
+describe('the grid picks the format section the value belongs to',()=>{
+  const shown=(value:number,format:string)=>formatCellValue(value,{number_format:format},'en-US')
+  it('draws zero with the third section and hides an empty one',()=>{
+    expect(shown(0,'#,##0;(#,##0)')).toBe('0')
+    expect(shown(0,'#,##0;(#,##0);"-"')).toBe('-')
+    expect(shown(-1234,'#,##0;(#,##0);"-"')).toBe('(1,234)')
+    expect(shown(0,'0;-0;"영"')).toBe('영')
+    expect(shown(-5,'0;;')).toBe('')
+    expect(shown(0,'0;;')).toBe('')
+    expect(shown(5,'0;;')).toBe('5')
+    expect(shown(5,'"판매"')).toBe('판매')
+    // 따옴표 안의 쌍반점은 구역을 가르지 않는다.
+    expect(shown(-5,'#,##0;"내려감;"')).toBe('내려감;')
+  })
+  it('shrinks by a thousand for every comma behind the digits',()=>{
+    expect(shown(1234567,'#,##0,')).toBe('1,235')
+    expect(shown(1234567,'#,##0,,')).toBe('1')
+    expect(shown(1234567,'0.0,,')).toBe('1.2')
+    expect(shown(-1234567,'#,##0,,')).toBe('-1')
+    // 자리 기호 사이의 쉼표는 그대로 자릿점이다.
+    expect(shown(1234567,'#,##0')).toBe('1,234,567')
+    expect(shown(1234567,'0')).toBe('1234567')
+  })
+})
+
 // 엑셀 파일에서 읽어 온 날짜는 1899-12-30부터 센 날 수로 담긴다. 격자는
 // 이 번호를 날짜로 보여주어야 하고, 서버의 수식도 같은 날짜로 읽어야 한다.
 // 아래 값은 서버의 internal/formula/library_extended_test.go 와 **같은
