@@ -183,12 +183,17 @@ func formatValue(value any, pattern string) string {
 	if moment, ok := parseDate(value); ok && isDatePattern(pattern) {
 		return renderDatePattern(moment, pattern)
 	}
-	number, ok := toNumber(value)
-	if !ok {
-		return display(value)
-	}
 	// 서식은 값의 부호마다 다른 구역을 담는다. ";" 로 나눈다.
 	sections := formatSections(pattern)
+	number, ok := toNumber(value)
+	if !ok {
+		// 넷째 구역은 글자 값의 서식이다. 구역이 넷이 안 되면 엑셀은 글자를
+		// 손대지 않는다.
+		if section, isText := textSection(sections); isText {
+			return renderTextSection(section, display(value))
+		}
+		return display(value)
+	}
 	section, flipped := sectionForNumber(sections, number)
 	if flipped {
 		number = -number
@@ -196,6 +201,11 @@ func formatValue(value any, pattern string) string {
 	// 비워 둔 구역은 "그 값은 적지 말라" 는 뜻이다. "0;;" 은 음수와 0 을 감춘다.
 	if section == "" {
 		return ""
+	}
+	// @ 는 값을 있는 그대로 적으라는 자리다. 수에도 쓴다 — 5 에 @"원" 은
+	// "5원" 이다. 예전에는 자리 기호가 아니라고 보아 "@원" 이라고 적었다.
+	if hasTextPlaceholder(section) {
+		return renderTextSection(section, display(value))
 	}
 	// 0.00E+00 처럼 지수로 적는 서식. E 뒤의 0 개수만큼 지수 자리를 채운다.
 	if match := scientificPattern.FindStringSubmatch(section); match != nil {
@@ -301,6 +311,100 @@ func sectionForNumber(sections []string, number float64) (string, bool) {
 		return sections[2], false
 	}
 	return sections[0], false
+}
+
+// textSection 은 글자 값을 그릴 구역을 고른다.
+//
+// 엑셀 서식의 넷째 구역은 글자 값의 서식이다 — 회계 서식의 마지막 토막
+// `_-@_-` 와 `#,##0;(#,##0);"-";"["@"]"` 의 `"["@"]"` 가 그것이다. 구역이
+// 넷이 안 되면 엑셀은 글자를 손대지 않는다. 다만 구역이 하나뿐인데 그 안에
+// @ 가 있으면 그 구역이 곧 글자 구역이다 — `@" 님"` 처럼 이름 뒤에 말을
+// 붙이는 데 흔히 쓴다.
+//
+// 예전에는 넷째 구역을 아예 읽지 않아 글자 칸이 서식 없이 그대로 나왔고,
+// `@" 님"` 은 "@ 님" 이라고 적혔다.
+//
+// web/src/lib/cellFormat.ts 의 textSection 과 같은 규칙이다.
+func textSection(sections []string) (string, bool) {
+	if len(sections) > 3 {
+		return sections[3], true
+	}
+	if len(sections) == 1 && hasTextPlaceholder(sections[0]) {
+		return sections[0], true
+	}
+	return "", false
+}
+
+// hasTextPlaceholder 는 구역에 값 자리(@)가 있는지 본다. 따옴표 안과 대괄호
+// 안의 @ 는 그냥 글자다 — [$@-409] 같은 나라 코드가 있다.
+func hasTextPlaceholder(section string) bool {
+	found := false
+	scanFormatSection(section, func(character rune, _ string) {
+		if character == '@' {
+			found = true
+		}
+	})
+	return found
+}
+
+// renderTextSection 은 글자 구역을 그린다. @ 자리에 값이 들어가고, 나머지는
+// splitFormatSection 과 같은 규칙으로 읽는다 — 따옴표 안은 그대로 적고,
+// 대괄호 안의 색·나라 코드는 그리지 않으며(통화 기호만 꺼낸다), _ 와 * 는
+// 자리 맞추기라 그리지 않는다.
+func renderTextSection(section, text string) string {
+	var out strings.Builder
+	scanFormatSection(section, func(character rune, literal string) {
+		switch character {
+		case '@':
+			out.WriteString(text)
+		case 0:
+			out.WriteString(literal)
+		default:
+			out.WriteRune(character)
+		}
+	})
+	return out.String()
+}
+
+// scanFormatSection 은 구역을 한 글자씩 읽어 넘긴다. 따옴표·대괄호·역빗금으로
+// 묶인 것은 글자(literal)로, 나머지는 글자 하나(character)로 넘어온다. _ 와 *
+// 는 자리 맞추기라 그 뒤 한 글자와 함께 건너뛴다.
+func scanFormatSection(section string, emit func(character rune, literal string)) {
+	runes := []rune(section)
+	closing := func(start int, mark rune) int {
+		for index := start; index < len(runes); index++ {
+			if runes[index] == mark {
+				return index
+			}
+		}
+		return len(runes)
+	}
+	for index := 0; index < len(runes); index++ {
+		switch character := runes[index]; character {
+		case '"':
+			end := closing(index+1, '"')
+			emit(0, string(runes[index+1:end]))
+			index = end
+		case '[':
+			end := closing(index+1, ']')
+			inside := string(runes[index+1 : end])
+			if strings.HasPrefix(inside, "$") {
+				if symbol := strings.SplitN(inside[1:], "-", 2)[0]; symbol != "" {
+					emit(0, symbol)
+				}
+			}
+			index = end
+		case '_', '*':
+			index++
+		case '\\':
+			if index+1 < len(runes) {
+				emit(0, string(runes[index+1]))
+				index++
+			}
+		default:
+			emit(character, "")
+		}
+	}
 }
 
 // thousandsScale 은 자리 기호 **뒤** 에 붙은 쉼표를 센다. 그 쉼표는 자릿점이

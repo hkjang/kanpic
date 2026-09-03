@@ -8,7 +8,8 @@ import {formatCellValue} from './cellFormat'
 //
 // testdata/cell-formats.json 을 서버의 internal/formula/cell_formats_test.go
 // 와 함께 읽는다. 한쪽만 고치면 양쪽 다 걸린다.
-type FormatCase={value:number;format:string;text:string}
+// 값은 수만이 아니다. 넷째 구역(글자 구역)은 글자 값에만 걸린다.
+type FormatCase={value:unknown;format:string;text:string}
 
 describe('the grid writes what the server writes',()=>{
   it('agrees on every format in testdata/cell-formats.json',()=>{
@@ -17,7 +18,7 @@ describe('the grid writes what the server writes',()=>{
     const wrong:string[]=[]
     for(const item of fixture.cases){
       const drawn=formatCellValue(item.value,{number_format:item.format},fixture.locale)
-      if(drawn!==item.text)wrong.push(`${item.value} + "${item.format}" -> ${JSON.stringify(drawn)}, 서버는 ${JSON.stringify(item.text)}`)
+      if(drawn!==item.text)wrong.push(`${JSON.stringify(item.value)} + "${item.format}" -> ${JSON.stringify(drawn)}, 서버는 ${JSON.stringify(item.text)}`)
     }
     expect(wrong.slice(0,20)).toEqual([])
   })
