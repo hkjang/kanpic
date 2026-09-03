@@ -74,6 +74,40 @@ describe('the grid picks the format section the value belongs to',()=>{
   })
 })
 
+// 분수 서식은 값을 소수가 아니라 분수로 적는다. 엑셀 기본 서식 12·13 번
+// (`# ?/?`, `# ??/??`)이라 XLSX 로 그냥 들어오는데, 예전에는 자리 기호만 세고
+// 빗금을 글자로 흘려 보내 `# ?/?` 가 0.5 를 "1/2" 가 아니라 "1/" 로 그렸다.
+// 아래 값은 서버의 internal/formula/cell_formats_test.go 와 **같은 글자** 다.
+describe('the grid draws fraction formats as fractions',()=>{
+  const shown=(value:number,format:string)=>formatCellValue(value,{number_format:format},'en-US')
+  it('picks the closest fraction the placeholders allow',()=>{
+    expect(shown(.3125,'# ?/?')).toBe('1/3')
+    expect(shown(.3125,'# ??/??')).toBe('5/16')
+    expect(shown(3.14159,'# ???/???')).toBe('3 16/113')
+    // 같은 만큼 어긋나면 분모가 작은 쪽이다.
+    expect(shown(.5,'# ?/?')).toBe('1/2')
+    expect(shown(.5,'# ??/??')).toBe('1/2')
+    // 분모를 숫자로 못 박으면 약분하지 않는다.
+    expect(shown(.5,'?/8')).toBe('4/8')
+    expect(shown(.375,'?/8')).toBe('3/8')
+  })
+  it('splits off a whole part only when the format has one',()=>{
+    expect(shown(2.75,'# ?/?')).toBe('2 3/4')
+    expect(shown(5.25,'#/#')).toBe('21/4')
+    expect(shown(.99,'# ?/?')).toBe('1')
+    expect(shown(1,'# ?/?')).toBe('1')
+    expect(shown(.5,'0 ?/?')).toBe('0 1/2')
+    expect(shown(1234.5,'#,##0 ?/?')).toBe('1,234 1/2')
+  })
+  it('keeps the sign and the literals, and never draws -0',()=>{
+    expect(shown(-2.75,'# ?/?')).toBe('-2 3/4')
+    expect(shown(-.02,'# ?/?')).toBe('0')
+    expect(shown(2.75,'# ?/?" 개"')).toBe('2 3/4 개')
+    // 날짜 서식의 빗금은 자리 기호 사이에 있지 않으므로 분수가 아니다.
+    expect(shown(45000.5,'m/d/yyyy')).toBe('3/15/2023')
+  })
+})
+
 // 엑셀 파일에서 읽어 온 날짜는 1899-12-30부터 센 날 수로 담긴다. 격자는
 // 이 번호를 날짜로 보여주어야 하고, 서버의 수식도 같은 날짜로 읽어야 한다.
 // 아래 값은 서버의 internal/formula/library_extended_test.go 와 **같은
