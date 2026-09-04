@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -381,8 +380,11 @@ func parseCSV(body string) formula.ExternalResult {
 				values = append(values, nil)
 				continue
 			}
+			// 수로 읽는 자는 수식 엔진의 것 하나뿐이다 — 스프레드시트가
+			// 수라고 부르는 것이지 Go 가 수라고 부르는 것이 아니다.
+			// 16진수도, NaN 도, 밑줄로 자리를 가른 것도 수가 아니다.
 			text := strings.TrimSpace(record[column])
-			if number, ok := csvNumber(text); ok {
+			if number, ok := formula.DecimalNumber(text); ok {
 				values = append(values, number)
 			} else {
 				values = append(values, record[column])
@@ -390,26 +392,6 @@ func parseCSV(body string) formula.ExternalResult {
 		}
 	}
 	return formula.ExternalResult{Rows: len(records), Columns: columns, Values: values}
-}
-
-// csvNumber is deliberately the spreadsheet's idea of a number, not Go's: no
-// hex, no NaN, no underscores. See decimalText in the formula package.
-func csvNumber(text string) (float64, bool) {
-	if text == "" {
-		return 0, false
-	}
-	for index, character := range text {
-		switch {
-		case character >= '0' && character <= '9', character == '.':
-		case (character == '-' || character == '+') && index == 0:
-		case (character == 'e' || character == 'E') && index > 0:
-		case (character == '-' || character == '+') && index > 0 && (text[index-1] == 'e' || text[index-1] == 'E'):
-		default:
-			return 0, false
-		}
-	}
-	number, err := strconv.ParseFloat(text, 64)
-	return number, err == nil
 }
 
 func stringList(value any) []string {
