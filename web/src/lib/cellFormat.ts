@@ -13,16 +13,25 @@ export function formatCellValue(value:unknown,style?:Record<string,unknown>,loca
     const date=spreadsheetDate(value)
     if(date)return formatDate(date,format,locale)
   }
-  if(typeof value!=='number'||!Number.isFinite(value))return String(value)
   // 서식은 값의 부호마다 다른 구역을 담는다. 음수 구역이 따로 있으면 그
   // 구역이 부호를 스스로 적는다. (#,##0) 은 괄호로 적겠다는 뜻이므로 빼기
   // 부호를 덧붙이면 -(5) 가 된다.
   const sections=formatSections(format)
+  if(typeof value!=='number'||!Number.isFinite(value)){
+    // 넷째 구역은 글자 값의 서식이다. 구역이 넷이 안 되면 엑셀은 글자를
+    // 손대지 않는다.
+    const text=textSection(sections)
+    if(text!==undefined&&typeof value!=='number')return renderTextSection(text,String(value))
+    return String(value)
+  }
   const negativeSection=value<0&&sections.length>1
   const zeroSection=value===0&&sections.length>2
   const section=(negativeSection?sections[1]:zeroSection?sections[2]:sections[0])??format
   // 비워 둔 구역은 "그 값은 적지 말라" 는 뜻이다. "0;;" 은 음수와 0 을 감춘다.
   if(section==='')return ''
+  // @ 는 값을 있는 그대로 적으라는 자리다. 수에도 쓴다 — 5 에 @"원" 은
+  // "5원" 이다. 예전에는 자리 기호가 아니라고 보아 "@원" 이라고 그렸다.
+  if(hasTextPlaceholder(section))return renderTextSection(section,String(value))
   const scientific=section.match(/^0(?:\.(0+))?[eE]([+-])(0+)$/)
   if(scientific){
     // 지수 자리는 서식에 적은 0 개수만큼 채운다. toExponential 은 자리를
@@ -104,6 +113,67 @@ export function formatSections(format:string){
   }
   sections.push(current)
   return sections
+}
+
+/**
+ * 글자 값을 그릴 구역을 고른다.
+ *
+ * 엑셀 서식의 넷째 구역은 글자 값의 서식이다 — 회계 서식의 마지막 토막
+ * `_-@_-` 와 `#,##0;(#,##0);"-";"["@"]"` 의 `"["@"]"` 가 그것이다. 구역이
+ * 넷이 안 되면 엑셀은 글자를 손대지 않는다. 다만 구역이 하나뿐인데 그 안에
+ * @ 가 있으면 그 구역이 곧 글자 구역이다 — `@" 님"` 처럼 이름 뒤에 말을
+ * 붙이는 데 흔히 쓴다.
+ *
+ * 예전에는 넷째 구역을 아예 읽지 않아 글자 칸이 서식 없이 그대로 나왔다.
+ * 서버의 internal/formula 의 textSection 과 같은 규칙이다.
+ */
+function textSection(sections:string[]){
+  if(sections.length>3)return sections[3]
+  if(sections.length===1&&hasTextPlaceholder(sections[0]))return sections[0]
+}
+
+// 따옴표 안과 대괄호 안의 @ 는 그냥 글자다 — [$@-409] 같은 나라 코드가 있다.
+function hasTextPlaceholder(section:string){
+  let found=false
+  scanFormatSection(section,character=>{if(character==='@')found=true})
+  return found
+}
+
+// 글자 구역을 그린다. @ 자리에 값이 들어가고, 나머지는 parseFormatSection 과
+// 같은 규칙으로 읽는다 — 따옴표 안은 그대로 적고, 대괄호 안의 색·나라 코드는
+// 그리지 않으며(통화 기호만 꺼낸다), _ 와 * 는 자리 맞추기라 그리지 않는다.
+function renderTextSection(section:string,text:string){
+  let out=''
+  scanFormatSection(section,(character,literal)=>{out+=character===undefined?literal:character==='@'?text:character})
+  return out
+}
+
+// 구역을 한 글자씩 읽어 넘긴다. 따옴표·대괄호·역빗금으로 묶인 것은
+// 글자(literal)로, 나머지는 글자 하나(character)로 넘어온다.
+function scanFormatSection(section:string,emit:(character:string|undefined,literal:string)=>void){
+  for(let index=0;index<section.length;index+=1){
+    const character=section[index]
+    if(character==='"'){
+      const end=section.indexOf('"',index+1)
+      emit(undefined,section.slice(index+1,end<0?section.length:end))
+      index=end<0?section.length:end
+      continue
+    }
+    if(character==='['){
+      const end=section.indexOf(']',index+1)
+      const inside=section.slice(index+1,end<0?section.length:end)
+      if(inside.startsWith('$')){
+        const symbol=inside.slice(1).split('-')[0]
+        if(symbol!=='')emit(undefined,symbol)
+      }
+      index=end<0?section.length:end
+      continue
+    }
+    // _x 는 x 만큼 자리를 비우고, *x 는 x 로 채운다. 둘 다 값이 아니다.
+    if(character==='_'||character==='*'){index+=1;continue}
+    if(character==='\\'){if(index+1<section.length)emit(undefined,section[index+1]??'');index+=1;continue}
+    emit(character,'')
+  }
 }
 
 /**

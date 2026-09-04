@@ -74,6 +74,36 @@ describe('the grid picks the format section the value belongs to',()=>{
   })
 })
 
+// 엑셀 서식의 넷째 구역은 글자 값의 서식이다 — 회계 서식의 마지막 토막
+// `_-@_-` 가 그것이고, `#,##0;(#,##0);"-";"["@"]"` 는 글자 칸을 [미정] 으로
+// 그린다. 예전에는 그 구역을 아예 읽지 않아 글자 칸이 서식 없이 그대로
+// 나왔고, 이름 뒤에 말을 붙이는 `@" 님"` 은 "@ 님" 이라고 그렸다.
+// 아래 값은 서버의 internal/formula/cell_formats_test.go 와 **같은 글자** 다.
+describe('the grid draws text with the fourth section',()=>{
+  const shown=(value:unknown,format:string)=>formatCellValue(value,{number_format:format},'en-US')
+  it('gives text values the fourth section and leaves shorter formats alone',()=>{
+    expect(shown('미정','#,##0;(#,##0);"-";"["@"]"')).toBe('[미정]')
+    expect(shown('미정','_-* #,##0_-;-* #,##0_-;_-* "-"_-;_-@_-')).toBe('미정')
+    expect(shown('미정','0;;;"기타"')).toBe('기타')
+    // 비워 둔 넷째 구역은 글자를 감춘다.
+    expect(shown('미정','#,##0;;;')).toBe('')
+    // 구역이 넷이 안 되면 글자를 손대지 않는다.
+    expect(shown('미정','#,##0;(#,##0);"-"')).toBe('미정')
+    expect(shown('미정','#,##0')).toBe('미정')
+  })
+  it('reads a lone section with @ as the text section',()=>{
+    expect(shown('홍길동','@" 님"')).toBe('홍길동 님')
+    expect(shown('홍길동','"("@")"')).toBe('(홍길동)')
+    // @ 는 수에도 걸린다. 값을 있는 그대로 적는 자리다.
+    expect(shown(5,'@" 님"')).toBe('5 님')
+  })
+  it('still draws numbers with the sections in front',()=>{
+    expect(shown(1234,'#,##0;(#,##0);"-";"["@"]"')).toBe('1,234')
+    expect(shown(-1234,'#,##0;(#,##0);"-";"["@"]"')).toBe('(1,234)')
+    expect(shown(0,'#,##0;(#,##0);"-";"["@"]"')).toBe('-')
+  })
+})
+
 // 분수 서식은 값을 소수가 아니라 분수로 적는다. 엑셀 기본 서식 12·13 번
 // (`# ?/?`, `# ??/??`)이라 XLSX 로 그냥 들어오는데, 예전에는 자리 기호만 세고
 // 빗금을 글자로 흘려 보내 `# ?/?` 가 0.5 를 "1/2" 가 아니라 "1/" 로 그렸다.

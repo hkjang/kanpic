@@ -21,9 +21,10 @@ func TestCellFormatsMatchTheGrid(t *testing.T) {
 	}
 	var fixture struct {
 		Cases []struct {
-			Value  float64 `json:"value"`
-			Format string  `json:"format"`
-			Text   string  `json:"text"`
+			// 값은 수만이 아니다. 넷째 구역(글자 구역)은 글자 값에만 걸린다.
+			Value  any    `json:"value"`
+			Format string `json:"format"`
+			Text   string `json:"text"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(raw, &fixture); err != nil {
@@ -97,6 +98,44 @@ func TestFormatSectionsAndThousandsScaleFollowExcel(t *testing.T) {
 	} {
 		if got := formatValue(testCase.number, testCase.format); got != testCase.want {
 			t.Errorf("TEXT(%v, %q) = %q, 엑셀은 %q 를 적는다", testCase.number, testCase.format, got, testCase.want)
+		}
+	}
+}
+
+// 엑셀 서식의 넷째 구역은 글자 값의 서식이다 — 회계 서식의 마지막 토막
+// `_-@_-` 가 그것이고, `#,##0;(#,##0);"-";"["@"]"` 는 글자 칸을 [미정] 으로
+// 적는다. 예전에는 그 구역을 아예 읽지 않아 글자 값이 서식 없이 그대로
+// 나왔고, 이름 뒤에 말을 붙이는 `@" 님"` 은 "@ 님" 이라고 적혔다.
+// 값은 testdata/cell-formats.json 이 격자와 함께 붙잡는다. 여기서는 규칙
+// 자체를 적어 둔다.
+func TestTextSectionsFollowExcel(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		value  any
+		format string
+		want   string
+	}{
+		// 넷째 구역이 글자 값을 그린다.
+		{"미정", `#,##0;(#,##0);"-";"["@"]"`, "[미정]"},
+		{"미정", `_-* #,##0_-;-* #,##0_-;_-* "-"_-;_-@_-`, "미정"},
+		{"미정", `0;;;"기타"`, "기타"},
+		// 비워 둔 넷째 구역은 글자를 감춘다.
+		{"미정", `#,##0;;;`, ""},
+		// 구역이 넷이 안 되면 글자를 손대지 않는다.
+		{"미정", `#,##0;(#,##0);"-"`, "미정"},
+		{"미정", `#,##0`, "미정"},
+		// 구역이 하나뿐인데 @ 가 있으면 그 구역이 곧 글자 구역이다.
+		{"홍길동", `@" 님"`, "홍길동 님"},
+		{"홍길동", `"("@")"`, "(홍길동)"},
+		// @ 는 수에도 걸린다. 값을 있는 그대로 적는 자리다.
+		{5.0, `@" 님"`, "5 님"},
+		// 앞의 구역들은 그대로 수를 적는다.
+		{1234.0, `#,##0;(#,##0);"-";"["@"]"`, "1,234"},
+		{-1234.0, `#,##0;(#,##0);"-";"["@"]"`, "(1,234)"},
+		{0.0, `#,##0;(#,##0);"-";"["@"]"`, "-"},
+	} {
+		if got := formatValue(testCase.value, testCase.format); got != testCase.want {
+			t.Errorf("TEXT(%v, %q) = %q, 엑셀은 %q 를 적는다", testCase.value, testCase.format, got, testCase.want)
 		}
 	}
 }
