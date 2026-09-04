@@ -1081,8 +1081,14 @@ func parseScalar(value string) any {
 	if lower == "false" {
 		return false
 	}
+	// 수로 읽는 자는 수식 엔진과 격자가 함께 쓰는 자여야 한다. Go 의
+	// ParseFloat 는 그보다 넓어 "NaN"·"Inf"·"1_000"·"0x1p4" 까지 받는데,
+	// pandas 나 R 이 내보낸 CSV 에는 빠진 값이 "NaN" 이라는 글자로 들어 있다.
+	// 그 한 칸이 부동소수점 NaN 이 되면 JSON 으로 적을 수 없어 파일이 통째로
+	// 들어오지 못했고, "1_000" 은 조용히 1000 이 되어 적힌 것과 다른 값을
+	// 남겼다. 그런 것은 수가 아니라 글자로 두어야 파일에 적힌 대로 남는다.
 	if !hasSignificantLeadingZero(value) && !tooLongToHoldExactly(value) {
-		if number, err := strconv.ParseFloat(value, 64); err == nil {
+		if number, ok := formula.DecimalNumber(value); ok {
 			return number
 		}
 	}
@@ -1140,7 +1146,7 @@ func parseXLSXValue(value string, cellType excelize.CellType) any {
 		if value == "" || hasSignificantLeadingZero(value) {
 			return value
 		}
-		if number, err := strconv.ParseFloat(value, 64); err == nil {
+		if number, ok := formula.DecimalNumber(value); ok {
 			return number
 		}
 	case excelize.CellTypeBool:
@@ -1149,8 +1155,7 @@ func parseXLSXValue(value string, cellType excelize.CellType) any {
 			return boolean
 		}
 	case excelize.CellTypeNumber:
-		number, err := strconv.ParseFloat(value, 64)
-		if err == nil {
+		if number, ok := formula.DecimalNumber(value); ok {
 			return number
 		}
 	}

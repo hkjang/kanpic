@@ -1373,13 +1373,24 @@ func toNumber(value any) (float64, bool) {
 // holds both sides to it.
 var decimalText = regexp.MustCompile(`^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$`)
 
-func numberFromText(value string) (float64, bool) {
-	text := strings.TrimSpace(value)
+// DecimalNumber 는 같은 자를 이 꾸러미 바깥에도 빌려 준다. 파일을 읽어
+// 들이는 자리(internal/importexport, internal/external)가 Go 의 ParseFloat 를
+// 그대로 쓰면 파일에 적힌 "NaN" 이 부동소수점 NaN 이 되는데, 그 값은 JSON 으로
+// 적을 수 없어 그 한 칸 때문에 파일이 통째로 들어오지 못한다. "1_000" 은 더
+// 나쁘다 — 조용히 1000 이 되어, 파일에 적힌 것과 다른 값이 칸에 남는다.
+//
+// 앞뒤 빈칸은 부르는 쪽이 정한다. 셈에 끼어드는 값은 빈칸을 버리고 세지만,
+// 파일에서 온 값은 적힌 그대로 두어야 한다.
+func DecimalNumber(text string) (float64, bool) {
 	if !decimalText.MatchString(text) {
 		return 0, false
 	}
 	number, err := strconv.ParseFloat(text, 64)
 	return number, err == nil
+}
+
+func numberFromText(value string) (float64, bool) {
+	return DecimalNumber(strings.TrimSpace(value))
 }
 func numericValues(values []any) []float64 {
 	result := make([]float64, 0)
