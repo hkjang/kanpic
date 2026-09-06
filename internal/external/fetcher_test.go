@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -204,6 +205,71 @@ func TestCacheSweepsExpiredAndStaysBounded(t *testing.T) {
 	}
 	if _, ok := fetcher.cache["live0"]; ok {
 		t.Error("먼저 만료될 답부터 나가야 한다")
+	}
+}
+
+// 관리자가 external.max_kb 를 올리면 그 자리에서 통해야 한다. 크기 상한은 부르는
+// 방법을 정하는 정책이므로, 옛 상한에서 받은 거절은 새 상한에 대한 답이 아니다.
+func TestRaisingTheSizeCeilingIsBelievedAtOnce(t *testing.T) {
+	hits := 0
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(strings.Repeat("x", 3*1024)))
+	})
+	settings := fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}, "external.cache_seconds": float64(300), "external.max_kb": float64(2)}
+	fetcher := withInsecureTLS(testFetcher(settings), server)
+	now := time.Now()
+	fetcher.now = func() time.Time { return now }
+	request := formula.ExternalRequest{Function: "WEBSERVICE", URL: server.URL + "/big"}
+	key := formula.ExternalKey(request.Function, request.URL)
+	resolve := func() formula.ExternalResult {
+		return fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[key]
+	}
+	if got := resolve(); got.Err == nil || !strings.Contains(got.Err.Message, "크기") {
+		t.Fatalf("상한을 넘으면 거절해야 한다: %+v", got)
+	}
+	if got := resolve(); got.Err == nil || hits != 1 {
+		t.Fatalf("정책이 그대로면 다시 부르지 않아야 한다: %+v, %d번", got, hits)
+	}
+	settings["external.max_kb"] = float64(8)
+	if got := resolve(); got.Err != nil || len(got.Text) != 3*1024 {
+		t.Fatalf("상한을 올리면 캐시에 든 거절을 내주면 안 된다: %+v", got)
+	}
+	settings["external.max_kb"] = float64(2)
+	if got := resolve(); got.Err == nil || !strings.Contains(got.Err.Message, "크기") {
+		t.Fatalf("상한을 내리면 캐시에 든 답도 내주면 안 된다: %+v", got)
+	}
+}
+
+// 한 번의 다시 계산이 여러 주소를 부르고, 여러 사람이 같은 워크북을 함께 고친다.
+// Fetcher 는 함께 써도 안전하다고 적혀 있으므로 -race 로 그것을 못 박는다.
+func TestResolveIsSafeToShare(t *testing.T) {
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok" + r.URL.Path))
+	})
+	fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}, "external.cache_seconds": float64(300)}), server)
+	var waiting sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		waiting.Add(1)
+		go func(worker int) {
+			defer waiting.Done()
+			requests := make([]formula.ExternalRequest, 0, 4)
+			for index := 0; index < 4; index++ {
+				requests = append(requests, formula.ExternalRequest{Function: "WEBSERVICE", URL: server.URL + "/p" + strconv.Itoa((worker+index)%5)})
+			}
+			results := fetcher.Resolve(context.Background(), requests)
+			for _, request := range requests {
+				got := results[formula.ExternalKey(request.Function, request.URL)]
+				path := strings.TrimPrefix(request.URL, server.URL)
+				if got.Err != nil || got.Text != "ok"+path {
+					t.Errorf("%s 의 답이 다르다: %+v", path, got)
+				}
+			}
+		}(worker)
+	}
+	waiting.Wait()
+	if len(fetcher.cache) != 5 {
+		t.Fatalf("주소마다 한 자리씩만 써야 한다: %d", len(fetcher.cache))
 	}
 }
 
