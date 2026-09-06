@@ -149,7 +149,7 @@ func (f *Fetcher) one(ctx context.Context, config Config, request formula.Extern
 	if err != nil {
 		return formula.ExternalResult{Err: &formula.Error{Code: "#N/A", Message: err.Error()}}
 	}
-	key := formula.ExternalKey(request.Function, request.URL)
+	key := cacheKey(config, request)
 	f.mu.Lock()
 	if hit, ok := f.cache[key]; ok && f.now().Before(hit.expires) {
 		f.mu.Unlock()
@@ -169,6 +169,18 @@ func (f *Fetcher) one(ctx context.Context, config Config, request formula.Extern
 		f.store(key, result, f.now().Add(config.CacheFor))
 	}
 	return result
+}
+
+// cacheKey names an answer by what was asked for and by the policy that shaped
+// the asking. The size ceiling and the timeout decide whether a fetch comes
+// back with a body or with a refusal, so what was kept under the old ceiling is
+// not an answer to the new one: raising external.max_kb has to be believed at
+// once, exactly as fixing external.allowed_hosts is. Without this the cell that
+// says "응답이 허용된 크기를 넘습니다" goes on saying it for cache_seconds after
+// the administrator has already raised the limit, and the administrator sees no
+// reason to believe the setting worked.
+func cacheKey(config Config, request formula.ExternalRequest) string {
+	return fmt.Sprintf("%d\x00%d\x00%s", config.MaxBytes, config.Timeout, formula.ExternalKey(request.Function, request.URL))
 }
 
 // store keeps one answer and takes out the rubbish while it is holding the
