@@ -43,6 +43,13 @@ const (
 	defaultTimeout  = 10 * time.Second
 	defaultMaxBytes = 1 << 20 // 1 MiB
 	defaultCacheFor = 5 * time.Minute
+	// failureCacheFor caps how long a failure that came from the far side is
+	// kept. Whether the answer is right is the remote's business, not the
+	// policy's: a 503 during a deploy or one call that ran out of time must not
+	// go on being the answer for cache_seconds (up to a day) after the remote is
+	// well again. Keeping it for a little while all the same is what stops a
+	// workbook from paying the timeout afresh on every recalculation.
+	failureCacheFor = 30 * time.Second
 	// MaxRequestsPerRecalculation bounds one recalculation's outbound calls.
 	MaxRequestsPerRecalculation = 20
 	maxCSVCells                 = formula.MaxImportedCells
@@ -158,18 +165,34 @@ func (f *Fetcher) one(ctx context.Context, config Config, request formula.Extern
 	f.mu.Unlock()
 	body, err := f.fetch(ctx, config, target)
 	var result formula.ExternalResult
+	keepFor := config.CacheFor
 	if err != nil {
 		result = formula.ExternalResult{Err: &formula.Error{Code: "#N/A", Message: err.Error()}}
+		var fromTheFarSide remoteFailure
+		if errors.As(err, &fromTheFarSide) && keepFor > failureCacheFor {
+			keepFor = failureCacheFor
+		}
 	} else if request.Function == "IMPORTDATA" {
 		result = parseCSV(body)
 	} else {
 		result = formula.ExternalResult{Text: body}
 	}
-	if config.CacheFor > 0 {
-		f.store(key, result, f.now().Add(config.CacheFor))
+	if keepFor > 0 {
+		f.store(key, result, f.now().Add(keepFor))
 	}
 	return result
 }
+
+// remoteFailure marks a refusal the remote is responsible for — it answered
+// with an error status, or it did not answer at all — as against one this
+// policy decided (a redirect, a private address, a body over the ceiling),
+// which the same request would earn again from the same response. Only the
+// first kind stops being true when somebody else fixes something.
+type remoteFailure struct{ err error }
+
+func (r remoteFailure) Error() string { return r.err.Error() }
+
+func (r remoteFailure) Unwrap() error { return r.err }
 
 // cacheKey names an answer by what was asked for and by the policy that shaped
 // the asking. The size ceiling and the timeout decide whether a fetch comes
@@ -341,16 +364,16 @@ func (f *Fetcher) fetch(ctx context.Context, config Config, target *url.URL) (st
 			return "", errPrivate
 		}
 		f.logger.Warn("external fetch failed", "url", target.String(), "error", err)
-		return "", errors.New("주소에 닿지 못했습니다: " + short(err.Error()))
+		return "", remoteFailure{errors.New("주소에 닿지 못했습니다: " + short(err.Error()))}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", fmt.Errorf("주소가 %d 로 답했습니다", response.StatusCode)
+		return "", remoteFailure{fmt.Errorf("주소가 %d 로 답했습니다", response.StatusCode)}
 	}
 	limited := io.LimitReader(response.Body, config.MaxBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
-		return "", errors.New("응답을 읽지 못했습니다")
+		return "", remoteFailure{errors.New("응답을 읽지 못했습니다")}
 	}
 	if int64(len(data)) > config.MaxBytes {
 		return "", fmt.Errorf("%w (%d KB)", errTooLarge, config.MaxBytes/1024)

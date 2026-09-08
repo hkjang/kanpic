@@ -241,6 +241,64 @@ func TestRaisingTheSizeCeilingIsBelievedAtOnce(t *testing.T) {
 	}
 }
 
+// 원격이 500 으로 답한 것은 정책이 정한 일이 아니라 저쪽 사정이다. 배포가 끝나 원격이
+// 다시 멀쩡해졌는데도 cache_seconds(최대 하루) 동안 그 거절이 답인 척하면 안 된다.
+// 그렇다고 아예 담지 않으면 시간 제한을 매 다시 계산마다 처음부터 다시 기다리므로
+// 잠깐만 담는다. 이 응답의 성질이 정한 거절(크기 상한)은 그것과 달라 그대로 담긴다.
+func TestRemoteFailuresAreKeptOnlyBriefly(t *testing.T) {
+	broken := true
+	hits := 0
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch {
+		case r.URL.Path == "/big":
+			_, _ = w.Write([]byte(strings.Repeat("x", 3*1024)))
+		case broken:
+			http.Error(w, "deploying", http.StatusInternalServerError)
+		default:
+			_, _ = w.Write([]byte("ok"))
+		}
+	})
+	fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}, "external.cache_seconds": float64(3600), "external.max_kb": float64(2)}), server)
+	now := time.Now()
+	fetcher.now = func() time.Time { return now }
+	resolve := func(path string) formula.ExternalResult {
+		request := formula.ExternalRequest{Function: "WEBSERVICE", URL: server.URL + path}
+		return fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+	}
+	if got := resolve("/x"); got.Err == nil || !strings.Contains(got.Err.Message, "500") {
+		t.Fatalf("500 은 거절로 와야 한다: %+v", got)
+	}
+	if got := resolve("/x"); got.Err == nil || hits != 1 {
+		t.Fatalf("잠깐은 담아 두어 되풀이해 부르지 않아야 한다: %+v, %d번", got, hits)
+	}
+	broken = false
+	now = now.Add(failureCacheFor / 2)
+	if got := resolve("/x"); got.Err == nil || hits != 1 {
+		t.Fatalf("아직 담긴 동안은 그 거절이 나와야 한다: %+v, %d번", got, hits)
+	}
+	now = now.Add(failureCacheFor)
+	if got := resolve("/x"); got.Err != nil || got.Text != "ok" {
+		t.Fatalf("원격이 나으면 cache_seconds 를 기다리지 않고 통해야 한다: %+v", got)
+	}
+	if hits != 2 {
+		t.Fatalf("다시 한 번만 불러야 한다: %d번", hits)
+	}
+	// 성공한 답은 예전대로 cache_seconds 만큼 산다.
+	now = now.Add(10 * time.Minute)
+	if got := resolve("/x"); got.Err != nil || got.Text != "ok" || hits != 2 {
+		t.Fatalf("성공한 답의 수명은 그대로여야 한다: %+v, %d번", got, hits)
+	}
+	// 크기를 넘긴다는 거절은 같은 응답에서 언제나 같은 답이므로 짧게 담을 까닭이 없다.
+	if got := resolve("/big"); got.Err == nil || !strings.Contains(got.Err.Message, "크기") {
+		t.Fatalf("상한을 넘으면 거절해야 한다: %+v", got)
+	}
+	now = now.Add(2 * failureCacheFor)
+	if got := resolve("/big"); got.Err == nil || hits != 3 {
+		t.Fatalf("정책이 정한 거절은 cache_seconds 만큼 담겨야 한다: %+v, %d번", got, hits)
+	}
+}
+
 // 한 번의 다시 계산이 여러 주소를 부르고, 여러 사람이 같은 워크북을 함께 고친다.
 // Fetcher 는 함께 써도 안전하다고 적혀 있으므로 -race 로 그것을 못 박는다.
 func TestResolveIsSafeToShare(t *testing.T) {
