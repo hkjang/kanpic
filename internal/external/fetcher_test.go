@@ -148,6 +148,24 @@ func TestImportDataParsesATableAndCachesIt(t *testing.T) {
 	}
 }
 
+// 소수점을 쉼표로 적는 로케일의 엑셀은 CSV 를 세미콜론으로 가른다. 업로드로 들어온
+// 그런 파일은 이미 열로 갈라 읽으므로, 같은 파일을 IMPORTDATA 로 가져와도 같은 표가
+// 나와야 한다 — 아니면 시트 하나가 A 열의 글자 덩어리로 들어앉는다.
+func TestImportDataReadsWhicheverSeparatorCutsTheFile(t *testing.T) {
+	got := parseCSV("품목;단가;비고\n연필;1200;\"가,나\"\n")
+	if got.Err != nil || got.Rows != 2 || got.Columns != 3 {
+		t.Fatalf("세미콜론으로 가른 표를 읽지 못했다: %+v", got)
+	}
+	if got.Values[3] != "연필" || got.Values[4] != 1200.0 || got.Values[5] != "가,나" {
+		t.Fatalf("칸이 다르다: %#v", got.Values)
+	}
+	// 따옴표 안의 세미콜론은 가르는 것이 아니라 글자다.
+	quoted := parseCSV("품목,비고\n연필,\"가;나;다;라\"\n")
+	if quoted.Err != nil || quoted.Columns != 2 || quoted.Values[3] != "가;나;다;라" {
+		t.Fatalf("따옴표 안의 세미콜론에 속았다: %+v", quoted)
+	}
+}
+
 // 관리자가 allowed_hosts 를 고치면 곧바로 통해야 한다. 정책은 아무 데도 닿지 않고
 // 설정만 읽으므로 캐시의 바깥에 있다.
 func TestPolicyIsNotCachedInEitherDirection(t *testing.T) {
