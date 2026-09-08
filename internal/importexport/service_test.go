@@ -50,6 +50,25 @@ func TestQuotedSeparatorsDoNotDecideHowTheFileIsCut(t *testing.T) {
 	assertRawJSON(t, cells[3].Value, float64(42))
 }
 
+// 보고서를 내보내는 도구는 표 위에 제목을 한 줄 얹는다. 그 줄은 아무것으로도
+// 갈리지 않으므로 파일이 어떻게 갈리는지에 대해 아무 말도 하지 않는데, 첫 줄만
+// 보던 때에는 그 한 줄이 세미콜론 파일 전체를 A열 한 줄짜리 글자 덩어리로
+// 만들었다 — =SUM 이 아무것도 더하지 못한다.
+func TestATitleRowAboveTheHeaderDoesNotDecideHowTheFileIsCut(t *testing.T) {
+	t.Parallel()
+	body := []byte("2026년 1분기 매출 보고서\n지점;매출\n서울;1200\n부산;900\n")
+	parsed, err := Parse("보고서.csv", body, DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Preview.Sheets[0].Columns != 2 {
+		t.Fatalf("열을 잘못 갈랐다: %#v", parsed.Preview)
+	}
+	cells := parsed.Sheets[0].Cells
+	assertRawJSON(t, cells[1].Value, "지점")
+	assertRawJSON(t, cells[4].Value, float64(1200))
+}
+
 func TestXLSXParseAndRoundTrip(t *testing.T) {
 	t.Parallel()
 	file := excelize.NewFile()

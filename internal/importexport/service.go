@@ -1055,15 +1055,19 @@ func applyImportedMerges(imported *workbook.ImportSheet, merges []excelize.Merge
 	return nil
 }
 
-// detectDelimiter hands the first line to the one rule both readers of
-// delimited files share, cutting the line off first so a twenty-megabyte
-// upload is not copied into a string to look at its head.
+// detectDelimiter hands the head of the file to the one rule both readers of
+// delimited files share, cutting it off first so a twenty-megabyte upload is
+// not copied into a string to look at how it is cut. The cut lands on a line
+// ending so the last line the rule sees is a whole one.
 func detectDelimiter(data []byte) rune {
-	line := data
-	if index := bytes.IndexByte(line, '\n'); index >= 0 {
-		line = line[:index]
+	const head = 64 << 10
+	if len(data) > head {
+		data = data[:head]
+		if index := bytes.LastIndexByte(data, '\n'); index >= 0 {
+			data = data[:index]
+		}
 	}
-	return delimited.Delimiter(string(line))
+	return delimited.Delimiter(string(data))
 }
 func parseScalar(value string) any {
 	// A delimited file that came from a spreadsheet keeps formula-looking text

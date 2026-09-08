@@ -164,6 +164,11 @@ func TestImportDataReadsWhicheverSeparatorCutsTheFile(t *testing.T) {
 	if quoted.Err != nil || quoted.Columns != 2 || quoted.Values[3] != "가;나;다;라" {
 		t.Fatalf("따옴표 안의 세미콜론에 속았다: %+v", quoted)
 	}
+	// 표 위의 제목 한 줄은 아무것으로도 갈리지 않으므로 아무것도 정하지 않는다.
+	titled := parseCSV("2026년 1분기 보고서\n품목;단가\n연필;1200\n공책;3500\n")
+	if titled.Err != nil || titled.Columns != 2 || titled.Values[4] != "연필" || titled.Values[5] != 1200.0 {
+		t.Fatalf("제목 줄에 속았다: %+v", titled)
+	}
 }
 
 // 관리자가 allowed_hosts 를 고치면 곧바로 통해야 한다. 정책은 아무 데도 닿지 않고
