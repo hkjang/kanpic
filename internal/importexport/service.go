@@ -18,6 +18,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"kanpic/internal/delimited"
 	"kanpic/internal/formula"
 	"kanpic/internal/workbook"
 	"kanpic/pkg/cellrange"
@@ -1054,20 +1055,15 @@ func applyImportedMerges(imported *workbook.ImportSheet, merges []excelize.Merge
 	return nil
 }
 
+// detectDelimiter hands the first line to the one rule both readers of
+// delimited files share, cutting the line off first so a twenty-megabyte
+// upload is not copied into a string to look at its head.
 func detectDelimiter(data []byte) rune {
-	line := string(data)
-	if index := strings.IndexByte(line, '\n'); index >= 0 {
+	line := data
+	if index := bytes.IndexByte(line, '\n'); index >= 0 {
 		line = line[:index]
 	}
-	candidates := []rune{',', ';', '\t'}
-	best, bestCount := ',', -1
-	for _, candidate := range candidates {
-		count := strings.Count(line, string(candidate))
-		if count > bestCount {
-			best, bestCount = candidate, count
-		}
-	}
-	return best
+	return delimited.Delimiter(string(line))
 }
 func parseScalar(value string) any {
 	// A delimited file that came from a spreadsheet keeps formula-looking text

@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"kanpic/internal/delimited"
 	"kanpic/internal/formula"
 )
 
@@ -381,15 +382,14 @@ func (f *Fetcher) fetch(ctx context.Context, config Config, target *url.URL) (st
 	return string(data), nil
 }
 
-// parseCSV turns a body into the table IMPORTDATA spills. Comma is assumed,
-// tab is honoured when the first line has tabs and no commas. Numbers become
-// numbers so =SUM over the result works; everything else stays text.
+// parseCSV turns a body into the table IMPORTDATA spills. What cuts the rows
+// into columns is the rule the file importer already follows, so a body reaches
+// the same table whether it is uploaded or fetched. Numbers become numbers so
+// =SUM over the result works; everything else stays text.
 func parseCSV(body string) formula.ExternalResult {
 	body = strings.TrimPrefix(body, "\uFEFF")
 	reader := csv.NewReader(strings.NewReader(body))
-	if first, _, _ := strings.Cut(body, "\n"); strings.Contains(first, "\t") && !strings.Contains(first, ",") {
-		reader.Comma = '\t'
-	}
+	reader.Comma = delimited.Delimiter(body)
 	reader.FieldsPerRecord = -1
 	reader.LazyQuotes = true
 	records, err := reader.ReadAll()

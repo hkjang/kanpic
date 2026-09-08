@@ -34,6 +34,22 @@ func TestParseCSVPreservesIdentifiersAndDoesNotExecuteFormulas(t *testing.T) {
 	}
 }
 
+// 가르는 것을 고르는 자는 따옴표 안을 세지 않는다. 헤더의 한 칸이 세미콜론을 여럿
+// 담고 있다고 해서 파일 전체가 세미콜론으로 갈리지는 않는다.
+func TestQuotedSeparatorsDoNotDecideHowTheFileIsCut(t *testing.T) {
+	t.Parallel()
+	parsed, err := Parse("customers.csv", []byte("id,\"가;나;다;라\"\n1,42\n"), DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := parsed.Sheets[0].Cells
+	if parsed.Preview.TotalCells != 4 {
+		t.Fatalf("열을 잘못 갈랐다: %#v", parsed.Preview)
+	}
+	assertRawJSON(t, cells[1].Value, "가;나;다;라")
+	assertRawJSON(t, cells[3].Value, float64(42))
+}
+
 func TestXLSXParseAndRoundTrip(t *testing.T) {
 	t.Parallel()
 	file := excelize.NewFile()
