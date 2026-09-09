@@ -179,7 +179,7 @@ func TestCSVExportEscapesFormulaInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := csv.NewReader(bytes.NewReader(exported.Data)).ReadAll()
+	records, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(exported.Data, utf8BOM))).ReadAll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,6 +791,44 @@ func TestCSVRoundTripKeepsFormulaLookingText(t *testing.T) {
 	}
 	if values[1] != `"+82-10-1234-5678"` || values[2] != `"=1+1"` {
 		t.Fatalf("round trip = %#v", values)
+	}
+}
+
+// 내려받은 표를 여는 길은 대개 엑셀에서 두 번 누르는 것이고, 그 길에는 무슨
+// 인코딩이냐고 물어보는 자리가 없다. UTF-8 표시가 없으면 엑셀은 그 컴퓨터의
+// 기본 코드 페이지로 읽어 한글을 통째로 깨뜨린다. 관리자 로그와 AI 기록을
+// 내보내는 자리는 이미 그 표시를 붙이므로 워크북만 다를 이유가 없다.
+func TestDelimitedExportMarksItselfAsUTF8(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{"csv", "tsv"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			repository := workbook.NewMemoryRepository()
+			ctx := context.Background()
+			header, _ := json.Marshal("지점명")
+			branch, _ := json.Marshal("서울 강남")
+			wb, err := repository.ImportWorkbook(ctx, workbook.ImportWorkbookInput{Title: "매출", ActorID: "tester", OwnerID: "tester", IdempotencyKey: "bom-" + format, FileName: "sales." + format, Format: format,
+				Sheets: []workbook.ImportSheet{{Name: "Sheet1", Cells: []workbook.CellInput{{Row: 1, Column: 1, Value: header}, {Row: 2, Column: 1, Value: branch}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exported, err := New(repository).Export(ctx, ExportRequest{WorkbookID: wb.ID, Format: format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(exported.Data, utf8BOM) {
+				t.Fatalf("exported %s does not announce UTF-8: %q", format, exported.Data)
+			}
+			// 표시는 파일 앞에만 붙고 값이 되지는 않는다 — 되돌려 읽은 첫 칸이
+			// 표시를 머리에 이고 있으면 그 열을 이름으로 가리키는 수식이 어긋난다.
+			parsed, err := Parse("sales."+format, exported.Data, DefaultMaxExpandedBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(parsed.Sheets[0].Cells[0].Value); got != `"지점명"` {
+				t.Fatalf("round trip first cell = %s", got)
+			}
+		})
 	}
 }
 
