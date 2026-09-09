@@ -147,8 +147,14 @@ func Parse(fileName string, data []byte, maxExpanded int64) (ParsedWorkbook, err
 	}
 }
 
+// utf8BOM 은 UTF-8 임을 알리는 표시다. 엑셀은 이것이 없으면 내려받은 CSV 를
+// 그 컴퓨터의 기본 코드 페이지로 읽어 한글을 통째로 깨뜨린다 — 두 번 눌러 여는
+// 길에는 인코딩을 물어보는 자리가 없다. 그래서 내보낼 때는 붙이고 읽을 때는
+// 뗀다.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
 func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook, error) {
-	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+	data = bytes.TrimPrefix(data, utf8BOM)
 	if !utf8.Valid(data) {
 		return ParsedWorkbook{}, errors.New("CSV must be UTF-8 encoded")
 	}
@@ -588,6 +594,11 @@ func (s *Service) exportDelimited(ctx context.Context, wb workbook.Workbook, she
 	}
 	maxRow, maxColumn := usedDimensions(cells)
 	var buffer bytes.Buffer
+	// 관리자 로그와 AI 기록을 내보내는 자리는 이미 이 표시를 붙인다. 정작
+	// 한글이 가장 많이 담기는 워크북만 붙이지 않아, 내려받은 표를 엑셀에서
+	// 열면 이름 칸이 죄다 깨져 보였다. 가져오기와 IMPORTDATA 는 이 표시를
+	// 떼고 읽으므로 왕복해도 첫 칸에 남지 않는다.
+	buffer.Write(utf8BOM)
 	writer := csv.NewWriter(&buffer)
 	if format == "tsv" {
 		writer.Comma = '\t'
