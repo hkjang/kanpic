@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"kanpic/internal/delimited"
 	"kanpic/internal/workbook"
 )
 
@@ -51,6 +52,12 @@ func normalizeColumn(value string) string {
 // 머리글 줄이 있어야 한다. 자리로 읽으면 열 차례가 다른 파일을 말없이
 // 엉뚱하게 읽어, 이름 칸에 이메일이 들어간 사용자가 스무 명 생긴다.
 func parseUserCSV(text string) ([]importedUser, error) {
+	// 파일이 스스로 무엇으로 적혔는지 밝히고 오면 그대로 읽는다. 화면은 고른
+	// 파일을 이미 밝힌 대로 풀어 보내지만(web/src/lib/fileText.ts), 표시가
+	// 남은 채로 오면 첫 머리글이 `user_id` 로 보이지 않아 명단 전체가
+	// "머리글 줄에 user_id 열이 있어야 합니다" 로 되돌아간다 — 보내는 쪽이
+	// 무엇이든 같은 파일은 같은 명단이어야 한다.
+	text = string(delimited.ToUTF8([]byte(text)))
 	reader := csv.NewReader(strings.NewReader(strings.TrimSpace(text)))
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()

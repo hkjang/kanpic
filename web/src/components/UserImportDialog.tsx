@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { UploadCloud, AlertTriangle } from 'lucide-react'
 import { useDialog } from '../lib/useDialog'
 import { api } from '../lib/api'
+import { readFileText } from '../lib/fileText'
 import './UserImportDialog.css'
 
 type Row={line:number;user_id:string;display_name?:string;email?:string;note?:string;action:'create'|'update'|'skip';reason?:string}
@@ -32,7 +33,7 @@ export function UserImportDialog({onClose,onDone}:{onClose:()=>void;onDone:(mess
     }catch(reason){setError(reason instanceof Error?reason.message:'읽지 못했습니다.');setRows(undefined)}
     finally{setBusy(false)}
   }
-  const readFile=async(file?:File)=>{if(!file)return;setText(await file.text());setRows(undefined)}
+  const readFile=async(file?:File)=>{if(!file)return;setText(await readFileText(file));setRows(undefined)}
   const counts={
     create:rows?.filter(row=>row.action==='create').length??0,
     update:rows?.filter(row=>row.action==='update').length??0,
