@@ -1,7 +1,8 @@
-// Package delimited holds the one rule that decides how a delimited file is
-// cut into columns. Two doors lead in — the importer that takes an uploaded
-// CSV and IMPORTDATA that takes one over https — and the same file has to be
-// read the same way whichever door it comes in by.
+// Package delimited holds the rules that decide how a delimited file is read:
+// which encoding it is written in and what cuts it into columns. Two doors
+// lead in — the importer that takes an uploaded CSV and IMPORTDATA that takes
+// one over https — and the same file has to be read the same way whichever
+// door it comes in by.
 package delimited
 
 import "strings"

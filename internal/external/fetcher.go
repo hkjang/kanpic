@@ -387,7 +387,9 @@ func (f *Fetcher) fetch(ctx context.Context, config Config, target *url.URL) (st
 // the same table whether it is uploaded or fetched. Numbers become numbers so
 // =SUM over the result works; everything else stays text.
 func parseCSV(body string) formula.ExternalResult {
-	body = strings.TrimPrefix(body, "\uFEFF")
+	// 어느 인코딩인지 밝히고 오는 파일은 그대로 읽는다. 밝히는 표시를 떼는 자리와
+	// 여는 자리가 하나여야 업로드로 들어온 같은 파일과 같은 표가 나온다.
+	body = string(delimited.ToUTF8([]byte(body)))
 	reader := csv.NewReader(strings.NewReader(body))
 	reader.Comma = delimited.Delimiter(body)
 	reader.FieldsPerRecord = -1

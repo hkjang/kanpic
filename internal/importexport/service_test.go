@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/xuri/excelize/v2"
 
@@ -830,6 +831,50 @@ func TestDelimitedExportMarksItselfAsUTF8(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 윈도우 파워셸의 Export-Csv 와 엑셀의 '유니코드 텍스트' 저장은 UTF-16LE 로 쓰고
+// 앞에 그 표시를 둔다. 무엇으로 읽어야 하는지 파일이 첫 두 바이트에 적어 두었는데도,
+// 가져오기는 그 두 바이트가 UTF-8 이 아니라는 이유로 "CSV must be UTF-8 encoded" 라며
+// 파일을 통째로 거절했다 — 안에 든 것이 한글이든 영문이든 마찬가지였고, 사람에게는
+// 다른 도구로 저장을 다시 하는 것 말고는 길이 없었다.
+func TestImportReadsCSVThatSaysItIsUTF16(t *testing.T) {
+	t.Parallel()
+	asUTF16LE := func(text string) []byte {
+		data := []byte{0xFF, 0xFE}
+		for _, unit := range utf16.Encode([]rune(text)) {
+			data = append(data, byte(unit), byte(unit>>8))
+		}
+		return data
+	}
+	// 파워셸은 모든 칸에 따옴표를 두르고 줄 끝을 CRLF 로 쓴다.
+	body := asUTF16LE("\"지점\",\"매출\"\r\n\"서울\",\"1200\"\r\n")
+	parsed, err := Parse("매출.csv", body, DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Preview.Sheets[0].Columns != 2 || parsed.Preview.TotalCells != 4 {
+		t.Fatalf("표로 읽지 못했다: %#v", parsed.Preview)
+	}
+	cells := parsed.Sheets[0].Cells
+	assertRawJSON(t, cells[0].Value, "지점")
+	assertRawJSON(t, cells[2].Value, "서울")
+	assertRawJSON(t, cells[3].Value, float64(1200))
+	// 미리보기의 크기는 사용자가 고른 파일의 크기다. UTF-8 로 옮기면 대개 절반으로
+	// 줄어드는데, 그 수를 말하면 방금 고른 파일보다 작아 보인다.
+	if parsed.Preview.SizeBytes != len(body) {
+		t.Fatalf("올린 파일은 %d바이트인데 %d바이트라고 말한다", len(body), parsed.Preview.SizeBytes)
+	}
+	// 안에 든 것이 영문뿐이어도 거절되던 것은 같다 — 거절한 것은 내용이 아니라 표시다.
+	ascii, err := Parse("sales.csv", asUTF16LE("id,amount\r\n1,42\r\n"), DefaultMaxExpandedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ascii.Preview.Sheets[0].Columns != 2 {
+		t.Fatalf("영문 파일을 잘못 갈랐다: %#v", ascii.Preview)
+	}
+	assertRawJSON(t, ascii.Sheets[0].Cells[0].Value, "id")
+	assertRawJSON(t, ascii.Sheets[0].Cells[3].Value, float64(42))
 }
 
 // A whole number should look like one in the file. Default formatting turns
