@@ -11,3 +11,6 @@ web/vite.config.d.ts
 .DS_Store
 output/
 *.test
+
+# 로컬에서 만든 서버 실행 파일
+/kanpic
