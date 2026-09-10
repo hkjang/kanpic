@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"kanpic/internal/formula"
@@ -168,6 +169,23 @@ func TestImportDataReadsWhicheverSeparatorCutsTheFile(t *testing.T) {
 	titled := parseCSV("2026년 1분기 보고서\n품목;단가\n연필;1200\n공책;3500\n")
 	if titled.Err != nil || titled.Columns != 2 || titled.Values[4] != "연필" || titled.Values[5] != 1200.0 {
 		t.Fatalf("제목 줄에 속았다: %+v", titled)
+	}
+}
+
+// 무엇으로 읽어야 하는지 밝히고 오는 파일은 밝힌 대로 읽는다. 업로드로 들어온 같은
+// 파일을 가져오기가 이제 그렇게 읽으므로, 문이 어느 쪽이냐에 따라 같은 주소가 다른
+// 표가 되어서는 안 된다 — 윈도우 도구가 올려 둔 UTF-16LE CSV 가 그런 파일이다.
+func TestImportDataReadsACSVThatSaysItIsUTF16(t *testing.T) {
+	body := []byte{0xFF, 0xFE}
+	for _, unit := range utf16.Encode([]rune("지점,매출\r\n서울,1200\r\n")) {
+		body = append(body, byte(unit), byte(unit>>8))
+	}
+	got := parseCSV(string(body))
+	if got.Err != nil || got.Rows != 2 || got.Columns != 2 {
+		t.Fatalf("UTF-16 로 적힌 표를 읽지 못했다: %+v", got)
+	}
+	if got.Values[0] != "지점" || got.Values[2] != "서울" || got.Values[3] != 1200.0 {
+		t.Fatalf("칸이 다르다: %#v", got.Values)
 	}
 }
 

@@ -149,12 +149,15 @@ func Parse(fileName string, data []byte, maxExpanded int64) (ParsedWorkbook, err
 
 // utf8BOM 은 UTF-8 임을 알리는 표시다. 엑셀은 이것이 없으면 내려받은 CSV 를
 // 그 컴퓨터의 기본 코드 페이지로 읽어 한글을 통째로 깨뜨린다 — 두 번 눌러 여는
-// 길에는 인코딩을 물어보는 자리가 없다. 그래서 내보낼 때는 붙이고 읽을 때는
-// 뗀다.
+// 길에는 인코딩을 물어보는 자리가 없다. 그래서 내보낼 때 붙인다. 떼는 것은
+// 읽는 규칙(delimited.ToUTF8)의 몫이다.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook, error) {
-	data = bytes.TrimPrefix(data, utf8BOM)
+	// 올라온 파일의 크기는 옮겨 읽기 전에 재 둔다 — UTF-16 은 UTF-8 로 옮기면
+	// 대개 절반으로 줄어, 미리보기가 사용자가 고른 파일보다 작은 수를 말하게 된다.
+	sizeBytes := len(data)
+	data = delimited.ToUTF8(data)
 	if !utf8.Valid(data) {
 		return ParsedWorkbook{}, errors.New("CSV must be UTF-8 encoded")
 	}
@@ -206,7 +209,7 @@ func parseDelimited(fileName, title, format string, data []byte) (ParsedWorkbook
 	if textNumbers > 0 {
 		warnings = append(warnings, fmt.Sprintf("숫자처럼 보이지만 글자로 담긴 칸이 %d개 있습니다. 가져온 뒤 데이터 › 데이터 정리 › 텍스트로 저장된 숫자로 고칠 수 있습니다.", textNumbers))
 	}
-	preview := Preview{FileName: fileName, Format: format, SizeBytes: len(data), Sheets: []SheetPreview{{Name: name, Rows: rows, Columns: maxColumns, NonEmptyCells: len(cells)}}, TotalCells: len(cells), Warnings: warnings}
+	preview := Preview{FileName: fileName, Format: format, SizeBytes: sizeBytes, Sheets: []SheetPreview{{Name: name, Rows: rows, Columns: maxColumns, NonEmptyCells: len(cells)}}, TotalCells: len(cells), Warnings: warnings}
 	return ParsedWorkbook{Title: title, Format: format, Sheets: []workbook.ImportSheet{{Name: name, Cells: cells}}, Preview: preview}, nil
 }
 
