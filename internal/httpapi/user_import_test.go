@@ -37,6 +37,20 @@ func TestUserCSVReadsKoreanHeaders(t *testing.T) {
 	}
 }
 
+// 무엇으로 적혔는지 밝히고 온 명단은 밝힌 대로 읽는다. 엑셀의 'CSV UTF-8'
+// 저장이 앞에 두는 표시가 머리글에 붙은 채로 오면, 첫 열이 user_id 로 보이지
+// 않아 명단 전체가 되돌아간다.
+func TestUserCSVReadsARosterThatSaysWhatItIs(t *testing.T) {
+	t.Parallel()
+	items, err := parseUserCSV("\ufeffuser_id,display_name\nkim.nara,김나라")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].UserID != "kim.nara" {
+		t.Errorf("읽은 것 = %#v", items)
+	}
+}
+
 // 같은 파일 안에 같은 아이디가 두 번 나오면 뒤엣것으로 덮어쓰지 않고
 // 짚어 준다. 어느 줄이 맞는지는 사람이 정해야 한다.
 func TestUserCSVPointsAtDuplicateRowsInsteadOfOverwriting(t *testing.T) {
