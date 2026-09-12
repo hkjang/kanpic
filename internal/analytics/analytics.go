@@ -129,6 +129,50 @@ func (c Config) Snippet(nonce string) string {
 	return ""
 }
 
+// indexFold finds sub in s ignoring ASCII case, and returns an index into s.
+//
+// strings.ToLower is the obvious way and the wrong one: it changes byte lengths
+// for some runes — U+212A KELVIN SIGN is three bytes and folds to a one-byte
+// 'k', U+0130 'İ' is two and folds to three — so an index taken from the folded
+// copy lands somewhere else in the original. A snippet holding one of those made
+// SnippetOrigins read past the end and withNonce write the nonce into the middle
+// of the tag name, which breaks the tag without saying so.
+//
+// Every needle here is ASCII, and folding only ASCII keeps every byte in place.
+func indexFold(s, sub string) int {
+	if len(sub) == 0 {
+		return 0
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			if foldASCII(s[i+j]) != foldASCII(sub[j]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+// containsFold reports whether sub appears in s, ignoring ASCII case.
+func containsFold(s, sub string) bool { return indexFold(s, sub) >= 0 }
+
+// hasPrefixFold reports whether s starts with prefix, ignoring ASCII case.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && indexFold(s[:len(prefix)], prefix) == 0
+}
+
+func foldASCII(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
 // withNonce adds the nonce to every script tag that does not already carry one,
 // which is what lets a pasted snippet run under a strict policy unchanged.
 func withNonce(snippet, nonce string) string {
@@ -138,7 +182,7 @@ func withNonce(snippet, nonce string) string {
 	var builder strings.Builder
 	remaining := snippet
 	for {
-		index := strings.Index(strings.ToLower(remaining), "<script")
+		index := indexFold(remaining, "<script")
 		if index < 0 {
 			builder.WriteString(remaining)
 			return builder.String()
@@ -150,7 +194,7 @@ func withNonce(snippet, nonce string) string {
 		if closing >= 0 {
 			tag = remaining[end : end+closing]
 		}
-		if !strings.Contains(strings.ToLower(tag), "nonce=") {
+		if !containsFold(tag, "nonce=") {
 			builder.WriteString(fmt.Sprintf(` nonce="%s"`, html.EscapeString(nonce)))
 		}
 		remaining = remaining[end:]
@@ -200,7 +244,7 @@ func SnippetOrigins(snippet string) []string {
 	origins := make([]string, 0, 2)
 	seen := make(map[string]struct{}, 2)
 	for index := 0; index < len(snippet); {
-		start := strings.Index(strings.ToLower(snippet[index:]), "http")
+		start := indexFold(snippet[index:], "http")
 		if start < 0 {
 			break
 		}
@@ -211,7 +255,7 @@ func SnippetOrigins(snippet string) []string {
 		}
 		index = end
 		origin := originOf(snippet[start:end])
-		if origin == "" || !strings.HasPrefix(strings.ToLower(origin), "http") {
+		if origin == "" || !hasPrefixFold(origin, "http") {
 			continue
 		}
 		if _, duplicate := seen[origin]; duplicate {
