@@ -36,6 +36,7 @@ docker run --rm -p 8080:8080 \
 - `/admin`: 시스템 설정 CRUD, 설정 버전·복원, 검증·연결 테스트, 사용자·역할·계정 정지 관리, 부서 계층·구성원 관리, 서버 로그, 전체 API 키 현황
 - `/preferences`: 개인화 설정과 개인 API 키 생성·수정·폐기·회전
 - `/mcp`: Streamable HTTP 방식의 MCP JSON-RPC endpoint
+- `/handoff`, `/api/v1/handoff/*`: 사내 서비스 간 문서 넘기기 표준(보내기 `csv`·`xlsx`, 받기 `csv`·`xlsx`). 한 번만 쓰는 5분짜리 표(claim)로 넘기며, 관리자가 `handoff.peers` 에 적은 오리진에서만 받는다 — 기본값은 비어 있어 편집기의 **파일 › 다른 서비스로 보내기** 가 보이지 않는다
 - `/api/v1/version`: 이미지 빌드 버전, Git commit, 빌드 시각
 - `/healthz`: 컨테이너 health check
 
