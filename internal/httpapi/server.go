@@ -21,6 +21,7 @@ import (
 	"kanpic/internal/buildinfo"
 	"kanpic/internal/collaboration"
 	"kanpic/internal/formula"
+	"kanpic/internal/handoff"
 	"kanpic/internal/importexport"
 	"kanpic/internal/mail"
 	"kanpic/internal/observability"
@@ -48,6 +49,7 @@ type Server struct {
 	automations   automation.ServiceAPI
 	mail          *mail.Service
 	presentations *presentation.Service
+	handoff       *handoff.Service
 	violations    *analytics.Recorder
 }
 
@@ -87,6 +89,15 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	for _, option := range options {
 		option(s)
 	}
+	if s.handoff == nil {
+		// 잇지 않은 설치는 허용 목록이 빈 것과 같다. nil 포인터를 인터페이스에
+		// 담으면 nil 이 아니게 되므로 설정이 없을 때는 아예 넘기지 않는다.
+		var provider handoff.SettingsProvider
+		if settingRepository != nil {
+			provider = settingRepository
+		}
+		s.handoff = handoff.NewService(provider, handoff.NewMemoryStore())
+	}
 	if automationService != nil {
 		s.collab.SetMutationListener(func(ctx context.Context, result workbook.MutationResult, cells []workbook.CellInput, actor, _ string) {
 			s.triggerCellAutomationsContext(ctx, result, cells, actor)
@@ -119,6 +130,11 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("PUT /api/v1/workbooks/{workbookId}/favorite", s.setWorkbookFavorite)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/sheet-stats", s.sheetStats)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/copy", s.copySheet)
+	mux.HandleFunc("GET /api/v1/handoff/targets", s.handoffTargets)
+	mux.HandleFunc("POST /api/v1/handoff/claims", s.createHandoffClaim)
+	mux.HandleFunc("GET /api/v1/handoff/claims/{claim}", s.serveHandoffClaim)
+	mux.HandleFunc("GET /handoff", s.receiveHandoff)
+	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/handoff", s.handoffOrigin)
 	mux.HandleFunc("GET /api/v1/presentation/config", s.presentationConfig)
 	mux.HandleFunc("GET /api/v1/presentation/templates", s.presentationTemplates)
 	mux.HandleFunc("GET /api/v1/workbooks/{workbookId}/presentations", s.listWorkbookPresentations)
@@ -1085,18 +1101,18 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		identified, active := s.resolveRequestPrincipal(w, r)
 		if !active {
-			s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
+			s.logger.Info("http request", "method", r.Method, "path", loggedPath(r.URL.Path), "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 			return
 		}
 		r = identified
 		guarded, allowed := s.authorizeWorkbookRequest(w, r)
 		if !allowed {
-			s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
+			s.logger.Info("http request", "method", r.Method, "path", loggedPath(r.URL.Path), "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 			return
 		}
 		r = guarded
 		next.ServeHTTP(w, r)
-		s.logger.Info("http request", "method", r.Method, "path", r.URL.Path, "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
+		s.logger.Info("http request", "method", r.Method, "path", loggedPath(r.URL.Path), "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 	})
 }
 
@@ -1199,6 +1215,10 @@ func isProtectedPath(path string) bool {
 	if strings.HasPrefix(path, "/auth/") {
 		return false
 	}
+	// 표를 내주는 자리에는 로그인이 필요 없다 — 표가 곧 자격이다.
+	if strings.HasPrefix(path, handoffClaimsPath) && len(path) > len(handoffClaimsPath) {
+		return false
+	}
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/ws/") || path == "/mcp"
 }
 
@@ -1229,6 +1249,10 @@ func requiredScope(r *http.Request) string {
 		return "workbook.read"
 	}
 	if strings.HasSuffix(path, "/favorite") || strings.HasSuffix(path, "/trash") {
+		return "workbook.read"
+	}
+	// 표를 발급하는 것은 내보내기와 같다.
+	if strings.HasPrefix(path, "/api/v1/handoff/") {
 		return "workbook.read"
 	}
 	if strings.Contains(path, "/departments") {

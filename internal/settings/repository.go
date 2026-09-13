@@ -135,6 +135,7 @@ var defaults = []Setting{
 	{Key: "external.timeout_seconds", Value: json.RawMessage(`10`), ValueType: "number", Description: "외부 호출 한 건의 제한 시간(초)"},
 	{Key: "external.max_kb", Value: json.RawMessage(`1024`), ValueType: "number", Description: "외부 호출 응답의 최대 크기(KB)"},
 	{Key: "external.cache_seconds", Value: json.RawMessage(`300`), ValueType: "number", Description: "같은 주소의 응답을 다시 부르지 않고 쓰는 시간(초). 0이면 매번 부릅니다"},
+	{Key: "handoff.peers", Value: json.RawMessage(`[]`), ValueType: "string_list", Description: "문서를 주고받을 사내 서비스. 서비스이름=오리진 (예: ptium=https://ptium.intra). 비어 있으면 보내기 단추가 없고 아무 데서도 받지 않습니다"},
 	{Key: "sharing.max_link_access", Value: json.RawMessage(`"anyone"`), ValueType: "string", Description: "허용할 최대 링크 액세스 범위 (restricted, organization, anyone)"},
 	{Key: "sharing.default_link_access", Value: json.RawMessage(`"restricted"`), ValueType: "string", Description: "새 워크북의 기본 링크 액세스"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},

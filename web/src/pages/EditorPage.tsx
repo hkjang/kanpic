@@ -18,6 +18,7 @@ import { ShareDialog,accessSummary } from '../components/ShareDialog'
 import { useUserDirectory, userLabel } from '../state/directory'
 import { QuickSwitcher,type QuickItem } from '../components/QuickSwitcher'
 import { ApiError } from '../lib/api'
+import { handoffFormatLabel, handoffResource, sendHandoff, type HandoffTarget } from '../lib/handoff'
 import { ContextMenu,type MenuItem } from '../components/ContextMenu'
 import { ChartDialog } from '../components/ChartDialog'
 import { ChartOverlay } from '../components/ChartOverlay'
@@ -243,6 +244,9 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
   // 않는다 — 눌러 봐야 안 된다고 답하는 항목은 없느니만 못하다.
   const presentationConfig=useQuery({queryKey:['presentation-config'],queryFn:()=>api<{enabled:boolean}>('/api/v1/presentation/config'),staleTime:300_000})
   const presentationEnabled=presentationConfig.data?.enabled===true
+  // 다른 서비스로 보내기. 허용 목록(handoff.peers)이 비어 있으면 목록이 비고 단추가 없다.
+  const handoffTargets=useQuery({queryKey:['handoff-targets'],queryFn:()=>api<{source:string;targets:HandoffTarget[]}>('/api/v1/handoff/targets'),staleTime:300_000})
+  const handoffMenu=(handoffTargets.data?.targets??[]).flatMap(target=>target.formats.map(format=>({kind:'item' as const,label:`${target.name} 으로 ${handoffFormatLabel[format]} 보내기`,onSelect:()=>void sendHandoff(target,handoffResource(workbookId,format,activeSheet?.id),format).catch(error=>alert(error instanceof Error?error.message:'다른 서비스로 보내지 못했습니다.'))})))
   const previewPresentation=useCallback((input:Record<string,unknown>)=>api<{deck:PresentationDeck;analysis:PresentationAnalysis}>(`/api/v1/sheets/${activeSheet!.id}/presentations`,{method:'POST',body:JSON.stringify(input)}),[activeSheet?.id])
   const createPresentation=useCallback(async(input:Record<string,unknown>)=>{
     const made=await api<{presentation:PresentationResult}>(`/api/v1/sheets/${activeSheet!.id}/presentations`,{method:'POST',body:JSON.stringify(input)})
@@ -1318,6 +1322,7 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
       {kind:'separator'},
       {kind:'item',label:'XLSX로 내보내기',onSelect:()=>void exportWorkbook('xlsx')},
       {kind:'item',label:'현재 시트 CSV로 내보내기',onSelect:()=>void exportWorkbook('csv')},
+      ...(handoffMenu.length>0?[{kind:'submenu' as const,label:'다른 서비스로 보내기',items:handoffMenu}]:[]),
       {kind:'item',label:'인쇄',shortcut:'Ctrl+P',onSelect:()=>void printSheet()},
       {kind:'item',label:'페이지 설정…',onSelect:()=>void openPrintOptions()},
       {kind:'item',label:'인쇄 영역으로 설정',onSelect:()=>void setPrintArea()},
