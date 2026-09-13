@@ -18,6 +18,17 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/kanpic ./cmd/api
 
 FROM alpine:3.22
+# 떠 있는 이미지에서 어느 소스로 만든 것인지 알 수 있게 한다. ARG 는
+# 스테이지마다 다시 선언해야 값이 넘어온다.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="Kanpic" \
+      org.opencontainers.image.description="Kanpic kanban and collaboration server" \
+      org.opencontainers.image.source="https://github.com/hkjang/kanpic" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S kanpic && adduser -S -G kanpic -u 10001 kanpic
 WORKDIR /app
 COPY --from=api-build /out/kanpic /app/kanpic
