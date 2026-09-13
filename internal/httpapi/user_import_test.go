@@ -51,6 +51,28 @@ func TestUserCSVReadsARosterThatSaysWhatItIs(t *testing.T) {
 	}
 }
 
+// 명단은 쉼표로만 오지 않는다. 엑셀에서 칸을 골라 붙여 넣으면 탭으로,
+// 소수점을 쉼표로 적는 로케일의 엑셀이 저장하면 세미콜론으로 갈려 오는데,
+// 둘 다 워크북 가져오기는 이미 읽는 꼴이다 — 같은 파일이 어느 문으로
+// 들어오느냐에 따라 다르게 읽힐 이유가 없다. 메모 칸의 세미콜론은 쉼표
+// 파일을 세미콜론 파일로 바꾸지 않는다.
+func TestUserCSVReadsWhicheverSeparatorCutsTheRoster(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"세미콜론":     "user_id;display_name;email\nkim.nara;김나라;kim@corp.example",
+		"탭":        "user_id\tdisplay_name\temail\nkim.nara\t김나라\tkim@corp.example",
+		"메모의 세미콜론": "user_id,display_name,email,note\nkim.nara,김나라,kim@corp.example,\"영업;서울;신규\"",
+	} {
+		items, err := parseUserCSV(text)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(items) != 1 || items[0].UserID != "kim.nara" || items[0].Name != "김나라" || items[0].Email != "kim@corp.example" {
+			t.Errorf("%s: 읽은 것 = %#v", name, items)
+		}
+	}
+}
+
 // 같은 파일 안에 같은 아이디가 두 번 나오면 뒤엣것으로 덮어쓰지 않고
 // 짚어 준다. 어느 줄이 맞는지는 사람이 정해야 한다.
 func TestUserCSVPointsAtDuplicateRowsInsteadOfOverwriting(t *testing.T) {
