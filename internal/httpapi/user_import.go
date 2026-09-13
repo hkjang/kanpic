@@ -57,8 +57,13 @@ func parseUserCSV(text string) ([]importedUser, error) {
 	// 남은 채로 오면 첫 머리글이 `user_id` 로 보이지 않아 명단 전체가
 	// "머리글 줄에 user_id 열이 있어야 합니다" 로 되돌아간다 — 보내는 쪽이
 	// 무엇이든 같은 파일은 같은 명단이어야 한다.
-	text = string(delimited.ToUTF8([]byte(text)))
-	reader := csv.NewReader(strings.NewReader(strings.TrimSpace(text)))
+	text = strings.TrimSpace(string(delimited.ToUTF8([]byte(text))))
+	reader := csv.NewReader(strings.NewReader(text))
+	// 무엇이 열을 가르는지도 워크북 가져오기와 같은 규칙으로 본다. 엑셀에서
+	// 칸을 골라 붙여 넣으면 탭으로, 소수점을 쉼표로 적는 로케일의 엑셀이
+	// 저장하면 세미콜론으로 갈려 오는데, 쉼표만 보면 머리글 전체가 한 칸이
+	// 되어 역시 "머리글 줄에 user_id 열이 있어야 합니다" 로 되돌아간다.
+	reader.Comma = delimited.Delimiter(text)
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
