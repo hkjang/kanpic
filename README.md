@@ -19,7 +19,7 @@ docker compose up --build
 GitHub Release의 `kanpic-vX.Y.Z.tar.gz`는 Docker 이미지 아카이브입니다. 아래의 `VERSION`을 설치할 릴리즈 버전으로 바꿉니다.
 
 ```bash
-VERSION=v0.246.0
+VERSION=v0.247.0
 sha256sum -c "kanpic-${VERSION}.tar.gz.sha256"
 gzip -dc "kanpic-${VERSION}.tar.gz" | docker load
 docker run --rm -p 8080:8080 \
@@ -40,7 +40,7 @@ docker run --rm -p 8080:8080 \
 - `/api/v1/version`: 이미지 빌드 버전, Git commit, 빌드 시각
 - `/healthz`: 컨테이너 health check
 
-API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이스에는 SHA-256 해시만 저장합니다. MCP 호출은 `mcp.use`와 각 도구의 실제 작업 scope를 모두 검사합니다.
+API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이스에는 SHA-256 해시만 저장합니다. MCP 호출은 `mcp.use`와 각 도구의 실제 작업 scope를 모두 검사합니다. `/mcp` 는 API 키 대신 Keycloak OAuth 액세스 토큰(MCP 인가 명세, RFC 9728 `/.well-known/oauth-protected-resource`)도 받으며, 토큰은 그 사용자의 권한 또는 토큰에 실린 kanpic scope 만큼 움직입니다.
 
 ## 개발 검증
 
