@@ -80,6 +80,8 @@ var defaults = []Setting{
 	{Key: "auth.oidc.ca_pem", Value: json.RawMessage(`""`), ValueType: "string", Description: "사내 CA 인증서 PEM", Secret: true},
 	{Key: "auth.oidc.scopes", Value: json.RawMessage(`["openid","profile","email"]`), ValueType: "string_list", Description: "OIDC Scope"},
 	{Key: "auth.oidc.admin_roles", Value: json.RawMessage(`["kanpic-admin"]`), ValueType: "string_list", Description: "관리자 권한으로 인정할 Keycloak Role"},
+	{Key: "auth.oidc.mcp_enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP 클라이언트가 Keycloak OAuth 액세스 토큰으로 /mcp 를 부르게 허용"},
+	{Key: "auth.oidc.mcp_audiences", Value: json.RawMessage(`[]`), ValueType: "string_list", Description: "MCP 토큰에서 받아들일 aud 값. 비우면 Client ID 와 /mcp 주소"},
 	{Key: "auth.session_hours", Value: json.RawMessage(`8`), ValueType: "number", Description: "로그인 세션 유지 시간"},
 	{Key: "server.public_url", Value: json.RawMessage(`""`), ValueType: "string", Description: "프록시 외부 공개 URL (비우면 요청 Host 사용)"},
 	{Key: "files.max_import_mb", Value: json.RawMessage(`20`), ValueType: "number", Description: "Import 파일 최대 크기"},

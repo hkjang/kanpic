@@ -52,6 +52,11 @@ type Config struct {
 	SessionTTL   time.Duration
 	CAPEM        string
 	PublicURL    string
+	// MCPEnabled lets MCP clients present an access token from the identity
+	// provider instead of an API key. MCPAudiences pins the aud values such a
+	// token must carry; empty means the client ID or the /mcp resource URL.
+	MCPEnabled   bool
+	MCPAudiences []string
 }
 
 type BootstrapCredentials struct {
@@ -67,6 +72,7 @@ type Service struct {
 	pool      *pgxpool.Pool
 	settings  *settings.Repository
 	bootstrap BootstrapCredentials
+	providers providerCache
 }
 
 func New(pool *pgxpool.Pool, settingRepository *settings.Repository, bootstrap BootstrapCredentials) *Service {
@@ -81,7 +87,7 @@ func (s *Service) Config(ctx context.Context) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	config := Config{ClientID: "kanpic", Scopes: []string{"openid", "profile", "email"}, AdminRoles: []string{"kanpic-admin"}, SessionTTL: 8 * time.Hour}
+	config := Config{ClientID: "kanpic", Scopes: []string{"openid", "profile", "email"}, AdminRoles: []string{"kanpic-admin"}, SessionTTL: 8 * time.Hour, MCPEnabled: true}
 	config.Enabled, _ = values["auth.oidc.enabled"].(bool)
 	config.IssuerURL, _ = values["auth.oidc.issuer_url"].(string)
 	if value, ok := values["auth.oidc.client_id"].(string); ok && value != "" {
@@ -99,6 +105,10 @@ func (s *Service) Config(ctx context.Context) (Config, error) {
 	}
 	config.CAPEM, _ = values["auth.oidc.ca_pem"].(string)
 	config.PublicURL, _ = values["server.public_url"].(string)
+	if enabled, ok := values["auth.oidc.mcp_enabled"].(bool); ok {
+		config.MCPEnabled = enabled
+	}
+	config.MCPAudiences = stringList(values["auth.oidc.mcp_audiences"])
 	return config, nil
 }
 
@@ -330,20 +340,32 @@ func oauthConfigFor(config Config, endpoint oauth2.Endpoint, redirectURL string)
 }
 
 func providerFor(ctx context.Context, config Config) (*oidc.Provider, context.Context, error) {
-	providerContext := ctx
-	if strings.TrimSpace(config.CAPEM) != "" {
-		roots, err := x509.SystemCertPool()
-		if err != nil {
-			roots = x509.NewCertPool()
-		}
-		if !roots.AppendCertsFromPEM([]byte(config.CAPEM)) {
-			return nil, ctx, errors.New("configured OIDC CA PEM is invalid")
-		}
-		client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}
-		providerContext = oidc.ClientContext(ctx, client)
+	client, err := httpClientFor(config)
+	if err != nil {
+		return nil, ctx, err
 	}
+	providerContext := oidc.ClientContext(ctx, client)
 	provider, err := oidc.NewProvider(providerContext, strings.TrimRight(config.IssuerURL, "/"))
 	return provider, providerContext, err
+}
+
+// httpClientFor builds the client used to talk to the identity provider. It
+// always has a deadline, so an unreachable issuer fails a login or a token check
+// instead of holding the request open, and trusts the configured private CA.
+func httpClientFor(config Config) (*http.Client, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if strings.TrimSpace(config.CAPEM) == "" {
+		return client, nil
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM([]byte(config.CAPEM)) {
+		return nil, errors.New("configured OIDC CA PEM is invalid")
+	}
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+	return client, nil
 }
 
 func RequestOrigin(r *http.Request) string {

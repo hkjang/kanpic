@@ -40,6 +40,7 @@ type Server struct {
 	settings      *settings.Repository
 	keys          *apikey.Repository
 	auth          *auth.Service
+	tokens        AccessTokenVerifier
 	logs          *observability.Store
 	build         buildinfo.BuildInfo
 	formula       *formula.Evaluator
@@ -69,6 +70,19 @@ func NewPlatformWithAI(repository workbook.Repository, settingRepository *settin
 // every caller already uses.
 type PlatformOption func(*Server)
 
+// AccessTokenVerifier turns a Bearer token from the identity provider into the
+// user it was issued to and describes the /mcp resource to clients that have no
+// token yet. The auth service implements it; tests substitute a fake.
+type AccessTokenVerifier interface {
+	VerifyAccessToken(ctx context.Context, requestOrigin, raw string) (auth.AccessToken, error)
+	ProtectedResource(ctx context.Context, requestOrigin string) (auth.ProtectedResource, bool, error)
+}
+
+// WithAccessTokens replaces the verifier behind OAuth access tokens on /mcp.
+func WithAccessTokens(verifier AccessTokenVerifier) PlatformOption {
+	return func(s *Server) { s.tokens = verifier }
+}
+
 // WithMail wires the notification mailer.
 func WithMail(service *mail.Service) PlatformOption {
 	return func(s *Server) { s.mail = service }
@@ -86,6 +100,11 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		logger = slog.Default()
 	}
 	s := &Server{repository: repository, logger: logger, settings: settingRepository, keys: keys, auth: authService, logs: logs, build: buildinfo.Current(), formula: formula.New(), files: importexport.New(repository), collab: collaboration.New(repository, logger), ai: aiService, automations: automationService, violations: analytics.NewRecorder()}
+	if authService != nil {
+		// Assigned only when present: a nil *auth.Service inside the interface
+		// would not be nil any more.
+		s.tokens = authService
+	}
 	for _, option := range options {
 		option(s)
 	}
@@ -363,6 +382,9 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		mux.HandleFunc("POST /api/v1/automation-runs/{runAction}", s.undoAutomationRun)
 	}
 	mux.HandleFunc("POST /mcp", s.mcp)
+	// RFC 9728: a client that was refused at /mcp reads this to find Keycloak.
+	mux.HandleFunc("GET "+auth.ProtectedResourceMetadataPath, s.protectedResourceMetadata)
+	mux.HandleFunc("GET "+auth.ProtectedResourceMetadataPath+auth.MCPResourcePath, s.protectedResourceMetadata)
 	if directory := staticDirectory(); directory != "" {
 		static := s.spaHandler(directory)
 		mux.Handle("GET /", static)
@@ -1032,7 +1054,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Trace-ID", traceID)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") || r.URL.Path == "/mcp" || r.URL.Path == "/healthz" || isProtectedResourceMetadataPath(r.URL.Path) {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 		} else if r.URL.Path == printFramePath {
 			// 인쇄 문서는 자기만의 정책을 가진다. 앱의 정책은 인라인 스타일을
@@ -1046,6 +1068,15 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			w.Header().Set("Content-Security-Policy", s.pagePolicy(r.Context(), r.URL.Path, nonce))
 		}
 		w.Header().Set("Cache-Control", "no-store")
+		if r.Method == http.MethodOptions && isProtectedResourceMetadataPath(r.URL.Path) {
+			// The resource document is public and MCP clients running in a browser
+			// read it from another origin, some with an MCP-Protocol-Version header.
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, MCP-Protocol-Version")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Kanpic-Actor, X-Trace-ID")
@@ -1059,26 +1090,16 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Expose-Headers", exposedHeaders)
 		}
 		authenticated := false
-		if s.keys != nil {
-			authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-			if authorization != "" {
-				if !strings.HasPrefix(authorization, "Bearer ") {
-					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "invalid_authorization", "message": "Bearer 인증이 필요합니다."}})
-					return
-				}
-				principal, err := s.keys.Authenticate(r.Context(), strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")))
-				if err != nil {
-					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "invalid_api_key", "message": "API 키가 유효하지 않거나 만료되었습니다."}})
-					return
-				}
-				required := requiredScope(r)
-				if !principal.Allows(required) {
-					writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "insufficient_scope", "message": required + " scope가 필요합니다."}})
-					return
-				}
-				r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal))
-				authenticated = true
+		if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" && (s.keys != nil || s.tokens != nil) {
+			if !strings.HasPrefix(authorization, "Bearer ") {
+				s.writeUnauthorized(w, r, "invalid_authorization", "Bearer 인증이 필요합니다.", "invalid_request")
+				return
 			}
+			credentialed, ok := s.authenticateBearer(w, r, strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")))
+			if !ok {
+				return
+			}
+			r, authenticated = credentialed, true
 		}
 		if !authenticated && s.auth != nil {
 			if cookie, err := r.Cookie(auth.SessionCookie); err == nil && cookie.Value != "" {
@@ -1094,7 +1115,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					return
 				}
 				if config.Enabled || s.auth.BootstrapEnabled() {
-					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "authentication_required", "message": "로그인이 필요합니다."}})
+					s.writeUnauthorized(w, r, "authentication_required", "로그인이 필요합니다.", "")
 					return
 				}
 			}
@@ -1114,6 +1135,68 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		s.logger.Info("http request", "method", r.Method, "path", loggedPath(r.URL.Path), "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 	})
+}
+
+// authenticateBearer resolves a Bearer credential. An API key is tried first
+// because it is a single indexed lookup; a credential shaped like a JWT that is
+// not a key is then verified against the identity provider, but only for /mcp,
+// which is the resource the OAuth flow was written for.
+func (s *Server) authenticateBearer(w http.ResponseWriter, r *http.Request, credential string) (*http.Request, bool) {
+	if s.keys != nil {
+		if principal, err := s.keys.Authenticate(r.Context(), credential); err == nil {
+			required := requiredScope(r)
+			if !principal.Allows(required) {
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "insufficient_scope", "message": required + " scope가 필요합니다."}})
+				return r, false
+			}
+			return r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)), true
+		}
+	}
+	if s.tokens != nil && r.URL.Path == auth.MCPResourcePath && looksLikeJWT(credential) {
+		token, err := s.tokens.VerifyAccessToken(r.Context(), auth.RequestOrigin(r), credential)
+		if err == nil {
+			ctx := context.WithValue(r.Context(), userContextKey{}, token.User)
+			if len(token.Scopes) > 0 {
+				// A narrowed token behaves like an API key with those scopes. Being
+				// accepted at /mcp at all is what mcp.use means for a token.
+				ctx = context.WithValue(ctx, principalContextKey{}, apikey.NewPrincipal(token.User.ID, append(token.Scopes, "mcp.use")))
+			}
+			return r.WithContext(ctx), true
+		}
+		if !errors.Is(err, auth.ErrTokenDisabled) {
+			s.logger.Info("mcp access token rejected", "error", err, "trace_id", w.Header().Get("X-Trace-ID"))
+			s.writeUnauthorized(w, r, "invalid_token", "OAuth 액세스 토큰이 유효하지 않거나 만료되었습니다.", "invalid_token")
+			return r, false
+		}
+	}
+	s.writeUnauthorized(w, r, "invalid_api_key", "API 키가 유효하지 않거나 만료되었습니다.", "invalid_token")
+	return r, false
+}
+
+// looksLikeJWT tells a compact JWS (three dot-separated segments) from an API
+// key, which never contains a dot.
+func looksLikeJWT(credential string) bool {
+	return strings.Count(credential, ".") == 2 && !strings.HasPrefix(credential, "kp_")
+}
+
+// writeUnauthorized answers 401. On /mcp it also names the protected resource
+// document (RFC 9728) in WWW-Authenticate so an MCP client can start the OAuth
+// flow with Keycloak instead of failing.
+func (s *Server) writeUnauthorized(w http.ResponseWriter, r *http.Request, code, message, oauthError string) {
+	if r.URL.Path == auth.MCPResourcePath && s.tokens != nil {
+		if metadata, enabled, err := s.tokens.ProtectedResource(r.Context(), auth.RequestOrigin(r)); err == nil && enabled {
+			challenge := `Bearer realm="kanpic", resource_metadata="` + metadata.MetadataURL + `"`
+			if oauthError != "" {
+				challenge += `, error="` + oauthError + `"`
+			}
+			w.Header().Set("WWW-Authenticate", challenge)
+		}
+	}
+	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+func isProtectedResourceMetadataPath(path string) bool {
+	return path == auth.ProtectedResourceMetadataPath || strings.HasPrefix(path, auth.ProtectedResourceMetadataPath+"/")
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {

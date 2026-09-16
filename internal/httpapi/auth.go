@@ -15,13 +15,46 @@ func (s *Server) authConfig(w http.ResponseWriter, r *http.Request) {
 		s.platformError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, s.authConfigPayload(config, auth.RequestOrigin(r)))
+}
+
+// authConfigPayload is shared by the REST endpoint and the MCP tool, so an agent
+// asking how to sign in gets the same answer as the browser.
+func (s *Server) authConfigPayload(config auth.Config, requestOrigin string) map[string]any {
+	payload := map[string]any{
 		"oidc_enabled":             config.Enabled,
 		"bootstrap_login_enabled":  s.auth.BootstrapEnabled(),
 		"issuer_url":               config.IssuerURL,
 		"client_id":                config.ClientID,
 		"client_secret_configured": strings.TrimSpace(config.ClientSecret) != "",
-	})
+		"mcp_oauth_enabled":        config.MCPTokensEnabled(),
+	}
+	if config.MCPTokensEnabled() {
+		payload["mcp_resource"] = config.MCPResource(requestOrigin)
+		payload["mcp_resource_metadata_url"] = config.MCPResourceMetadataURL(requestOrigin)
+	}
+	return payload
+}
+
+// protectedResourceMetadata serves the RFC 9728 document for /mcp. It is public:
+// it only says which authorization server to use, and a client reads it before
+// it has any credential.
+func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if s.tokens == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "MCP OAuth 연동이 꺼져 있습니다."}})
+		return
+	}
+	metadata, enabled, err := s.tokens.ProtectedResource(r.Context(), auth.RequestOrigin(r))
+	if err != nil {
+		s.platformError(w, err)
+		return
+	}
+	if !enabled {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "MCP OAuth 연동이 꺼져 있습니다."}})
+		return
+	}
+	writeJSON(w, http.StatusOK, metadata)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

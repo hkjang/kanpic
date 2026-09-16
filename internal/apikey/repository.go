@@ -237,6 +237,16 @@ func (r *Repository) Authenticate(ctx context.Context, secret string) (Principal
 	return principal, nil
 }
 
+// NewPrincipal builds a scoped principal that is not backed by a stored key,
+// such as an OAuth access token that carries kanpic scopes.
+func NewPrincipal(userID string, scopes []string) Principal {
+	principal := Principal{UserID: userID, Scopes: make(map[string]struct{}, len(scopes))}
+	for _, scope := range normalizedScopes(scopes) {
+		principal.Scopes[scope] = struct{}{}
+	}
+	return principal
+}
+
 func (p Principal) Allows(required string) bool {
 	if required == "" {
 		return true

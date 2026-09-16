@@ -1,5 +1,5 @@
 export type BuildInfo = { product: string; version: string; commit: string; build_time: string; go_version: string }
-export type AuthConfig = { oidc_enabled:boolean; bootstrap_login_enabled:boolean; issuer_url:string; client_id:string; client_secret_configured:boolean }
+export type AuthConfig = { oidc_enabled:boolean; bootstrap_login_enabled:boolean; issuer_url:string; client_id:string; client_secret_configured:boolean; mcp_oauth_enabled?:boolean; mcp_resource?:string; mcp_resource_metadata_url?:string }
 export type User = { id: string; email?: string; display_name: string; roles: string[]; expires_at: string }
 export type Session = { authenticated: boolean; user?: User; admin?: boolean }
 export type DimensionSize = { index:number; size:number }

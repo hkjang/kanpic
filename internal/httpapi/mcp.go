@@ -14,6 +14,7 @@ import (
 
 	"kanpic/internal/ai"
 	"kanpic/internal/apikey"
+	"kanpic/internal/auth"
 	"kanpic/internal/automation"
 	"kanpic/internal/importexport"
 	"kanpic/internal/presentation"
@@ -38,7 +39,7 @@ type mcpTool struct {
 
 var mcpTools = []mcpTool{
 	tool("platform.version.get", "kanpic 서버 빌드 버전을 조회합니다.", "", nil),
-	tool("platform.auth.config", "OIDC 로그인 활성화 상태를 조회합니다.", "", nil),
+	tool("platform.auth.config", "OIDC 로그인과 MCP OAuth 연동 상태, 토큰을 받을 리소스 주소를 조회합니다.", "", nil),
 	tool("spreadsheet.workbook.list", "접근 가능한 워크북을 조회합니다.", "workbook.read", props("workspace_id", "string")),
 	tool("spreadsheet.workbook.get", "워크북 메타데이터와 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.search", "워크북 전체의 셀 값과 수식을 대소문자·전체 셀·정규식·시트 범위 옵션으로 검색하고 시트·A1 주소를 반환합니다.", "workbook.read", workbookSearchSchema()),
@@ -236,13 +237,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return s.build, nil
 	case "platform.auth.config":
 		config, err := s.auth.Config(ctx)
-		return map[string]any{
-			"oidc_enabled":             config.Enabled,
-			"bootstrap_login_enabled":  s.auth.BootstrapEnabled(),
-			"issuer_url":               config.IssuerURL,
-			"client_id":                config.ClientID,
-			"client_secret_configured": strings.TrimSpace(config.ClientSecret) != "",
-		}, err
+		if err != nil {
+			return nil, err
+		}
+		return s.authConfigPayload(config, auth.RequestOrigin(r)), nil
 	case "spreadsheet.workbook.list":
 		return s.repository.ListWorkbooks(ctx, stringArg(args, "workspace_id"), s.accessPrincipal(r))
 	case "spreadsheet.workbook.get":
