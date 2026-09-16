@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { handoffAddress, handoffResource, sendHandoff, type HandoffTarget } from './handoff'
+import { fetchHandoffOrigin, handoffAddress, handoffOriginDetail, handoffOriginLabel, handoffResource, sendHandoff, type HandoffOrigin, type HandoffTarget } from './handoff'
 
 const ptium: HandoffTarget = { name: 'ptium', origin: 'https://ptium.intra', formats: ['csv', 'xlsx'] }
 const issued = { claim: 'abc+def/ghi', source: 'https://kanpic.intra', filename: '실적.xlsx', content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: 10, expires_at: '2026-09-14T09:05:00+09:00' }
@@ -43,5 +43,26 @@ describe('sendHandoff', () => {
     await expect(sendHandoff(ptium, 'wb', 'csv', () => popup)).rejects.toThrow('소유자가 뷰어의 내보내기와 복사를 제한했습니다.')
     expect(popup.close).toHaveBeenCalledTimes(1)
     expect(popup.location.href).toBe('about:blank')
+  })
+})
+
+describe('handoff origin', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const received: HandoffOrigin = { workbook_id: 'wb', source: 'https://ptium.intra', service: 'ptium', filename: '실적.csv', received_by: 'bob', received_at: '2026-09-14T09:05:00+09:00' }
+
+  it('names the sender by its allow-list name, or by host once it has left the list', () => {
+    expect(handoffOriginLabel(received)).toBe('ptium 에서 받음')
+    expect(handoffOriginLabel({ ...received, service: undefined })).toBe('ptium.intra 에서 받음')
+    expect(handoffOriginLabel({ source: 'not a url', service: '' })).toBe('not a url 에서 받음')
+    expect(handoffOriginDetail(received)).toContain('https://ptium.intra 에서 실적.csv 을(를) ')
+  })
+
+  it('reads a missing origin as "not handed off" and reports anything else', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'not_found', message: '요청한 리소스를 찾을 수 없습니다.' } }), { status: 404 })))
+    await expect(fetchHandoffOrigin('wb')).resolves.toBeNull()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(received), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    await expect(fetchHandoffOrigin('wb')).resolves.toEqual(received)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })))
+    await expect(fetchHandoffOrigin('wb')).rejects.toThrow('요청 실패 (500)')
   })
 })

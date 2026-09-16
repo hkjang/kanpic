@@ -162,7 +162,9 @@ func (s *Server) receiveHandoff(w http.ResponseWriter, r *http.Request) {
 }
 
 // handoffOrigin 은 GET /api/v1/workbooks/{workbookId}/handoff 다. 넘겨받은
-// 워크북이 어디서 왔는지 답한다. 넘겨받은 것이 아니면 404.
+// 워크북이 어디서 왔는지 답한다. 넘겨받은 것이 아니면 404. 출처에는 오리진만
+// 남으므로 사람이 부르는 이름은 지금의 허용 목록에서 찾는다 — 그 사이 목록에서
+// 빠졌으면 이름 없이 오리진만 답한다.
 func (s *Server) handoffOrigin(w http.ResponseWriter, r *http.Request) {
 	receipt, err := s.handoff.Origin(r.Context(), r.PathValue("workbookId"))
 	if errors.Is(err, handoff.ErrNotFound) {
@@ -173,7 +175,11 @@ func (s *Server) handoffOrigin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, receipt)
+	peer, _ := handoff.Allowed(s.handoff.Peers(r.Context()), receipt.Source)
+	writeJSON(w, http.StatusOK, struct {
+		handoff.Receipt
+		Service string `json:"service,omitempty"`
+	}{receipt, peer.Name})
 }
 
 // loginRequired 는 이 설치가 로그인을 요구하는지다. 개방형 초기 설정 모드에서는
