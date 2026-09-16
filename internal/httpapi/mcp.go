@@ -1,13 +1,18 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -182,42 +187,207 @@ var mcpTools = []mcpTool{
 	tool("admin.logs.purge", "기준 시각 이전 서버 로그를 삭제합니다.", "admin.*", requiredProps("before", "string")),
 }
 
+// mcpLatestProtocolVersion is what the server speaks when a client asks for a
+// version it does not know. The older revisions differ only in transport
+// details this server does not use, so all three are served the same way.
+const mcpLatestProtocolVersion = "2025-06-18"
+
+var mcpSupportedProtocolVersions = map[string]bool{"2024-11-05": true, "2025-03-26": true, "2025-06-18": true}
+
+// mcpInstructions is shown to the model once by clients that surface it.
+const mcpInstructions = "kanpic 스프레드시트 서버입니다. 도구 이름은 spreadsheet.*, profile.*, admin.* 로 나뉘고 각 도구의 _meta.required_scope 가 필요한 권한입니다. 목록을 돌려주는 도구의 structuredContent 는 {\"items\": [...]} 꼴입니다."
+
 func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
+	// A tool that panics must not drop the connection: the client would see a
+	// reset with no reason, and retry the same call. It gets an error instead.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("mcp handler panicked", "panic", fmt.Sprint(recovered), "trace_id", w.Header().Get("X-Trace-ID"), "stack", string(debug.Stack()))
+			s.writeMCPError(w, http.StatusOK, nil, -32603, "서버 내부 오류로 요청을 처리하지 못했습니다.")
+		}
+	}()
+	if !s.mcpEnabled(r.Context()) {
+		s.writeMCPError(w, http.StatusServiceUnavailable, nil, -32000, "MCP 가 꺼져 있습니다. 관리자가 mcp.enabled 를 켜야 합니다.")
+		return
+	}
+	// The specification requires Origin validation on every request, so a page
+	// in the user's browser cannot drive the server through their session.
+	if !mcpOriginAllowed(r) {
+		s.writeMCPError(w, http.StatusForbidden, nil, -32000, "허용되지 않은 Origin 입니다.")
+		return
+	}
+	if version := strings.TrimSpace(r.Header.Get("MCP-Protocol-Version")); version != "" && !mcpSupportedProtocolVersions[version] {
+		s.writeMCPError(w, http.StatusBadRequest, nil, -32600, "지원하지 않는 MCP 프로토콜 버전입니다: "+version)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	if err != nil {
+		s.writeMCPError(w, http.StatusRequestEntityTooLarge, nil, -32600, "요청 본문이 너무 크거나 읽을 수 없습니다.")
+		return
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		// Batching was removed in 2025-06-18; each request travels on its own.
+		s.writeMCPError(w, http.StatusBadRequest, nil, -32600, "JSON-RPC 배치 요청은 지원하지 않습니다. 요청을 하나씩 보내세요.")
+		return
+	}
 	var request mcpRequest
-	if !decodeJSON(w, r, &request) {
+	if err := json.Unmarshal(trimmed, &request); err != nil {
+		s.writeMCPError(w, http.StatusBadRequest, nil, -32700, "JSON 요청 본문을 해석할 수 없습니다.")
 		return
 	}
-	if request.JSONRPC != "2.0" {
-		s.writeMCPError(w, request.ID, -32600, "JSON-RPC 2.0이 필요합니다.")
+	if request.JSONRPC != "2.0" || strings.TrimSpace(request.Method) == "" {
+		s.writeMCPError(w, http.StatusBadRequest, request.ID, -32600, "JSON-RPC 2.0 요청(jsonrpc, method)이 필요합니다.")
 		return
 	}
-	switch request.Method {
-	case "initialize":
-		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]string{"name": "kanpic", "version": s.build.Version}}})
-	case "notifications/initialized":
+	notification := len(request.ID) == 0 || string(request.ID) == "null"
+	switch {
+	case request.Method == "initialize":
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(request.Params, &params)
+		version := mcpLatestProtocolVersion
+		if mcpSupportedProtocolVersions[params.ProtocolVersion] {
+			version = params.ProtocolVersion
+		}
+		s.writeMCPResult(w, request.ID, map[string]any{
+			"protocolVersion": version,
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+			"serverInfo":      map[string]string{"name": "kanpic", "title": "kanpic", "version": s.build.Version},
+			"instructions":    mcpInstructions,
+		})
+	case request.Method == "ping":
+		s.writeMCPResult(w, request.ID, map[string]any{})
+	case strings.HasPrefix(request.Method, "notifications/"):
+		// Notifications never get a response body, whatever they announce.
 		w.WriteHeader(http.StatusAccepted)
-	case "tools/list":
-		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"tools": mcpTools}})
-	case "tools/call":
+	case request.Method == "tools/list":
+		s.writeMCPResult(w, request.ID, map[string]any{"tools": mcpTools})
+	case request.Method == "tools/call":
 		var params struct {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
 		}
-		if err := json.Unmarshal(request.Params, &params); err != nil {
-			s.writeMCPError(w, request.ID, -32602, "도구 인수가 올바르지 않습니다.")
+		if err := json.Unmarshal(request.Params, &params); err != nil || strings.TrimSpace(params.Name) == "" {
+			s.writeMCPError(w, http.StatusOK, request.ID, -32602, "도구 인수가 올바르지 않습니다. params.name 과 params.arguments 가 필요합니다.")
+			return
+		}
+		if _, found := findMCPTool(params.Name); !found {
+			// An unknown tool is a protocol error, not a failed tool run: the model
+			// asked for something that does not exist rather than something that
+			// went wrong.
+			s.writeMCPError(w, http.StatusOK, request.ID, -32602, "알 수 없는 도구입니다: "+params.Name)
 			return
 		}
 		result, err := s.callMCPTool(r, params.Name, params.Arguments)
 		if err != nil {
-			content, _ := json.Marshal(map[string]any{"error": err.Error()})
-			writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"isError": true, "content": []map[string]string{{"type": "text", "text": string(content)}}}})
+			s.writeMCPToolFailure(w, request.ID, err.Error())
 			return
 		}
-		content, _ := json.Marshal(result)
-		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []map[string]string{{"type": "text", "text": string(content)}}, "structuredContent": result}})
+		text, structured, err := mcpToolPayload(result)
+		if err != nil {
+			s.logger.Error("mcp tool result is not serialisable", "tool", params.Name, "error", err, "trace_id", w.Header().Get("X-Trace-ID"))
+			s.writeMCPToolFailure(w, request.ID, "도구 결과를 JSON 으로 만들 수 없습니다: "+err.Error())
+			return
+		}
+		payload := map[string]any{"content": []map[string]string{{"type": "text", "text": text}}}
+		if structured != nil {
+			payload["structuredContent"] = structured
+		}
+		s.writeMCPResult(w, request.ID, payload)
+	case notification:
+		// A request without an id is a notification even when the method is
+		// unknown; answering it would be a protocol violation.
+		w.WriteHeader(http.StatusAccepted)
 	default:
-		s.writeMCPError(w, request.ID, -32601, "지원하지 않는 MCP 메서드입니다.")
+		s.writeMCPError(w, http.StatusOK, request.ID, -32601, "지원하지 않는 MCP 메서드입니다: "+request.Method)
 	}
+}
+
+// mcpEnabled reads the mcp.enabled switch. A settings outage does not turn the
+// gateway off: the tools fail on their own if the database is down.
+func (s *Server) mcpEnabled(ctx context.Context) bool {
+	if s.settings == nil {
+		return true
+	}
+	values, err := s.settings.Values(ctx)
+	if err != nil {
+		return true
+	}
+	enabled, ok := values["mcp.enabled"].(bool)
+	return !ok || enabled
+}
+
+// mcpOriginAllowed accepts requests without an Origin (every non-browser
+// client) and browser requests from this server's own origin or the Vite dev
+// server. Anything else is a page trying to use the visitor's session.
+func mcpOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" || origin == "null" {
+		return origin == ""
+	}
+	if strings.EqualFold(origin, "http://localhost:5173") || strings.EqualFold(origin, auth.RequestOrigin(r)) {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Host != "" && strings.EqualFold(parsed.Host, r.Host)
+}
+
+// mcpToolPayload renders a tool result once and shapes it for the two places it
+// goes: the text block the model reads and structuredContent, which the
+// specification requires to be an object. Lists are wrapped as items and
+// scalars as value so a client that validates the schema does not reject a
+// successful call.
+func mcpToolPayload(result any) (string, map[string]any, error) {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return "", nil, err
+	}
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return "", nil, err
+	}
+	switch value := decoded.(type) {
+	case nil:
+		return string(data), nil, nil
+	case map[string]any:
+		return string(data), value, nil
+	case []any:
+		return string(data), map[string]any{"items": value}, nil
+	default:
+		return string(data), map[string]any{"value": value}, nil
+	}
+}
+
+// writeMCPResult marshals the whole envelope before writing so a value that
+// cannot be encoded produces an error response instead of a truncated body
+// under a 200.
+func (s *Server) writeMCPResult(w http.ResponseWriter, id json.RawMessage, result any) {
+	encoded, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": mcpID(id), "result": result})
+	if err != nil {
+		s.logger.Error("mcp response is not serialisable", "error", err, "trace_id", w.Header().Get("X-Trace-ID"))
+		s.writeMCPError(w, http.StatusOK, id, -32603, "응답을 JSON 으로 만들 수 없습니다.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(encoded)
+}
+
+// writeMCPToolFailure reports a tool that ran and refused or failed. The model
+// is meant to read this and adjust, so it is a result, not a protocol error.
+func (s *Server) writeMCPToolFailure(w http.ResponseWriter, id json.RawMessage, message string) {
+	content, _ := json.Marshal(map[string]any{"error": message})
+	s.writeMCPResult(w, id, map[string]any{"isError": true, "content": []map[string]string{{"type": "text", "text": string(content)}}})
+}
+
+// mcpID keeps the client's id verbatim and turns an absent one into null.
+func mcpID(id json.RawMessage) json.RawMessage {
+	if len(id) == 0 {
+		return json.RawMessage("null")
+	}
+	return id
 }
 
 func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) (any, error) {
@@ -229,6 +399,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return nil, errors.New("insufficient scope: " + definition.Meta["required_scope"].(string))
 	}
 	if err := s.authorizeMCPTool(r, name, args); err != nil {
+		return nil, err
+	}
+	// Checked after permission so a caller without rights learns nothing about
+	// how the server is wired.
+	if err := s.mcpServiceAvailable(name); err != nil {
 		return nil, err
 	}
 	ctx, actor := r.Context(), actorID(r)
@@ -1208,11 +1383,15 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 		return s.keys.List(ctx, actor, false)
 	case "profile.api_key.create":
 		var input apikey.CreateInput
-		decodeMCP(args, &input)
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, fmt.Errorf("invalid api key input: %w", err)
+		}
 		return s.keys.Create(ctx, actor, input)
 	case "profile.api_key.update":
 		var input apikey.UpdateInput
-		decodeMCP(args, &input)
+		if err := decodeMCP(args, &input); err != nil {
+			return nil, fmt.Errorf("invalid api key input: %w", err)
+		}
 		return s.keys.Update(ctx, stringArg(args, "key_id"), actor, input, false)
 	case "profile.api_key.revoke":
 		return okResult(s.keys.Revoke(ctx, stringArg(args, "key_id"), actor, false))
@@ -1288,13 +1467,29 @@ func (s *Server) requireMCPAdmin(r *http.Request) error {
 		}
 		return errors.New("admin scope is required")
 	}
-	if user, ok := sessionUser(r); ok && s.auth.IsAdmin(r.Context(), user) {
+	if user, ok := sessionUser(r); ok && s.auth != nil && s.auth.IsAdmin(r.Context(), user) {
 		return nil
 	}
 	if actorID(r) == "local-user" {
 		return nil
 	}
 	return errors.New("administrator permission is required")
+}
+
+// mcpServiceAvailable refuses tools whose backing service is not wired, so a
+// deployment without one answers with a reason instead of a nil dereference.
+func (s *Server) mcpServiceAvailable(name string) error {
+	switch {
+	case strings.HasPrefix(name, "profile.api_key.") && s.keys == nil:
+		return errors.New("API key service is not configured on this server")
+	case (strings.HasPrefix(name, "profile.preferences.") || strings.HasPrefix(name, "admin.settings.")) && s.settings == nil:
+		return errors.New("settings service is not configured on this server")
+	case strings.HasPrefix(name, "admin.logs.") && s.logs == nil:
+		return errors.New("log store is not configured on this server")
+	case strings.HasPrefix(name, "platform.auth.") && s.auth == nil:
+		return errors.New("authentication service is not configured on this server")
+	}
+	return nil
 }
 
 func requireMCPScopes(r *http.Request, scopes ...string) error {
@@ -1310,8 +1505,8 @@ func requireMCPScopes(r *http.Request, scopes ...string) error {
 	return nil
 }
 
-func (s *Server) writeMCPError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
-	writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+func (s *Server) writeMCPError(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
+	writeJSON(w, status, map[string]any{"jsonrpc": "2.0", "id": mcpID(id), "error": map[string]any{"code": code, "message": message}})
 }
 
 func tool(name, description, scope string, schema map[string]any) mcpTool {

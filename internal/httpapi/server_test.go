@@ -474,12 +474,14 @@ func TestChartsShareRESTAndMCPContracts(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.Chart `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.Chart `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 92, "method": "tools/call", "params": map[string]any{
 		"name": "spreadsheet.chart.list", "arguments": map[string]any{"workbook_id": book.ID, "sheet_id": sheetID},
 	}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].Type != "line" {
+	if len(mcpList.Result.Structured.Items) != 1 || mcpList.Result.Structured.Items[0].Type != "line" {
 		t.Fatalf("MCP chart list = %#v", mcpList)
 	}
 	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 93, "method": "tools/call", "params": map[string]any{
@@ -572,12 +574,14 @@ func TestPivotsShareRESTAndMCPContracts(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.Pivot `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.Pivot `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 103, "method": "tools/call", "params": map[string]any{
 		"name": "spreadsheet.pivot.list", "arguments": map[string]any{"workbook_id": book.ID, "sheet_id": sheetID},
 	}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].Name != "갱신된 피벗" {
+	if len(mcpList.Result.Structured.Items) != 1 || mcpList.Result.Structured.Items[0].Name != "갱신된 피벗" {
 		t.Fatalf("MCP pivot list = %#v", mcpList)
 	}
 	request[map[string]any](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 104, "method": "tools/call", "params": map[string]any{
@@ -777,10 +781,12 @@ func TestCellConflictRESTAndMCPComparisonResolutionFlow(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.CellConflict `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.CellConflict `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conflict.list", "arguments": map[string]any{"workbook_id": book.ID}}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 1 || mcpList.Result.Structured[0].ID != conflictID {
+	if len(mcpList.Result.Structured.Items) != 1 || mcpList.Result.Structured.Items[0].ID != conflictID {
 		t.Fatalf("MCP conflict list=%#v", mcpList)
 	}
 	mcpResolved := request[struct {
@@ -1568,10 +1574,12 @@ func TestFilterViewRESTAndMCPCRUDUseLatestCellsAndPersonalScopes(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.FilterView `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.FilterView `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 16, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.filter_view.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 2 {
+	if len(mcpList.Result.Structured.Items) != 2 {
 		t.Fatalf("MCP filter list: %#v", mcpList)
 	}
 	mcpEvaluated := request[struct {
@@ -1679,10 +1687,12 @@ func TestDataValidationRESTAndMCPCRUDEnforceWrites(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.DataValidation `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.DataValidation `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 24, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.data_validation.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 2 {
+	if len(mcpList.Result.Structured.Items) != 2 {
 		t.Fatalf("MCP validation list=%#v", mcpList)
 	}
 	mcpEvaluation := request[struct {
@@ -1773,10 +1783,12 @@ func TestConditionalFormatRESTAndMCPCRUD(t *testing.T) {
 	}
 	mcpList := request[struct {
 		Result struct {
-			Structured []workbook.ConditionalFormat `json:"structuredContent"`
+			Structured struct {
+				Items []workbook.ConditionalFormat `json:"items"`
+			} `json:"structuredContent"`
 		} `json:"result"`
 	}](t, server, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 33, "method": "tools/call", "params": map[string]any{"name": "spreadsheet.conditional_format.list", "arguments": map[string]any{"sheet_id": sheetID}}}, http.StatusOK)
-	if len(mcpList.Result.Structured) != 2 {
+	if len(mcpList.Result.Structured.Items) != 2 {
 		t.Fatalf("MCP conditional list=%#v", mcpList)
 	}
 	mcpEvaluation := request[struct {

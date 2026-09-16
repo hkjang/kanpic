@@ -382,6 +382,11 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 		mux.HandleFunc("POST /api/v1/automation-runs/{runAction}", s.undoAutomationRun)
 	}
 	mux.HandleFunc("POST /mcp", s.mcp)
+	// Without these the SPA fallback would answer a GET with index.html. This
+	// server does not open a server-to-client stream and keeps no sessions, so
+	// both are refused the way the specification allows.
+	mux.HandleFunc("GET /mcp", s.mcpMethodNotAllowed)
+	mux.HandleFunc("DELETE /mcp", s.mcpMethodNotAllowed)
 	// RFC 9728: a client that was refused at /mcp reads this to find Keycloak.
 	mux.HandleFunc("GET "+auth.ProtectedResourceMetadataPath, s.protectedResourceMetadata)
 	mux.HandleFunc("GET "+auth.ProtectedResourceMetadataPath+auth.MCPResourcePath, s.protectedResourceMetadata)
@@ -1135,6 +1140,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		s.logger.Info("http request", "method", r.Method, "path", loggedPath(r.URL.Path), "trace_id", traceID, "duration_ms", time.Since(started).Milliseconds())
 	})
+}
+
+func (s *Server) mcpMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", "POST")
+	s.writeMCPError(w, http.StatusMethodNotAllowed, nil, -32600, "/mcp 는 POST 만 받습니다. 서버→클라이언트 스트림과 세션 종료는 제공하지 않습니다.")
 }
 
 // authenticateBearer resolves a Bearer credential. An API key is tried first
