@@ -169,8 +169,12 @@ func TestHandoffIsReceivedIntoAWorkbookThatRemembersItsSource(t *testing.T) {
 	if len(cells.Items) != 4 {
 		t.Fatalf("cells=%+v", cells.Items)
 	}
-	origin := requestAs[handoff.Receipt](t, receiver, "bob", http.MethodGet, "/api/v1/workbooks/"+workbookID+"/handoff", nil, http.StatusOK)
-	if origin.Source != sender.URL || origin.ReceivedBy != "bob" || !strings.HasSuffix(origin.Filename, ".csv") {
+	// 편집기는 오리진이 아니라 허용 목록의 이름으로 "어디서 왔는지" 를 말한다.
+	origin := requestAs[struct {
+		handoff.Receipt
+		Service string `json:"service"`
+	}](t, receiver, "bob", http.MethodGet, "/api/v1/workbooks/"+workbookID+"/handoff", nil, http.StatusOK)
+	if origin.Source != sender.URL || origin.ReceivedBy != "bob" || !strings.HasSuffix(origin.Filename, ".csv") || origin.Service != "kanpic" {
 		t.Fatalf("origin=%+v", origin)
 	}
 	if stored, err := service.Origin(context.Background(), workbookID); err != nil || stored.Source != sender.URL {

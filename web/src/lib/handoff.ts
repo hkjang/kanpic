@@ -1,4 +1,4 @@
-import { api } from './api'
+import { api, ApiError } from './api'
 
 // 서비스 간 문서 넘기기(HANDOFF-STANDARD)의 보내는 쪽. 사람이 파일을
 // 내려받지 않는다 — 표(claim)를 발급받아 받는 쪽의 /handoff 를 새 창에서
@@ -21,6 +21,38 @@ export function handoffAddress(target: Pick<HandoffTarget, 'origin'>, claim: Pic
 /** 표에 적는 문서 id. 시트 하나(CSV)는 워크북 뒤에 시트를 붙인다. */
 export function handoffResource(workbookId: string, format: HandoffFormat, sheetId?: string) {
   return format === 'csv' && sheetId ? `${workbookId}/sheets/${sheetId}` : workbookId
+}
+
+/** 넘겨받은 워크북의 출처. service 는 허용 목록의 이름이라 그 사이 목록에서 빠졌으면 없다. */
+export type HandoffOrigin = { workbook_id: string; source: string; service?: string; filename: string; received_by: string; received_at: string }
+
+/** 어디서 왔는지 묻는다. 넘겨받은 워크북이 아니면(404) null 이다 — 대부분의 워크북이 그렇다. */
+export async function fetchHandoffOrigin(workbookId: string) {
+  try {
+    return await api<HandoffOrigin>(`/api/v1/workbooks/${workbookId}/handoff`)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+/** 편집기 제목 아래 한 줄. 이름이 없으면 오리진의 호스트로 부른다. */
+export function handoffOriginLabel(origin: Pick<HandoffOrigin, 'source' | 'service'>) {
+  return `${handoffOriginName(origin)} 에서 받음`
+}
+
+/** 그 한 줄에 마우스를 올렸을 때: 어느 파일을 언제 받았는지. */
+export function handoffOriginDetail(origin: Pick<HandoffOrigin, 'source' | 'service' | 'filename' | 'received_at'>) {
+  return `${origin.source} 에서 ${origin.filename} 을(를) ${new Date(origin.received_at).toLocaleString('ko-KR')} 에 받았습니다.`
+}
+
+function handoffOriginName(origin: Pick<HandoffOrigin, 'source' | 'service'>) {
+  if (origin.service) return origin.service
+  try {
+    return new URL(origin.source).host
+  } catch {
+    return origin.source
+  }
 }
 
 /**
