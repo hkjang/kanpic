@@ -48,7 +48,9 @@ export function UserImportDialog({onClose,onDone}:{onClose:()=>void;onDone:(mess
         <textarea aria-label="CSV 내용" rows={6} value={text} placeholder={SAMPLE} onChange={event=>{setText(event.target.value);setRows(undefined)}}/>
       </label>
       <div className="user-import-row">
-        <input type="file" aria-label="CSV 파일" accept=".csv,text/csv" onChange={event=>void readFile(event.target.files?.[0])}/>
+        {/* 서버는 탭·세미콜론으로 가른 명단도 읽는다. 엑셀의 '텍스트(탭으로 분리)'
+            저장과 AD 에서 뽑은 .txt 가 그 꼴이라 파일 고르기도 그것을 보여 준다. */}
+        <input type="file" aria-label="CSV 파일" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" onChange={event=>void readFile(event.target.files?.[0])}/>
         <button className="secondary" onClick={()=>{setText(SAMPLE);setRows(undefined)}}>보기 채우기</button>
       </div>
       <p className="user-import-hint">머리글 줄이 있어야 합니다. <code>user_id</code>(필수) · <code>display_name</code> · <code>email</code> · <code>note</code> 를 읽고, <code>사용자 ID</code> · <code>이름</code> · <code>이메일</code> · <code>메모</code> 로 적어도 됩니다. 역할과 부서는 등록한 뒤 사용자별로 지정합니다.</p>
