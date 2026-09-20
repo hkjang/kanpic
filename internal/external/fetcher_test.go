@@ -2,6 +2,7 @@ package external
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"kanpic/internal/formula"
+	"kanpic/internal/importexport"
 )
 
 type fixedSettings map[string]any
@@ -382,5 +384,56 @@ func TestShortKeepsKoreanLettersWhole(t *testing.T) {
 	}
 	if short("짧은 메시지") != "짧은 메시지" {
 		t.Error("짧은 메시지는 그대로 두어야 한다")
+	}
+}
+
+// 업로드 가져오기(internal/importexport 의 parseScalar)는 우편번호·사번의
+// "00123" 과 스무 자리 계좌번호를 글자로 둔다 — 수로 읽으면 123 과
+// 1.2345678901234567e19 가 되어 파일에 적힌 것과 다른 값이 칸에 남고 되돌릴
+// 길이 없다. IMPORTDATA 는 수식 엔진의 자(formula.DecimalNumber)만 불러 그
+// 두 가드가 없었으므로 같은 CSV 가 어느 문으로 들어오느냐에 따라 다른 표가
+// 되었다. 같은 파일은 어느 문으로 들어오든 같은 표여야 한다.
+func TestImportDataKeepsNumbersThatUploadKeepsAsText(t *testing.T) {
+	body := "사번,계좌,금액,비율,영\n00123,12345678901234567890,1200,0.5,0\n007.5,1234567890123456.5,3.5e3,-0,+0\n"
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	})
+	fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
+	request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/t.csv"}
+	got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+	if got.Err != nil || got.Rows != 3 || got.Columns != 5 {
+		t.Fatalf("표를 읽지 못했다: %+v", got)
+	}
+	for index, want := range []any{
+		"사번", "계좌", "금액", "비율", "영",
+		// 앞자리 0 과 열여섯 자리 넘는 번호는 글자다. 나머지는 예전대로 수.
+		"00123", "12345678901234567890", 1200.0, 0.5, 0.0,
+		// 소수점이 있으면 앞의 0 은 자리이지 번호가 아니다. 지수로 적은 것은 수다.
+		7.5, "1234567890123456.5", 3500.0, -0.0, 0.0,
+	} {
+		if got.Values[index] != want {
+			t.Errorf("%d번째 칸 = %#v, want %#v", index, got.Values[index], want)
+		}
+	}
+	// 같은 바이트를 업로드 문으로 넣어 칸마다 같은 타입·같은 값인지 본다.
+	// 한쪽의 규칙만 고쳐서는 두 문이 다시 갈린다.
+	uploaded, err := importexport.Parse("t.csv", []byte(body), 0)
+	if err != nil {
+		t.Fatalf("업로드로 읽지 못했다: %v", err)
+	}
+	seen := 0
+	for _, cell := range uploaded.Sheets[0].Cells {
+		var value any
+		if err := json.Unmarshal(cell.Value, &value); err != nil {
+			t.Fatalf("%d:%d 칸을 읽지 못했다: %v", cell.Row, cell.Column, err)
+		}
+		fetched := got.Values[(cell.Row-1)*got.Columns+cell.Column-1]
+		if fetched != value {
+			t.Errorf("%d:%d 칸이 문에 따라 다르다: 업로드 %#v, IMPORTDATA %#v", cell.Row, cell.Column, value, fetched)
+		}
+		seen++
+	}
+	if seen != len(got.Values) {
+		t.Errorf("업로드는 %d칸, IMPORTDATA 는 %d칸", seen, len(got.Values))
 	}
 }

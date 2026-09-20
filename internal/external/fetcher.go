@@ -417,11 +417,12 @@ func parseCSV(body string) formula.ExternalResult {
 				values = append(values, nil)
 				continue
 			}
-			// 수로 읽는 자는 수식 엔진의 것 하나뿐이다 — 스프레드시트가
-			// 수라고 부르는 것이지 Go 가 수라고 부르는 것이 아니다.
-			// 16진수도, NaN 도, 밑줄로 자리를 가른 것도 수가 아니다.
+			// 수로 읽는 자는 업로드 가져오기와 같은 것 하나뿐이다 — 스프레드시트가
+			// 수라고 부르는 것이지 Go 가 수라고 부르는 것이 아니다. 16진수도,
+			// NaN 도, 밑줄로 자리를 가른 것도 수가 아니고, 우편번호의 "00123"
+			// 과 스무 자리 계좌번호는 수로 담으면 적힌 것과 달라지므로 글자다.
 			text := strings.TrimSpace(record[column])
-			if number, ok := formula.DecimalNumber(text); ok {
+			if number, ok := delimited.Number(text); ok {
 				values = append(values, number)
 			} else {
 				values = append(values, record[column])
