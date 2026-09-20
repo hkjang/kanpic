@@ -123,3 +123,36 @@ func TestLooksLikeNumberStoredAsText(t *testing.T) {
 		}
 	}
 }
+
+// 형식이 적히지 않은 XLSX 칸은 CSV 의 자(delimited.Number)를 그대로 쓰지
+// 않는다. 엑셀의 raw 값은 사람이 적은 글자가 아니라 이미 실수라, 이진 오차가
+// 있는 값을 되돌릴 수 있게 17자리로 적는다(2.2 → <v>2.2000000000000002</v>,
+// 37.02 → <v>37.019999999999996</v> — 계산 결과를 값으로 붙여 넣은 칸이면
+// 흔하다). 그런 칸에 "열여섯 자리 넘으면 번호" 규칙을 대면 수 칸이 글자가
+// 되어 가져온 열의 SUM 이 조용히 0 이 된다. 앞자리 0 만 걸러 둔다.
+func TestParseXLSXValueUntypedCellsFollowTheFileRule(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		text string
+		want any
+	}{
+		{"", ""},
+		{"007", "007"},
+		{"00123", "00123"},
+		{"0.5", 0.5},
+		{"1200", 1200.0},
+		// 엑셀이 17자리로 적은 실수는 수다.
+		{"2.2000000000000002", 2.2000000000000002},
+		{"37.019999999999996", 37.019999999999996},
+		{"1234567890123450", 1234567890123450.0},
+		{"12345678901234567890", 1.2345678901234567e19},
+		{"1.2345678901234567E+19", 1.2345678901234567e19},
+	} {
+		if got := parseXLSXValue(testCase.text, excelize.CellTypeUnset); got != testCase.want {
+			t.Errorf("parseXLSXValue(%q, Unset) = %#v, want %#v", testCase.text, got, testCase.want)
+		}
+	}
+	if got := parseXLSXValue("12345678901234567890", excelize.CellTypeNumber); got != any(1.2345678901234567e19) {
+		t.Errorf("parseXLSXValue(20자리, Number) = %#v, 엑셀이 수라고 밝힌 칸은 수다", got)
+	}
+}

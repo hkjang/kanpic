@@ -1101,31 +1101,14 @@ func parseScalar(value string) any {
 	// 그 한 칸이 부동소수점 NaN 이 되면 JSON 으로 적을 수 없어 파일이 통째로
 	// 들어오지 못했고, "1_000" 은 조용히 1000 이 되어 적힌 것과 다른 값을
 	// 남겼다. 그런 것은 수가 아니라 글자로 두어야 파일에 적힌 대로 남는다.
-	if !hasSignificantLeadingZero(value) && !tooLongToHoldExactly(value) {
-		if number, ok := formula.DecimalNumber(value); ok {
-			return number
-		}
+	// 앞자리 0 과 열여섯 자리 넘는 번호를 글자로 두는 것까지 합쳐 그 자는
+	// delimited.Number 하나다 — IMPORTDATA 가 같은 자를 써야 같은 파일이 어느
+	// 문으로 들어오든 같은 표가 된다.
+	if number, ok := delimited.Number(value); ok {
+		return number
 	}
 	return value
 }
-
-// tooLongToHoldExactly 는 배정밀도가 정확히 담지 못할 만큼 긴 수인지 본다.
-//
-// 스무 자리 계좌번호를 실수로 읽으면 1.2345678901234567e+19 가 되어 뒤가
-// 뭉개진다. 파일에 적힌 것과 다른 값이 칸에 들어가고, 되돌릴 방법이 없다.
-// 그런 것은 금액이 아니라 번호이므로 글자로 둔다 — 적어도 그대로 남는다.
-//
-// 지수로 적은 것(1e30)은 사람이 수로 적은 것이므로 건드리지 않는다.
-// web/src/lib/spreadsheetNumber.ts 의 significantDigits 와 같은 한도다.
-func tooLongToHoldExactly(value string) bool {
-	if !plainNumber.MatchString(value) {
-		return false
-	}
-	digits := strings.TrimLeft(strings.Replace(strings.TrimLeft(value, "+-"), ".", "", 1), "0")
-	return len(digits) > 15
-}
-
-var plainNumber = regexp.MustCompile(`^[+-]?\d+(\.\d+)?$`)
 
 // looksLikeNumberStoredAsText 는 글자로 남은 값이 사람 눈에는 숫자인지 본다.
 //
@@ -1157,7 +1140,15 @@ func parseXLSXValue(value string, cellType excelize.CellType) any {
 		// a shared or inline string. An untyped cell holding digits is a
 		// number, and reading it as words means SUM over an imported column
 		// quietly answers zero.
-		if value == "" || hasSignificantLeadingZero(value) {
+		//
+		// CSV 의 자(delimited.Number)를 그대로 쓰지 않는다. 엑셀의 raw 값은
+		// 사람이 적은 글자가 아니라 이미 실수이고, 이진 오차가 있는 값을 되돌릴
+		// 수 있게 17자리로 적는다(2.2 → <v>2.2000000000000002</v>, 37.02 →
+		// <v>37.019999999999996</v> — 계산 결과를 값으로 붙여 넣은 칸이면
+		// 흔하다). 거기에 "열여섯 자리 넘으면 번호" 를 대면 수 칸이 글자가 되어
+		// 위의 SUM 이 0 이 되는 일이 그대로 난다. 앞자리 0 만 거른다 — 엑셀은
+		// 그런 것을 수로 저장하지 않으므로 다른 도구가 글자로 적은 번호다.
+		if value == "" || delimited.HasSignificantLeadingZero(value) {
 			return value
 		}
 		if number, ok := formula.DecimalNumber(value); ok {
@@ -1169,15 +1160,13 @@ func parseXLSXValue(value string, cellType excelize.CellType) any {
 			return boolean
 		}
 	case excelize.CellTypeNumber:
+		// 엑셀이 수라고 밝힌 칸은 이미 실수로 저장된 것이라 앞자리 0 도
+		// 열여섯 자리 너머도 남아 있지 않다 — 여기서 글자로 되돌릴 것이 없다.
 		if number, ok := formula.DecimalNumber(value); ok {
 			return number
 		}
 	}
 	return value
-}
-func hasSignificantLeadingZero(value string) bool {
-	trimmed := strings.TrimPrefix(strings.TrimPrefix(value, "+"), "-")
-	return len(trimmed) > 1 && trimmed[0] == '0' && trimmed[1] >= '0' && trimmed[1] <= '9' && !strings.Contains(trimmed, ".")
 }
 func selectSheet(wb workbook.Workbook, id string) (workbook.Sheet, error) {
 	if id == "" && len(wb.Sheets) > 0 {
