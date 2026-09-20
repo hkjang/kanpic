@@ -123,3 +123,30 @@ func TestLooksLikeNumberStoredAsText(t *testing.T) {
 		}
 	}
 }
+
+// 형식이 적히지 않은 XLSX 칸도 CSV 와 같은 자(delimited.Number)로 담는다.
+// 엑셀 자신은 스무 자리를 1.2345678901234567E+19 로 적지만 다른 도구
+// (openpyxl 의 int)는 자릿수 그대로 적으므로, 그 칸은 글자로 남아야 적힌
+// 것과 같다. 엑셀이 수라고 밝힌 칸(CellTypeNumber)은 이미 실수라 되돌릴
+// 것이 없어 예전대로 수다.
+func TestParseXLSXValueUntypedCellsFollowTheFileRule(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		text string
+		want any
+	}{
+		{"", ""},
+		{"007", "007"},
+		{"12345678901234567890", "12345678901234567890"},
+		{"1.2345678901234567E+19", 1.2345678901234567e19},
+		{"0.5", 0.5},
+		{"1200", 1200.0},
+	} {
+		if got := parseXLSXValue(testCase.text, excelize.CellTypeUnset); got != testCase.want {
+			t.Errorf("parseXLSXValue(%q, Unset) = %#v, want %#v", testCase.text, got, testCase.want)
+		}
+	}
+	if got := parseXLSXValue("12345678901234567890", excelize.CellTypeNumber); got != any(1.2345678901234567e19) {
+		t.Errorf("parseXLSXValue(20자리, Number) = %#v, 엑셀이 수라고 밝힌 칸은 수다", got)
+	}
+}
