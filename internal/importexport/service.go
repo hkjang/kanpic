@@ -1140,7 +1140,18 @@ func parseXLSXValue(value string, cellType excelize.CellType) any {
 		// a shared or inline string. An untyped cell holding digits is a
 		// number, and reading it as words means SUM over an imported column
 		// quietly answers zero.
-		if number, ok := delimited.Number(value); ok {
+		//
+		// CSV 의 자(delimited.Number)를 그대로 쓰지 않는다. 엑셀의 raw 값은
+		// 사람이 적은 글자가 아니라 이미 실수이고, 이진 오차가 있는 값을 되돌릴
+		// 수 있게 17자리로 적는다(2.2 → <v>2.2000000000000002</v>, 37.02 →
+		// <v>37.019999999999996</v> — 계산 결과를 값으로 붙여 넣은 칸이면
+		// 흔하다). 거기에 "열여섯 자리 넘으면 번호" 를 대면 수 칸이 글자가 되어
+		// 위의 SUM 이 0 이 되는 일이 그대로 난다. 앞자리 0 만 거른다 — 엑셀은
+		// 그런 것을 수로 저장하지 않으므로 다른 도구가 글자로 적은 번호다.
+		if value == "" || delimited.HasSignificantLeadingZero(value) {
+			return value
+		}
+		if number, ok := formula.DecimalNumber(value); ok {
 			return number
 		}
 	case excelize.CellTypeBool:

@@ -20,16 +20,21 @@ import (
 //
 // 앞뒤 빈칸은 부르는 쪽이 정한다 — formula.DecimalNumber 와 같다.
 func Number(text string) (float64, bool) {
-	if hasSignificantLeadingZero(text) || tooLongToHoldExactly(text) {
+	if HasSignificantLeadingZero(text) || tooLongToHoldExactly(text) {
 		return 0, false
 	}
 	return formula.DecimalNumber(text)
 }
 
-// hasSignificantLeadingZero 는 앞의 0 이 번호를 뜻하는지 본다. "0"·"0.5"·"-0"
+// HasSignificantLeadingZero 는 앞의 0 이 번호를 뜻하는지 본다. "0"·"0.5"·"-0"
 // 의 0 은 자리이고, "00123"·"007" 처럼 두 자리 이상이면서 소수점이 없을 때만
 // 번호다.
-func hasSignificantLeadingZero(value string) bool {
+//
+// 따로 내놓는 까닭: XLSX 의 형식 없는 칸은 이 가드만 쓴다. 엑셀의 raw 값은
+// 사람이 적은 글자가 아니라 이미 실수이고, 이진 오차가 있는 값을 되돌릴 수
+// 있게 17자리로 적으므로(2.2 → 2.2000000000000002) 열여섯 자리 한도를 대면
+// 수 칸이 글자가 된다.
+func HasSignificantLeadingZero(value string) bool {
 	trimmed := strings.TrimPrefix(strings.TrimPrefix(value, "+"), "-")
 	return len(trimmed) > 1 && trimmed[0] == '0' && trimmed[1] >= '0' && trimmed[1] <= '9' && !strings.Contains(trimmed, ".")
 }
