@@ -417,6 +417,11 @@ func parseCSV(body string) formula.ExternalResult {
 				values = append(values, nil)
 				continue
 			}
+			// 불리언은 원문으로 판정해 공백이 붙은 글자를 그대로 지킨다.
+			if boolean, ok := delimited.Boolean(record[column]); ok {
+				values = append(values, boolean)
+				continue
+			}
 			// 수로 읽는 자는 업로드 가져오기와 같은 것 하나뿐이다 — 스프레드시트가
 			// 수라고 부르는 것이지 Go 가 수라고 부르는 것이 아니다. 16진수도,
 			// NaN 도, 밑줄로 자리를 가른 것도 수가 아니고, 우편번호의 "00123"

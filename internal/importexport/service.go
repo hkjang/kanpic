@@ -1088,12 +1088,8 @@ func parseScalar(value string) any {
 	// behind an apostrophe. Reading it as part of the value turns a phone
 	// number into '+82-10-1234-5678 on the way back in.
 	value = unguardDelimitedValue(value)
-	lower := strings.ToLower(value)
-	if lower == "true" {
-		return true
-	}
-	if lower == "false" {
-		return false
+	if boolean, ok := delimited.Boolean(value); ok {
+		return boolean
 	}
 	// 수로 읽는 자는 수식 엔진과 격자가 함께 쓰는 자여야 한다. Go 의
 	// ParseFloat 는 그보다 넓어 "NaN"·"Inf"·"1_000"·"0x1p4" 까지 받는데,

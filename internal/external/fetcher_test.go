@@ -437,3 +437,86 @@ func TestImportDataKeepsNumbersThatUploadKeepsAsText(t *testing.T) {
 		t.Errorf("업로드는 %d칸, IMPORTDATA 는 %d칸", seen, len(got.Values))
 	}
 }
+
+// 같은 바이트의 논리값은 두 문에서 Go 타입과 JSON 타입까지 같아야 한다.
+// 공백·빈칸·아포스트로피의 기존 계약 차이는 별도 기대값으로 지킨다.
+func TestImportDataReadsBooleansLikeUpload(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		columns int
+		remote  []any
+		upload  []any
+	}{
+		{
+			name:    "booleans and lookalikes",
+			body:    "true,TRUE,True,false,FALSE,FaLsE\ntruex,falsehood,t,f,1,0\n00123,12345678901234567890,'true, true,false ,text\n",
+			columns: 6,
+			remote:  []any{true, true, true, false, false, false, "truex", "falsehood", "t", "f", 1.0, 0.0, "00123", "12345678901234567890", "'true", " true", "false ", "text"},
+		},
+		{
+			name:    "existing whitespace apostrophe and empty cells",
+			body:    " 12,12 ,'true,'+12\n,false , true\n",
+			columns: 4,
+			remote:  []any{12.0, 12.0, "'true", "'+12", "", "false ", " true", nil},
+			upload:  []any{" 12", "12 ", "'true", 12.0, nil, "false ", " true", nil},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			})
+			fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
+			request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/booleans.csv"}
+			got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+			if got.Err != nil || got.Columns != tc.columns || got.Rows*got.Columns != len(tc.remote) || len(got.Values) != len(tc.remote) {
+				t.Fatalf("표를 읽지 못했다: %+v", got)
+			}
+			uploaded, err := importexport.Parse("booleans.csv", []byte(tc.body), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cells := make(map[int]json.RawMessage)
+			for _, cell := range uploaded.Sheets[0].Cells {
+				cells[(cell.Row-1)*tc.columns+cell.Column-1] = cell.Value
+			}
+			wantUpload := tc.upload
+			if wantUpload == nil {
+				wantUpload = tc.remote
+			}
+			for index, want := range tc.remote {
+				row, column := index/tc.columns+1, index%tc.columns+1
+				fetched := got.Values[index]
+				if fetched != want {
+					t.Errorf("%d:%d IMPORTDATA = %T(%v), want %T(%v)", row, column, fetched, fetched, want, want)
+				}
+				raw, present := cells[index]
+				if wantUpload[index] == nil {
+					if present {
+						t.Errorf("%d:%d 업로드 빈칸이 저장됨: %s", row, column, raw)
+					}
+					continue
+				}
+				var value any
+				if !present {
+					t.Fatalf("%d:%d 업로드 칸 누락", row, column)
+				}
+				if err := json.Unmarshal(raw, &value); err != nil {
+					t.Fatal(err)
+				}
+				if value != wantUpload[index] {
+					t.Errorf("%d:%d 업로드 = %T(%v), want %T(%v)", row, column, value, value, wantUpload[index], wantUpload[index])
+				}
+				if tc.upload == nil {
+					remoteJSON, err := json.Marshal(fetched)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if fetched != value || string(remoteJSON) != string(raw) {
+						t.Errorf("%d:%d 두 경로 타입/값 불일치: 원격 %T(%s), 업로드 %T(%s)", row, column, fetched, remoteJSON, value, raw)
+					}
+				}
+			}
+		})
+	}
+}
