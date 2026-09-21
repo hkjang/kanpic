@@ -2,6 +2,7 @@ package external
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -449,6 +450,12 @@ func TestImportDataReadsBooleansLikeUpload(t *testing.T) {
 		upload  []any
 	}{
 		{
+			name:    "unicode and file numbers",
+			body:    "한국어,😀,�,42,true,false\n00123,12345678901234567890,1.5,-2,TRUE,False\n",
+			columns: 6,
+			remote:  []any{"한국어", "😀", "�", 42.0, true, false, "00123", "12345678901234567890", 1.5, -2.0, true, false},
+		},
+		{
 			name:    "booleans and lookalikes",
 			body:    "true,TRUE,True,false,FALSE,FaLsE\ntruex,falsehood,t,f,1,0\n00123,12345678901234567890,'true, true,false ,text\n",
 			columns: 6,
@@ -462,60 +469,125 @@ func TestImportDataReadsBooleansLikeUpload(t *testing.T) {
 			upload:  []any{" 12", "12 ", "'true", 12.0, nil, "false ", " true", nil},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte(tc.body))
-			})
-			fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
-			request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/booleans.csv"}
-			got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
-			if got.Err != nil || got.Columns != tc.columns || got.Rows*got.Columns != len(tc.remote) || len(got.Values) != len(tc.remote) {
-				t.Fatalf("표를 읽지 못했다: %+v", got)
-			}
-			uploaded, err := importexport.Parse("booleans.csv", []byte(tc.body), 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cells := make(map[int]json.RawMessage)
-			for _, cell := range uploaded.Sheets[0].Cells {
-				cells[(cell.Row-1)*tc.columns+cell.Column-1] = cell.Value
-			}
-			wantUpload := tc.upload
-			if wantUpload == nil {
-				wantUpload = tc.remote
-			}
-			for index, want := range tc.remote {
-				row, column := index/tc.columns+1, index%tc.columns+1
-				fetched := got.Values[index]
-				if fetched != want {
-					t.Errorf("%d:%d IMPORTDATA = %T(%v), want %T(%v)", row, column, fetched, fetched, want, want)
+		for _, encoding := range []string{"utf8", "utf8-bom", "utf16le", "utf16be"} {
+			t.Run(tc.name+"/"+encoding, func(t *testing.T) {
+				body := encodedCSV(tc.body, encoding)
+				server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write(body)
+				})
+				fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
+				request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/booleans.csv"}
+				got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+				if got.Err != nil || got.Columns != tc.columns || got.Rows*got.Columns != len(tc.remote) || len(got.Values) != len(tc.remote) {
+					t.Fatalf("표를 읽지 못했다: %+v", got)
 				}
-				raw, present := cells[index]
-				if wantUpload[index] == nil {
-					if present {
-						t.Errorf("%d:%d 업로드 빈칸이 저장됨: %s", row, column, raw)
-					}
-					continue
-				}
-				var value any
-				if !present {
-					t.Fatalf("%d:%d 업로드 칸 누락", row, column)
-				}
-				if err := json.Unmarshal(raw, &value); err != nil {
+				uploaded, err := importexport.Parse("booleans.csv", body, 0)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if value != wantUpload[index] {
-					t.Errorf("%d:%d 업로드 = %T(%v), want %T(%v)", row, column, value, value, wantUpload[index], wantUpload[index])
+				cells := make(map[int]json.RawMessage)
+				for _, cell := range uploaded.Sheets[0].Cells {
+					cells[(cell.Row-1)*tc.columns+cell.Column-1] = cell.Value
 				}
-				if tc.upload == nil {
-					remoteJSON, err := json.Marshal(fetched)
-					if err != nil {
+				wantUpload := tc.upload
+				if wantUpload == nil {
+					wantUpload = tc.remote
+				}
+				for index, want := range tc.remote {
+					row, column := index/tc.columns+1, index%tc.columns+1
+					fetched := got.Values[index]
+					if fetched != want {
+						t.Errorf("%d:%d IMPORTDATA = %T(%v), want %T(%v)", row, column, fetched, fetched, want, want)
+					}
+					raw, present := cells[index]
+					if wantUpload[index] == nil {
+						if present {
+							t.Errorf("%d:%d 업로드 빈칸이 저장됨: %s", row, column, raw)
+						}
+						continue
+					}
+					var value any
+					if !present {
+						t.Fatalf("%d:%d 업로드 칸 누락", row, column)
+					}
+					if err := json.Unmarshal(raw, &value); err != nil {
 						t.Fatal(err)
 					}
-					if fetched != value || string(remoteJSON) != string(raw) {
-						t.Errorf("%d:%d 두 경로 타입/값 불일치: 원격 %T(%s), 업로드 %T(%s)", row, column, fetched, remoteJSON, value, raw)
+					if value != wantUpload[index] {
+						t.Errorf("%d:%d 업로드 = %T(%v), want %T(%v)", row, column, value, value, wantUpload[index], wantUpload[index])
+					}
+					if tc.upload == nil {
+						remoteJSON, err := json.Marshal(fetched)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if fetched != value || string(remoteJSON) != string(raw) {
+							t.Errorf("%d:%d 두 경로 타입/값 불일치: 원격 %T(%s), 업로드 %T(%s)", row, column, fetched, remoteJSON, value, raw)
+						}
 					}
 				}
+			})
+		}
+	}
+}
+
+// Build the announced bytes independently of the production decoder.
+func encodedCSV(body, encoding string) []byte {
+	switch encoding {
+	case "utf8-bom":
+		return append([]byte{0xef, 0xbb, 0xbf}, []byte(body)...)
+	case "utf16le", "utf16be":
+		var order binary.AppendByteOrder = binary.LittleEndian
+		data := []byte{0xff, 0xfe}
+		if encoding == "utf16be" {
+			order = binary.BigEndian
+			data = []byte{0xfe, 0xff}
+		}
+		for _, unit := range utf16.Encode([]rune(body)) {
+			data = order.AppendUint16(data, unit)
+		}
+		return data
+	case "utf32le", "utf32be":
+		var order binary.AppendByteOrder = binary.LittleEndian
+		data := []byte{0xff, 0xfe, 0, 0}
+		if encoding == "utf32be" {
+			order = binary.BigEndian
+			data = []byte{0, 0, 0xfe, 0xff}
+		}
+		for _, char := range body {
+			data = order.AppendUint32(data, uint32(char))
+		}
+		return data
+	default:
+		return []byte(body)
+	}
+}
+
+func TestImportDataRejectsInvalidEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"invalid-utf8", []byte("id,v\n1,\xff\n")},
+		{"invalid-utf8-with-bom", encodedCSV("id,v\n1,\xff\n", "utf8-bom")},
+		{"utf32le", encodedCSV("id,v\n1,한국어😀\n", "utf32le")},
+		{"utf32be", encodedCSV("id,v\n1,한국어😀\n", "utf32be")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(tc.body)
+			})
+			fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
+			request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/encoding.csv"}
+			got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+			if _, err := importexport.Parse("encoding.csv", tc.body, 0); err == nil || err.Error() != "CSV must be UTF-8 encoded" {
+				t.Fatalf("업로드 인코딩 오류 = %v", err)
+			}
+			if got.Err == nil || got.Err.Code != "#VALUE!" || got.Err.Message != "CSV 인코딩을 읽지 못했습니다: UTF-8 또는 BOM이 있는 UTF-16을 사용하세요" {
+				t.Errorf("IMPORTDATA 인코딩 오류 = %+v", got.Err)
+			}
+			if got.Rows != 0 || got.Columns != 0 || len(got.Values) != 0 {
+				t.Errorf("잘못된 인코딩이 표로 반환됨: %+v", got)
 			}
 		})
 	}

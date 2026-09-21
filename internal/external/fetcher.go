@@ -390,6 +390,9 @@ func parseCSV(body string) formula.ExternalResult {
 	// 어느 인코딩인지 밝히고 오는 파일은 그대로 읽는다. 밝히는 표시를 떼는 자리와
 	// 여는 자리가 하나여야 업로드로 들어온 같은 파일과 같은 표가 나온다.
 	body = string(delimited.ToUTF8([]byte(body)))
+	if !utf8.ValidString(body) {
+		return formula.ExternalResult{Err: &formula.Error{Code: "#VALUE!", Message: "CSV 인코딩을 읽지 못했습니다: UTF-8 또는 BOM이 있는 UTF-16을 사용하세요"}}
+	}
 	reader := csv.NewReader(strings.NewReader(body))
 	reader.Comma = delimited.Delimiter(body)
 	reader.FieldsPerRecord = -1
