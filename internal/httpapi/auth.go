@@ -28,6 +28,7 @@ func (s *Server) authConfigPayload(config auth.Config, requestOrigin string) map
 		"client_id":                config.ClientID,
 		"client_secret_configured": strings.TrimSpace(config.ClientSecret) != "",
 		"mcp_oauth_enabled":        config.MCPTokensEnabled(),
+		"auto_login":               config.Enabled && config.AutoLogin,
 	}
 	if config.MCPTokensEnabled() {
 		payload["mcp_resource"] = config.MCPResource(requestOrigin)
@@ -58,7 +59,7 @@ func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	loginURL, err := s.auth.LoginURL(r.Context(), auth.RequestOrigin(r), r.URL.Query().Get("return_to"))
+	loginURL, err := s.auth.LoginURL(r.Context(), auth.RequestOrigin(r), r.URL.Query().Get("return_to"), r.URL.Query().Get("prompt") == "none")
 	if err != nil {
 		s.platformError(w, err)
 		return
@@ -67,6 +68,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
+	if providerError := r.URL.Query().Get("error"); providerError != "" {
+		// prompt=none answers login_required whenever the provider holds no
+		// session. For a silent attempt that is the expected answer, not a
+		// failure, so the browser goes to the login screen instead of an error.
+		returnTo, silent, err := s.auth.RefusedCallback(r.Context(), r.URL.Query().Get("state"))
+		if err == nil && silent {
+			http.Redirect(w, r, auth.SilentRefusalPath(returnTo), http.StatusFound)
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "oidc_denied", "message": "SSO 로그인이 취소되었거나 거부되었습니다. (" + providerError + ")"}})
+		return
+	}
 	session, returnTo, user, err := s.auth.Callback(r.Context(), auth.RequestOrigin(r), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
 	if err != nil {
 		s.platformError(w, err)

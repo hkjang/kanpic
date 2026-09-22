@@ -70,3 +70,37 @@ func TestBootstrapAdministratorRecognition(t *testing.T) {
 		t.Fatal("different credentials compared equal")
 	}
 }
+
+// The browser may ask for a silent start; only the administrator setting
+// grants it, so a crafted address cannot change where the redirects happen.
+func TestSilentLoginAllowedOnlyWhenAutoLoginIsOn(t *testing.T) {
+	t.Parallel()
+	if SilentLoginAllowed(Config{AutoLogin: true}, true) != true {
+		t.Fatal("requested and allowed must be silent")
+	}
+	if SilentLoginAllowed(Config{AutoLogin: false}, true) {
+		t.Fatal("a request without the setting is downgraded to an ordinary login")
+	}
+	if SilentLoginAllowed(Config{AutoLogin: true}, false) {
+		t.Fatal("the setting alone never makes an ordinary login silent")
+	}
+}
+
+// A refused silent attempt lands on the login screen with the marker that
+// stops another attempt and the deep link it was opened with.
+func TestSilentRefusalPathKeepsSafeDeepLinks(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"/":                      "/login?sso=none",
+		"/workbooks/abc?sheet=2": "/login?sso=none&return_to=%2Fworkbooks%2Fabc%3Fsheet%3D2",
+		"//evil.example/":        "/login?sso=none",
+		"https://evil.example/":  "/login?sso=none",
+		"":                       "/login?sso=none",
+		"/admin":                 "/login?sso=none&return_to=%2Fadmin",
+	}
+	for returnTo, want := range cases {
+		if got := SilentRefusalPath(returnTo); got != want {
+			t.Errorf("SilentRefusalPath(%q) = %q, want %q", returnTo, got, want)
+		}
+	}
+}

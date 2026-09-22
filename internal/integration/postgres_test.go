@@ -1936,6 +1936,23 @@ func TestSettingsAndAPIKeyLifecycle(t *testing.T) {
 		t.Fatalf("bootstrap session: %#v %v", persistedUser, err)
 	}
 
+	// A silent attempt that the provider refused is consumed once and reports
+	// that it was silent, so the callback can send the browser to the login
+	// screen instead of an error; an ordinary attempt reports otherwise.
+	for _, silent := range []bool{true, false} {
+		state := "integration-state-" + time.Now().Format("150405.000000") + fmt.Sprint(silent)
+		if err := authService.SaveTransactionForTest(ctx, state, "verifier", "/workbooks/x", silent); err != nil {
+			t.Fatal(err)
+		}
+		returnTo, wasSilent, err := authService.RefusedCallback(ctx, state)
+		if err != nil || returnTo != "/workbooks/x" || wasSilent != silent {
+			t.Fatalf("refused callback silent=%v: %q %v %v", silent, returnTo, wasSilent, err)
+		}
+		if _, _, err := authService.RefusedCallback(ctx, state); err == nil {
+			t.Fatal("a transaction is consumed by the first callback")
+		}
+	}
+
 	keys := apikey.New(pool)
 	userID := "integration-key-user"
 	defer pool.Exec(context.Background(), `DELETE FROM api_keys WHERE user_id=$1`, userID)
