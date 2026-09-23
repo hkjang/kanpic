@@ -77,11 +77,29 @@ const CURRENCY_SIGN=/^([₩$€¥£¢])(\s*)/
 const UNIT_SUFFIX=/(\s*)(원|달러|USD|KRW|won)$/i
 const GROUPED_INTEGER=/^\d{1,3}(,\d{3})+$/
 const PLAIN_INTEGER=/^\d+$/
+/**
+ * 앞의 0 이 자리가 아니라 번호를 뜻하는 평문 정수. `0`·`0.5`·`-0`·`007.5` 의
+ * 0 은 자리이고, `00123`·`007` 처럼 0 뒤에 숫자가 더 오면서 소수점이 없을
+ * 때만 번호다. 자릿점이나 통화 기호가 붙은 것은 번호가 아니라 금액이므로
+ * 여기서 걸리지 않는다. 서버의 delimited.HasSignificantLeadingZero 와 같은
+ * 자다.
+ */
+const LEADING_ZERO_NUMBER=/^[+-]?0\d+$/
 
 export function decomposeNumberText(value:string):NumberText|undefined{
   let text=value.trim()
   // 마흔 자를 넘는 것은 금액이 아니라 문장이다.
   if(text===''||text.length>40)return undefined
+  // 우편번호·사번의 앞자리 0 은 숫자로 바꾸는 순간 사라지고 되돌릴 길이 없다.
+  // 열여섯 자리 넘는 번호를 아래에서 놓아주는 것과 같은 까닭이다. 파일로
+  // 들어오는 문(internal/delimited 의 Number — 업로드 가져오기와 IMPORTDATA)이
+  // 이미 그렇게 하므로, 같은 표를 CSV 로 올리느냐 복사해 붙이느냐에 따라
+  // 다른 값이 남지 않으려면 여기서도 글자로 두어야 한다.
+  // testdata/incoming-number.json 이 두 문을 붙들어 둔다.
+  //
+  // 칸에 직접 쳐 넣는 것은 다른 문이다 — CanvasGrid 의 parsedValue 는 여기에
+  // 닿기 전에 Number() 로 읽으므로 사람이 친 `00123` 은 예전대로 123 이다.
+  if(LEADING_ZERO_NUMBER.test(text))return undefined
   let negative=false
   const parenthesized=/^\(.*\)$/.test(text)
   if(parenthesized){negative=true;text=text.slice(1,-1).trim()}
