@@ -725,7 +725,7 @@ function SettingsPanel(){
   const validate=useMutation({mutationFn:()=>api<{valid:boolean;issues:Array<{key:string;message:string}>}>('/api/v1/admin/settings:validate',{method:'POST',body:'{}'}),onSuccess:r=>setMessage(r.valid?'모든 설정이 유효합니다.':r.issues.map(i=>`${i.key}: ${i.message}`).join('\n'))})
   const test=useMutation({mutationFn:()=>api<{items:Array<{name:string;success:boolean;message:string}>}>('/api/v1/admin/settings:test',{method:'POST',body:'{}'}),onSuccess:r=>setMessage(r.items.map(i=>`${i.success?'✓':'✕'} ${i.name}: ${i.message}`).join('\n'))})
   const byKey=useMemo(()=>new Map(settings.data?.items.map(item=>[item.key,item])),[settings.data])
-  const oidcKeys=['auth.oidc.enabled','auth.oidc.issuer_url','auth.oidc.client_id','auth.oidc.client_secret','auth.oidc.scopes','auth.oidc.admin_roles','auth.oidc.mcp_enabled','auth.oidc.mcp_audiences','auth.oidc.ca_pem','server.public_url']
+  const oidcKeys=['auth.oidc.enabled','auth.oidc.issuer_url','auth.oidc.client_id','auth.oidc.client_secret','auth.oidc.scopes','auth.oidc.admin_roles','auth.oidc.auto_login','auth.oidc.mcp_enabled','auth.oidc.mcp_audiences','auth.oidc.ca_pem','server.public_url']
   const aiKeys=['ai.enabled','ai.gateway_url','ai.model','ai.api_key','ai.timeout_seconds','ai.max_input_cells','ai.max_changes','ai.ca_pem']
   const automationKeys=['automation.enabled','automation.max_cells_per_run','automation.max_runs_per_hour','automation.scheduler_poll_seconds']
   return <main className="console-content"><div className="content-title"><div><span className="eyebrow">PLATFORM CONFIGURATION</span><h1>시스템 설정</h1><p>서비스 설정을 변경하고 저장된 버전을 검증·복원합니다.</p></div><button className="primary" onClick={()=>setShowAdd(true)}><Plus/> 설정 추가</button></div>

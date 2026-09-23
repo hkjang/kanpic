@@ -57,6 +57,9 @@ type Config struct {
 	// token must carry; empty means the client ID or the /mcp resource URL.
 	MCPEnabled   bool
 	MCPAudiences []string
+	// AutoLogin lets the browser try prompt=none first, so someone already
+	// signed in at Keycloak never sees the login screen.
+	AutoLogin bool
 }
 
 type BootstrapCredentials struct {
@@ -109,10 +112,17 @@ func (s *Service) Config(ctx context.Context) (Config, error) {
 		config.MCPEnabled = enabled
 	}
 	config.MCPAudiences = stringList(values["auth.oidc.mcp_audiences"])
+	config.AutoLogin, _ = values["auth.oidc.auto_login"].(bool)
 	return config, nil
 }
 
-func (s *Service) LoginURL(ctx context.Context, requestOrigin, returnTo string) (string, error) {
+// LoginURL starts an authorization code flow. A silent start adds prompt=none,
+// which the provider answers at once: with a code when it already holds a
+// session for the browser, otherwise with error=login_required and no screen.
+// The browser asks for a silent start, but only the administrator setting
+// grants it; an unrequested one is downgraded to an ordinary login so a
+// crafted address cannot decide where the redirects happen.
+func (s *Service) LoginURL(ctx context.Context, requestOrigin, returnTo string, silent bool) (string, error) {
 	config, err := s.Config(ctx)
 	if err != nil {
 		return "", err
@@ -120,6 +130,7 @@ func (s *Service) LoginURL(ctx context.Context, requestOrigin, returnTo string) 
 	if !config.Enabled {
 		return "", errors.New("OIDC is disabled")
 	}
+	silent = SilentLoginAllowed(config, silent)
 	provider, providerContext, err := providerFor(ctx, config)
 	if err != nil {
 		return "", err
@@ -138,13 +149,59 @@ func (s *Service) LoginURL(ctx context.Context, requestOrigin, returnTo string) 
 	if !validReturnTo(returnTo) {
 		returnTo = "/"
 	}
-	hash := sha256.Sum256([]byte(state))
-	_, err = s.pool.Exec(ctx, `INSERT INTO auth_transactions(state_hash,code_verifier,return_to,expires_at) VALUES($1,$2,$3,$4)`, hash[:], verifier, returnTo, time.Now().UTC().Add(10*time.Minute))
-	if err != nil {
+	if err := s.saveTransaction(ctx, state, verifier, returnTo, silent); err != nil {
 		return "", err
 	}
 	_ = providerContext
-	return oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier)), nil
+	options := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier)}
+	if silent {
+		options = append(options, oauth2.SetAuthURLParam("prompt", "none"))
+	}
+	return oauthConfig.AuthCodeURL(state, options...), nil
+}
+
+// SilentLoginAllowed says whether a requested silent start may go ahead.
+func SilentLoginAllowed(config Config, requested bool) bool {
+	return requested && config.AutoLogin
+}
+
+func (s *Service) saveTransaction(ctx context.Context, state, verifier, returnTo string, silent bool) error {
+	hash := sha256.Sum256([]byte(state))
+	_, err := s.pool.Exec(ctx, `INSERT INTO auth_transactions(state_hash,code_verifier,return_to,expires_at,silent) VALUES($1,$2,$3,$4,$5)`, hash[:], verifier, returnTo, time.Now().UTC().Add(10*time.Minute), silent)
+	return err
+}
+
+// SaveTransactionForTest stores a login transaction without going through
+// provider discovery, so the refusal path can be exercised against a database.
+func (s *Service) SaveTransactionForTest(ctx context.Context, state, verifier, returnTo string, silent bool) error {
+	return s.saveTransaction(ctx, state, verifier, returnTo, silent)
+}
+
+// RefusedCallback consumes the transaction behind a callback that carried an
+// error instead of a code and reports where the browser should go. A silent
+// attempt that found no provider session is an ordinary outcome, so it lands on
+// the login screen with the deep link kept; anything else is a real refusal.
+func (s *Service) RefusedCallback(ctx context.Context, state string) (returnTo string, silent bool, err error) {
+	if state == "" {
+		return "/", false, errors.New("login transaction expired or invalid")
+	}
+	hash := sha256.Sum256([]byte(state))
+	err = s.pool.QueryRow(ctx, `DELETE FROM auth_transactions WHERE state_hash=$1 AND expires_at>now() RETURNING return_to,silent`, hash[:]).Scan(&returnTo, &silent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "/", false, errors.New("login transaction expired or invalid")
+	}
+	return returnTo, silent, err
+}
+
+// SilentRefusalPath is where a refused silent attempt lands. The sso=none
+// marker tells the browser not to try again even if its session storage was
+// cleared meanwhile; return_to keeps the deep link for the manual login.
+func SilentRefusalPath(returnTo string) string {
+	path := "/login?sso=none"
+	if validReturnTo(returnTo) && returnTo != "/" {
+		path += "&return_to=" + url.QueryEscape(returnTo)
+	}
+	return path
 }
 
 func (s *Service) Callback(ctx context.Context, requestOrigin, state, code string) (string, string, User, error) {

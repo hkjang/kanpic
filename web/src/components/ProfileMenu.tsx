@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, LogOut, Settings, ShieldCheck, UserRound } from 'lucide-react'
 import type { BuildInfo, Session } from '../types'
+import { markSignedOut } from '../lib/silent-sso'
 
 export function ProfileMenu({build,session}:{build?:BuildInfo;session?:Session}) {
   const [open,setOpen]=useState(false)
@@ -8,7 +9,9 @@ export function ProfileMenu({build,session}:{build?:BuildInfo;session?:Session})
   useEffect(()=>{const close=(event:MouseEvent)=>{if(!root.current?.contains(event.target as Node))setOpen(false)};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close)},[])
   const name=session?.user?.display_name || '로컬 관리자'
   const initial=name.slice(0,1).toUpperCase()
-  const logout=async()=>{await fetch('/auth/logout',{method:'POST'});window.location.href='/login'}
+  // Marked before the session goes away: a silent SSO attempt right after
+  // signing out would make the sign-out look broken.
+  const logout=async()=>{markSignedOut();await fetch('/auth/logout',{method:'POST'});window.location.href='/login'}
   return <div className="profile-menu" ref={root}>
     <button className="profile-trigger" onClick={()=>setOpen(!open)} aria-expanded={open}>
       <span className="avatar">{initial}</span><span className="profile-name">{name}</span><ChevronDown size={15}/>
