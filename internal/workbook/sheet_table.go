@@ -15,6 +15,12 @@ import (
 // 훑으므로 한없이 늘리면 계산이 느려진다.
 const MaxTables = 200
 
+// MaxTableCells 는 표 하나가 덮을 수 있는 칸 수다. 줄 수만 보고 넓이를 보지
+// 않던 동안, 표의 범위는 열 이름을 담을 자리를 그대로 정했다 —
+// TableColumns 가 범위의 넓이만큼 슬라이스를 잡으므로, 여덟 글자짜리 열을
+// 끝으로 둔 A1:AAAAAAAA10 은 백이십 기가바이트를 달라고 했다.
+const MaxTableCells = 1_000_000
+
 // SheetTable 은 이름을 가진 표다. 지금까지의 "테이블 서식" 은 색만 칠하는
 // 것이어서 수식에서 그것을 가리킬 수 없었다.
 //
@@ -88,6 +94,13 @@ func normalizeSheetTable(item SheetTable) (SheetTable, error) {
 	}
 	if parsed.End.Row-parsed.Start.Row+1 <= overhead {
 		return SheetTable{}, fmt.Errorf("%w: a table needs at least one row of data below its header and above its totals row", ErrInvalid)
+	}
+	// 넓이도 함께 본다. 줄 수만 세던 동안 열 쪽은 시트 끝까지 열려 있었고,
+	// 넓이를 읽는 쪽은 그만큼 자리를 잡았다. int64 로 세는 것은 두 변이
+	// 모두 시트만 할 때 곱이 int 를 넘기 때문이다.
+	cells := int64(parsed.End.Row-parsed.Start.Row+1) * int64(parsed.End.Column-parsed.Start.Column+1)
+	if cells > MaxTableCells {
+		return SheetTable{}, fmt.Errorf("%w: a table may cover at most %d cells", ErrInvalid, MaxTableCells)
 	}
 	item.Range = cellrange.Address(parsed.Start.Row, parsed.Start.Column) + ":" + cellrange.Address(parsed.End.Row, parsed.End.Column)
 	item.Theme = strings.TrimSpace(item.Theme)

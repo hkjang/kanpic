@@ -10,6 +10,21 @@ import (
 
 var ErrInvalidRange = errors.New("invalid A1 range")
 
+// How large a sheet is, which is not a choice this package makes: a spreadsheet
+// has columns A through XFD and rows 1 through 1048576, so a position past
+// either edge names no cell of any sheet there could be.
+//
+// The ceiling is the parser's business rather than each caller's. A position
+// read out of a stored range is handed straight to a make() often enough --
+// TableColumns sizes a slice by the width of the table's range, the print
+// sheet lays out one row per row of the print area -- that a caller who
+// forgets the check writes an allocation the range names. One cell reference
+// of eight letters asks for a hundred and twenty gigabytes.
+const (
+	MaxRows    = 1_048_576
+	MaxColumns = 16_384
+)
+
 type Position struct {
 	Row    int `json:"row"`
 	Column int `json:"column"`
@@ -51,13 +66,19 @@ func parsePosition(value string) (Position, error) {
 	column := 0
 	for i < len(value) && unicode.IsLetter(rune(value[i])) {
 		column = column*26 + int(value[i]-'A'+1)
+		// Inside the loop, not after it. The count runs past what an int holds
+		// a few letters later, where it can come back around to a small number
+		// and name a column after all.
+		if column > MaxColumns {
+			return Position{}, ErrInvalidRange
+		}
 		i++
 	}
 	if i == 0 || i == len(value) {
 		return Position{}, ErrInvalidRange
 	}
 	row, err := strconv.Atoi(value[i:])
-	if err != nil || row < 1 || column < 1 {
+	if err != nil || row < 1 || row > MaxRows || column < 1 {
 		return Position{}, ErrInvalidRange
 	}
 	return Position{Row: row, Column: column}, nil

@@ -124,15 +124,32 @@ export function printColumnPages(region:GridRegion,widthOf:(column:number)=>numb
 
 const escapeHTML=(value:string)=>value.replace(/[&<>"]/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[character] as string))
 
+// 시트가 가진 넓이. 서버도 같은 값으로 인쇄 영역을 받지만, 그 검사가 생기기
+// 전에 저장된 값이 남아 있을 수 있어 읽는 쪽에서도 본다. 아래 layout 은 영역의
+// 줄마다 한 줄씩 짜므로, 시트에 없는 줄을 세면 화면이 멈춘다.
+const SHEET_ROWS=1048576, SHEET_COLUMNS=16384
+
 /** The smallest rectangle that holds every non-empty cell of the sheet. */
 // printAreaRegion 은 "A1:D20" 을 격자 범위로 옮긴다. 읽을 수 없는 값이면
 // 아무것도 돌려주지 않아 내용이 있는 곳 전체를 내게 한다.
 export function printAreaRegion(area:string|undefined):GridRegion|undefined{
   const parsed=/^([A-Z]+)([1-9]\d*):([A-Z]+)([1-9]\d*)$/.exec((area??'').trim().toUpperCase())
   if(!parsed)return
-  const column=(letters:string)=>{let value=0;for(const letter of letters)value=value*26+letter.charCodeAt(0)-64;return value}
+  const column=(letters:string)=>{
+    let value=0
+    for(const letter of letters){
+      value=value*26+letter.charCodeAt(0)-64
+      // 루프 안에서 본다. 글자가 몇 개 더 붙으면 수가 배정밀도의 정수 범위를
+      // 넘어, 빠져나온 뒤에 재면 멀쩡한 열 번호로 보일 수 있다.
+      if(value>SHEET_COLUMNS)return 0
+    }
+    return value
+  }
   const startRow=Number(parsed[2]),endRow=Number(parsed[4])
   const startColumn=column(parsed[1]),endColumn=column(parsed[3])
+  // 시트 밖을 가리키는 값이면 인쇄 영역이 없는 것으로 친다 — 내용이 있는
+  // 곳 전체를 내는 쪽이, 아무것도 못 내는 것보다 낫다.
+  if(startColumn<1||endColumn<1||startRow>SHEET_ROWS||endRow>SHEET_ROWS)return
   return{startRow:Math.min(startRow,endRow),startColumn:Math.min(startColumn,endColumn),
          endRow:Math.max(startRow,endRow),endColumn:Math.max(startColumn,endColumn)}
 }

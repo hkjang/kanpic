@@ -22,6 +22,10 @@ const (
 	MaxLayoutEntries   = 10_000
 	MaxFrozenRows      = 100
 	MaxFrozenColumns   = 50
+	// 인쇄 영역이 품을 수 있는 칸 수. 인쇄 화면은 영역의 줄마다 한 줄씩
+	// 짜므로, 가진 적 없는 넓이를 인쇄 영역으로 적어 두면 그 파일을 여는
+	// 사람의 화면이 멈춘다. 한 장에 담을 수 있는 칸 수와 같게 둔다.
+	MaxPrintAreaCells = 1_000_000
 )
 
 func defaultSheetLayout() SheetLayout { return SheetLayout{Revision: 1} }
@@ -214,6 +218,13 @@ func normalizeSheetLayoutMutation(input SheetLayoutMutation) (SheetLayoutMutatio
 		selected, err := cellrange.Parse(strings.TrimSpace(input.Range))
 		if err != nil {
 			return SheetLayoutMutation{}, fmt.Errorf("%w: print area must be a range like A1:D20", ErrInvalid)
+		}
+		// 넓이를 세어 둔다. 차트의 원본 범위와 같은 이유에서다 — 범위는
+		// 저장될 뿐이지만, 읽는 쪽은 그 넓이만큼 자리를 잡는다. int64 로
+		// 세는 것은 두 변이 모두 시트만 할 때 곱이 int 를 넘기 때문이다.
+		cells := int64(selected.End.Row-selected.Start.Row+1) * int64(selected.End.Column-selected.Start.Column+1)
+		if cells > MaxPrintAreaCells {
+			return SheetLayoutMutation{}, fmt.Errorf("%w: print area may contain at most %d cells", ErrInvalid, MaxPrintAreaCells)
 		}
 		// 사람이 적은 모양을 그대로 두지 않고 A1:D20 꼴로 다듬는다. $ 나
 		// 소문자로 적어도 저장된 값은 하나뿐이라 뒤에서 견주기 쉽다.
