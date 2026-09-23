@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cellKey } from '../state/editor'
-import { columnPages, printableDocument, printableWidth, usedRegion , cellCSSForTest , printColumnPages } from './printSheet'
+import { columnPages, printableDocument, printableWidth, usedRegion , cellCSSForTest , printColumnPages , printAreaRegion } from './printSheet'
 import type { Cell } from '../types'
 
 function grid(entries:Array<[number,number,unknown,Record<string,unknown>?]>){
@@ -398,5 +398,23 @@ describe('the preview region matches the printed region',()=>{
     cells.set(cellKey(1,1),{sheet_id:'s',row:1,column:1,value:'x',updated_at:''})
     cells.set(cellKey(1,40),{sheet_id:'s',row:1,column:40,style:{bold:true},updated_at:''})
     expect(usedRegion(cells)?.endColumn).toBe(1)
+  })
+})
+
+describe('printAreaRegion', () => {
+  it('reads an ordinary print area', () => {
+    expect(printAreaRegion('A1:D20')).toEqual({ startRow: 1, startColumn: 1, endRow: 20, endColumn: 4 })
+  })
+
+  it('reads the whole sheet', () => {
+    expect(printAreaRegion('A1:XFD1048576')).toEqual({ startRow: 1, startColumn: 1, endRow: 1048576, endColumn: 16384 })
+  })
+
+  // 인쇄 화면은 영역의 줄마다 한 줄씩 짠다. 시트가 가진 적 없는 넓이를
+  // 인쇄 영역으로 적어 두면 그 파일을 여는 사람의 화면이 멈췄다.
+  it('ignores an area that reaches past the sheet', () => {
+    expect(printAreaRegion('A1:AAAAAAAA10')).toBeUndefined()
+    expect(printAreaRegion('A1:XFE5')).toBeUndefined()
+    expect(printAreaRegion('A1:A1048577')).toBeUndefined()
   })
 })
