@@ -16,7 +16,7 @@ import { drawConditionalIcon,iconGlyph,iconGutter } from '../lib/conditionalIcon
 import { hashesWhenTooNarrow } from '../lib/cellWidth'
 import { parseClipboardHtml } from '../lib/clipboardHtml'
 import { cycleReference } from '../lib/referenceCycle'
-import { parsePastedNumber } from '../lib/clipboardNumber'
+import { parseTypedCellValue } from '../lib/cellEntry'
 import { clipboardHtml } from '../lib/clipboardHtmlOut'
 import { collaborationClientId } from '../lib/client'
 import { cellMerge,selectedMergedBounds,stripMergeStyle,type MergeRange } from '../lib/merge'
@@ -63,20 +63,6 @@ export type GridMenuCommand=
 const RESIZE_HANDLE=4,MIN_ROW_HEIGHT=16,MAX_ROW_HEIGHT=400,MIN_COLUMN_WIDTH=32,MAX_COLUMN_WIDTH=600,DEFAULT_ROW_HEIGHT=27,DEFAULT_COLUMN_WIDTH=108
 
 function columnName(column:number){let value=column,result='';while(value){value--;result=String.fromCharCode(65+value%26)+result;value=Math.floor(value/26)}return result}
-/**
- * 입력한 글자가 무엇인지 정한다. 스프레드시트는 `1,234` 나 `12%` 를 글자가
- * 아니라 숫자로 받고 보이던 모습은 표시 형식으로 남긴다. 그렇지 않으면
- * 합계에 들어가지 않는다.
- */
-function parsedValue(raw:string):{value:unknown;numberFormat?:string}{
-  if(raw==='')return {value:undefined}
-  if(raw.toLowerCase()==='true')return {value:true}
-  if(raw.toLowerCase()==='false')return {value:false}
-  if(Number.isFinite(Number(raw))&&raw.trim()!=='')return {value:Number(raw)}
-  const number=parsePastedNumber(raw)
-  if(number)return {value:number.value,numberFormat:number.numberFormat}
-  return {value:raw}
-}
 function parsedAddress(value:string){const match=/^([A-Z]+)([1-9]\d*)$/.exec(value.toUpperCase());if(!match)return;let column=0;for(const character of match[1])column=column*26+character.charCodeAt(0)-64;return{row:Number(match[2]),column}}
 function formulaPreview(value:unknown){if(!Array.isArray(value))return value;const first=value[0];return Array.isArray(first)?first[0]:first}
 // 표를 그리는 색. 선택 색이나 협업자 색과 겹치지 않아야 무엇이 무엇인지
@@ -477,7 +463,7 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
 
   const commit=useCallback(async(raw:string,row=activeRow,column=activeColumn)=>{
     const formula=raw.startsWith('=')?raw:''
-    const parsed=formula?{value:undefined,numberFormat:undefined}:parsedValue(raw)
+    const parsed=formula?{value:undefined,numberFormat:undefined}:parseTypedCellValue(raw)
     let value:unknown=parsed.value
     if(formula&&navigator.onLine){
       // Formula evaluation happens before the outbox write. Mark that gap as
@@ -506,7 +492,7 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
   const fillFrom=useCallback(async(source:FillRange)=>{try{const inputs=materializeFill(selectionPayload(source),selection);await queueCells(inputs,'fill')}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위를 채우지 못했습니다.')}},[queueCells,selection,selectionPayload,setSaveState])
   const fillDown=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.startRow,endColumn:selection.endColumn}),[fillFrom,selection])
   const fillRight=useCallback(()=>void fillFrom({startRow:selection.startRow,startColumn:selection.startColumn,endRow:selection.endRow,endColumn:selection.startColumn}),[fillFrom,selection])
-  const fillDraft=useCallback(async(raw:string)=>{try{const formula=raw.startsWith('=')?raw:undefined,current=cells.get(cellKey(activeRow,activeColumn)),parsed=formula?{value:undefined,numberFormat:undefined}:parsedValue(raw),existing=current?.style as Record<string,unknown>|undefined,style=parsed.numberFormat&&typeof existing?.number_format!=='string'?{...(existing??{}),number_format:parsed.numberFormat}:existing,payload:KanpicClipboard={version:1,sourceRow:activeRow,sourceColumn:activeColumn,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:parsed.value,formula,style:stripMergeStyle(style)}]},inputs=[{row:activeRow,column:activeColumn,value:parsed.value,formula,style},...materializeFill(payload,selection)];await queueCells(inputs,'fill');setEditing(false)}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위에 값을 채우지 못했습니다.')}},[activeColumn,activeRow,cells,queueCells,selection,setEditing,setSaveState])
+  const fillDraft=useCallback(async(raw:string)=>{try{const formula=raw.startsWith('=')?raw:undefined,current=cells.get(cellKey(activeRow,activeColumn)),parsed=formula?{value:undefined,numberFormat:undefined}:parseTypedCellValue(raw),existing=current?.style as Record<string,unknown>|undefined,style=parsed.numberFormat&&typeof existing?.number_format!=='string'?{...(existing??{}),number_format:parsed.numberFormat}:existing,payload:KanpicClipboard={version:1,sourceRow:activeRow,sourceColumn:activeColumn,rows:1,columns:1,cells:[{rowOffset:0,columnOffset:0,value:parsed.value,formula,style:stripMergeStyle(style)}]},inputs=[{row:activeRow,column:activeColumn,value:parsed.value,formula,style},...materializeFill(payload,selection)];await queueCells(inputs,'fill');setEditing(false)}catch(error){setSaveState('error');alert(error instanceof Error?error.message:'선택 범위에 값을 채우지 못했습니다.')}},[activeColumn,activeRow,cells,queueCells,selection,setEditing,setSaveState])
 
   const selectCell=useCallback((row:number,column:number,extend=false)=>{
     let nextRow=Math.max(1,Math.min(TOTAL_ROWS,row)),nextColumn=Math.max(1,Math.min(TOTAL_COLUMNS,column));if(rowAxis.isHidden(nextRow))nextRow=row>=activeRow?rowAxis.firstVisibleAtOrAfter(nextRow):rowAxis.lastVisibleAtOrBefore(nextRow);if(columnAxis.isHidden(nextColumn))nextColumn=column>=activeColumn?columnAxis.firstVisibleAtOrAfter(nextColumn):columnAxis.lastVisibleAtOrBefore(nextColumn)
