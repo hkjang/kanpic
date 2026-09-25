@@ -97,8 +97,9 @@ export function decomposeNumberText(value:string):NumberText|undefined{
   // 다른 값이 남지 않으려면 여기서도 글자로 두어야 한다.
   // testdata/incoming-number.json 이 두 문을 붙들어 둔다.
   //
-  // 칸에 직접 쳐 넣는 것은 다른 문이다 — CanvasGrid 의 parsedValue 는 여기에
-  // 닿기 전에 Number() 로 읽으므로 사람이 친 `00123` 은 예전대로 123 이다.
+  // 칸에 직접 쳐 넣는 것은 다른 문이다 — cellEntry 의 parseTypedCellValue 는
+  // 여기에 닿기 전에 위의 spreadsheetNumber 로 읽으므로 사람이 친 `00123` 은
+  // 예전대로 123 이다. 파일은 되돌릴 길이 없지만 친 사람은 다시 칠 수 있다.
   if(LEADING_ZERO_NUMBER.test(text))return undefined
   let negative=false
   const parenthesized=/^\(.*\)$/.test(text)
