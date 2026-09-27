@@ -33,14 +33,16 @@ func encodeAddress(address string) string {
 	return mime.QEncoding.Encode("utf-8", strings.TrimSpace(address[:open])) + " " + address[open:]
 }
 
-// normalizeBody uses CRLF line endings and escapes a leading dot so a line of
-// text can never terminate the DATA command early.
+// normalizeBody uses CRLF line endings and makes sure the body ends with one,
+// so the DATA terminator always lands on a line of its own.
+//
+// 와이어의 점 이스케이프는 여기서 하지 않는다 — Deliver 가 본문을 쓰는 곳은
+// client.Data() 가 돌려주는 net/textproto 의 dot writer 이고, 그것이 줄 앞
+// 점을 RFC 5321 4.5.2 대로 이미 하나 더 붙인다. 여기서 손으로 한 번 더
+// 붙이면 받는 쪽이 하나만 되돌리므로 `.점으로 시작` 이 `..점으로 시작` 으로
+// 보인다.
 func normalizeBody(body string) string {
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
-	if strings.HasPrefix(body, ".") {
-		body = "." + body
-	}
-	body = strings.ReplaceAll(body, "\r\n.", "\r\n..")
 	if !strings.HasSuffix(body, "\r\n") {
 		body += "\r\n"
 	}
