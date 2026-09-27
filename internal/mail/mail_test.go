@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -147,12 +148,72 @@ func TestDeliverWithoutAuthentication(t *testing.T) {
 	relay.mu.Lock()
 	body := relay.body
 	relay.mu.Unlock()
-	// The subject is encoded and a leading dot inside the body is escaped.
-	if !strings.Contains(body, "Subject: =?utf-8?q?") || !strings.Contains(body, "..점으로 시작") {
+	if !strings.Contains(body, "Subject: =?utf-8?q?") {
 		t.Fatalf("body=%q", body)
+	}
+	// 줄 앞 점은 와이어에서 이스케이프되지만, 받는 쪽이 RFC 5321 대로
+	// 되돌리면 적은 그대로여야 한다. `Contains(body, "..점으로 시작")` 으로
+	// 적으면 와이어에 `...점으로 시작` 이 실려도 통과해 이중 이스케이프를
+	// 가려내지 못하므로 되돌린 줄과 정확히 비교한다.
+	if got, want := undotWireBody(t, body), []string{"본문입니다.", ".점으로 시작"}; !slices.Equal(got, want) {
+		t.Fatalf("wire body=%q, want %q (raw=%q)", got, want, body)
 	}
 	if !strings.Contains(body, "Content-Type: text/plain; charset=UTF-8") {
 		t.Fatalf("missing content type: %q", body)
+	}
+}
+
+// undotWireBody 는 와이어에 실린 DATA 를 받는 쪽이 읽는 모습으로 되돌린다 —
+// 헤더를 떼고, RFC 5321 4.5.2 의 투명성 규칙대로 점으로 시작하는 줄에서 점
+// 하나를 뺀다. 이스케이프가 두 번 일어났다면 한 번만 되돌린 여기서 점이
+// 남아 드러난다.
+func undotWireBody(t *testing.T, wire string) []string {
+	t.Helper()
+	_, body, found := strings.Cut(wire, "\r\n\r\n")
+	if !found {
+		t.Fatalf("헤더와 본문을 가르는 빈 줄이 없다: %q", wire)
+	}
+	if !strings.HasSuffix(body, "\r\n") {
+		t.Fatalf("본문은 CRLF 로 끝나야 한다: %q", body)
+	}
+	lines := strings.Split(strings.TrimSuffix(body, "\r\n"), "\r\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimPrefix(line, ".")
+	}
+	return lines
+}
+
+// 줄 앞 점의 이스케이프는 와이어에서 딱 한 번만 일어나야 한다. compose 가
+// 손으로 한 번 붙이고 client.Data() 의 net/textproto dot writer 가 또 붙이면
+// 받는 사람은 `.점으로 시작` 을 `..점으로 시작` 으로 본다 — 이 테스트는
+// compose 의 반환값이 아니라 실제 relay 에 실린 바이트를 본다.
+func TestDeliverEscapesLeadingDotsOnceOnTheWire(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"점으로 시작하는 줄", "본문입니다.\n.점으로 시작"},
+		{"이미 점이 두 개인 줄", "본문입니다.\n..이미 두 점"},
+		{"첫 줄이 점 하나", ".\n두 번째 줄"},
+		{"마지막 줄이 점 하나", "첫 줄\n."},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			relay := startRelay(t, false)
+			message := Message{To: "park@corp.example", Subject: "공유 알림", Body: testCase.body}
+			if err := Deliver(context.Background(), relayConfig(relay), message); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			relay.mu.Lock()
+			wire := relay.body
+			relay.mu.Unlock()
+			got, want := undotWireBody(t, wire), strings.Split(testCase.body, "\n")
+			if !slices.Equal(got, want) {
+				t.Fatalf("받는 쪽이 읽는 본문=%q, 적은 본문=%q (와이어=%q)", got, want, wire)
+			}
+		})
 	}
 }
 
