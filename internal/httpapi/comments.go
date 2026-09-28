@@ -165,17 +165,19 @@ func (s *Server) notifyCommentMail(r *http.Request, thread workbook.CommentThrea
 	if s.mail == nil {
 		return
 	}
+	ctx, cancel := notifyContext(r.Context())
+	defer cancel()
 	message := thread.Messages[len(thread.Messages)-1]
 	actor := actorID(r)
-	label := s.actorLabel(r.Context(), actor)
-	book, audience := s.workbookAudience(r.Context(), thread.WorkbookID)
+	label := s.actorLabel(ctx, actor)
+	book, audience := s.workbookAudience(ctx, thread.WorkbookID)
 	for _, participant := range thread.Messages {
 		audience = append(audience, participant.AuthorID)
 	}
 	mentioned := message.Mentions
 	audience = removeAll(audience, mentioned)
-	s.notifyMail(r.Context(), mail.CommentPosted(label, book.Title, thread.WorkbookID, thread.Range, message.Content, reply), actor, audience)
-	s.notifyMail(r.Context(), mail.Mentioned(label, book.Title, thread.WorkbookID, thread.Range, message.Content), actor, mentioned)
+	s.notifyMail(ctx, mail.CommentPosted(label, book.Title, thread.WorkbookID, thread.Range, message.Content, reply), actor, audience)
+	s.notifyMail(ctx, mail.Mentioned(label, book.Title, thread.WorkbookID, thread.Range, message.Content), actor, mentioned)
 }
 
 // removeAll drops the recipients that are handled by another mail.

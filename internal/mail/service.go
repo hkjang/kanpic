@@ -71,6 +71,16 @@ func (s *Service) Config(ctx context.Context) (Config, error) { return readConfi
 // Notify resolves the recipients and sends in the background so no request
 // waits on a mail server. Recipients without an address are skipped quietly.
 func (s *Service) Notify(ctx context.Context, notification Notification, actorID string, recipients []string) {
+	// 요청은 끝나도 이미 일어난 변경의 알림은 나가야 한다. 브라우저가 칸 저장·
+	// 댓글 등록 직후 떠나면 요청 컨텍스트가 취소되는데, 설정 읽기·수신자 조회·
+	// 발송 기록은 모두 이 컨텍스트로 DB 를 부르므로(pgx 는 취소된 컨텍스트에서
+	// 곧바로 실패한다) 변경은 커밋됐는데 알림만 조용히 사라진다. 값은 그대로
+	// 쓰면서 취소만 떼어 낸다 — SendNow(아래)가 전송에 쓰는 것과 같은 자다.
+	// 취소를 떼면 남는 것이 없어 요청이 무한정 기다릴 수 있으니 SendNow 처럼
+	// 시한을 같이 둔다. 여기서 세는 일은 설정 읽기·수신자 조회·발송 기록뿐이고
+	// 실제 전송은 아래 고루틴이 제 컨텍스트로 하므로 이 시한에 걸리지 않는다.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	config, err := s.Config(ctx)
 	if err != nil || !config.Enabled || !config.Allows(notification.Event) {
 		return
