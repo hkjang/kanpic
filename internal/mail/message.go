@@ -12,6 +12,9 @@ import (
 func compose(config Config, message Message) string {
 	var builder strings.Builder
 	builder.WriteString("From: " + encodeAddress(config.Address()) + "\r\n")
+	// message.To 는 Deliver 가 이미 다듬어 넘긴 값이다 — 여기서 다시 trim 하지
+	// 않는 이유는 정본을 한 곳(Deliver)에 두기 위해서다. 두 곳에서 각자
+	// 다듬으면 봉투(RCPT TO)와 이 헤더가 언젠가 또 갈라진다.
 	builder.WriteString("To: " + message.To + "\r\n")
 	builder.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", message.Subject) + "\r\n")
 	builder.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")

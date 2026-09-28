@@ -3,6 +3,7 @@ package mail
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -215,6 +216,114 @@ func TestDeliverEscapesLeadingDotsOnceOnTheWire(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 봉투(RCPT TO)와 헤더(To:)는 같은 주소를 **글자 그대로** 같게 읽어야 한다.
+// 봉투 쪽만 trim 하면 끝에 CRLF 가 붙은 주소에서 헤더 블록이 To 에서 끝나고
+// Subject·Date·MIME-Version·Content-Type 이 전부 본문 글자가 된다 — 받는
+// 사람은 제목 없는 깨진 메일을 보는데 Deliver 는 nil 을 돌려준다. 그래서
+// compose 의 반환값이 아니라 실제 relay 에 실린 바이트를 본다.
+func TestDeliverUsesTheSameRecipientInEnvelopeAndHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		to   string
+	}{
+		{"끝에 CRLF", "park@corp.example\r\n"},
+		{"끝에 LF", "park@corp.example\n"},
+		{"앞뒤 공백", "  park@corp.example\t"},
+		{"군더더기 없음", "park@corp.example"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			relay := startRelay(t, false)
+			message := Message{To: testCase.to, Subject: "공유 알림", Body: "본문입니다."}
+			if err := Deliver(context.Background(), relayConfig(relay), message); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			relay.mu.Lock()
+			wire := relay.body
+			relay.mu.Unlock()
+			headers, body, found := strings.Cut(wire, "\r\n\r\n")
+			if !found {
+				t.Fatalf("헤더와 본문을 가르는 빈 줄이 없다: %q", wire)
+			}
+			envelope, header := envelopeRecipient(t, relay.transcript()), headerValue(t, headers, "To")
+			if envelope != header {
+				t.Fatalf("봉투 수신자=%q, To 헤더=%q — 글자 그대로 같아야 한다 (와이어=%q)", envelope, header, wire)
+			}
+			if envelope != "park@corp.example" {
+				t.Fatalf("수신자=%q, want %q", envelope, "park@corp.example")
+			}
+			// 헤더 블록이 To 에서 끝나 버리는 것이 이 결함의 증상이다.
+			for _, name := range []string{"Subject", "Date", "MIME-Version", "Content-Type"} {
+				if headerValue(t, headers, name) == "" {
+					t.Fatalf("%s 가 헤더 블록에서 빠졌다 — 본문으로 새어 나갔다 (헤더=%q, 본문=%q)", name, headers, body)
+				}
+			}
+			if want := "본문입니다.\r\n"; body != want {
+				t.Fatalf("본문=%q, want %q", body, want)
+			}
+		})
+	}
+}
+
+// 주소 가운데의 CR/LF 는 헤더 주입이므로 연결 전에 거절한다. net/smtp 의
+// validateLine 에 맡기면 릴레이에 붙은 뒤 영어 오류가 나온다.
+func TestDeliverRejectsRecipientWithEmbeddedNewline(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		to   string
+	}{
+		{"LF 로 헤더 주입", "park@corp.example\nBcc: spy@evil.example"},
+		{"CR 로 헤더 주입", "park@corp.example\rBcc: spy@evil.example"},
+		{"CRLF 로 헤더 주입", "park@corp.example\r\nBcc: spy@evil.example"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			relay := startRelay(t, false)
+			message := Message{To: testCase.to, Subject: "공유 알림", Body: "본문입니다."}
+			err := Deliver(context.Background(), relayConfig(relay), message)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error=%v, want ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), "줄바꿈") {
+				t.Fatalf("문구가 저장소 관례대로 한국어여야 한다: %v", err)
+			}
+			if transcript := relay.transcript(); len(transcript) != 0 {
+				t.Fatalf("릴레이에 연결조차 없어야 한다: %v", transcript)
+			}
+		})
+	}
+}
+
+// envelopeRecipient 는 와이어의 `RCPT TO:<...>` 에서 주소만 꺼낸다.
+func envelopeRecipient(t *testing.T, transcript []string) string {
+	t.Helper()
+	for _, line := range transcript {
+		if !strings.HasPrefix(strings.ToUpper(line), "RCPT TO:") {
+			continue
+		}
+		address := strings.TrimSpace(line[len("RCPT TO:"):])
+		return strings.TrimSuffix(strings.TrimPrefix(address, "<"), ">")
+	}
+	t.Fatalf("RCPT TO 가 와이어에 없다: %v", transcript)
+	return ""
+}
+
+// headerValue 는 헤더 블록에서 이름이 같은 첫 헤더의 값을 돌려준다. 없으면
+// 빈 문자열이다 — 헤더가 본문으로 새어 나갔는지 보려면 그 구분이 필요하다.
+func headerValue(t *testing.T, headers, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(headers, "\r\n") {
+		if value, found := strings.CutPrefix(line, name+": "); found {
+			return value
+		}
+	}
+	return ""
 }
 
 // When credentials are set and the relay offers AUTH, kanpic authenticates.

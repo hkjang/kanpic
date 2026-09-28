@@ -99,9 +99,22 @@ func Deliver(ctx context.Context, config Config, message Message) error {
 	if err := config.validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(message.To) == "" {
+	// 수신자는 여기서 **한 번만** 다듬고, 봉투(RCPT TO)와 To 헤더가 그 같은
+	// 값을 쓴다. 봉투 쪽만 trim 하면 끝에 CRLF 가 붙은 주소에서 헤더 블록이
+	// To 에서 끝나 Subject 이하가 전부 본문 글자가 되는데, Rcpt 는 trim 후를
+	// 보므로 통과하고 Deliver 는 nil 을 돌려준다 — 아무도 모르게 깨진다.
+	// Message 는 값으로 받으므로 이 갱신은 호출자에게 새지 않는다.
+	to := strings.TrimSpace(message.To)
+	if to == "" {
 		return fmt.Errorf("%w: recipient is required", ErrInvalid)
 	}
+	// 주소 가운데의 CR/LF 는 헤더 주입이라 다듬어 넘길 수 없다. net/smtp 의
+	// validateLine 에 맡기면 릴레이에 붙은 뒤에야 영어 오류가 나오므로,
+	// 연결 전에 저장소 관례대로 한국어로 거절한다.
+	if strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("%w: 수신자 주소에 줄바꿈 문자를 쓸 수 없습니다", ErrInvalid)
+	}
+	message.To = to
 	client, err := dial(ctx, config)
 	if err != nil {
 		return err
@@ -113,7 +126,7 @@ func Deliver(ctx context.Context, config Config, message Message) error {
 	if err := client.Mail(strings.TrimSpace(config.FromAddress)); err != nil {
 		return fmt.Errorf("MAIL FROM 실패: %w", err)
 	}
-	if err := client.Rcpt(strings.TrimSpace(message.To)); err != nil {
+	if err := client.Rcpt(message.To); err != nil {
 		return fmt.Errorf("RCPT TO 실패: %w", err)
 	}
 	writer, err := client.Data()
