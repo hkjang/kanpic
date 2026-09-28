@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"slices"
 	"strings"
@@ -415,5 +416,136 @@ func TestNotificationRendersLinkAndFooter(t *testing.T) {
 	// Without a base URL the mail still makes sense, just without a link.
 	if strings.Contains(ShareGranted("박지민", "월간 매출", "wb-1", "editor").Render(Config{}), "바로 열기") {
 		t.Fatal("no link should be offered without a base URL")
+	}
+}
+
+// A stalled relay drains input but never answers at the selected stage. Cleanup
+// closes both sides and joins the server even when the regression test fails.
+func startStalledRelay(t *testing.T, stage string) (Config, <-chan error, <-chan struct{}, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan error, 1)
+	closed := make(chan struct{})
+	done := make(chan struct{})
+	var mu sync.Mutex
+	var connection net.Conn
+	stopping := false
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			ready <- err
+			return
+		}
+		mu.Lock()
+		connection = conn
+		if stopping {
+			_ = conn.Close()
+		}
+		mu.Unlock()
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		if stage == "ehlo" {
+			_, err = io.WriteString(conn, "220 stalled.example ESMTP\r\n")
+			if err == nil {
+				var line string
+				line, err = reader.ReadString('\n')
+				if err == nil && !strings.HasPrefix(line, "EHLO ") {
+					err = fmt.Errorf("expected EHLO, got %q", line)
+				}
+			}
+		}
+		ready <- err
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, reader)
+		close(closed)
+	}()
+	stop := func() {
+		_ = listener.Close()
+		mu.Lock()
+		stopping = true
+		if connection != nil {
+			_ = connection.Close()
+		}
+		mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("stalled relay did not stop")
+		}
+	}
+	t.Cleanup(stop)
+	relay := &fakeRelay{address: listener.Addr().String()}
+	config := relayConfig(relay)
+	config.Security = "none"
+	if stage == "tls" {
+		config.Security = "tls"
+	}
+	return config, ready, closed, stop
+}
+
+func TestDeliverHonorsContext(t *testing.T) {
+	testSMTPContext(t, func(ctx context.Context, config Config) error {
+		return Deliver(ctx, config, Message{To: "lee@corp.example", Subject: "test", Body: "body"})
+	})
+}
+
+func TestVerifyHonorsContext(t *testing.T) { testSMTPContext(t, Verify) }
+
+func testSMTPContext(t *testing.T, call func(context.Context, Config) error) {
+	t.Helper()
+	for _, stage := range []string{"greeting", "ehlo", "tls"} {
+		for _, mode := range []string{"deadline", "cancel"} {
+			t.Run(stage+"/"+mode, func(t *testing.T) {
+				config, ready, closed, stop := startStalledRelay(t, stage)
+				ctx, cancel := context.WithCancel(context.Background())
+				if mode == "deadline" {
+					cancel()
+					ctx, cancel = context.WithTimeout(context.Background(), 150*time.Millisecond)
+				}
+				defer cancel()
+				result := make(chan error, 1)
+				finished := make(chan struct{})
+				go func() { defer close(finished); result <- call(ctx, config) }()
+				defer func() {
+					stop()
+					select {
+					case <-finished:
+					case <-time.After(2 * time.Second):
+						t.Error("SMTP call did not stop after relay cleanup")
+					}
+				}()
+				select {
+				case err := <-ready:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("relay did not reach stall stage")
+				}
+				if mode == "cancel" {
+					cancel()
+				}
+				<-ctx.Done()
+				select {
+				case err := <-result:
+					if err == nil {
+						t.Fatal("cancelled SMTP session returned nil")
+					}
+				case <-time.After(500 * time.Millisecond):
+					t.Fatal("SMTP session blocked after context cancellation")
+				}
+				select {
+				case <-closed:
+				case <-time.After(500 * time.Millisecond):
+					t.Fatal("SMTP session left its socket open")
+				}
+			})
+		}
 	}
 }
