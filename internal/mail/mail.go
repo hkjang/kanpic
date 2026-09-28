@@ -115,11 +115,11 @@ func Deliver(ctx context.Context, config Config, message Message) error {
 		return fmt.Errorf("%w: 수신자 주소에 줄바꿈 문자를 쓸 수 없습니다", ErrInvalid)
 	}
 	message.To = to
-	client, err := dial(ctx, config)
+	client, cleanup, err := dial(ctx, config)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.Close() }()
+	defer cleanup()
 	if err := startSession(client, config); err != nil {
 		return err
 	}
@@ -148,45 +148,61 @@ func Verify(ctx context.Context, config Config) error {
 	if err := config.validate(); err != nil {
 		return err
 	}
-	client, err := dial(ctx, config)
+	client, cleanup, err := dial(ctx, config)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.Close() }()
+	defer cleanup()
 	if err := startSession(client, config); err != nil {
 		return err
 	}
 	return client.Quit()
 }
 
-func dial(ctx context.Context, config Config) (*smtp.Client, error) {
+func dial(ctx context.Context, config Config) (*smtp.Client, func(), error) {
 	timeout := config.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 	dialer := &net.Dialer{Timeout: timeout}
+	var connection net.Conn
+	var err error
 	if config.Security == "tls" {
-		connection, err := tls.DialWithDialer(dialer, "tcp", config.endpoint(), config.tlsConfig())
+		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: config.tlsConfig()}
+		connection, err = tlsDialer.DialContext(ctx, "tcp", config.endpoint())
 		if err != nil {
-			return nil, fmt.Errorf("SMTP TLS 연결 실패: %w", err)
+			return nil, nil, fmt.Errorf("SMTP TLS 연결 실패: %w", err)
 		}
-		client, err := smtp.NewClient(connection, config.Host)
+	} else {
+		connection, err = dialer.DialContext(ctx, "tcp", config.endpoint())
 		if err != nil {
-			_ = connection.Close()
-			return nil, fmt.Errorf("SMTP 세션 시작 실패: %w", err)
+			return nil, nil, fmt.Errorf("SMTP 연결 실패: %w", err)
 		}
-		return client, nil
 	}
-	connection, err := dialer.DialContext(ctx, "tcp", config.endpoint())
-	if err != nil {
-		return nil, fmt.Errorf("SMTP 연결 실패: %w", err)
+	// greeting부터 QUIT까지 취소가 실제 소켓을 닫아 읽기·쓰기를 깨운다.
+	// TLS close_notify 쓰기가 취소를 지연하지 않도록 원래 TCP 소켓을 닫는다.
+	transport := connection
+	if secured, ok := connection.(*tls.Conn); ok {
+		transport = secured.NetConn()
+	}
+	cancelled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(cancelled)
+		_ = transport.Close()
+	})
+	cleanup := func() {
+		if !stop() {
+			<-cancelled
+		}
+		_ = transport.Close()
 	}
 	client, err := smtp.NewClient(connection, config.Host)
 	if err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("SMTP 세션 시작 실패: %w", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("SMTP 세션 시작 실패: %w", err)
 	}
-	return client, nil
+	// 호출자가 세션 전체를 마칠 때 감시를 해제하고 실행 중인 콜백도 회수한다.
+	return client, cleanup, nil
 }
 
 // startSession upgrades and authenticates only as far as the relay allows, so
