@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"kanpic/internal/mail"
 	"kanpic/internal/workbook"
@@ -58,6 +59,25 @@ func (s *Server) actorLabel(ctx context.Context, id string) string {
 	return trimmed
 }
 
+// notifyContext 는 알림을 **채비할 때** 쓰는 컨텍스트다. 값은 그대로 두고 취소만
+// 떼어 낸다.
+//
+// 브라우저가 칸 저장·댓글 등록 직후 떠나면 요청 컨텍스트는 곧 취소된다. 그런데
+// 누구에게 보낼지를 정하는 일(지켜보기 규칙·워크북·공유 목록·사람 이름 읽기)은
+// 모두 저장소를 거치고, pgx 는 취소된 컨텍스트에서 질의에 닿기도 전에 실패한다
+// (풀의 Acquire 가 ctx.Done() 을 먼저 본다). 그러면 변경은 커밋됐는데 알림만
+// 조용히 사라진다 — 수신자를 못 구했으니 mail.Notify 는 불리지도 않는다.
+//
+// mail.Service.Notify 도 안에서 같은 일을 하지만(mail/service.go:82) 그것은 수신자가
+// 이미 정해진 다음이라 이 자리를 구제하지 못한다. 그래서 수신자를 구하는 이
+// 경계에서 한 번 더 떼어 낸다. 취소를 떼면 남는 것이 없어 요청이 무한정 기다릴 수
+// 있으니 시한을 같이 둔다 — triggerCellAutomationsContext(automations.go:249)와 같은
+// 자다. 여기서 세는 일은 저장소 읽기 몇 번이고 실제 전송은 Notify 의 고루틴이 제
+// 컨텍스트로 하므로 이 시한에 걸리지 않는다.
+func notifyContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+}
+
 // notifyMail sends one event mail when the mailer is configured. Every caller
 // is on a request path, so failures never surface to the user.
 func (s *Server) notifyMail(ctx context.Context, notification mail.Notification, actorID string, recipients []string) {
@@ -69,7 +89,14 @@ func (s *Server) notifyMail(ctx context.Context, notification mail.Notification,
 
 // workbookAudience is everyone with a personal stake in a workbook: the owner
 // and the people it is shared with directly.
+//
+// 이 자리는 알림에만 쓰이고 워크북을 못 읽으면 수신자 0명으로 돌아서므로,
+// 부르는 쪽이 요청 컨텍스트를 그대로 넘겨도 알림이 사라지지 않게 여기서도 취소를
+// 떼어 낸다(notifyContext 의 설명 참고). 부르는 쪽에서 이미 떼었어도 값만 물려
+// 받으므로 손해가 없다.
 func (s *Server) workbookAudience(ctx context.Context, workbookID string) (workbook.Workbook, []string) {
+	ctx, cancel := notifyContext(ctx)
+	defer cancel()
 	book, err := s.repository.GetWorkbook(ctx, workbookID)
 	if err != nil {
 		return workbook.Workbook{}, nil
@@ -146,6 +173,8 @@ func (s *Server) notifyWatchers(ctx context.Context, workbookID, sheetID, actorI
 	if s.mail == nil || result.Duplicate || len(cells) == 0 {
 		return
 	}
+	ctx, cancel := notifyContext(ctx)
+	defer cancel()
 	rules, err := s.repository.SheetWatchRules(ctx, sheetID)
 	if err != nil || len(rules) == 0 {
 		return

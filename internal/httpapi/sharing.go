@@ -132,8 +132,10 @@ func (s *Server) putWorkbookShare(w http.ResponseWriter, r *http.Request) {
 	// Only a person can be mailed; department and role shares reach people
 	// through their membership, which the directory does not enumerate here.
 	if input.PrincipalType == workbook.PrincipalUser {
-		if book, err := s.repository.GetWorkbook(r.Context(), workbookID); err == nil {
-			s.notifyMail(r.Context(), mail.ShareGranted(s.actorLabel(r.Context(), actorID(r)), book.Title, workbookID, string(input.Role)), actorID(r), []string{input.PrincipalID})
+		notify, cancel := notifyContext(r.Context())
+		defer cancel()
+		if book, err := s.repository.GetWorkbook(notify, workbookID); err == nil {
+			s.notifyMail(notify, mail.ShareGranted(s.actorLabel(notify, actorID(r)), book.Title, workbookID, string(input.Role)), actorID(r), []string{input.PrincipalID})
 		}
 	}
 	response, err := s.sharingWithAccess(r, workbookID)
@@ -212,8 +214,10 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	request, err := s.repository.CreateAccessRequest(r.Context(), r.PathValue("workbookId"), input)
 	if err == nil {
-		book, audience := s.workbookAudience(r.Context(), r.PathValue("workbookId"))
-		s.notifyMail(r.Context(), mail.AccessRequested(s.actorLabel(r.Context(), input.RequesterID), book.Title, book.ID, string(input.RequestedRole), input.Message), input.RequesterID, audience)
+		notify, cancel := notifyContext(r.Context())
+		defer cancel()
+		book, audience := s.workbookAudience(notify, r.PathValue("workbookId"))
+		s.notifyMail(notify, mail.AccessRequested(s.actorLabel(notify, input.RequesterID), book.Title, book.ID, string(input.RequestedRole), input.Message), input.RequesterID, audience)
 	}
 	if err != nil {
 		s.writeError(w, r, err)
@@ -246,13 +250,15 @@ func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishCurrentVersion(r.Context(), request.WorkbookID, actorID(r), "")
+	notify, cancel := notifyContext(r.Context())
+	defer cancel()
 	title := request.WorkbookTitle
 	if title == "" {
-		if book, err := s.repository.GetWorkbook(r.Context(), request.WorkbookID); err == nil {
+		if book, err := s.repository.GetWorkbook(notify, request.WorkbookID); err == nil {
 			title = book.Title
 		}
 	}
-	s.notifyMail(r.Context(), mail.AccessDecided(title, request.WorkbookID, request.Status, string(request.RequestedRole)), actorID(r), []string{request.RequesterID})
+	s.notifyMail(notify, mail.AccessDecided(title, request.WorkbookID, request.Status, string(request.RequestedRole)), actorID(r), []string{request.RequesterID})
 	writeJSON(w, http.StatusOK, request)
 }
 
