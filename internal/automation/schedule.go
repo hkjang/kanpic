@@ -27,8 +27,9 @@ var weekdayNames = map[string]int{
 }
 
 type cronField struct {
-	allowed  []bool
-	wildcard bool
+	allowed []bool
+	// unrestricted 는 필드가 별표로 시작해 값을 제한하지 않는다는 뜻이다(`*`, `*/2`).
+	unrestricted bool
 }
 
 type Schedule struct {
@@ -115,20 +116,18 @@ func (s *Schedule) Next(after time.Time) (time.Time, error) {
 func (s *Schedule) matchesDay(date time.Time) bool {
 	dayMatch := s.day.allowed[date.Day()]
 	weekdayMatch := s.weekday.allowed[int(date.Weekday())]
-	switch {
-	case s.day.wildcard && s.weekday.wildcard:
-		return true
-	case s.day.wildcard:
-		return weekdayMatch
-	case s.weekday.wildcard:
-		return dayMatch
-	default:
-		return dayMatch || weekdayMatch
+	// crontab(5) 의 규칙: 일·요일 두 필드가 **모두 제한되어 있을 때만** 어느 한쪽이 맞으면 실행한다.
+	// 한쪽이 별표로 시작하면 그 필드는 아무 날도 걸러내지 않으므로 AND 로 합쳐야 한다 —
+	// 그래야 `0 0 */2 * MON` 이 "격일 중 월요일" 로 읽힌다.
+	if s.day.unrestricted || s.weekday.unrestricted {
+		return dayMatch && weekdayMatch
 	}
+	return dayMatch || weekdayMatch
 }
 
 func parseCronField(raw string, minimum, maximum int, names map[string]int, sundaySeven bool) (cronField, error) {
-	field := cronField{allowed: make([]bool, maximum+1), wildcard: raw == "*"}
+	// Vixie cron 은 필드 전체의 첫 글자만 보므로 `1,*/2` 처럼 다른 값이 앞서면 제한으로 남는다.
+	field := cronField{allowed: make([]bool, maximum+1), unrestricted: strings.HasPrefix(raw, "*")}
 	for _, segment := range strings.Split(strings.ToUpper(raw), ",") {
 		segment = strings.TrimSpace(segment)
 		if segment == "" {
