@@ -61,6 +61,89 @@ func TestScheduleAliasesLeapDayAndCronDayOrSemantics(t *testing.T) {
 	}
 }
 
+// 일·요일 두 필드를 AND 로 합칠지 OR 로 합칠지는 "두 필드가 모두 제한되어 있는가" 로 갈린다.
+// 별표로 시작하는 필드(`*`, `*/2`)는 제한이 아니므로 AND 여야 한다 — 아래 표의 앞 두 사례가
+// 그것을 못 박고, 나머지는 OR·한쪽 제한 사례가 함께 그대로 유지되는지 보는 대조군이다.
+func TestScheduleCombinesDayAndWeekdayByRestriction(t *testing.T) {
+	after := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		expression string
+		want       []string
+	}{
+		{
+			name:       "별표 step 인 일 필드는 요일과 AND",
+			expression: "0 0 */2 * MON",
+			want: []string{
+				"2026-11-09 Mon 00:00", "2026-11-23 Mon 00:00", "2026-12-07 Mon 00:00",
+				"2026-12-21 Mon 00:00", "2027-01-11 Mon 00:00",
+			},
+		},
+		{
+			name:       "별표 step 인 요일 필드는 일과 AND",
+			expression: "0 0 1 * */2",
+			want: []string{
+				"2026-11-01 Sun 00:00", "2026-12-01 Tue 00:00", "2027-04-01 Thu 00:00",
+				"2027-05-01 Sat 00:00", "2027-06-01 Tue 00:00",
+			},
+		},
+		{
+			name:       "두 필드가 모두 제한이면 OR 로 남는다",
+			expression: "0 0 1-31 * MON",
+			want: []string{
+				"2026-10-31 Sat 00:00", "2026-11-01 Sun 00:00", "2026-11-02 Mon 00:00",
+				"2026-11-03 Tue 00:00", "2026-11-04 Wed 00:00",
+			},
+		},
+		{
+			name:       "일 필드가 별표면 요일만 본다",
+			expression: "0 0 * * */3",
+			want: []string{
+				"2026-10-31 Sat 00:00", "2026-11-01 Sun 00:00", "2026-11-04 Wed 00:00",
+				"2026-11-07 Sat 00:00", "2026-11-08 Sun 00:00",
+			},
+		},
+		{
+			name:       "요일 이름만 제한하면 그 요일에만 돈다",
+			expression: "* * * * MON",
+			want: []string{
+				"2026-11-02 Mon 00:00", "2026-11-02 Mon 00:01", "2026-11-02 Mon 00:02",
+				"2026-11-02 Mon 00:03", "2026-11-02 Mon 00:04",
+			},
+		},
+		{
+			name:       "요일 필드가 별표면 일만 본다",
+			expression: "0 9 1 * *",
+			want: []string{
+				"2026-11-01 Sun 09:00", "2026-12-01 Tue 09:00", "2027-01-01 Fri 09:00",
+				"2027-02-01 Mon 09:00", "2027-03-01 Mon 09:00",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schedule, err := ParseSchedule(test.expression, "UTC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, 0, len(test.want))
+			cursor := after
+			for range test.want {
+				next, err := schedule.Next(cursor)
+				if err != nil {
+					t.Fatalf("Next(%s): %v", cursor, err)
+				}
+				got = append(got, next.Format("2006-01-02 Mon 15:04"))
+				cursor = next
+			}
+			for index := range test.want {
+				if got[index] != test.want[index] {
+					t.Fatalf("%q 다음 실행=%v, want %v", test.expression, got, test.want)
+				}
+			}
+		})
+	}
+}
+
 func TestScheduleSkipsNonexistentDSTWallTime(t *testing.T) {
 	schedule, err := ParseSchedule("30 2 * * *", "America/New_York")
 	if err != nil {
