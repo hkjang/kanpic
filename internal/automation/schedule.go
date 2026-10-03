@@ -2,6 +2,7 @@ package automation
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -9,12 +10,16 @@ import (
 
 const maxScheduleLookaheadYears = 8
 
+// Vixie cron 의 표준 별칭. @reboot 은 영구 저장된 next_run_at 으로 다음 시각을 미리 정하는
+// 이 스케줄러에서 뜻이 없으므로 일부러 빼 두었다.
 var cronAliases = map[string]string{
-	"@hourly":  "0 * * * *",
-	"@daily":   "0 0 * * *",
-	"@weekly":  "0 0 * * 0",
-	"@monthly": "0 0 1 * *",
-	"@yearly":  "0 0 1 1 *",
+	"@hourly":   "0 * * * *",
+	"@daily":    "0 0 * * *",
+	"@midnight": "0 0 * * *",
+	"@weekly":   "0 0 * * 0",
+	"@monthly":  "0 0 1 * *",
+	"@yearly":   "0 0 1 1 *",
+	"@annually": "0 0 1 1 *",
 }
 
 var monthNames = map[string]int{
@@ -45,8 +50,13 @@ type Schedule struct {
 
 func ParseSchedule(expression, timezone string) (*Schedule, error) {
 	expression = strings.TrimSpace(expression)
-	if alias, ok := cronAliases[strings.ToLower(expression)]; ok {
+	lowered := strings.ToLower(expression)
+	if alias, ok := cronAliases[lowered]; ok {
 		expression = alias
+	} else if strings.HasPrefix(lowered, "@") {
+		// 별칭을 쓰려 한 입력에 "다섯 필드" 를 말해 주면 사용자는 다섯 필드 식을 쓴 적이 없으므로
+		// 오타인지 미지원 별칭인지 구분할 수 없다. 지원 목록을 그대로 돌려준다.
+		return nil, fmt.Errorf("%w: unknown schedule alias %q, supported aliases are %s", ErrInvalid, expression, strings.Join(cronAliasNames(), ", "))
 	}
 	parts := strings.Fields(expression)
 	if len(parts) != 5 {
@@ -81,6 +91,16 @@ func ParseSchedule(expression, timezone string) (*Schedule, error) {
 		return nil, fmt.Errorf("%w: invalid schedule weekday: %v", ErrInvalid, err)
 	}
 	return &Schedule{Expression: strings.Join(parts, " "), Timezone: timezone, location: location, minute: minute, hour: hour, day: day, month: month, weekday: weekday}, nil
+}
+
+// cronAliasNames 는 오류 문구가 맵 순회 순서로 흔들리지 않게 지원 별칭을 정렬해 돌려준다.
+func cronAliasNames() []string {
+	names := make([]string, 0, len(cronAliases))
+	for name := range cronAliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (s *Schedule) Next(after time.Time) (time.Time, error) {

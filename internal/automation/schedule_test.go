@@ -2,6 +2,7 @@ package automation
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,6 +145,55 @@ func TestScheduleCombinesDayAndWeekdayByRestriction(t *testing.T) {
 	}
 }
 
+// 별칭은 "같은 뜻의 다섯 필드 식과 실제 실행 시각이 같은가" 로만 확인할 수 있다 —
+// 맵에 문자열이 있다는 사실은 Next 가 같은 시각을 돌려준다는 증명이 아니므로
+// 두 ParseSchedule 결과를 연속 4회 돌려 반환 시각을 그대로 비교한다.
+func TestScheduleAliasesMatchEquivalentCronExpressions(t *testing.T) {
+	after := time.Date(2026, 10, 30, 12, 34, 56, 0, time.UTC)
+	for _, test := range []struct{ alias, equivalent string }{
+		{"@hourly", "0 * * * *"},
+		{"@daily", "0 0 * * *"},
+		{"@midnight", "0 0 * * *"},
+		{"@weekly", "0 0 * * 0"},
+		{"@monthly", "0 0 1 * *"},
+		{"@yearly", "0 0 1 1 *"},
+		{"@annually", "0 0 1 1 *"},
+		{"@MIDNIGHT", "0 0 * * *"},
+		{"  @annually  ", "0 0 1 1 *"},
+	} {
+		t.Run(test.alias, func(t *testing.T) {
+			aliasSchedule, err := ParseSchedule(test.alias, "UTC")
+			if err != nil {
+				t.Fatalf("ParseSchedule(%q): %v", test.alias, err)
+			}
+			plainSchedule, err := ParseSchedule(test.equivalent, "UTC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			aliasRuns, plainRuns := make([]string, 0, 4), make([]string, 0, 4)
+			aliasCursor, plainCursor := after, after
+			for range 4 {
+				aliasNext, err := aliasSchedule.Next(aliasCursor)
+				if err != nil {
+					t.Fatalf("alias Next(%s): %v", aliasCursor, err)
+				}
+				plainNext, err := plainSchedule.Next(plainCursor)
+				if err != nil {
+					t.Fatalf("plain Next(%s): %v", plainCursor, err)
+				}
+				aliasRuns = append(aliasRuns, aliasNext.Format("2006-01-02 Mon 15:04"))
+				plainRuns = append(plainRuns, plainNext.Format("2006-01-02 Mon 15:04"))
+				aliasCursor, plainCursor = aliasNext, plainNext
+			}
+			for index := range plainRuns {
+				if aliasRuns[index] != plainRuns[index] {
+					t.Fatalf("%q 다음 실행=%v, %q=%v", test.alias, aliasRuns, test.equivalent, plainRuns)
+				}
+			}
+		})
+	}
+}
+
 func TestScheduleSkipsNonexistentDSTWallTime(t *testing.T) {
 	schedule, err := ParseSchedule("30 2 * * *", "America/New_York")
 	if err != nil {
@@ -163,9 +213,32 @@ func TestScheduleRejectsInvalidExpressions(t *testing.T) {
 		{"*/0 * * * *", "UTC"},
 		{"0 9 * * FUNDAY", "UTC"},
 		{"0 9 * * *", "Mars/Base"},
+		{"@reboot", "UTC"},
+		{"@nope", "UTC"},
 	} {
 		if _, err := ParseSchedule(test.expression, test.timezone); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("ParseSchedule(%q,%q) error=%v", test.expression, test.timezone, err)
+		}
+	}
+}
+
+// 모르는 별칭을 "다섯 필드가 아니다" 로 거절하면 다섯 필드 식을 쓴 적이 없는 사용자는
+// 오타인지 미지원인지 알 수 없다. @reboot 은 영구 저장된 next_run_at 기반 스케줄러에
+// 뜻이 없어 영영 지원하지 않으므로, 두 경우 모두 지원 목록을 문구에 담아 거절한다.
+func TestScheduleRejectsUnknownAliasesWithSupportedList(t *testing.T) {
+	for _, expression := range []string{"@reboot", "@nope", "@DAILY2"} {
+		_, err := ParseSchedule(expression, "UTC")
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ParseSchedule(%q) error=%v, want ErrInvalid", expression, err)
+		}
+		message := err.Error()
+		if strings.Contains(message, "five fields") {
+			t.Fatalf("ParseSchedule(%q) error=%q — 별칭 입력에 다섯 필드 문구를 쓰면 원인을 알 수 없다", expression, message)
+		}
+		for _, alias := range []string{"@annually", "@daily", "@hourly", "@midnight", "@monthly", "@weekly", "@yearly"} {
+			if !strings.Contains(message, alias) {
+				t.Fatalf("ParseSchedule(%q) error=%q — 지원 별칭 %s 가 빠졌다", expression, message, alias)
+			}
 		}
 	}
 }
