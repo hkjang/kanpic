@@ -222,6 +222,34 @@ func TestScheduleRejectsInvalidExpressions(t *testing.T) {
 	}
 }
 
+// cron 문법에는 부호가 없다. strconv.Atoi 는 `+5`·`-0` 을 받아들이므로 오타가 그대로
+// Schedule.Expression 에 저장돼 다른 cron 구현과 사람의 눈에 읽히지 않는 식이 영구 기록으로
+// 남는다. 저장 시점에 사람이 읽을 수 있는 ErrInvalid 로 돌려줘야 한다.
+func TestScheduleRejectsSignedCronValues(t *testing.T) {
+	for _, expression := range []string{
+		"+5 0 * * *",
+		"0 0 +1 +1 *",
+		"0 0 1 1 +7",
+		"0 0 * * +0",
+		"-0 0 * * *",
+		"+1-+3 0 * * *",
+	} {
+		t.Run(expression, func(t *testing.T) {
+			schedule, err := ParseSchedule(expression, "UTC")
+			if err == nil {
+				next, nextErr := schedule.Next(time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC))
+				t.Fatalf("ParseSchedule(%q) 가 받아들였다: expression=%q 다음 실행=%s (%v)", expression, schedule.Expression, next, nextErr)
+			}
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ParseSchedule(%q) error=%v, want ErrInvalid", expression, err)
+			}
+			if !strings.Contains(err.Error(), "must be between") {
+				t.Fatalf("ParseSchedule(%q) error=%q — 400 응답에 실리는 문구가 값 범위 계열이어야 한다", expression, err.Error())
+			}
+		})
+	}
+}
+
 // 모르는 별칭을 "다섯 필드가 아니다" 로 거절하면 다섯 필드 식을 쓴 적이 없는 사용자는
 // 오타인지 미지원인지 알 수 없다. @reboot 은 영구 저장된 next_run_at 기반 스케줄러에
 // 뜻이 없어 영영 지원하지 않으므로, 두 경우 모두 지원 목록을 문구에 담아 거절한다.
