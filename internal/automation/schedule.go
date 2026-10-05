@@ -215,9 +215,26 @@ func cronValue(raw string, minimum, maximum int, names map[string]int) (int, err
 	if value, ok := names[raw]; ok {
 		return value, nil
 	}
+	// strconv.Atoi 는 부호를 허용하므로 cron 문법에 없는 `+5`·`+0` 이 통과한다 — 값 자리는
+	// 십진 숫자만이어야 하고, 아니면 같은 범위 오류로 거절한다.
+	if !isDecimalDigits(raw) {
+		return 0, fmt.Errorf("value %q must be between %d and %d", raw, minimum, maximum)
+	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < minimum || value > maximum {
 		return 0, fmt.Errorf("value %q must be between %d and %d", raw, minimum, maximum)
 	}
 	return value, nil
+}
+
+func isDecimalDigits(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	for index := 0; index < len(raw); index++ {
+		if raw[index] < '0' || raw[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
