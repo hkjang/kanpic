@@ -520,3 +520,32 @@ func TestImportDataReadsBooleansLikeUpload(t *testing.T) {
 		})
 	}
 }
+
+// UTF-8 도 아니고 인코딩을 밝히는 표시도 없는 본문은 두 문이 같이 거절해야
+// 한다. 받아들이면 칸 값 자체가 UTF-8 이 아닌 바이트가 되어, 사용자가 보는
+// 것은 "읽을 수 없는 파일" 이 아니라 "깨진 글자가 든 표" 가 된다.
+func TestImportDataRefusesBytesThatAreNotUTF8LikeUpload(t *testing.T) {
+	// CP949 로 적은 "이름,메모\n1,2\n" — 어느 인코딩인지 밝히는 표시가 없다.
+	body := []byte{0xC0, 0xCC, 0xB8, 0xA7, ',', 0xB8, 0xDE, 0xB8, 0xF0, '\n', '1', ',', '2', '\n'}
+	server, host := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	})
+	fetcher := withInsecureTLS(testFetcher(fixedSettings{"external.enabled": true, "external.allowed_hosts": []any{host}}), server)
+	request := formula.ExternalRequest{Function: "IMPORTDATA", URL: server.URL + "/cp949.csv"}
+	got := fetcher.Resolve(context.Background(), []formula.ExternalRequest{request})[formula.ExternalKey(request.Function, request.URL)]
+	if got.Err == nil {
+		t.Fatalf("IMPORTDATA 가 UTF-8 이 아닌 본문으로 표를 냈다: rows=%d cols=%d values=%#v", got.Rows, got.Columns, got.Values)
+	}
+	// 같은 함수의 기존 읽기 실패와 같은 코드를 쓴다.
+	if got.Err.Code != "#VALUE!" {
+		t.Errorf("오류 코드 = %q, want %q (메시지=%q)", got.Err.Code, "#VALUE!", got.Err.Message)
+	}
+	if got.Rows != 0 || got.Columns != 0 || len(got.Values) != 0 {
+		t.Errorf("거절했는데 표가 남았다: rows=%d cols=%d values=%#v", got.Rows, got.Columns, got.Values)
+	}
+	// 같은 바이트열을 업로드 문에 넣어 둘 다 거절하는 것을 본다 — 한쪽만
+	// 거절하면 같은 파일이 들어오는 문에 따라 다르게 읽힌다.
+	if _, err := importexport.Parse("cp949.csv", body, 0); err == nil {
+		t.Fatal("업로드 문이 UTF-8 이 아닌 본문을 받아들였다")
+	}
+}
