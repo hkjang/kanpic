@@ -253,6 +253,11 @@ type FractionFormat={prefix:string;suffix:string;integer:string;denominator:numb
 // 이진 실수의 어긋남뿐이다.
 const MAX_FRACTION_VALUE=1e15
 
+// 분모 자리 기호를 세는 상한. internal/formula/format_fraction.go 의
+// maxFractionPlaces 와 같은 수여야 한다 — 다르면 격자와 서버가 같은 칸을
+// 다르게 그린다. 왜 여섯인지는 parseFractionFormat 안에 적었다.
+const MAX_FRACTION_PLACES=6
+
 function parseFractionFormat(section:string):FractionFormat|undefined{
   let slash=-1
   for(let index=0;index<section.length&&slash<0;index+=1){
@@ -276,7 +281,13 @@ function parseFractionFormat(section:string):FractionFormat|undefined{
   while(end<section.length&&'0#?'.includes(section[end]))end+=1
   let denominator=0,maxDenominator=0
   const places=end-slash-1
-  if(places>0)maxDenominator=10**Math.min(places,9)-1
+  // 자리 기호를 여섯 개까지만 센다. bestFraction 이 분모를 1 부터 상한까지
+  // 하나씩 재므로 상한이 그대로 한 칸을 그리는 비용이고, 이 루프는 메인
+  // 스레드에서 돈다 — 배정밀도 값에서 1e-12 안으로 들어오는 분수는 여섯 자리
+  // 분모 안에 거의 다 있고, 그보다 넓히면 칸 하나가 그리드를 멈춘다(아홉
+  // 자리는 10억 번이다). internal/formula/format_fraction.go 의
+  // maxFractionPlaces 와 같은 수여야 한다.
+  if(places>0)maxDenominator=10**Math.min(places,MAX_FRACTION_PLACES)-1
   else{
     while(end<section.length&&section[end]>='0'&&section[end]<='9')end+=1
     denominator=Number(section.slice(slash+1,end))
