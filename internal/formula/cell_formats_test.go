@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 // 격자와 서버의 TEXT 는 같은 값을 같은 글자로 적어야 한다. 두 곳에서 따로
@@ -180,6 +181,44 @@ func TestFractionFormatsFollowExcel(t *testing.T) {
 	} {
 		if got := formatValue(testCase.number, testCase.format); got != testCase.want {
 			t.Errorf("TEXT(%v, %q) = %q, 엑셀은 %q 를 적는다", testCase.number, testCase.format, got, testCase.want)
+		}
+	}
+}
+
+// 자리 기호를 일곱 개 이상 적은 분수 서식은 여섯 자리 상한과 같은 글자를
+// 내고, 칸 하나를 그리는 데 사람이 기다릴 만한 시간을 쓰지 않아야 한다.
+// bestFraction 은 분모를 1 부터 상한까지 하나씩 재므로 상한이 그대로 한 칸의
+// 비용이다 — 상한이 999,999,999 이던 때는 `?????????/?????????` 가 붙은 칸
+// 하나가 1.5 초씩 돌아 격자를 멈췄다.
+//
+// 기다리는 글자는 여섯 자리 상한을 손으로 적어 둔 것이다. 상한을 다시
+// 움직이면 시간뿐 아니라 이 글자가 걸린다 — 다섯 자리로 내리면 π 는
+// "3 14093/99532" 가 되어 눈에 보이게 달라진다.
+func TestFractionFormatsStopAtSixDigitDenominators(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		number float64
+		want   string
+	}{
+		// 짧은 분수·유한 소수로 적히는 값은 상한을 좁혀도 그대로다.
+		{1.0 / 3.0, "1/3"},
+		{0.3125, "5/16"},
+		{3.14159, "3 14159/100000"},
+		{2.718281828459045, "2 286565/398959"},
+		// 무리수는 자리를 넓힐수록 조금 더 가까워지므로 여섯 자리에서 멈춘
+		// 값이 적힌다. 일부러 좁힌 것이다 — 일곱 자리 상한이던 때는
+		// "3 192583/1360120" 이었다.
+		{3.141592653589793, "3 51669/364913"},
+	} {
+		for _, format := range []string{`# ??????/??????`, `# ???????/???????`, `# ????????/????????`, `# ?????????/?????????`} {
+			started := time.Now()
+			got := formatValue(testCase.number, format)
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Errorf("TEXT(%v, %q) 가 %v 걸렸다 — 칸 하나를 그리는 비용이다", testCase.number, format, elapsed)
+			}
+			if got != testCase.want {
+				t.Errorf("TEXT(%v, %q) = %q, 여섯 자리 상한은 %q 를 적는다", testCase.number, format, got, testCase.want)
+			}
 		}
 	}
 }

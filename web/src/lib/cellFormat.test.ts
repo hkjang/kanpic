@@ -136,6 +136,18 @@ describe('the grid draws fraction formats as fractions',()=>{
     // 날짜 서식의 빗금은 자리 기호 사이에 있지 않으므로 분수가 아니다.
     expect(shown(45000.5,'m/d/yyyy')).toBe('3/15/2023')
   })
+  // bestFraction 은 분모를 1 부터 상한까지 하나씩 재고 이 루프는 메인
+  // 스레드에서 돈다. 자리 기호를 아홉 개 적으면 칸 하나가 10억 번 돌아
+  // 그리드를 멈췄으므로 상한을 여섯 자리로 좁혔다 — 서버의
+  // internal/formula/cell_formats_test.go 가 같은 글자를 못 박는다.
+  it('stops counting denominator placeholders at six digits',()=>{
+    expect(shown(1/3,'?????????/?????????')).toBe('1/3')
+    expect(shown(1/3,'?????????/?????????')).toBe(shown(1/3,'??????/??????'))
+    // 무리수는 자리를 넓힐수록 조금 더 가까워지므로 여섯 자리에서 멈춘
+    // 값이 적힌다. 일부러 좁힌 것이다 — 아홉 자리를 끝까지 재던 때는
+    // "3 192583/1360120" 이었다.
+    expect(shown(Math.PI,'# ?????????/?????????')).toBe('3 51669/364913')
+  })
 })
 
 // 엑셀 파일에서 읽어 온 날짜는 1899-12-30부터 센 날 수로 담긴다. 격자는

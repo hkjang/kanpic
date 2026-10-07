@@ -19,6 +19,11 @@ import (
 // 소수 부분이 이미 이진 실수의 어긋남뿐이고, 가분수의 분자가 int 를 넘는다.
 const maxFractionValue = 1e15
 
+// maxFractionPlaces 는 분모 자리 기호를 세는 상한이다. web/src/lib/cellFormat.ts
+// 의 maxFractionPlaces 와 같은 수여야 한다 — 다르면 격자와 서버가 같은 칸을
+// 다르게 그린다. 왜 여섯인지는 parseFractionFormat 의 주석에 적었다.
+const maxFractionPlaces = 6
+
 // fractionFormat 은 분수 서식 한 구역을 뜯어 놓은 것이다.
 type fractionFormat struct {
 	prefix, suffix string
@@ -73,8 +78,15 @@ func parseFractionFormat(section string) (fractionFormat, bool) {
 	spec := fractionFormat{}
 	switch places := end - slash - 1; {
 	case places > 0:
-		if places > 9 {
-			places = 9
+		// 자리 기호를 여섯 개까지만 센다. bestFraction 이 분모를 1 부터
+		// 상한까지 하나씩 재므로 상한이 그대로 한 칸을 그리는 비용이다 —
+		// 배정밀도 값에서 1e-12 안으로 들어오는 분수는 여섯 자리 분모 안에
+		// 거의 다 있고, 그보다 넓히면 칸 하나가 그리드를 멈춘다(아홉 자리는
+		// 10억 번, 한 칸에 1.5 초다). 무리수처럼 어떤 분모로도 떨어지지 않는
+		// 값은 일곱 자리 이상에서 조금 더 가까운 분수를 찾긴 하지만, 그 차이는
+		// 서식이 보여 주려던 "읽을 수 있는 분수" 와 거리가 멀다.
+		if places > maxFractionPlaces {
+			places = maxFractionPlaces
 		}
 		spec.maxDenominator = int(math.Pow10(places)) - 1
 	default:
