@@ -106,8 +106,10 @@ func cronAliasNames() []string {
 func (s *Schedule) Next(after time.Time) (time.Time, error) {
 	localAfter := after.In(s.location)
 	start := localAfter.Truncate(time.Minute).Add(time.Minute)
-	limit := start.AddDate(maxScheduleLookaheadYears, 0, 0)
-	for date := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, s.location); date.Before(limit); date = time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, s.location) {
+	// 현지 자정은 DST 전환 때 전날로 정규화될 수 있으므로 날짜 순회는 UTC 달력으로 한다.
+	// 경계도 같은 달력으로 비교하고 시·분을 유지해 기존 마지막 날짜 포함 범위를 지킨다.
+	limit := time.Date(start.Year()+maxScheduleLookaheadYears, start.Month(), start.Day(), start.Hour(), start.Minute(), 0, 0, time.UTC)
+	for date := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC); date.Before(limit); date = date.AddDate(0, 0, 1) {
 		if !s.month.allowed[int(date.Month())] || !s.matchesDay(date) {
 			continue
 		}

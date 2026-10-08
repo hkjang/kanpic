@@ -206,6 +206,81 @@ func TestScheduleSkipsNonexistentDSTWallTime(t *testing.T) {
 	}
 }
 
+func TestScheduleNextTraversesCalendarDates(t *testing.T) {
+	for _, test := range []struct {
+		name, expression, timezone, after string
+		want                              []string
+	}{
+		{
+			name: "Santiago midnight DST", expression: "0 9 * * *", timezone: "America/Santiago",
+			after: "2026-09-05T13:00:00Z",
+			want:  []string{"2026-09-06T12:00:00Z", "2026-09-07T12:00:00Z"},
+		},
+		{
+			name: "Santiago missing 00:30", expression: "30 0 * * *", timezone: "America/Santiago",
+			after: "2026-09-05T13:00:00Z",
+			want:  []string{"2026-09-07T03:30:00Z"},
+		},
+		{
+			name: "Apia missing day", expression: "0 9 * * *", timezone: "Pacific/Apia",
+			after: "2011-12-29T19:00:00Z",
+			want:  []string{"2011-12-30T19:00:00Z"},
+		},
+		{
+			name: "Apia missing date must not run on December 31", expression: "0 9 30 DEC *", timezone: "Pacific/Apia",
+			after: "2011-12-29T19:00:00Z",
+			want:  []string{"2012-12-29T19:00:00Z"},
+		},
+		{
+			name: "month end", expression: "0 0 31 * *", timezone: "Asia/Seoul",
+			after: "2026-01-30T15:00:00Z",
+			want:  []string{"2026-03-30T15:00:00Z", "2026-05-30T15:00:00Z"},
+		},
+		{
+			name: "fall DST runs once", expression: "30 1 * * *", timezone: "America/New_York",
+			after: "2026-11-01T04:00:00Z",
+			want:  []string{"2026-11-01T05:30:00Z", "2026-11-02T06:30:00Z"},
+		},
+		{
+			name: "eight year final date included", expression: "0 9 29 FEB *", timezone: "Asia/Seoul",
+			after: "2096-02-29T00:00:00Z",
+			want:  []string{"2104-02-29T00:00:00Z"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schedule, err := ParseSchedule(test.expression, test.timezone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := time.Parse(time.RFC3339, test.after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range test.want {
+				next, err := schedule.Next(after)
+				if err != nil {
+					t.Fatalf("Next(%s): %v", after, err)
+				}
+				if next.Format(time.RFC3339) != want || next.Location() != time.UTC {
+					t.Fatalf("Next(%s)=%s (%s), want %s (UTC)", after, next, next.Location(), want)
+				}
+				after = next
+			}
+		})
+	}
+}
+
+func TestScheduleNextRejectsNonexistentCalendarDate(t *testing.T) {
+	schedule, err := ParseSchedule("0 9 31 FEB *", "America/Santiago")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := schedule.Next(time.Date(2026, 9, 5, 13, 0, 0, 0, time.UTC))
+	if !errors.Is(err, ErrInvalid) || !next.IsZero() {
+		t.Fatalf("Next=%s, %v, want zero time and ErrInvalid", next, err)
+	}
+}
+
 func TestScheduleRejectsInvalidExpressions(t *testing.T) {
 	for _, test := range []struct{ expression, timezone string }{
 		{"* * * *", "UTC"},
