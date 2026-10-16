@@ -159,6 +159,11 @@ func parseCronField(raw string, minimum, maximum int, names map[string]int, sund
 			if strings.Contains(stepRaw, "/") {
 				return cronField{}, fmt.Errorf("too many step separators")
 			}
+			// 값 자리(cronValue)와 같은 이유로 step 자리도 십진 숫자만이어야 한다 —
+			// strconv.Atoi 는 부호를 받으므로 cron 문법에 없는 `*/+2` 가 통과한다.
+			if !isDecimalDigits(stepRaw) {
+				return cronField{}, fmt.Errorf("step must be between 1 and %d", maximum-minimum+1)
+			}
 			value, err := strconv.Atoi(stepRaw)
 			if err != nil || value < 1 || value > maximum-minimum+1 {
 				return cronField{}, fmt.Errorf("step must be between 1 and %d", maximum-minimum+1)

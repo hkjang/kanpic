@@ -250,6 +250,61 @@ func TestScheduleRejectsSignedCronValues(t *testing.T) {
 	}
 }
 
+// 값 자리와 같은 이유로 step 자리에도 부호가 없다. `*/+2` 는 cron 문법에 없지만
+// strconv.Atoi 가 받아들여 Schedule.Expression 에 영구 저장된다 — 값 자리에서 이미 내린
+// 결정과 같게 맞춘다. 이미 거절되던 `-2`·`+0`·`0` 은 회귀 방지로 표에 남긴다.
+func TestScheduleRejectsSignedCronSteps(t *testing.T) {
+	for _, expression := range []string{
+		"*/+2 0 * * *",
+		"0 0 * * */+2",
+		"*/+3 0 * * *",
+		"0-30/+2 0 * * *",
+		"*/-2 0 * * *",
+		"*/+0 0 * * *",
+		"*/0 0 * * *",
+	} {
+		t.Run(expression, func(t *testing.T) {
+			schedule, err := ParseSchedule(expression, "UTC")
+			if err == nil {
+				next, nextErr := schedule.Next(time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+				t.Fatalf("ParseSchedule(%q) 가 받아들였다: expression=%q 다음 실행=%s (%v)", expression, schedule.Expression, next, nextErr)
+			}
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ParseSchedule(%q) error=%v, want ErrInvalid", expression, err)
+			}
+			if !strings.Contains(err.Error(), "step must be between 1 and") {
+				t.Fatalf("ParseSchedule(%q) error=%q — 400 응답에 실리는 문구가 기존 step 범위 계열이어야 한다", expression, err.Error())
+			}
+		})
+	}
+}
+
+// step 자리를 좁힌 뒤에도 부호 없는 step 식은 반환 시각까지 그대로여야 한다.
+func TestScheduleKeepsUnsignedStepExpressions(t *testing.T) {
+	after := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC) // 금요일
+	for _, test := range []struct {
+		expression string
+		want       time.Time
+	}{
+		{"*/2 0 * * *", time.Date(2026, 10, 16, 0, 2, 0, 0, time.UTC)},
+		{"0-30/5 0 * * *", time.Date(2026, 10, 16, 0, 5, 0, 0, time.UTC)},
+		{"@daily", time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)},
+		{"0 0 * * */8", time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)},
+		{"0 0 */2 * *", time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(test.expression, func(t *testing.T) {
+			schedule, err := ParseSchedule(test.expression, "UTC")
+			if err != nil {
+				t.Fatalf("ParseSchedule(%q) error=%v", test.expression, err)
+			}
+			next, err := schedule.Next(after)
+			if err != nil || !next.Equal(test.want) {
+				t.Fatalf("ParseSchedule(%q).Next=%s (%v), want %s", test.expression, next, err, test.want)
+			}
+		})
+	}
+}
+
 // 모르는 별칭을 "다섯 필드가 아니다" 로 거절하면 다섯 필드 식을 쓴 적이 없는 사용자는
 // 오타인지 미지원인지 알 수 없다. @reboot 은 영구 저장된 next_run_at 기반 스케줄러에
 // 뜻이 없어 영영 지원하지 않으므로, 두 경우 모두 지원 목록을 문구에 담아 거절한다.
