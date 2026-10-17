@@ -87,6 +87,21 @@ describe('splitSheetRange',()=>{
     expect(splitSheetRange('')).toBeUndefined()
     expect(splitSheetRange('!A1:B2')).toBeUndefined()
   })
+  it('reads a doubled quote inside the quotes as one quote',()=>{
+    // 수식 바가 가르치는 표기다 — internal/formula 가 시트 이름을 적을 때
+    // `'` 를 `''` 로 적고 읽을 때 되돌린다. 대사 입력도 같게 읽어야 한다.
+    expect(splitSheetRange("'Bob''s Data'!A1:B2")?.sheetName).toBe("Bob's Data")
+    expect(splitSheetRange("'O''Brien'!A1:B2")?.sheetName).toBe("O'Brien")
+  })
+  it('leaves a doubled quote alone when there are no wrapping quotes',()=>{
+    // 따옴표로 감싸지 않은 이름은 Go 의 quotedQualifier 와 마찬가지로
+    // 이스케이프를 해석하지 않는다 — 글자 그대로가 시트 이름이다.
+    expect(splitSheetRange("A''B!A1:B2")?.sheetName).toBe("A''B")
+    expect(splitSheetRange("O'Brien!A1:B2")?.sheetName).toBe("O'Brien")
+  })
+  it('refuses an empty quoted name',()=>{
+    expect(splitSheetRange("''!A1:B2")).toBeUndefined()
+  })
 })
 
 describe('keys that must not be read as numbers',()=>{
