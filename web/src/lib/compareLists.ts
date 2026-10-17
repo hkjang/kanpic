@@ -127,6 +127,10 @@ export function splitSheetRange(value:string):{sheetName?:string;region:GridRegi
   if(!region)return undefined
   if(split<0)return {region}
   // 이름에 빈칸이 있으면 따옴표로 감싸는 것이 스프레드시트의 버릇이다.
-  const sheetName=text.slice(0,split).trim().replace(/^'(.*)'$/,'$1')
+  // 감싼 안쪽의 `''` 는 작은따옴표 한 개다 — `internal/formula/structure.go` 의
+  // `quotedQualifier` 와 같은 규칙이라, 감싸지 않은 이름은 글자 그대로 둔다.
+  const raw=text.slice(0,split).trim()
+  const quoted=/^'(.*)'$/.exec(raw)
+  const sheetName=quoted?quoted[1].replaceAll("''","'"):raw
   return sheetName===''?undefined:{sheetName,region}
 }
