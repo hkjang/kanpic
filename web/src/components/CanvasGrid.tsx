@@ -9,6 +9,7 @@ import { suggestColumnValues } from '../lib/valueSuggest'
 import type { LayoutCommand } from './LayoutDialog'
 import type { StructureCommand } from './StructureDialog'
 import { dataRegion, populatedCell } from '../lib/dataRegion'
+import { LineOccupancy, walkDataEdge, type DataLine } from '../lib/dataEdge'
 import { clampDimensionSize, parseTableRange, pointerRegion, resizeHandleAt, type GridGeometry, type ResizeTarget } from '../lib/gridGeometry'
 import { spillRoom } from '../lib/textSpill'
 import { clipboardText, KANPIC_CLIPBOARD_TYPE, materializeFill, MAX_GRID_COLUMNS, MAX_GRID_ROWS, MAX_PASTE_CELLS, type FillRange, type KanpicClipboard, type PasteMode, type PastedCell } from '../lib/clipboard'
@@ -513,8 +514,80 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
     sendSelection({sheet_id:sheetId,start:{row:startRow,column:startColumn},end:{row:endRow,column:endColumn}})
   },[select,sendCursor,sendSelection,sheetId])
   const selectRange=useCallback((startRow:number,startColumn:number,endRow:number,endColumn:number)=>selectSpan(startRow,startColumn,endRow,endColumn,{row:startRow,column:startColumn}),[selectSpan])
-  const populated=useCallback((row:number,column:number)=>{const cell=cells.get(cellKey(row,column));return cell?.value!=null||Boolean(cell?.formula)},[cells])
-  const moveDataEdge=useCallback((direction:'up'|'down'|'left'|'right',extend:boolean)=>{const rowStep=direction==='up'?-1:direction==='down'?1:0,columnStep=direction==='left'?-1:direction==='right'?1:0,filled=populated(activeRow,activeColumn);let row=activeRow,column=activeColumn;for(let index=0;index<TOTAL_ROWS+TOTAL_COLUMNS;index+=1){const nextRow=rowStep?rowAxis.nextVisible(row,rowStep):row,nextColumn=columnStep?columnAxis.nextVisible(column,columnStep):column;if(nextRow===row&&nextColumn===column)break;if(populated(nextRow,nextColumn)!==filled)break;row=nextRow;column=nextColumn}selectCell(row,column,extend)},[activeColumn,activeRow,columnAxis,populated,rowAxis,selectCell])
+  // Ctrl+arrow and select-all finish after a server answer, so they read the
+  // newest axes, window and selection functions through a ref rather than the
+  // ones captured when the key went down.
+  const latest=useRef({sheetId,rowAxis,columnAxis,visibleRange,selectCell,selectSpan})
+  latest.current={sheetId,rowAxis,columnAxis,visibleRange,selectCell,selectSpan}
+  // Presses run one after another: a second Ctrl+Down starts from where the
+  // first one landed, not from where the cursor was when both were pressed.
+  const navigationQueue=useRef<Promise<void>>(Promise.resolve())
+  const queueNavigation=useCallback((run:()=>Promise<void>)=>{navigationQueue.current=navigationQueue.current.then(run).catch(()=>undefined)},[])
+  const moveDataEdge=useCallback((direction:'up'|'down'|'left'|'right',extend:boolean)=>queueNavigation(async()=>{
+    const {sheetId:currentSheet,rowAxis:rows,columnAxis:columns,visibleRange:window}=latest.current
+    const state=useEditorStore.getState(),row=state.activeRow,column=state.activeColumn
+    const vertical=direction==='up'||direction==='down',step=direction==='down'||direction==='right'?1:-1
+    const axis=vertical?rows:columns,start=vertical?row:column
+    const next=(index:number)=>axis.nextVisible(index,step)
+    const local=(index:number)=>populatedCell(state.cells,vertical?index:row,vertical?column:index)
+    // Only the window on screen is loaded. Beyond it the grid knows nothing,
+    // which is not the same as empty.
+    const lineOnScreen=vertical?column>=window.startColumn&&column<=window.endColumn:row>=window.startRow&&row<=window.endRow
+    const low=vertical?window.startRow:window.startColumn,high=vertical?window.endRow:window.endColumn
+    const quick=walkDataEdge(start,next,index=>lineOnScreen&&index>=low&&index<=high?local(index):undefined)
+    let target='target' in quick?quick.target:undefined
+    if(target===undefined){
+      // Cells typed a moment ago may not have reached the server, so what the
+      // grid holds counts as filled too.
+      const occupancy=new LineOccupancy(),known=(index:number)=>local(index)||occupancy.filled(index)
+      try{
+        for(let attempt=0;attempt<64&&target===undefined;attempt+=1){
+          const walk=walkDataEdge(start,next,known)
+          if('target' in walk){target=walk.target;break}
+          const at=vertical?address(walk.unknown,column):address(row,walk.unknown)
+          occupancy.add(await api<DataLine>(`/api/v1/sheets/${currentSheet}/cells/${at}/edge?direction=${direction}`))
+        }
+      }catch{/* offline or refused: the grid's own cells are all there is */}
+      if(target===undefined){const fallback=walkDataEdge(start,next,local);target='target' in fallback?fallback.target:start}
+    }
+    const now=useEditorStore.getState()
+    // Somebody clicked elsewhere or switched sheets while the answer was on
+    // its way; moving now would undo what they did.
+    if(latest.current.sheetId!==currentSheet||now.activeRow!==row||now.activeColumn!==column)return
+    latest.current.selectCell(vertical?target:row,vertical?column:target,extend)
+  }),[queueNavigation])
+  // The block of data around the active cell, read from every stored row. The
+  // grid's own cells answer when the whole block and the empty border around
+  // it are on screen; anything bigger is the server's to say.
+  const resolveDataRegion=useCallback(async(row:number,column:number):Promise<{region:{startRow:number;startColumn:number;endRow:number;endColumn:number};empty:boolean}>=>{
+    const {sheetId:currentSheet,visibleRange:window}=latest.current,state=useEditorStore.getState()
+    const local=dataRegion(state.cells,row,column,{rows:TOTAL_ROWS,columns:TOTAL_COLUMNS})
+    const inside=(local.startRow===1||local.startRow-1>=window.startRow)&&(local.startColumn===1||local.startColumn-1>=window.startColumn)&&local.endRow+1<=window.endRow&&local.endColumn+1<=window.endColumn&&row>=window.startRow&&column>=window.startColumn
+    const localEmpty=local.startRow===local.endRow&&local.startColumn===local.endColumn&&!populatedCell(state.cells,row,column)
+    if(inside)return {region:local,empty:localEmpty}
+    try{
+      const found=await api<{start_row:number;start_column:number;end_row:number;end_column:number;empty:boolean}>(`/api/v1/sheets/${currentSheet}/cells/${address(row,column)}/region`)
+      return {region:{startRow:found.start_row,startColumn:found.start_column,endRow:Math.min(found.end_row,TOTAL_ROWS),endColumn:Math.min(found.end_column,TOTAL_COLUMNS)},empty:found.empty&&!populatedCell(state.cells,row,column)}
+    }catch{return {region:local,empty:localEmpty}}
+  },[])
+  const selectDataRegion=useCallback(()=>queueNavigation(async()=>{
+    const state=useEditorStore.getState(),row=state.activeRow,column=state.activeColumn,currentSheet=latest.current.sheetId
+    const {region}=await resolveDataRegion(row,column)
+    if(latest.current.sheetId!==currentSheet)return
+    latest.current.selectSpan(region.startRow,region.startColumn,region.endRow,region.endColumn,{row:region.startRow,column:region.startColumn})
+  }),[queueNavigation,resolveDataRegion])
+  // Select-all picks the data first, the way spreadsheets do; the second press,
+  // or a press away from any data, takes the whole sheet.
+  const selectAll=useCallback(()=>queueNavigation(async()=>{
+    const whole=()=>latest.current.selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1})
+    const state=useEditorStore.getState(),bounds=selectedBounds(state),currentSheet=latest.current.sheetId
+    if(bounds.startRow===1&&bounds.startColumn===1&&bounds.endRow>=TOTAL_ROWS&&bounds.endColumn>=TOTAL_COLUMNS)return
+    const {region,empty}=await resolveDataRegion(state.activeRow,state.activeColumn)
+    if(latest.current.sheetId!==currentSheet)return
+    const same=region.startRow===bounds.startRow&&region.startColumn===bounds.startColumn&&region.endRow===bounds.endRow&&region.endColumn===bounds.endColumn
+    if(empty||same){whole();return}
+    latest.current.selectSpan(region.startRow,region.startColumn,region.endRow,region.endColumn,{row:region.startRow,column:region.startColumn})
+  }),[queueNavigation,resolveDataRegion])
   const commitAndMoveRef=useRef<(rowOffset:number,columnOffset:number)=>void>(()=>{})
   // Enter and Tab close the editor and move on straight away. Saving a formula
   // needs a server round trip, and waiting for it used to swallow whatever was
@@ -737,7 +810,7 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
   const editActiveCell=useCallback(()=>{if(readOnly){readOnlyNotice();return}if(activeCell?.spill_source){const source=parsedAddress(activeCell.spill_source);if(source){selectCell(source.row,source.column);setEditing(true);return}}setEditing(true)},[activeCell,selectCell,setEditing,readOnly,readOnlyNotice])
   const keyDown=(event:React.KeyboardEvent)=>{if(editing)return;const primary=event.ctrlKey||event.metaKey
     if(primary&&event.shiftKey&&event.key.toLowerCase()==='v'){pasteAsValues.current=true;return}
-    if(primary&&event.key.toLowerCase()==='a'){selectRange(1,1,TOTAL_ROWS,TOTAL_COLUMNS);event.preventDefault()}
+    if(primary&&event.key.toLowerCase()==='a'){if(event.shiftKey)selectDataRegion();else selectAll();event.preventDefault()}
     else if(primary&&event.code==='Space'){selectRange(1,activeColumn,TOTAL_ROWS,activeColumn);event.preventDefault()}
     else if(event.shiftKey&&event.code==='Space'){selectRange(activeRow,1,activeRow,TOTAL_COLUMNS);event.preventDefault()}
     else if(primary&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)){const direction=event.key.replace('Arrow','').toLowerCase() as 'up'|'down'|'left'|'right';moveDataEdge(direction,event.shiftKey);event.preventDefault()}
@@ -897,10 +970,10 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
     switch(detail.command){
       case 'fill-down':fillDown();return
       case 'fill-right':fillRight();return
-      case 'select-all':selectSpan(1,1,TOTAL_ROWS,TOTAL_COLUMNS,{row:1,column:1});return
+      case 'select-all':selectAll();return
       case 'select-row':selectSpan(activeRow,1,activeRow,TOTAL_COLUMNS,{row:activeRow,column:1});return
       case 'select-column':selectSpan(1,activeColumn,TOTAL_ROWS,activeColumn,{row:1,column:activeColumn});return
-      case 'select-data-region':{const region=dataRegion(cells,activeRow,activeColumn,{rows:TOTAL_ROWS,columns:TOTAL_COLUMNS});selectSpan(region.startRow,region.startColumn,region.endRow,region.endColumn,{row:region.startRow,column:region.startColumn});return}
+      case 'select-data-region':selectDataRegion();return
       case 'move-first':selectCell(1,1);return
       case 'move-last':selectCell(TOTAL_ROWS,TOTAL_COLUMNS);return
       case 'move-data-edge':moveDataEdge(detail.direction,detail.extend);return
@@ -922,7 +995,7 @@ export function CanvasGrid({sheetId,workbookId,layout=DEFAULT_LAYOUT,version,onV
       case 'commit-text':if(readOnly){readOnlyNotice();return}void commit(detail.text);return
       case 'insert-function':if(readOnly){readOnlyNotice();return}insertAggregate(detail.name);return
     }
-  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,focusGrid,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectCell,selectSpan,setDraft,setEditing])
+  };window.addEventListener('kanpic:grid-shortcut',shortcut);return()=>window.removeEventListener('kanpic:grid-shortcut',shortcut)},[activeColumn,activeRow,autoSum,cells,clearSelection,commit,copySelection,fillDown,fillRight,moveDataEdge,movePage,focusGrid,insertAggregate,pasteFromClipboard,readOnly,readOnlyNotice,selectAll,selectCell,selectDataRegion,selectSpan,setDraft,setEditing])
   // Auto-fit measures the cells already loaded in the client store, which is
   // the same data the canvas paints.
   const autoFitSize=(axis:'row'|'column',start:number,count:number)=>{

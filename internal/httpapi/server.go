@@ -289,6 +289,8 @@ func NewPlatformWithServices(repository workbook.Repository, settingRepository *
 	mux.HandleFunc("DELETE /api/v1/data-validations/{validationId}", s.deleteDataValidation)
 	mux.HandleFunc("POST /api/v1/data-validations/{validationAction}", s.evaluateDataValidation)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/cells/{address}/history", s.cellHistory)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/cells/{address}/edge", s.cellDataEdge)
+	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/cells/{address}/region", s.cellDataRegion)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats", s.listConditionalFormats)
 	mux.HandleFunc("POST /api/v1/sheets/{sheetId}/conditional-formats", s.createConditionalFormat)
 	mux.HandleFunc("GET /api/v1/sheets/{sheetId}/conditional-formats:evaluate", s.evaluateConditionalFormats)
@@ -1445,7 +1447,7 @@ func requiredScope(r *http.Request) string {
 		}
 		return "range.write"
 	}
-	if strings.HasSuffix(path, "/history") && strings.Contains(path, "/cells/") {
+	if strings.Contains(path, "/cells/") && (strings.HasSuffix(path, "/history") || strings.HasSuffix(path, "/edge") || strings.HasSuffix(path, "/region")) {
 		return "range.read"
 	}
 	if strings.Contains(path, "/ranges/") {
