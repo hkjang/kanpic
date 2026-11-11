@@ -49,7 +49,7 @@ export function SelectionSummary({sheetId,version}:{sheetId?:string;version:numb
     },220)
     return()=>{window.clearTimeout(timer);controller.abort()}
   },[sheetId,range,cellCount,tooLarge,version])
-  const loaded=new Map((cells??[]).map(cell=>[`${cell.row}:${cell.column}`,cell]))
+  const loaded=new Map((tooLarge?[]:cells??[]).map(cell=>[`${cell.row}:${cell.column}`,cell]))
   const stats=summarizeSelection(loaded,bounds.startRow,bounds.startColumn,bounds.endRow,bounds.endColumn)
   const toggle=(key:SummaryKey)=>{
     const next=chosen.includes(key)?chosen.filter(item=>item!==key):[...chosen,key]

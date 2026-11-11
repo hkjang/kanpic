@@ -32,20 +32,21 @@ const numeric=spreadsheetNumber
  */
 export function summarizeSelection(cells:Map<string,Cell>,startRow:number,startColumn:number,endRow:number,endColumn:number):SelectionStats{
   let numbers=0,filled=0,sum=0,min=Number.POSITIVE_INFINITY,max=Number.NEGATIVE_INFINITY
-  for(let row=startRow;row<=endRow;row+=1){
-    for(let column=startColumn;column<=endColumn;column+=1){
-      const cell=cells.get(`${row}:${column}`)
-      if(!cell)continue
-      const value=cell.value
-      if(value===null||value===undefined||value==='')continue
-      filled+=1
-      const parsed=numeric(value)
-      if(parsed===undefined)continue
-      numbers+=1
-      sum+=parsed
-      min=Math.min(min,parsed)
-      max=Math.max(max,parsed)
-    }
+  // The cells that exist are walked, not the rectangle. Select-all is two
+  // hundred thousand rows by sixteen thousand columns — three billion
+  // addresses — and walking them froze the editor for minutes while the map
+  // held a few hundred cells.
+  for(const cell of cells.values()){
+    if(cell.row<startRow||cell.row>endRow||cell.column<startColumn||cell.column>endColumn)continue
+    const value=cell.value
+    if(value===null||value===undefined||value==='')continue
+    filled+=1
+    const parsed=numeric(value)
+    if(parsed===undefined)continue
+    numbers+=1
+    sum+=parsed
+    min=Math.min(min,parsed)
+    max=Math.max(max,parsed)
   }
   return {
     numbers,filled,sum,

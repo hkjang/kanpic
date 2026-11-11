@@ -495,6 +495,10 @@ export function EditorPage({workbookId,build,session}:{workbookId:string;build?:
    */
   const applyNote=async(note:string)=>{
     if(!activeSheet||!writable())return
+    // The optimistic copy below is one entry per selected cell. After
+    // select-all that is three billion of them, so the cap other range
+    // commands keep applies here too.
+    if((editorSelection.endRow-editorSelection.startRow+1)*(editorSelection.endColumn-editorSelection.startColumn+1)>MAX_PASTE_CELLS){alert(`메모는 최대 ${MAX_PASTE_CELLS.toLocaleString()}셀까지 한 번에 달 수 있습니다.`);return}
     const updatedAt=new Date().toISOString(),optimistic:Cell[]=[]
     for(let row=editorSelection.startRow;row<=editorSelection.endRow;row+=1)for(let column=editorSelection.startColumn;column<=editorSelection.endColumn;column+=1){
       const current=editor.cells.get(cellKey(row,column))

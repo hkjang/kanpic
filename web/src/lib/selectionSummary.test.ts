@@ -26,6 +26,13 @@ describe('summarizeSelection', () => {
   it('only covers the selected rectangle', () => {
     expect(summarizeSelection(grid([[1,1,10],[1,2,99],[2,1,20]]),1,1,2,1).sum).toBe(30)
   })
+
+  it('answers a whole-sheet selection at once instead of walking three billion addresses', () => {
+    const started=performance.now()
+    const stats=summarizeSelection(grid([[1,1,10],[199_999,16_384,5],[3,3,'가']]),1,1,200_000,16_384)
+    expect(stats).toMatchObject({numbers:2,filled:3,sum:15})
+    expect(performance.now()-started).toBeLessThan(1000)
+  })
 })
 
 describe('formatStat', () => {

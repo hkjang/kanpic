@@ -41,7 +41,7 @@ const sections:Array<{title:string; shortcuts:Shortcut[]}> = [
   {title:'선택과 탐색',shortcuts:[
     {action:'셀 이동 / 범위 확장',keys:['방향키','Shift + 방향키']},
     {action:'데이터 영역 끝으로 이동 / 확장',keys:['Ctrl / ⌘ + 방향키','Ctrl / ⌘ + Shift + 방향키']},
-    {action:'전체 시트 선택',keys:['Ctrl / ⌘ + A']},
+    {action:'데이터 표 선택, 한 번 더 누르면 전체 시트',keys:['Ctrl / ⌘ + A']},
     {action:'현재 열 / 행 선택',keys:['Ctrl + Space','Shift + Space']},
     {action:'시트 처음 / 끝으로 이동',keys:['Ctrl / ⌘ + Home','Ctrl / ⌘ + End']},
   ]},
