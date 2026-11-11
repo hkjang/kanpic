@@ -247,10 +247,38 @@ func NewPrincipal(userID string, scopes []string) Principal {
 	return principal
 }
 
+// scopeAliases are scope names people grant that kanpic splits more finely.
+// "Write to the spreadsheet" is how the request reads in a Keycloak client
+// scope or a ticket; kanpic checks range.write for values and formula.write for
+// formulas, and the alias stands for both.
+var scopeAliases = map[string][]string{
+	"spreadsheet.read":  {"workbook.read", "range.read", "formula.read"},
+	"spreadsheet.write": {"range.write", "formula.write"},
+}
+
 func (p Principal) Allows(required string) bool {
 	if required == "" {
 		return true
 	}
+	if p.holds(required) {
+		return true
+	}
+	for alias, expands := range scopeAliases {
+		if !p.holds(alias) {
+			continue
+		}
+		for _, scope := range expands {
+			if scope == required {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// holds is the scope check without aliases: the scope itself, a wildcard over
+// its family, or everything.
+func (p Principal) holds(required string) bool {
 	if _, ok := p.Scopes["*"]; ok {
 		return true
 	}
@@ -264,6 +292,19 @@ func (p Principal) Allows(required string) bool {
 		}
 	}
 	return false
+}
+
+// WithScopes returns a copy of the principal that also holds the given scopes.
+// The original is left alone, so a widening made for one call ends with it.
+func (p Principal) WithScopes(extra ...string) Principal {
+	widened := Principal{UserID: p.UserID, KeyID: p.KeyID, Scopes: make(map[string]struct{}, len(p.Scopes)+len(extra))}
+	for scope := range p.Scopes {
+		widened.Scopes[scope] = struct{}{}
+	}
+	for _, scope := range normalizedScopes(extra) {
+		widened.Scopes[scope] = struct{}{}
+	}
+	return widened
 }
 
 type keyScanner interface{ Scan(...any) error }
@@ -298,4 +339,41 @@ func normalizedScopes(scopes []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// DefaultOwnerScopes is what an MCP caller may do on a workbook its own user
+// owns even when its API key or OAuth token was narrowed to less. A narrowed
+// credential is there to keep an agent away from what other people shared with
+// its user; on the user's own documents it would only stop the agent editing
+// cells, formats and automations the user can edit anyway. Administrators
+// change the list with the mcp.owner_scopes setting.
+var DefaultOwnerScopes = []string{
+	"workbook.read", "range.read", "range.write", "formula.read", "formula.write",
+	"format.read", "format.write", "automation.read", "automation.write", "automation.run",
+	"chart.read", "chart.write", "pivot.read", "pivot.write", "comment.read", "comment.write",
+	"version.read", "version.write",
+}
+
+// ownerGrantableFamilies are the scope families that act on one workbook's
+// content. Anything outside them — administration, API keys, profiles,
+// sharing and deleting (workbook.write), AI budget, imports — is never added by
+// ownership, whatever the setting says.
+var ownerGrantableFamilies = []string{"range", "formula", "format", "automation", "chart", "pivot", "comment", "version", "presentation", "spreadsheet"}
+
+// OwnerGrantable reports whether a scope may be added on the caller's own
+// workbooks.
+func OwnerGrantable(scope string) bool {
+	scope = strings.TrimSpace(scope)
+	if scope == "workbook.read" || scope == "export.read" {
+		return true
+	}
+	if scope == "automation.webhook.invoke" {
+		return false
+	}
+	for _, family := range ownerGrantableFamilies {
+		if strings.HasPrefix(scope, family+".") && len(scope) > len(family)+1 {
+			return true
+		}
+	}
+	return false
 }

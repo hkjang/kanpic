@@ -55,7 +55,8 @@ type ProtectedResource struct {
 // client scopes to narrow a token. It is advisory: a token without any of them
 // acts with the user's own rights.
 var mcpScopesSupported = []string{
-	"workbook.read", "workbook.write", "range.read", "range.write", "formula.write",
+	"spreadsheet.read", "spreadsheet.write",
+	"workbook.read", "workbook.write", "range.read", "range.write", "formula.read", "formula.write",
 	"chart.read", "chart.write", "pivot.read", "pivot.write", "format.read", "format.write",
 	"automation.read", "automation.write", "automation.run", "presentation.read", "presentation.write",
 	"ai.use", "admin.*",

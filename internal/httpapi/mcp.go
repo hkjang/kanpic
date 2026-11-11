@@ -51,46 +51,46 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.workbook.replace", "검색 조건과 동일한 셀의 값 또는 수식을 미리보기하거나 시트별 원자적·실행 취소 가능한 작업으로 바꿉니다.", "range.write", workbookReplaceSchema()),
 	tool("spreadsheet.workbook.create", "워크북과 첫 시트를 생성합니다. template_id를 주면 템플릿 내용으로 채웁니다.", "workbook.write", workbookCreateSchema()),
 	tool("spreadsheet.template.list", "바로 사용할 수 있는 워크북 템플릿 목록을 반환합니다.", "workbook.read", map[string]any{"type": "object"}),
-	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
-	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.workbook.duplicate", "워크북의 시트, 셀, 수식, 서식과 속성을 새 워크북으로 원자적으로 복제합니다.", "workbook.write", withProps(requiredProps("workbook_id", "string"), map[string]any{"title": typed("string")})),
+	tool("spreadsheet.workbook.update", "워크북 이름 또는 즐겨찾기를 변경합니다.", "workbook.write", withProps(requiredProps("workbook_id", "string"), map[string]any{"title": typed("string"), "favorite": typed("boolean")})),
 	tool("spreadsheet.workbook.delete", "워크북을 삭제합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.share.list", "워크북의 공유 대상과 링크 액세스, 호출자의 유효 권한을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.share.grant", "사용자·부서·역할에 뷰어·댓글 작성자·편집자 권한을 부여하거나 변경합니다.", "workbook.write", shareGrantSchema()),
 	tool("spreadsheet.share.revoke", "공유 항목을 제거합니다.", "workbook.write", requiredProps2("workbook_id", "string", "share_id", "string")),
 	tool("spreadsheet.share.link", "링크 액세스 범위와 역할, 편집자 공유 허용과 뷰어 복사 허용을 변경합니다.", "workbook.write", shareLinkSchema()),
-	tool("spreadsheet.share.transfer_ownership", "워크북 소유자를 변경합니다.", "workbook.write", requiredProps2("workbook_id", "string", "new_owner_id", "string")),
+	tool("spreadsheet.share.transfer_ownership", "워크북 소유자를 변경합니다.", "workbook.write", withProps(requiredProps2("workbook_id", "string", "new_owner_id", "string"), map[string]any{"keep_as_editor": typed("boolean")})),
 	tool("spreadsheet.access_request.list", "워크북의 액세스 요청을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.access_request.decide", "액세스 요청을 승인하거나 거부합니다.", "workbook.write", accessRequestDecisionSchema()),
 	tool("spreadsheet.department.list", "부서 계층과 구성원 수를 조회합니다.", "workbook.read", map[string]any{"type": "object", "properties": map[string]any{}}),
 	tool("spreadsheet.department.create", "부서를 생성합니다.", "admin.*", departmentSchema()),
-	tool("spreadsheet.department.update", "부서 이름, 설명 또는 상위 부서를 변경합니다.", "admin.*", requiredProps("department_id", "string")),
+	tool("spreadsheet.department.update", "부서 이름, 설명 또는 상위 부서를 변경합니다.", "admin.*", withProps(requiredProps("department_id", "string"), map[string]any{"name": typed("string"), "description": typed("string"), "parent_id": typed("string"), "expected_revision": typed("integer")})),
 	tool("spreadsheet.department.delete", "하위 부서가 없는 부서를 삭제하고 관련 공유를 정리합니다.", "admin.*", requiredProps("department_id", "string")),
 	tool("spreadsheet.department.add_members", "부서에 구성원을 추가합니다.", "admin.*", requiredProps2("department_id", "string", "user_ids", "array")),
 	tool("spreadsheet.department.remove_member", "부서에서 구성원을 제거합니다.", "admin.*", requiredProps2("department_id", "string", "user_id", "string")),
 	tool("spreadsheet.sheet.list", "워크북의 시트를 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
-	tool("spreadsheet.sheet.create", "워크북에 시트를 추가합니다.", "workbook.write", requiredProps2("workbook_id", "string", "name", "string")),
-	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
-	tool("spreadsheet.sheet.update", "시트 이름, 순서, 색상, 숨김 상태를 변경합니다.", "workbook.write", requiredProps("sheet_id", "string")),
+	tool("spreadsheet.sheet.create", "워크북에 시트를 추가합니다.", "workbook.write", withProps(requiredProps2("workbook_id", "string", "name", "string"), map[string]any{"color": typed("string")})),
+	tool("spreadsheet.sheet.duplicate", "시트의 셀, 수식, 서식과 속성을 원자적으로 복제합니다.", "workbook.write", withProps(requiredProps("sheet_id", "string"), map[string]any{"name": typed("string")})),
+	tool("spreadsheet.sheet.update", "시트 이름, 순서, 색상, 숨김 상태를 변경합니다.", "workbook.write", withProps(requiredProps("sheet_id", "string"), map[string]any{"name": typed("string"), "position": typed("integer"), "color": typed("string"), "hidden": typed("boolean")})),
 	tool("spreadsheet.sheet.delete", "시트를 삭제합니다.", "workbook.write", requiredProps("sheet_id", "string")),
 	tool("spreadsheet.workbook.trash", "삭제된 워크북 목록을 조회합니다.", "workbook.read", map[string]any{"type": "object", "properties": map[string]any{"workspace_id": map[string]any{"type": "string"}}}),
 	tool("spreadsheet.workbook.restore", "삭제된 워크북을 복원합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.purge", "삭제된 워크북을 완전히 제거합니다.", "workbook.write", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.workbook.favorite", "호출자의 개인 즐겨찾기를 설정하거나 해제합니다.", "workbook.read", requiredProps2("workbook_id", "string", "favorite", "boolean")),
 	tool("spreadsheet.sheet.stats", "시트별 데이터 양, 수식 수, 사용 범위와 마지막 변경 시각을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
-	tool("spreadsheet.sheet.copy", "시트를 셀·서식·레이아웃과 함께 다른 워크북으로 복사합니다.", "workbook.write", requiredProps2("sheet_id", "string", "target_workbook_id", "string")),
+	tool("spreadsheet.sheet.copy", "시트를 셀·서식·레이아웃과 함께 다른 워크북으로 복사합니다.", "workbook.write", withProps(requiredProps2("sheet_id", "string", "target_workbook_id", "string"), map[string]any{"name": typed("string")})),
 	tool("spreadsheet.named_range.list", "워크북의 이름 범위 정의와 revision을 조회합니다.", "workbook.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.named_range.get", "이름 범위 정의를 조회합니다.", "workbook.read", requiredProps("named_range_id", "string")),
 	tool("spreadsheet.named_range.create", "수식과 API에서 재사용할 워크북 이름 범위를 멱등 생성합니다.", "formula.write", namedRangeSchema(true)),
 	tool("spreadsheet.named_range.update", "expected_revision으로 이름 범위의 이름이나 대상을 변경합니다.", "formula.write", namedRangeSchema(false)),
 	tool("spreadsheet.named_range.delete", "이름 범위를 삭제하고 종속 수식을 #NAME?으로 재계산합니다.", "formula.write", namedRangeDeleteSchema()),
 	tool("spreadsheet.range.read", "A1 범위의 비어 있지 않은 셀을 조회합니다.", "range.read", requiredProps2("sheet_id", "string", "range", "string")),
-	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
-	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
-	tool("spreadsheet.range.fill", "계산된 자동 채우기 셀 최대 1만 개를 하나의 원자적·실행 취소 가능한 작업으로 적용합니다.", "range.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
+	tool("spreadsheet.range.write", "최대 1천 셀을 멱등 일괄 변경합니다. cells 의 각 항목은 row·column(1부터)과 value 또는 formula 입니다.", "range.write", cellWriteSchema(workbook.MaxBatchCells)),
+	tool("spreadsheet.range.paste", "최대 1만 셀을 하나의 원자적 작업으로 붙여넣습니다.", "range.write", cellWriteSchema(workbook.MaxPasteCells)),
+	tool("spreadsheet.range.fill", "계산된 자동 채우기 셀 최대 1만 개를 하나의 원자적·실행 취소 가능한 작업으로 적용합니다.", "range.write", cellWriteSchema(workbook.MaxPasteCells)),
 	tool("spreadsheet.range.format", "값과 수식을 보존하며 최대 1만 셀의 서식과 범위 테두리를 원자적으로 병합합니다.", "format.write", rangeFormatSchema()),
-	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
-	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string")),
-	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", requiredProps4("sheet_id", "string", "range", "string", "keys", "array", "idempotency_key", "string")),
+	tool("spreadsheet.range.merge", "값과 수식을 보존한 채 선택 범위를 원자적으로 병합합니다.", "format.write", withProps(requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string"), map[string]any{"base_version": typed("integer"), "client_id": typed("string")})),
+	tool("spreadsheet.range.unmerge", "선택한 병합 범위를 원자적으로 해제합니다.", "format.write", withProps(requiredProps3("sheet_id", "string", "range", "string", "idempotency_key", "string"), map[string]any{"base_version": typed("integer"), "client_id": typed("string")})),
+	tool("spreadsheet.range.sort", "선택 범위를 다중 키로 안정 정렬하고 수식과 서식을 함께 이동합니다.", "range.write", rangeSortSchema()),
 	tool("spreadsheet.structure.apply", "행 또는 열을 원자적으로 삽입·삭제하고 수식, 병합, 이름 범위, 검증, 조건부 서식 및 필터 참조를 갱신합니다.", "range.write", structureSchema()),
 	tool("spreadsheet.layout.apply", "행 높이·열 너비·숨김·고정 영역을 revision 기반으로 멱등 변경합니다.", "format.write", sheetLayoutSchema()),
 	tool("spreadsheet.filter_view.list", "현재 사용자가 저장한 시트 필터 보기를 조회합니다.", "range.read", requiredProps("sheet_id", "string")),
@@ -135,16 +135,16 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.pivot.update", "피벗 정의와 자동·수동 갱신 방식을 revision 기반으로 변경합니다.", "pivot.write", pivotSchema(false)),
 	tool("spreadsheet.pivot.refresh", "최신 원본 셀로 피벗을 즉시 다시 계산하고 수동 캐시를 갱신합니다.", "pivot.write", requiredProps("pivot_id", "string")),
 	tool("spreadsheet.pivot.delete", "피벗 정의와 계산 캐시를 삭제합니다.", "pivot.write", pivotDeleteSchema()),
-	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다.", "formula.write", requiredProps2("sheet_id", "string", "idempotency_key", "string")),
-	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", requiredProps("formula", "string")),
+	tool("spreadsheet.formula.set", "셀 수식을 멱등 설정합니다. row·column 은 1부터 셉니다.", "formula.write", formulaSetSchema()),
+	tool("spreadsheet.formula.evaluate", "MVP 수식과 제공된 A1 셀 값을 서버에서 계산합니다.", "formula.read", withProps(requiredProps("formula", "string"), map[string]any{"cells": map[string]any{"type": "object", "description": "A1 주소를 키로 한 셀 값"}})),
 	tool("spreadsheet.formula.explain", "저장된 수식과 직접 의존 셀·종속 수식을 조회합니다.", "formula.read", requiredProps2("sheet_id", "string", "address", "string")),
-	tool("spreadsheet.operation.undo", "자신의 작업을 후속 변경과 충돌하지 않는 셀만 선택적으로 되돌립니다. Undo 작업을 다시 되돌리면 Redo가 됩니다.", "range.write", requiredProps2("operation_id", "string", "idempotency_key", "string")),
+	tool("spreadsheet.operation.undo", "자신의 작업을 후속 변경과 충돌하지 않는 셀만 선택적으로 되돌립니다. Undo 작업을 다시 되돌리면 Redo가 됩니다.", "range.write", withProps(requiredProps2("operation_id", "string", "idempotency_key", "string"), map[string]any{"client_id": typed("string")})),
 	tool("spreadsheet.conflict.list", "워크북의 열린 동일 셀 충돌과 선택적으로 해소된 이력을 조회합니다.", "range.read", conflictListSchema()),
 	tool("spreadsheet.conflict.get", "충돌 전 값, 상대 사용자 값, 제출 값과 현재 서버 값을 비교 조회합니다.", "range.read", requiredProps("conflict_id", "string")),
 	tool("spreadsheet.conflict.resolve", "동일 셀 충돌을 현재 값 유지 또는 상대 사용자 값 복원으로 멱등 해소하고 버전 이력에 남깁니다.", "range.write", conflictResolutionSchema()),
 	tool("spreadsheet.ai.config.get", "활성화 여부, 모델과 셀·변경 한도를 비밀정보 없이 조회합니다.", "ai.use", nil),
 	tool("spreadsheet.ai.action.plan", "선택 범위만 사내 LLM Gateway에 전달하여 수식·요약·이상치·정제 계획과 비파괴 미리보기를 만듭니다.", "ai.use", aiPlanSchema()),
-	tool("spreadsheet.ai.action.list", "현재 사용자가 생성한 워크북 AI 작업 이력을 조회합니다.", "ai.use", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.ai.action.list", "현재 사용자가 생성한 워크북 AI 작업 이력을 조회합니다.", "ai.use", withProps(requiredProps("workbook_id", "string"), map[string]any{"limit": typed("integer")})),
 	tool("spreadsheet.ai.action.get", "AI 계획, 변경 미리보기, 모델·도구 감사 이력과 적용 상태를 조회합니다.", "ai.use", requiredProps("action_id", "string")),
 	tool("spreadsheet.ai.action.approve", "미리 본 AI 수식 또는 데이터 정제 계획을 revision과 워크북 버전을 확인한 뒤 원자적으로 적용합니다.", "ai.use", aiExecutionSchema()),
 	tool("spreadsheet.ai.action.undo", "승인된 AI 작업을 사용자별 작업 이력으로 안전하게 되돌립니다.", "ai.use", aiExecutionSchema()),
@@ -156,34 +156,34 @@ var mcpTools = []mcpTool{
 	tool("spreadsheet.automation.test", "최신 서버 셀을 사용해 쓰기 없이 자동화 변경 미리보기를 검증합니다.", "automation.read", requiredProps("automation_id", "string")),
 	tool("spreadsheet.automation.run", "test 응답의 automation_revision과 base_version을 검증해 자동화를 멱등 실행하고 하나의 서버 권위 셀 작업으로 반영합니다.", "automation.run", automationRunSchema()),
 	tool("spreadsheet.automation.webhook.invoke", "개인 API 키로 인증한 JSON webhook payload의 digest만 감사에 보존하고 자동화를 멱등 실행합니다.", "automation.webhook.invoke", automationWebhookSchema()),
-	tool("spreadsheet.automation.run.list", "자동화 실행·실패·Undo 이력을 조회합니다.", "automation.read", requiredProps("automation_id", "string")),
+	tool("spreadsheet.automation.run.list", "자동화 실행·실패·Undo 이력을 조회합니다.", "automation.read", withProps(requiredProps("automation_id", "string"), map[string]any{"limit": typed("integer")})),
 	tool("spreadsheet.automation.run.undo", "성공한 자동화 실행을 후속 변경과 충돌하지 않는 범위에서 되돌립니다.", "automation.run", automationUndoSchema()),
 	tool("spreadsheet.import.preview", "Base64 CSV, TSV 또는 XLSX를 저장 전에 검사합니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
-	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", requiredProps2("file_name", "string", "data_base64", "string")),
-	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", requiredProps2("workbook_id", "string", "format", "string")),
+	tool("spreadsheet.import.execute", "파일을 하나의 원자적 트랜잭션으로 워크북에 가져옵니다.", "import.write", withProps(requiredProps3("file_name", "string", "data_base64", "string", "idempotency_key", "string"), map[string]any{"workspace_id": typed("string")})),
+	tool("spreadsheet.export.execute", "워크북을 CSV, TSV, JSON 또는 XLSX Base64 파일로 내보냅니다.", "export.read", withProps(requiredProps2("workbook_id", "string", "format", "string"), map[string]any{"sheet_id": typed("string")})),
 	tool("spreadsheet.presentation.preview", "범위를 프레젠테이션으로 만들면 어떤 슬라이드가 되는지 만들지 않고 돌려줍니다. 값의 뜻(항목별 비교·추이·비중·진행 순서)과 각 열의 노릇도 함께 알려 줍니다.", "presentation.read", presentationSchema(false)),
 	tool("spreadsheet.presentation.create", "선택 범위로 프레젠테이션을 만듭니다. 셀이 아니라 kanpic이 판단한 뜻이 전달되므로 숫자를 다시 쓸 필요가 없습니다.", "presentation.write", presentationSchema(true)),
 	tool("spreadsheet.presentation.list", "워크북에서 만든 프레젠테이션과 각각의 원본 범위·기준 버전·원본 변경 여부를 조회합니다.", "presentation.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.presentation.refresh", "이미 만든 프레젠테이션을 같은 덱인 채로 원본 범위의 지금 값으로 다시 만듭니다.", "presentation.write", requiredProps("presentation_id", "string")),
 	tool("spreadsheet.presentation.template.list", "프레젠테이션 서비스가 제공하는 디자인 목록을 조회합니다.", "presentation.read", nil),
-	tool("spreadsheet.version.create", "현재 워크북 스냅샷 버전을 생성합니다.", "version.write", requiredProps("workbook_id", "string")),
+	tool("spreadsheet.version.create", "현재 워크북 스냅샷 버전을 생성합니다.", "version.write", withProps(requiredProps("workbook_id", "string"), map[string]any{"name": typed("string")})),
 	tool("spreadsheet.version.list", "워크북 버전 목록을 조회합니다.", "version.read", requiredProps("workbook_id", "string")),
 	tool("spreadsheet.version.restore", "선택한 버전을 최신 버전으로 복원합니다.", "version.write", requiredProps("version_id", "string")),
 	tool("profile.preferences.get", "현재 사용자의 개인 설정을 조회합니다.", "profile.read", nil),
 	tool("profile.preferences.update", "현재 사용자의 개인 설정을 저장합니다.", "profile.write", requiredProps("values", "object")),
 	tool("profile.api_key.list", "현재 사용자의 API 키 메타데이터를 조회합니다.", "api_keys.read", nil),
-	tool("profile.api_key.create", "새 API 키를 만들고 원문을 한 번 반환합니다.", "api_keys.write", requiredProps2("name", "string", "scopes", "array")),
-	tool("profile.api_key.update", "API 키 이름, scope, 만료를 변경합니다.", "api_keys.write", requiredProps("key_id", "string")),
+	tool("profile.api_key.create", "새 API 키를 만들고 원문을 한 번 반환합니다.", "api_keys.write", withProps(requiredProps2("name", "string", "scopes", "array"), map[string]any{"scopes": stringArray(), "expires_at": typed("string")})),
+	tool("profile.api_key.update", "API 키 이름, scope, 만료를 변경합니다.", "api_keys.write", withProps(requiredProps("key_id", "string"), map[string]any{"name": typed("string"), "scopes": stringArray(), "expires_at": typed("string")})),
 	tool("profile.api_key.revoke", "API 키를 폐기합니다.", "api_keys.write", requiredProps("key_id", "string")),
 	tool("profile.api_key.rotate", "기존 키를 폐기하고 같은 정책의 새 키를 발급합니다.", "api_keys.write", requiredProps("key_id", "string")),
 	tool("admin.settings.list", "전체 시스템 설정을 조회합니다.", "admin.*", nil),
-	tool("admin.settings.upsert", "시스템 설정을 추가하거나 변경하고 버전을 생성합니다.", "admin.*", requiredProps2("key", "string", "value_type", "string")),
+	tool("admin.settings.upsert", "시스템 설정을 추가하거나 변경하고 버전을 생성합니다.", "admin.*", withProps(requiredProps2("key", "string", "value_type", "string"), map[string]any{"value": map[string]any{}, "description": typed("string"), "secret": typed("boolean")})),
 	tool("admin.settings.delete", "시스템 설정을 삭제하고 버전을 생성합니다.", "admin.*", requiredProps("key", "string")),
 	tool("admin.settings.validate", "현재 시스템 설정 전체를 검증합니다.", "admin.*", nil),
 	tool("admin.settings.test", "PostgreSQL과 활성화된 OIDC 연결을 시험합니다.", "admin.*", nil),
 	tool("admin.settings.version.list", "설정 변경 버전 목록을 조회합니다.", "admin.*", nil),
 	tool("admin.settings.version.restore", "설정 스냅샷을 복원합니다.", "admin.*", requiredProps("revision", "number")),
-	tool("admin.logs.list", "서버 구조화 로그를 검색합니다.", "admin.*", props("query", "string")),
+	tool("admin.logs.list", "서버 구조화 로그를 검색합니다.", "admin.*", withProps(props("query", "string"), map[string]any{"level": typed("string"), "limit": typed("integer")})),
 	tool("admin.logs.purge", "기준 시각 이전 서버 로그를 삭제합니다.", "admin.*", requiredProps("before", "string")),
 }
 
@@ -266,11 +266,16 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 		s.writeMCPResult(w, request.ID, map[string]any{"tools": mcpTools})
 	case request.Method == "tools/call":
 		var params struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
 		}
 		if err := json.Unmarshal(request.Params, &params); err != nil || strings.TrimSpace(params.Name) == "" {
 			s.writeMCPError(w, http.StatusOK, request.ID, -32602, "도구 인수가 올바르지 않습니다. params.name 과 params.arguments 가 필요합니다.")
+			return
+		}
+		arguments, err := decodeMCPArguments(params.Arguments)
+		if err != nil {
+			s.writeMCPError(w, http.StatusOK, request.ID, -32602, "도구 인수가 올바르지 않습니다: "+err.Error())
 			return
 		}
 		if _, found := findMCPTool(params.Name); !found {
@@ -280,7 +285,7 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 			s.writeMCPError(w, http.StatusOK, request.ID, -32602, "알 수 없는 도구입니다: "+params.Name)
 			return
 		}
-		result, err := s.callMCPTool(r, params.Name, params.Arguments)
+		result, err := s.callMCPTool(r, params.Name, arguments)
 		if err != nil {
 			s.writeMCPToolFailure(w, request.ID, err.Error())
 			return
@@ -395,8 +400,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, args map[string]any) 
 	if !found {
 		return nil, errors.New("unknown tool: " + name)
 	}
-	if principal, ok := apiPrincipal(r); ok && !principal.Allows(definition.Meta["required_scope"].(string)) {
-		return nil, errors.New("insufficient scope: " + definition.Meta["required_scope"].(string))
+	args = normalizeMCPArguments(r, definition, args)
+	r = s.withMCPOwnerGrant(r, args)
+	if err := requireMCPScopes(r, definition.Meta["required_scope"].(string)); err != nil {
+		return nil, err
 	}
 	if err := s.authorizeMCPTool(r, name, args); err != nil {
 		return nil, err
@@ -1492,13 +1499,15 @@ func (s *Server) mcpServiceAvailable(name string) error {
 	return nil
 }
 
+// requireMCPScopes checks the caller's key or token, and on a workbook the
+// caller owns also the scopes mcp.owner_scopes adds there.
 func requireMCPScopes(r *http.Request, scopes ...string) error {
 	principal, ok := apiPrincipal(r)
 	if !ok {
 		return nil
 	}
 	for _, scope := range scopes {
-		if !principal.Allows(scope) {
+		if !principal.Allows(scope) && !mcpOwnerGranted(r, scope) {
 			return errors.New("insufficient scope: " + scope)
 		}
 	}
@@ -1531,6 +1540,95 @@ func requiredProps3(a, ak, b, bk, c, ck string) map[string]any {
 }
 func requiredProps4(a, ak, b, bk, c, ck, d, dk string) map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{a: map[string]any{"type": ak}, b: map[string]any{"type": bk}, c: map[string]any{"type": ck}, d: map[string]any{"type": dk}}, "required": []string{a, b, c, d}}
+}
+
+// withProps declares the optional arguments a tool reads besides its required
+// ones. An MCP gateway forwards only what the schema names, so an argument the
+// handler reads but the schema leaves out never arrives.
+func withProps(schema map[string]any, extra map[string]any) map[string]any {
+	properties, _ := schema["properties"].(map[string]any)
+	if properties == nil {
+		properties = map[string]any{}
+		schema["properties"] = properties
+	}
+	for name, definition := range extra {
+		properties[name] = definition
+	}
+	return schema
+}
+
+func typed(kind string) map[string]any { return map[string]any{"type": kind} }
+
+func stringArray() map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+}
+
+// cellInputSchema is one entry of cells: where, and what to put there.
+func cellInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"row":     map[string]any{"type": "integer", "minimum": 1, "maximum": cellrange.MaxRows, "description": "1부터 세는 행 번호"},
+			"column":  map[string]any{"type": "integer", "minimum": 1, "maximum": cellrange.MaxColumns, "description": "1부터 세는 열 번호(A=1)"},
+			"value":   map[string]any{"description": "문자열·숫자·불리언. null 이면 값을 지웁니다"},
+			"formula": map[string]any{"type": "string", "description": "= 로 시작하는 수식"},
+			"style":   map[string]any{"type": "object"},
+			"note":    map[string]any{"type": "string"},
+		},
+		"required": []string{"row", "column"},
+	}
+}
+
+// cellWriteSchema covers range.write, range.paste and range.fill, which take the
+// same cells and differ only in how many.
+func cellWriteSchema(limit int) map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id":        map[string]any{"type": "string", "minLength": 1},
+			"cells":           map[string]any{"type": "array", "minItems": 1, "maxItems": limit, "items": cellInputSchema()},
+			"base_version":    map[string]any{"type": "integer", "minimum": 0, "description": "편집을 시작한 워크북 버전. 생략하면 0"},
+			"idempotency_key": map[string]any{"type": "string"},
+			"client_id":       map[string]any{"type": "string"},
+		},
+		"required": []string{"sheet_id", "cells", "idempotency_key"},
+	}
+}
+
+func formulaSetSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id":        map[string]any{"type": "string", "minLength": 1},
+			"row":             map[string]any{"type": "integer", "minimum": 1, "maximum": cellrange.MaxRows, "description": "1부터 세는 행 번호"},
+			"column":          map[string]any{"type": "integer", "minimum": 1, "maximum": cellrange.MaxColumns, "description": "1부터 세는 열 번호(A=1)"},
+			"formula":         map[string]any{"type": "string", "description": "= 로 시작하는 수식"},
+			"base_version":    map[string]any{"type": "integer", "minimum": 0},
+			"idempotency_key": map[string]any{"type": "string"},
+		},
+		"required": []string{"sheet_id", "row", "column", "formula", "idempotency_key"},
+	}
+}
+
+func rangeSortSchema() map[string]any {
+	key := map[string]any{"type": "object", "properties": map[string]any{
+		"column":    map[string]any{"type": "integer", "minimum": 1},
+		"direction": map[string]any{"type": "string", "description": "asc 또는 desc"},
+	}, "required": []string{"column"}}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sheet_id": typed("string"), "range": typed("string"),
+			"keys":            map[string]any{"type": "array", "minItems": 1, "items": key},
+			"header_rows":     map[string]any{"type": "integer", "minimum": 0},
+			"case_sensitive":  typed("boolean"),
+			"literal_order":   typed("boolean"),
+			"base_version":    typed("integer"),
+			"idempotency_key": typed("string"),
+			"client_id":       typed("string"),
+		},
+		"required": []string{"sheet_id", "range", "keys", "idempotency_key"},
+	}
 }
 
 func workbookCreateSchema() map[string]any {
@@ -1673,12 +1771,13 @@ func chartSchema(create bool) map[string]any {
 	}, "required": []string{"x", "y", "width", "height"}}
 	properties := map[string]any{
 		"chart_id": map[string]any{"type": "string"}, "workbook_id": map[string]any{"type": "string"}, "sheet_id": map[string]any{"type": "string"}, "source_sheet_id": map[string]any{"type": "string"},
-		"idempotency_key": map[string]any{"type": "string", "minLength": 1}, "type": map[string]any{"type": "string", "enum": []string{"bar", "line", "area", "pie", "scatter", "histogram"}},
+		"idempotency_key": map[string]any{"type": "string", "minLength": 1}, "type": map[string]any{"type": "string", "enum": []string{"bar", "line", "area", "pie", "scatter", "histogram", "stacked_bar", "stacked_area", "combo", "timeline", "waterfall"}},
 		"title": map[string]any{"type": "string", "maxLength": 200}, "source_range": map[string]any{"type": "string"},
 		"first_row_headers": map[string]any{"type": "boolean"}, "first_column_labels": map[string]any{"type": "boolean"},
 		"legend_position": map[string]any{"type": "string", "enum": []string{"none", "top", "right", "bottom", "left"}},
 		"x_axis_title":    map[string]any{"type": "string", "maxLength": 100}, "y_axis_title": map[string]any{"type": "string", "maxLength": 100},
 		"position": position, "expected_revision": map[string]any{"type": "integer", "minimum": 1},
+		"secondary_axis": typed("boolean"), "data_labels": typed("boolean"), "y_axis_min": typed("number"), "y_axis_max": typed("number"),
 	}
 	required := []string{"chart_id"}
 	if create {
@@ -1812,6 +1911,7 @@ func aiPlanSchema() map[string]any {
 			"base_version":    map[string]any{"type": "number", "minimum": 1},
 			"idempotency_key": map[string]any{"type": "string"},
 			"client_id":       map[string]any{"type": "string"},
+			"conversation_id": map[string]any{"type": "string"},
 		},
 		"required": []string{"workbook_id", "sheet_id", "range", "request", "mode", "base_version", "idempotency_key"},
 	}
@@ -1963,13 +2063,16 @@ func sheetLayoutSchema() map[string]any {
 			"idempotency_key":   map[string]any{"type": "string", "minLength": 1},
 			"client_id":         map[string]any{"type": "string"},
 			"expected_revision": map[string]any{"type": "integer", "minimum": 1},
-			"action":            map[string]any{"type": "string", "enum": []string{"resize", "reset_size", "hide", "show", "show_all", "freeze"}},
-			"axis":              map[string]any{"type": "string", "enum": []string{"row", "column"}},
-			"start":             map[string]any{"type": "integer", "minimum": 1},
-			"count":             map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxLayoutSpan},
-			"size":              map[string]any{"type": "number"},
-			"frozen_rows":       map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenRows},
-			"frozen_columns":    map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenColumns},
+			"action": map[string]any{"type": "string", "enum": []string{"resize", "reset_size", "hide", "show", "show_all", "freeze", "group", "ungroup", "collapse", "expand",
+				"print_area_set", "print_area_clear", "slicer_add", "slicer_update", "slicer_remove"}},
+			"axis":           map[string]any{"type": "string", "enum": []string{"row", "column"}},
+			"start":          map[string]any{"type": "integer", "minimum": 1},
+			"count":          map[string]any{"type": "integer", "minimum": 1, "maximum": workbook.MaxLayoutSpan},
+			"size":           map[string]any{"type": "number"},
+			"frozen_rows":    map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenRows},
+			"frozen_columns": map[string]any{"type": "integer", "minimum": 0, "maximum": workbook.MaxFrozenColumns},
+			"range":          map[string]any{"type": "string", "description": "print_area_set 의 인쇄 영역"},
+			"slicer":         map[string]any{"type": "object", "description": "slicer_add·slicer_update·slicer_remove 의 슬라이서(id, filter_view_id, column, title, position)"},
 		},
 		"required": []string{"sheet_id", "idempotency_key", "expected_revision", "action"},
 	}
@@ -2006,7 +2109,7 @@ func dataValidationSchema(create bool) map[string]any {
 		"options":  map[string]any{"type": "array", "minItems": 1, "maxItems": workbook.MaxValidationOptions, "items": option}, "value": map[string]any{}, "value2": map[string]any{},
 		"formula": map[string]any{"type": "string", "maxLength": 2000}, "allow_blank": map[string]any{"type": "boolean"}, "reject_input": map[string]any{"type": "boolean"},
 		"show_dropdown": map[string]any{"type": "boolean"}, "display_style": map[string]any{"type": "string", "enum": []string{"chip", "arrow", "plain"}}, "help_text": map[string]any{"type": "string", "maxLength": 500},
-		"expected_revision": map[string]any{"type": "integer", "minimum": 1},
+		"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "source_range": typed("string"),
 	}
 	required := []string{"validation_id"}
 	if create {

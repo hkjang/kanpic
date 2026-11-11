@@ -336,6 +336,7 @@ REST `GET /api/v1/departments`와 MCP `spreadsheet.department.list`는 모든 �
 | `sharing.max_link_access` | `anyone` | 허용할 최대 링크 액세스 범위 |
 | `sharing.default_link_access` | `restricted` | 새 워크북의 기본 링크 액세스 |
 | `mcp.enabled` | `true` | MCP Gateway 사용 |
+| `mcp.owner_scopes` | 셀·수식·서식·자동화·차트·피벗·댓글·버전의 읽기/쓰기와 `workbook.read`, `automation.run` | API 키·OAuth 토큰에 없어도 **자기 소유 워크북**에서는 MCP 로 쓸 수 있는 scope. 비우면 키·토큰의 scope 만 따릅니다 |
 | `observability.log_retention_days` | `30` | 서버 로그 보존 일수 |
 
 ---
@@ -426,7 +427,7 @@ sequenceDiagram
 
 1. **MCP 클라이언트용 Client 를 만듭니다.** Public client, Standard flow, PKCE `S256` 을 켜고 Redirect URI 에는 클라이언트 문서가 안내하는 값을 적습니다. 동적 클라이언트 등록(RFC 7591) 으로 스스로 등록하는 클라이언트를 쓰려면 Realm 의 *Client registration › Anonymous access policies* 에서 Trusted Hosts 를 그 클라이언트가 오는 곳으로 열어 둡니다.
 2. **토큰에 kanpic 을 받는 이로 적습니다.** 그 Client(또는 그 Client 의 dedicated scope)에 *Audience* 매퍼를 붙여 *Included Custom Audience* 에 `<server.public_url>/mcp` (예: `https://kanpic.example/mcp`) 를 넣거나, *Included Client Audience* 에 kanpic 의 Client ID 를 넣습니다. kanpic 은 `aud` 가 `auth.oidc.mcp_audiences`(비우면 Client ID 와 `/mcp` 주소) 중 하나와 정확히 같거나, `azp` 가 kanpic 의 Client ID 인 토큰만 받습니다. 다른 서비스용으로 발급된 토큰은 서명이 맞아도 거절됩니다.
-3. **(선택) 토큰을 좁힙니다.** `workbook.read`, `range.read` 같은 kanpic scope 이름으로 Client Scope 를 만들어 그 Client 에 붙이면 토큰의 `scope` 클레임에 실리고, kanpic 은 그 토큰을 **그 scope 만 가진 API 키처럼** 다룹니다(`mcp.use` 는 따로 필요하지 않습니다). kanpic scope 가 하나도 없는 토큰은 사용자가 웹에서 로그인했을 때와 같은 권한으로 움직입니다 — 워크북 공유 규칙과 `auth.oidc.admin_roles` 판정 모두 그대로입니다.
+3. **(선택) 토큰을 좁힙니다.** `workbook.read`, `range.read` 같은 kanpic scope 이름으로 Client Scope 를 만들어 그 Client 에 붙이면 토큰의 `scope` 클레임에 실리고, kanpic 은 그 토큰을 **그 scope 만 가진 API 키처럼** 다룹니다(`mcp.use` 는 따로 필요하지 않습니다). kanpic scope 가 하나도 없는 토큰은 사용자가 웹에서 로그인했을 때와 같은 권한으로 움직입니다 — 워크북 공유 규칙과 `auth.oidc.admin_roles` 판정 모두 그대로입니다. 좁힌 토큰도 **그 사용자가 소유한 워크북**에서는 `mcp.owner_scopes` 의 scope 가 더해지므로(6.1 참고), 셀 쓰기·서식·자동화를 위해 Client Scope 를 따로 만들 필요는 없습니다. 남이 공유해 준 워크북까지 쓰게 하려면 `spreadsheet.write`(= `range.write` + `formula.write`), `format.read`, `format.write`, `automation.read`, `automation.run` 같은 이름으로 Client Scope 를 붙입니다.
 
 **kanpic 쪽에서 확인할 것**
 
@@ -615,6 +616,15 @@ kanpic은 AI 에이전트 및 LLM이 스프레드시트 데이터를 안전하�
 ### 6.1 MCP 스코프 및 인증
 - MCP 요청은 HTTP Header `Authorization: Bearer <API_KEY>` 또는 `Authorization: Bearer <Keycloak 액세스 토큰>`을 통과해야 합니다. 토큰 로그인의 Keycloak 설정은 **4.3 MCP 클라이언트의 Keycloak OAuth 로그인**에 있습니다.
 - API 키는 `mcp.use` 스코프 권한을 보유해야 `/mcp` 엔드포인트를 호출할 수 있습니다. Keycloak 토큰은 받아들여지는 것 자체가 `mcp.use` 이며, 토큰에 kanpic scope 가 실려 있으면 그 scope 만큼만, 없으면 그 사용자의 권한만큼 움직입니다.
+- **자기 소유 워크북은 기본으로 열려 있습니다.** 키나 토큰이 `workbook.read` 처럼 좁혀져 있어도, 호출이 가리키는 워크북의 **소유자가 그 키·토큰의 사용자**이면 `mcp.owner_scopes` 의 scope 가 그 호출에 한해 더해집니다. 기본값은 `workbook.read`, `range.read|write`, `formula.read|write`, `format.read|write`, `automation.read|write|run`, `chart.read|write`, `pivot.read|write`, `comment.read|write`, `version.read|write` 입니다. 지켜지는 선은 그대로입니다:
+  - 남이 공유해 준 워크북(편집자여도)에서는 키·토큰의 scope 만 봅니다.
+  - 한 호출이 둘 이상의 워크북을 가리키면(예: 내 시트와 남의 워크북) 더하지 않습니다.
+  - 관리자라서 생기는 소유자 권한은 소유로 치지 않습니다. 실제 `owner_id` 가 같아야 합니다.
+  - 공유·소유권 이전·삭제(`workbook.write`), 관리(`admin.*`), API 키, 개인 설정, AI(`ai.use`), 가져오기, 웹훅은 이 설정에 넣을 수 없습니다 — 저장할 때 거절되고, 저장소에 남아 있어도 무시됩니다.
+  - 끄려면 `mcp.owner_scopes` 를 빈 목록으로 저장합니다. 설정 저장소를 읽지 못하면 아무것도 더하지 않습니다.
+- scope 이름 `spreadsheet.write` 는 `range.write` + `formula.write`, `spreadsheet.read` 는 `workbook.read` + `range.read` + `formula.read` 를 뜻합니다. 티켓이나 Keycloak Client Scope 에 흔히 적는 이름을 그대로 받기 위한 별칭입니다.
+- **MCP 게이트웨이를 거쳐도 인수가 그대로 도착합니다.** 사내 MCP 게이트웨이는 도구의 `inputSchema` 에 적힌 인수만 넘기는 경우가 많아, 스키마에 빠져 있던 `spreadsheet.range.write|paste|fill` 의 `cells`, `spreadsheet.formula.set` 의 `row`·`column`·`formula` 등이 중간에서 사라졌습니다. 핸들러가 읽는 인수는 이제 모두 스키마에 있습니다. 서버는 게이트웨이가 흔히 바꾸는 꼴도 스키마에 맞춰 되돌립니다: `arguments` 전체나 `cells` 배열이 JSON **문자열**로 온 경우, 숫자·불리언이 문자열로 온 경우(`"row":"3"`), 키가 camelCase(`sheetId`, `idempotencyKey`)로 바뀐 경우, `{"arguments":{...}}` 처럼 한 번 더 감싼 경우. 스키마가 형식을 정하지 않은 셀 `value` 는 손대지 않으므로 `"0012"` 같은 글자는 글자로 남습니다.
+- `idempotency_key` 가 필요한 도구에 키가 오지 않으면 HTTP 헤더 `Idempotency-Key` 를 씁니다. 그것도 없으면 그 호출만의 키를 서버가 만들어 한 번 실행합니다 — 키가 없다는 것은 재시도 중복 제거를 바라지 않는다는 뜻이기 때문입니다. 재시도 안전이 필요하면 인수나 헤더로 키를 보내세요.
 - 자격 없이 `/mcp` 를 부르면 401 과 함께 `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` 가 돌아가고, 그 주소는 RFC 9728 문서(`resource`, `authorization_servers`)를 내줍니다. OIDC 나 `auth.oidc.mcp_enabled` 가 꺼져 있으면 이 헤더도 문서도 없습니다.
 - `/mcp` 는 **POST 만** 받습니다. 서버→클라이언트 스트림(GET)과 세션 종료(DELETE)는 제공하지 않으므로 405 와 `Allow: POST` 로 답합니다. 상태를 두지 않으므로 `Mcp-Session-Id` 도 없습니다.
 - 프로토콜 버전은 `2024-11-05`, `2025-03-26`, `2025-06-18` 을 받습니다. `initialize` 는 클라이언트가 말한 버전을 알면 그대로, 모르면 `2025-06-18` 로 답하고, `MCP-Protocol-Version` 헤더에 모르는 버전이 오면 400 입니다. JSON-RPC 배치(배열)는 받지 않고 -32600 으로 거절합니다. `ping` 은 빈 결과로, `notifications/*` 와 id 없는 요청은 202 로 답합니다.

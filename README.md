@@ -40,7 +40,7 @@ docker run --rm -p 8080:8080 \
 - `/api/v1/version`: 이미지 빌드 버전, Git commit, 빌드 시각
 - `/healthz`: 컨테이너 health check
 
-API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이스에는 SHA-256 해시만 저장합니다. MCP 호출은 `mcp.use`와 각 도구의 실제 작업 scope를 모두 검사합니다. `/mcp` 는 API 키 대신 Keycloak OAuth 액세스 토큰(MCP 인가 명세, RFC 9728 `/.well-known/oauth-protected-resource`)도 받으며, 토큰은 그 사용자의 권한 또는 토큰에 실린 kanpic scope 만큼 움직입니다.
+API 키 원문은 생성·회전 직후 한 번만 반환하며 데이터베이스에는 SHA-256 해시만 저장합니다. MCP 호출은 `mcp.use`와 각 도구의 실제 작업 scope를 모두 검사합니다. 다만 키·토큰의 사용자가 **소유한 워크북**에서는 `mcp.owner_scopes`(기본: 셀·수식·서식·자동화·차트·피벗·댓글·버전)의 scope 가 기본으로 더해지고, 공유·삭제·관리 scope 는 어떤 경우에도 더해지지 않습니다. 도구의 `inputSchema` 는 핸들러가 읽는 인수를 모두 선언하므로 스키마 기반 MCP 게이트웨이를 거쳐도 `cells`·`row`·`column` 이 빠지지 않습니다. `/mcp` 는 API 키 대신 Keycloak OAuth 액세스 토큰(MCP 인가 명세, RFC 9728 `/.well-known/oauth-protected-resource`)도 받으며, 토큰은 그 사용자의 권한 또는 토큰에 실린 kanpic scope 만큼 움직입니다.
 
 ## 개발 검증
 

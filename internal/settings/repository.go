@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"kanpic/internal/analytics"
+	"kanpic/internal/apikey"
 	"kanpic/internal/mail"
 )
 
@@ -142,6 +143,7 @@ var defaults = []Setting{
 	{Key: "sharing.max_link_access", Value: json.RawMessage(`"anyone"`), ValueType: "string", Description: "허용할 최대 링크 액세스 범위 (restricted, organization, anyone)"},
 	{Key: "sharing.default_link_access", Value: json.RawMessage(`"restricted"`), ValueType: "string", Description: "새 워크북의 기본 링크 액세스"},
 	{Key: "mcp.enabled", Value: json.RawMessage(`true`), ValueType: "boolean", Description: "MCP Gateway 사용"},
+	{Key: "mcp.owner_scopes", Value: mustJSON(apikey.DefaultOwnerScopes), ValueType: "string_list", Description: "API 키·OAuth 토큰에 없어도 자기 소유 워크북에서는 MCP 로 쓸 수 있는 scope. 비우면 키·토큰의 scope 만 따릅니다"},
 	{Key: "observability.log_retention_days", Value: json.RawMessage(`30`), ValueType: "number", Description: "서버 로그 보존 일수"},
 }
 
@@ -483,6 +485,14 @@ func validateValue(item Setting) string {
 			}
 		}
 	}
+	if item.Key == "mcp.owner_scopes" {
+		list, _ := value.([]any)
+		for _, candidate := range list {
+			if scope, _ := candidate.(string); !apikey.OwnerGrantable(scope) {
+				return fmt.Sprintf("%q 는 소유 워크북 기본 scope 로 줄 수 없습니다. 셀·서식·수식·자동화·차트·피벗·댓글·버전 scope 와 workbook.read 만 됩니다.", scope)
+			}
+		}
+	}
 	if item.Key == "editor.autosave_batch_ms" {
 		number, _ := value.(float64)
 		if number < 100 || number > 500 {
@@ -647,4 +657,14 @@ func validateAnalytics(items map[string]Setting) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// mustJSON encodes a default that is a Go value, so the list a default names
+// and the list the code falls back to cannot drift apart.
+func mustJSON(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
